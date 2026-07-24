@@ -150,7 +150,10 @@ so the precedence is unit-testable on any CI OS.
 
 `Process.Start(mod_relay.exe, args)`. No Proton, no path translation --
 native Windows paths. Args: `--game-binary`, `--mod-path`, `--log-file`
-(verbatim, untranslated); then, when the profile's `EnableLuaLogs` toggle is on,
+(verbatim, untranslated; the value is Curator's startup-resolved, process-pinned
+log path from `LoggingBootstrap.CurrentLogFile`, so Relay writes the same
+per-process file as Curator, with the configured `Logging.LogFile` only a
+fallback when the bootstrap has not run); then, when the profile's `EnableLuaLogs` toggle is on,
 a bare `--lua-logs` flag (tees Lua `print` output into the log file; no value,
 appended right after `--log-file`); then (when the profile has game arguments)
 one bare `--` + each game arg as its own argv entry. The profile's environment
@@ -176,7 +179,9 @@ Command: `<proton> run <launcher.exe> <args>`, where:
 - The launcher's *own* path-valued flags (`--game-binary`, `--mod-path`,
   `--log-file`) are **`Z:\`-translated** (the launcher runs under Wine and needs
   Windows paths) -- including `--log-file`, otherwise the Relay shell log
-  couldn't be written where Curator expects. When the profile's `EnableLuaLogs`
+  couldn't be written where Curator expects. The `--log-file` value is Curator's
+  startup-resolved, process-pinned path (`LoggingBootstrap.CurrentLogFile`), so
+  Relay writes the same per-process file as Curator. When the profile's `EnableLuaLogs`
   toggle is on, a bare `--lua-logs` flag is appended right after `--log-file`
   (a Relay-owned logging flag with no value, so it is NOT path-valued and is not
   `Z:\`-translated).
@@ -280,9 +285,11 @@ from the container.
 
 ## Dependencies
 
-- **Curator libraries:** `config` (`RelayDir`, `Logging.LogFile`),
-  `profiles` (`IProfileService.PrepareModRoot` + `GetLaunchSettings`),
-  `steam` (`ISteamService.Discover`).
+- **Curator libraries:** `config` (`RelayDir`; `Logging.LogFile` as the fallback
+  log path), `general` (`LoggingBootstrap.CurrentLogFile`, the startup-resolved,
+  process-pinned log path forwarded to Relay as `--log-file`, reached
+  transitively via `steam`), `profiles` (`IProfileService.PrepareModRoot` +
+  `GetLaunchSettings`), `steam` (`ISteamService.Discover`).
 - **NuGet:** `Microsoft.Extensions.DependencyInjection.Abstractions`,
   `Microsoft.Extensions.Logging.Abstractions`.
 

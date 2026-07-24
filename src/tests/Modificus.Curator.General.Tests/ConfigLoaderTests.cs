@@ -27,6 +27,44 @@ public sealed class ConfigLoaderTests
     }
 
     [Fact]
+    public void Logging_RetainedLogFileCount_defaults_to_5_when_absent()
+    {
+        var loader = new ConfigLoader(Path.Combine(Path.GetTempPath(), "curator-missing-" + Guid.NewGuid() + ".json"));
+
+        Assert.Equal(5, loader.Load().Logging.RetainedLogFileCount);
+    }
+
+    [Fact]
+    public void Logging_RetainedLogFileCount_round_trips_when_present()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "curator-cfg-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        var configPath = Path.Combine(dir, "config.json");
+        File.WriteAllText(configPath, """
+            {
+              "Logging": { "RetainedLogFileCount": 3 }
+            }
+            """);
+
+        try
+        {
+            var loader = new ConfigLoader(configPath);
+
+            // JSON override binds onto the default.
+            Assert.Equal(3, loader.Load().Logging.RetainedLogFileCount);
+
+            // And survives a Save/Load round-trip.
+            var config = loader.Load();
+            loader.Save(config);
+            Assert.Equal(3, loader.Load().Logging.RetainedLogFileCount);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Load_applies_json_overrides_onto_defaults()
     {
         var dir = Path.Combine(Path.GetTempPath(), "curator-cfg-" + Guid.NewGuid());

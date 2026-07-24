@@ -240,13 +240,14 @@ platform-appropriate default, so the app runs with no file present; specify only
 what you want to override. See [`config.example.json`](./config.example.json)
 for the schema.
 
-| Field                  | Default                                         |
-| ---------------------- | ----------------------------------------------- |
-| `Logging:Level`        | `Information`                                   |
-| `Logging:LogFile`      | `<app-data>/logs/curator.log`                   |
-| `ProfilesBaseFolder`   | `<app-data>/profiles`                           |
-| `ModsFolder`           | `<app-data>/mods`                               |
-| `RelayDir`             | `<app-data>/relay`                              |
+| Field                          | Default                                         |
+| ------------------------------ | ----------------------------------------------- |
+| `Logging:Level`                | `Information`                                   |
+| `Logging:LogFile`              | `<app-data>/logs/curator-{DateTime}.log`        |
+| `Logging:RetainedLogFileCount` | `5`                                             |
+| `ProfilesBaseFolder`           | `<app-data>/profiles`                           |
+| `ModsFolder`                   | `<app-data>/mods`                               |
+| `RelayDir`                     | `<app-data>/relay`                              |
 
 Per-profile settings live with the profile, not in the global config. This
 includes the launch settings (environment variables + Darktide command-line

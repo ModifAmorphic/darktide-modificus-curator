@@ -90,8 +90,10 @@ through a registered library interface. The UI registers only its own surface
    startup cache would only create staleness for the Settings window, which
    writes config at runtime; #31).
 2. **Build the logger**: `LoggingBootstrap.CreateLoggerFactory(config)`
-   (Serilog console + file, level-honored, truncated on startup). Both config
-   and the logger are constructed **outside** DI because DI itself needs them.
+   (Serilog console + file, level-honored; per-process datetime-named log-file
+   rotation with retention, the resolved path shared with Relay via
+   `--log-file`). Both config and the logger are constructed **outside** DI
+   because DI itself needs them.
 3. **Compose services**: `new ServiceCollection()`, then the `Add<Library>()`
    extensions in their real order:
    - `AddSingleton<IConfigLoader>(loader)`: pre-registered before `AddGeneral`
@@ -641,7 +643,10 @@ exactly the fields launch reported missing.
 One global config file for system-level settings (structured -- e.g. JSON or
 TOML):
 
-- Log file location + level (the log is **truncated on each manager startup** -- no rolling/retention/backup, matching the Relay launcher pattern).
+- Log file location + level (per-process datetime-named rotation: each manager
+  start writes a new `curator-{DateTime}.log` pinned for the process lifetime,
+  with older files pruned to `RetainedLogFileCount`; the resolved path is shared
+  with Relay via `--log-file`).
 - Profiles base folder (where profiles, mods, and settings are stored).
 - Mods folder (the global mod store; see
   [Mod repository](#mod-repository)).

@@ -76,9 +76,11 @@ internal sealed class RelayLaunchService : IRelayLaunchService
     {
         try
         {
-            // One live config snapshot for the whole launch. RelayDir
-            // + Logging.LogFile are read once here; a runtime config change via
-            // the Settings window takes effect on the next launch.
+            // One live config snapshot for the whole launch. RelayDir is read
+            // once here; a runtime config change via the Settings window takes
+            // effect on the next launch. The log file is the bootstrap-resolved,
+            // process-pinned path (LoggingBootstrap.CurrentLogFile), not the raw
+            // template, read once here too.
             var config = _configLoader.Load();
 
             // Discovery first: if we cannot launch, do not touch the profile's
@@ -136,7 +138,11 @@ internal sealed class RelayLaunchService : IRelayLaunchService
             }
 
             var gameBinary = discovery.DarktideGameBinaryPath!;
-            var logFile = config.Logging.LogFile;
+            // The log file is resolved once at startup (a datetime-named,
+            // process-pinned path) by LoggingBootstrap; Relay writes the same
+            // per-process file. Fall back to the configured value if the
+            // bootstrap has not run (tests, edge hosts).
+            var logFile = LoggingBootstrap.CurrentLogFile ?? config.Logging.LogFile;
 
             // Read the profile's launch settings fresh on each launch (they apply next launch; editing
             // is unlocked while Darktide runs). GetLaunchSettings throws KeyNotFoundException for an

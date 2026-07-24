@@ -5,6 +5,18 @@
     <AssemblyName>Modificus.Curator.General</AssemblyName>
   </PropertyGroup>
 
+  <!--
+    Exposes the internal logging helpers (ResolveLogFile, PruneOldLogs) and the
+    CurrentLogFile test seam to the test assemblies, so the rotation/pruning
+    logic and the "Relay gets the resolved pinned path" wiring are unit-testable
+    without widening the library's public surface. CurrentLogFile's setter stays
+    internal (no public mutation): only this assembly sets it in production.
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Modificus.Curator.General.Tests" />
+    <InternalsVisibleTo Include="Modificus.Curator.RelayClient.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.9" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.9" />

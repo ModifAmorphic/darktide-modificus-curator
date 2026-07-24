@@ -69,7 +69,7 @@ public class App : Application
             config.ModsFolder,
             config.RelayDir,
             config.Logging.Level,
-            config.Logging.LogFile);
+            LoggingBootstrap.CurrentLogFile ?? config.Logging.LogFile);
 
         // Apply the user's preferences (theme, font scale, language) before any
         // window shows, so the first paint already reflects them. Swaps the XAML

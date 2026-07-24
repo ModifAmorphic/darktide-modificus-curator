@@ -3,7 +3,8 @@
   "_comment": "Sample Modificus Curator global config. Copy to <app-data>/config.json and edit. Every field has a default; specify only what you want to override.",
   "Logging": {
     "Level": "Information",
-    "LogFile": "<app-data>/logs/curator.log"
+    "LogFile": "<app-data>/logs/curator-{DateTime}.log",
+    "RetainedLogFileCount": 5
   },
   "ProfilesBaseFolder": "<app-data>/profiles",
   "ModsFolder": "<app-data>/mods",

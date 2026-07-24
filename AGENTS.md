@@ -297,7 +297,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           active change `CommitCreate` just made inside the
                           dialog). Bracketing the swap under `_syncing` makes
                           those events no-ops)
-  general/              Modificus.Curator.General -- cross-cutting infra (logging bootstrap,
+  general/              Modificus.Curator.General -- cross-cutting infra (logging bootstrap:
+                        per-process datetime-named log-file rotation + retention, with the
+                        resolved process-pinned path shared with Relay via --log-file,
                         config loader, app-state store (active profile id +
                         last update-check timestamp + manual-refresh throttle
                         window + profile-scoped known-update snapshots), AddGeneral() DI ext)
@@ -718,6 +720,10 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   file/dir → defaults (first-run safe).
 - **Logging** is Serilog (console + file) bridged into
   `Microsoft.Extensions.Logging`; honors `Logging:Level` + `Logging:LogFile`.
+  Per-process datetime-named log-file rotation: each start resolves the
+  `{DateTime}` token in `Logging:LogFile` to a timestamp, pins that path for the
+  process lifetime, and prunes to `Logging:RetainedLogFileCount` (default 5). The
+  resolved path is shared with Relay via `--log-file`.
 - The backend libraries are all implemented: **Profiles** (profile data model +
   lifecycle; container-based staging, where `PrepareModRoot` discovers each
   enabled mod's base folder name inside the resolved version folder via

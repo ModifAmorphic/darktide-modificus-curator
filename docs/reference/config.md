@@ -55,14 +55,26 @@ org/app hierarchy, kept distinct from the Velopack install root at
 ```csharp
 public sealed class LoggingConfig
 {
+    public const string DateTimeToken = "{DateTime}";
     public string Level { get; set; } = "Information";   // Serilog level name
-    public string LogFile { get; set; }                  // default <app-data>/logs/curator.log
+    public string LogFile { get; set; }                   // default <app-data>/logs/curator-{DateTime}.log
+    public int RetainedLogFileCount { get; set; } = 5;
 }
 ```
 
 - `Level`: a Serilog level name (`Verbose`/`Debug`/`Information`/`Warning`/
   `Error`/`Fatal`); an unknown value falls back to `Information` at bootstrap.
-- `LogFile`: the structured log file; truncated on each manager startup.
+- `LogFile`: the structured log file. May contain `DateTimeToken` (`{DateTime}`);
+  when it does, the bootstrap resolves the token to a fixed-width local timestamp
+  (`yyyyMMddHHmmss`) once at startup and pins that path for the process lifetime
+  (a new file per start). The resolved path is shared with Mod Relay: Curator
+  passes it to the launcher as `--log-file`, so the two write the same per-process
+  file. When the token is absent, the configured file is reused and truncated on
+  each start (the legacy behavior).
+- `RetainedLogFileCount`: how many datetime-named log files to keep (including
+  the current process's file). Default 5. Only applies when `LogFile` contains
+  `DateTimeToken`; the log directory is pruned to the newest N after each start.
+  A value below 1 disables pruning (keeps all).
 
 ### `IntegrationsConfig` / `NexusConfig`
 

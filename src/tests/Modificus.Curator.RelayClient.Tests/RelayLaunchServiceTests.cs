@@ -1,3 +1,4 @@
+using Modificus.Curator.General;
 using Modificus.Curator.Profiles;
 using Modificus.Curator.Steam;
 
@@ -65,6 +66,35 @@ public sealed class RelayLaunchServiceTests
         Assert.Equal(LogFile, log);
         Assert.DoesNotContain("Z:", game);
         Assert.DoesNotContain("Z:", log);
+    }
+
+    [Fact]
+    public void Launch_uses_the_bootstrap_resolved_log_file_path()
+    {
+        // Pins "Relay gets the resolved, process-pinned path": when the bootstrap
+        // has resolved a log file, the spawned --log-file arg is that path, not
+        // the raw config.Logging.LogFile template. Uses the Windows strategy so
+        // the path passes through verbatim (no Z:\ translation).
+        using var fx = new RelayFixture();
+        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        const string Resolved = @"C:\resolved\curator-xyz.log";
+        var previous = LoggingBootstrap.CurrentLogFile;
+        LoggingBootstrap.CurrentLogFile = Resolved;
+        try
+        {
+            var svc = fx.BuildWindowsService();
+
+            svc.Launch(Guid.NewGuid());
+
+            var args = fx.Launcher.Arguments!;
+            var log = args[IndexOf(args, "--log-file") + 1];
+            Assert.Equal(Resolved, log);
+            Assert.NotEqual(fx.Config.Logging.LogFile, log);
+        }
+        finally
+        {
+            LoggingBootstrap.CurrentLogFile = previous;
+        }
     }
 
     [Fact]
