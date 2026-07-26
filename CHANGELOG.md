@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.17.0...v0.18.0) (2026-07-26)
+
+
+### Features
+
+* **logging:** rotate per-process log files with retention ([#144](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/144)) ([819d9c6](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/819d9c6181a6754451ea499c69e7e148ba5a2207))
+
 ## [0.17.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.16.0...v0.17.0) (2026-07-24)
 
 
