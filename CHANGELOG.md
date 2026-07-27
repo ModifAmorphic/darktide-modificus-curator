@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.18.0...v0.19.0) (2026-07-27)
+
+
+### Features
+
+* **launch:** add per-profile --skip-splash toggle ([#147](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/147)) ([c814ab3](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/c814ab302bc16c2be2e0cc1047368487d385e3dd))
+
 ## [0.18.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.17.0...v0.18.0) (2026-07-26)
 
 
