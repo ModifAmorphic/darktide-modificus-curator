@@ -88,7 +88,7 @@ internal sealed class LinuxLaunchStrategy : IPlatformLaunchStrategy
         // launcher.exe path are native Linux (Proton resolves the .exe from a
         // native path). Game args append a bare -- then one argv entry each
         // (Relay's -- contract; empty game args emit no --).
-        var launcherArgs = BuildLauncherArgs(gameBinary, modPath, logFile, launchSettings.EnableLuaLogs, launchSettings.GameArguments);
+        var launcherArgs = BuildLauncherArgs(gameBinary, modPath, logFile, launchSettings);
 
         var arguments = new List<string>(capacity: launcherArgs.Count + 2)
         {
@@ -133,13 +133,18 @@ internal sealed class LinuxLaunchStrategy : IPlatformLaunchStrategy
     /// Builds the launcher's own argument list (the flags AFTER
     /// <c>... proton run launcher.exe</c>). The path-valued flags are converted
     /// to Wine <c>Z:\</c> form so the launcher-under-Wine can resolve them. When
-    /// <paramref name="enableLuaLogs"/> is true, appends a bare
+    /// <see cref="LaunchSettings.EnableLuaLogs"/> is true, appends a bare
     /// <c>--lua-logs</c> flag after <c>--log-file</c> (a Relay-owned logging
     /// flag with no value, NOT path-valued, so it is not <c>Z:\</c>-translated),
     /// teeing Lua <c>print</c> output into the log file. When
-    /// <paramref name="gameArguments"/> is non-empty, appends a single bare
-    /// <c>--</c> separator then each game arg as its own argv entry (Relay's
-    /// <c>--</c> contract); empty game args emit no <c>--</c> (legacy launch).
+    /// <see cref="LaunchSettings.SkipSplash"/> is true, appends a bare
+    /// <c>--skip-splash</c> flag after <c>--lua-logs</c> (a Relay-owned flag
+    /// with no value, NOT path-valued, so it is not <c>Z:\</c>-translated),
+    /// skipping Darktide's intro splash state. When
+    /// <see cref="LaunchSettings.GameArguments"/> is non-empty, appends a single
+    /// bare <c>--</c> separator then each game arg as its own argv entry
+    /// (Relay's <c>--</c> contract); empty game args emit no <c>--</c> (legacy
+    /// launch).
     /// </summary>
     /// <remarks>
     /// <c>--log-file</c> is a path the launcher-under-Wine opens, so it must be
@@ -149,19 +154,25 @@ internal sealed class LinuxLaunchStrategy : IPlatformLaunchStrategy
     /// are NOT <c>Z:\</c>-translated: they are Darktide's own args, opaque to
     /// Curator, forwarded verbatim; any path-like arg is the game's concern.
     /// </remarks>
-    internal static List<string> BuildLauncherArgs(string gameBinary, string modPath, string logFile, bool enableLuaLogs, IReadOnlyList<string> gameArguments)
+    internal static List<string> BuildLauncherArgs(string gameBinary, string modPath, string logFile, LaunchSettings launchSettings)
     {
+        ArgumentNullException.ThrowIfNull(launchSettings);
+
         var args = new List<string>
         {
             "--game-binary", WinePath.ToWine(gameBinary),
             "--mod-path", WinePath.ToWine(modPath),
             "--log-file", WinePath.ToWine(logFile),
         };
-        if (enableLuaLogs)
+        if (launchSettings.EnableLuaLogs)
         {
             args.Add("--lua-logs");
         }
-        return AppendGameArguments(args, gameArguments);
+        if (launchSettings.SkipSplash)
+        {
+            args.Add("--skip-splash");
+        }
+        return AppendGameArguments(args, launchSettings.GameArguments);
     }
 
     /// <summary>

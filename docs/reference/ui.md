@@ -128,16 +128,19 @@ public interface IDialogService
   on completion. Each row carries a launch-settings action (a drawn tune
   icon) that opens `ShowLaunchSettingsAsync` for that row's profile.
 - `ShowLaunchSettingsAsync(profileId)`: the per-profile launch-settings modal
-  (environment variables + Darktide command-line arguments), opened over the
-  Manage-profiles dialog. Loads the profile's existing settings via
-  `GetLaunchSettings`, lets the user add/remove env-var + game-arg rows with
-  inline localized validation (delegated to the shared
-  `LaunchSettingsValidator` from the Profiles library -- the same source of truth
-  `SetLaunchSettings` uses -- so the per-field messages track the service rules
-  exactly), and persists on Save through `SetLaunchSettings`
+  (environment variables + Darktide command-line arguments + the skip-splash and
+  Lua-logging toggles), opened over the Manage-profiles dialog. Loads the
+  profile's existing settings via `GetLaunchSettings`, lets the user add/remove
+  env-var + game-arg rows with inline localized validation (delegated to the
+  shared `LaunchSettingsValidator` from the Profiles library -- the same source
+  of truth `SetLaunchSettings` uses -- so the per-field messages track the
+  service rules exactly), and persists on Save through `SetLaunchSettings`
   (closing only on success). Cancel / ESC / close make no change. Editing is
   unlocked while Darktide runs (a `profile.json` write that does not touch the
-  running process); changes apply on the next launch.
+  running process); changes apply on the next launch. The two toggles map to
+  Relay bare flags: `SkipSplash` emits `--skip-splash` (skips Darktide's intro
+  splash state) and `EnableLuaLogs` emits `--lua-logs` (tees Lua `print` output
+  into the log file).
 - `ShowPreferencesAsync()`: the Preferences modal (theme / font scale /
   language). Each change applies immediately through `IPreferencesService`
   (which also persists), so on completion the running app and the persisted
@@ -1004,8 +1007,9 @@ No backend library references the UI (the dependency direction is one-way).
   settings load, add/remove rows, inline localized validation -- empty / `=` /
   NUL name, NUL value, case-insensitive duplicate, reserved name, all delegated
   to the shared `LaunchSettingsValidator` from the Profiles library -- the
-  `EnableLuaLogs` Logging toggle (load + persist), Save persists once via
-  `SetLaunchSettings` and closes only on success, Cancel no change).
+  `EnableLuaLogs` Logging toggle + the `SkipSplash` skip-splash toggle (load +
+  persist), Save persists once via `SetLaunchSettings` and closes only on
+  success, Cancel no change).
 - **`ModListViewModelTests`**: enable / disable, reorder, per-mod policy,
   remove (with confirm), auto-sort (identity stub), the add flow (peek,
   collision hard-block, import, add-mod), the linked-folder flow

@@ -250,6 +250,18 @@
     <value>Copies Lua print output (the mod loader, DMF, and mods) into the same log file Relay writes. It is a tee, not a redirect; Darktide's console log stays complete. Adds Relay's --lua-logs flag at launch.</value>
     <comment>Tooltip on the Lua-logs checkbox in the launch-settings modal.</comment>
   </data>
+  <data name="LaunchSettings_StartupHeader" xml:space="preserve">
+    <value>Game startup</value>
+    <comment>Header over the game-startup options section in the launch-settings modal.</comment>
+  </data>
+  <data name="LaunchSettings_SkipSplash" xml:space="preserve">
+    <value>Skip splash screens and intro video</value>
+    <comment>Checkbox label in the launch-settings modal. When on, Relay's --skip-splash flag is emitted at launch so Darktide's intro splash state (the splash screens and intro video) is skipped and the game goes straight to the title screen.</comment>
+  </data>
+  <data name="LaunchSettings_SkipSplashTooltip" xml:space="preserve">
+    <value>Skips Darktide's intro splash screens and intro video so the game goes straight to the title screen. Adds Relay's --skip-splash flag at launch.</value>
+    <comment>Tooltip on the skip-splash checkbox in the launch-settings modal.</comment>
+  </data>
   <data name="LaunchSettings_AddEnvVar" xml:space="preserve">
     <value>Add variable</value>
     <comment>The add-row button under the environment-variable section.</comment>

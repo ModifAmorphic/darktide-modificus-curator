@@ -37,15 +37,18 @@ public sealed record LaunchSettings
     /// <c>STEAM_COMPAT_DATA_PATH</c>, <c>STEAM_COMPAT_CLIENT_INSTALL_PATH</c>,
     /// <c>APPDIR</c>, <c>APPIMAGE</c>, <c>ARGV0</c>, <c>OWD</c>,
     /// <c>BAMF_DESKTOP_FILE_HINT</c>.</description></item>
-    /// <item><term>Relay config env (6).</term>
+    /// <item><term>Relay config env (7).</term>
     /// <description>Curator owns these knobs and supplies them as flags (Relay's
     /// config model is flag &gt; env &gt; default):
     /// <c>MODIFICUS_GAME_BINARY</c>, <c>MODIFICUS_MOD_PATH</c>,
     /// <c>RELAY_LOG_FILE</c>, <c>RELAY_LOG_LEVEL</c>,
     /// <c>MODIFICUS_STEAM_APP_ID</c> (the env fallback is inert; blocked to
-    /// avoid a silently-ignored value), and <c>RELAY_LUA_LOGS</c> (owned by the
+    /// avoid a silently-ignored value), <c>RELAY_LUA_LOGS</c> (owned by the
     /// per-profile <see cref="EnableLuaLogs"/> toggle; the env form is reserved
     /// so a profile value can't double-control or silently bypass that
+    /// toggle), and <c>RELAY_SKIP_SPLASH</c> (owned by the per-profile
+    /// <see cref="SkipSplash"/> toggle; the env form is reserved for the same
+    /// reason, so a profile value can't double-control or silently bypass that
     /// toggle).</description></item>
     /// </list>
     /// Exposed publicly so the launch-settings UI can pre-validate and show a
@@ -69,6 +72,7 @@ public sealed record LaunchSettings
         "RELAY_LOG_LEVEL",
         "MODIFICUS_STEAM_APP_ID",
         "RELAY_LUA_LOGS",
+        "RELAY_SKIP_SPLASH",
     };
 
     /// <summary>
@@ -100,4 +104,15 @@ public sealed record LaunchSettings
     /// runs.
     /// </summary>
     public bool EnableLuaLogs { get; init; }
+
+    /// <summary>
+    /// Whether to emit Relay's <c>--skip-splash</c> flag at launch, skipping
+    /// Darktide's intro splash state (the splash screens and intro video) so the
+    /// game advances directly to the title screen. Off by default. The Relay env
+    /// form <c>RELAY_SKIP_SPLASH</c> is reserved (see
+    /// <see cref="ReservedEnvironmentNames"/>) so this toggle is the single
+    /// source of truth. Applies at launch; editing is unlocked while Darktide
+    /// runs.
+    /// </summary>
+    public bool SkipSplash { get; init; }
 }

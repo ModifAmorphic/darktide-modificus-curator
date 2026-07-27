@@ -371,10 +371,8 @@ public sealed class RelayLaunchServiceTests
         svc.Launch(Guid.NewGuid());
 
         var args = fx.Launcher.Arguments!;
-        Assert.Contains("--lua-logs", args);
-        // --lua-logs sits immediately after the --log-file value.
-        var logIndex = IndexOf(args, "--log-file");
-        Assert.Equal("--lua-logs", args[logIndex + 2]);
+        AssertBareFlag(args, "--lua-logs", present: true);
+        AssertPrecedesSeparator(args, "--lua-logs");
     }
 
     [Fact]
@@ -390,12 +388,9 @@ public sealed class RelayLaunchServiceTests
         var args = fx.Launcher.Arguments!;
         // Exactly once; the bare flag is not Z:\-translated (only path-valued
         // flags are).
-        var lua = Assert.Single(args, a => a == "--lua-logs");
-        Assert.Equal("--lua-logs", lua);
-        Assert.DoesNotContain("Z:", lua);
-        // Sits immediately after the --log-file value (which IS Z:\-translated).
-        var logIndex = IndexOf(args, "--log-file");
-        Assert.Equal("--lua-logs", args[logIndex + 2]);
+        AssertBareFlag(args, "--lua-logs", present: true);
+        AssertPrecedesSeparator(args, "--lua-logs");
+        Assert.DoesNotContain("Z:", args[IndexOf(args, "--lua-logs")]);
     }
 
     [Fact]
@@ -409,6 +404,82 @@ public sealed class RelayLaunchServiceTests
         svc.Launch(Guid.NewGuid());
 
         Assert.DoesNotContain("--lua-logs", fx.Launcher.Arguments!);
+    }
+
+    [Fact]
+    public void Windows_profile_with_skip_splash_emits_flag()
+    {
+        using var fx = new RelayFixture();
+        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Profiles.LaunchSettingsResult = new LaunchSettings { SkipSplash = true };
+        var svc = fx.BuildWindowsService();
+
+        svc.Launch(Guid.NewGuid());
+
+        var args = fx.Launcher.Arguments!;
+        AssertBareFlag(args, "--skip-splash", present: true);
+        AssertPrecedesSeparator(args, "--skip-splash");
+    }
+
+    [Fact]
+    public void Linux_profile_with_skip_splash_emits_flag()
+    {
+        using var fx = new RelayFixture();
+        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Profiles.LaunchSettingsResult = new LaunchSettings { SkipSplash = true };
+        var svc = fx.BuildLinuxService();
+
+        svc.Launch(Guid.NewGuid());
+
+        var args = fx.Launcher.Arguments!;
+        // Exactly once; the bare flag is not Z:\-translated (only path-valued
+        // flags are).
+        AssertBareFlag(args, "--skip-splash", present: true);
+        AssertPrecedesSeparator(args, "--skip-splash");
+        Assert.DoesNotContain("Z:", args[IndexOf(args, "--skip-splash")]);
+    }
+
+    [Fact]
+    public void Profile_without_skip_splash_omits_flag()
+    {
+        // Default LaunchSettings: SkipSplash is false, so no --skip-splash.
+        using var fx = new RelayFixture();
+        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        var svc = fx.BuildWindowsService();
+
+        svc.Launch(Guid.NewGuid());
+
+        Assert.DoesNotContain("--skip-splash", fx.Launcher.Arguments!);
+    }
+
+    [Fact]
+    public void Both_bare_flags_precede_separator_when_both_toggles_on()
+    {
+        // With both toggles on, each bare flag is present and precedes the --
+        // separator (game args follow --). The relative order of the two bare
+        // flags is not a Relay contract, so it is not asserted. One platform
+        // is enough (the signature is shared).
+        using var fx = new RelayFixture();
+        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Profiles.LaunchSettingsResult = new LaunchSettings
+        {
+            EnableLuaLogs = true,
+            SkipSplash = true,
+            GameArguments = new[] { "-g" },
+        };
+        var svc = fx.BuildWindowsService();
+
+        svc.Launch(Guid.NewGuid());
+
+        var args = fx.Launcher.Arguments!;
+        var luaIndex = IndexOf(args, "--lua-logs");
+        var skipIndex = IndexOf(args, "--skip-splash");
+        var sepIndex = IndexOf(args, "--");
+        Assert.True(luaIndex >= 0, "expected --lua-logs to be present");
+        Assert.True(skipIndex >= 0, "expected --skip-splash to be present");
+        Assert.True(sepIndex > luaIndex, "expected --lua-logs to precede the -- separator");
+        Assert.True(sepIndex > skipIndex, "expected --skip-splash to precede the -- separator");
+        Assert.Equal("-g", args[^1]);
     }
 
     [Fact]
@@ -647,5 +718,26 @@ public sealed class RelayLaunchServiceTests
             }
         }
         return -1;
+    }
+
+    // ---- relational argv-flag helpers --------------------------------------
+    // Assert Relay's bare-flag contract without pinning absolute argv layout:
+    // the flag is present exactly once when its toggle is on, and it precedes
+    // the -- separator. No fixed indices, no adjacency to other flags.
+
+    // A bare (value-less) flag is present exactly once when on, absent when off.
+    private static void AssertBareFlag(IReadOnlyList<string> args, string flag, bool present)
+    {
+        if (present) Assert.Single(args, a => a == flag);
+        else Assert.DoesNotContain(flag, args);
+    }
+
+    // A Relay flag precedes the -- separator (Relay contract #1). No-op when the separator is absent.
+    private static void AssertPrecedesSeparator(IReadOnlyList<string> args, string flag)
+    {
+        var i = IndexOf(args, flag);
+        var sep = IndexOf(args, "--");
+        Assert.True(i >= 0, $"expected flag {flag} to be present");
+        Assert.True(sep < 0 || i < sep, $"expected {flag} to precede the -- separator");
     }
 }

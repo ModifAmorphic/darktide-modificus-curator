@@ -108,6 +108,14 @@ public partial class LaunchSettingsViewModel : ObservableObject
     private bool _enableLuaLogs;
 
     /// <summary>
+    /// Whether Relay's <c>--skip-splash</c> flag is emitted at launch (skips the
+    /// intro splash state). Loaded from the profile's launch settings; persisted
+    /// on Save. No validation (a boolean toggle).
+    /// </summary>
+    [ObservableProperty]
+    private bool _skipSplash;
+
+    /// <summary>
     /// A top-level error from the authoritative <see cref="Save"/> call (empty
     /// when there is nothing to show). Cleared on any edit so a stale error does
     /// not linger after the user fixes the input.
@@ -158,6 +166,7 @@ public partial class LaunchSettingsViewModel : ObservableObject
         }
 
         EnableLuaLogs = settings.EnableLuaLogs;
+        SkipSplash = settings.SkipSplash;
 
         RecomputeValidation();
     }
@@ -233,6 +242,7 @@ public partial class LaunchSettingsViewModel : ObservableObject
                 .Select(r => r.Value)
                 .ToArray(),
             EnableLuaLogs = EnableLuaLogs,
+            SkipSplash = SkipSplash,
         };
 
         try

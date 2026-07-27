@@ -1,0 +1,21 @@
+root = true
+
+# Universal rules. end_of_line = lf is the load-bearing one: without it,
+# dotnet format's line-ending default is platform-dependent (CRLF on Windows,
+# LF on Ubuntu), so the CI format gate (Ubuntu) and a Windows contributor's
+# local format disagree, producing spurious LF<->CRLF "violations". Pinning lf
+# makes dotnet format deterministic across OSes and matches the repo's existing
+# line-ending convention.
+[*]
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.cs]
+indent_style = space
+indent_size = 4
+
+[*.{axaml,xaml}]
+indent_style = space
+indent_size = 2

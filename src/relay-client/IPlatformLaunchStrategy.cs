@@ -54,6 +54,9 @@ internal interface IPlatformLaunchStrategy
     /// game args emit no <c>--</c>. <see cref="LaunchSettings.EnableLuaLogs"/>
     /// controls emission of Relay's bare <c>--lua-logs</c> logging flag
     /// (appended after <c>--log-file</c>, no value, not path-translated).
+    /// <see cref="LaunchSettings.SkipSplash"/> controls emission of Relay's bare
+    /// <c>--skip-splash</c> flag (skips Darktide's intro splash state; appended
+    /// after <c>--log-file</c>, no value, not path-translated).
     /// </param>
     bool Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings);
 }
