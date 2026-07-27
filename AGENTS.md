@@ -326,14 +326,16 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         (EnvVar/LaunchSettings: ordered env-var entries + game
                         args + the EnableLuaLogs toggle (emits Relay's bare
                         --lua-logs flag, teeing Lua print output into the log
-                        file); GetLaunchSettings/SetLaunchSettings validate at the
+                        file) + the SkipSplash toggle (emits Relay's bare
+                        --skip-splash flag, skipping Darktide's intro splash
+                        state); GetLaunchSettings/SetLaunchSettings validate at the
                         setter via the shared LaunchSettingsValidator
                         (LaunchSettingsValidationError: index + field + kind;
                         single source of truth consumed by both the service and
                         the UI) -- names non-empty/no =/no NUL, no NUL in values,
                         case-insensitive duplicate rejection, reserved-name block
-                        of 13 Curator-owned OS/launch + Relay config env (adds
-                        RELAY_LUA_LOGS); backward-
+                        of 14 Curator-owned OS/launch + Relay config env (adds
+                        RELAY_LUA_LOGS + RELAY_SKIP_SPLASH); backward-
                         compat null/missing normalization to empty, mirroring Mods;
                         apply at launch) + the auto-sort seam
                         (IModOrderResolver/IdentityModOrderResolver, identity stub now;
@@ -466,6 +468,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         AppImage identity; a profile's EnableLuaLogs emits Relay's
                         bare --lua-logs flag appended after --log-file (a tee of
                         Lua print output into the log file, no value, not
+                        Z:\-translated on Linux); a profile's SkipSplash emits
+                        Relay's bare --skip-splash flag appended after --log-file
+                        (skips Darktide's intro splash state, no value, not
                         Z:\-translated on Linux); game args append one bare -- then
                         each arg as its own ArgumentList entry (Relay's --
                         contract; no version preflight); the spawn seam IProcessLauncher takes
@@ -561,7 +566,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             load, add/remove rows, inline localized validation --
                                             empty/`=`/NUL name, NUL value, case-insensitive
                                             duplicate, reserved name -- + a Logging toggle
-                                            (EnableLuaLogs emits Relay's bare --lua-logs flag);
+                                            (EnableLuaLogs emits Relay's bare --lua-logs flag) +
+                                            a SkipSplash toggle (SkipSplash emits Relay's bare
+                                            --skip-splash flag);
                                             Save persists once via
                                             SetLaunchSettings + closes only on success, Cancel no
                                             change) + the

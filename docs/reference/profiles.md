@@ -163,10 +163,11 @@ public sealed record EnvVar(string Name, string Value);
 
 public sealed record LaunchSettings
 {
-    public static readonly IReadOnlyCollection<string> ReservedEnvironmentNames;  // 13, case-insensitive
+    public static readonly IReadOnlyCollection<string> ReservedEnvironmentNames;  // 14, case-insensitive
     public IReadOnlyList<EnvVar> EnvironmentVariables { get; init; }  // ordered, default empty
     public IReadOnlyList<string> GameArguments { get; init; }        // ordered, default empty
     public bool EnableLuaLogs { get; init; }                         // emits Relay's --lua-logs when true
+    public bool SkipSplash { get; init; }                            // emits Relay's --skip-splash when true
 }
 ```
 
@@ -177,18 +178,19 @@ public sealed record LaunchSettings
 - Backward compatible: an existing `profile.json` without `LaunchSettings`, and
   an explicit JSON `null`, both deserialize to an empty (non-null) instance
   (`ReadProfileFile` coerces `null` to `new()`, mirroring `Mods ??= Empty`).
-- `ReservedEnvironmentNames` (case-insensitive, 13 names) is the central
+- `ReservedEnvironmentNames` (case-insensitive, 14 names) is the central
   reserved-name policy consumed by the shared `LaunchSettingsValidator` (below)
   so the launch-settings UI pre-validates inline from the same source of truth.
   Two groups: Curator-owned OS/launch env (7: the two `STEAM_COMPAT_*`,
   `APPDIR`, `APPIMAGE`, `ARGV0`, `OWD`, `BAMF_DESKTOP_FILE_HINT` -- a profile
   value would fight Curator or break the AppImage-identity invariant) and Relay
-  config env (6: `MODIFICUS_GAME_BINARY`, `MODIFICUS_MOD_PATH`,
+  config env (7: `MODIFICUS_GAME_BINARY`, `MODIFICUS_MOD_PATH`,
   `RELAY_LOG_FILE`, `RELAY_LOG_LEVEL`, `MODIFICUS_STEAM_APP_ID` -- Curator
   supplies these as flags so the env fallback is inert; blocked to avoid a
   silently-ignored value -- plus `RELAY_LUA_LOGS`, owned by the per-profile
   `EnableLuaLogs` toggle and reserved so a profile env can't double-control or
-  silently bypass that toggle).
+  silently bypass that toggle, and `RELAY_SKIP_SPLASH`, owned by the per-profile
+  `SkipSplash` toggle and reserved for the same reason).
 
 ### Launch-settings validation (`LaunchSettingsValidator`)
 

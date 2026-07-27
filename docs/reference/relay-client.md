@@ -155,7 +155,9 @@ log path from `LoggingBootstrap.CurrentLogFile`, so Relay writes the same
 per-process file as Curator, with the configured `Logging.LogFile` only a
 fallback when the bootstrap has not run); then, when the profile's `EnableLuaLogs` toggle is on,
 a bare `--lua-logs` flag (tees Lua `print` output into the log file; no value,
-appended right after `--log-file`); then (when the profile has game arguments)
+appended right after `--log-file`); then, when the profile's `SkipSplash` toggle
+is on, a bare `--skip-splash` flag (skips Darktide's intro splash state; no
+value, appended after `--log-file`); then (when the profile has game arguments)
 one bare `--` + each game arg as its own argv entry. The profile's environment
 variables are applied as overrides on the Relay process; Relay creates Darktide
 with an inherited environment, so the values reach the game. No removals (Windows
@@ -182,9 +184,11 @@ Command: `<proton> run <launcher.exe> <args>`, where:
   couldn't be written where Curator expects. The `--log-file` value is Curator's
   startup-resolved, process-pinned path (`LoggingBootstrap.CurrentLogFile`), so
   Relay writes the same per-process file as Curator. When the profile's `EnableLuaLogs`
-  toggle is on, a bare `--lua-logs` flag is appended right after `--log-file`
-  (a Relay-owned logging flag with no value, so it is NOT path-valued and is not
-  `Z:\`-translated).
+  toggle is on, a bare `--lua-logs` flag is appended (a Relay-owned logging
+  flag with no value, so it is NOT path-valued and is not `Z:\`-translated).
+  When the profile's `SkipSplash` toggle is on, a bare `--skip-splash` flag is
+  appended (a Relay-owned flag with no value, so it is NOT path-valued and is
+  not `Z:\`-translated).
 - Environment: `STEAM_COMPAT_DATA_PATH = <compatdata>` (the Wine prefix) +
   `STEAM_COMPAT_CLIENT_INSTALL_PATH = <steam-install>` -- both required for Proton
   to use the right prefix and find the Steam client. Discovery guaranteed both
@@ -224,6 +228,13 @@ args). It tees Lua `print` output (the mod loader, DMF, and mods) into the
 no value, so on Linux it is NOT `Z:\`-translated (only `--game-binary`,
 `--mod-path`, `--log-file` are path-valued). Its Relay env form
 `RELAY_LUA_LOGS` is reserved so the toggle is the single source of truth.
+
+**Skip splash:** when the profile's `SkipSplash` toggle is on, Curator appends
+the bare `--skip-splash` flag after `--log-file` (before any `--` + game
+args). It skips Darktide's intro splash state (the splash screens and intro
+video) so the game advances directly to the title screen. The flag carries no
+value, so on Linux it is NOT `Z:\`-translated. Its Relay env form
+`RELAY_SKIP_SPLASH` is reserved so the toggle is the single source of truth.
 
 #### AppImage desktop-identity sanitization
 
@@ -304,8 +315,11 @@ and the Windows empty-removal/override assertion, plus the launch-settings merge
 Linux profile env before Proton startup alongside the AppImage removals + the
 `STEAM_COMPAT_*` overrides; Windows profile env as overrides; empty/legacy when no
 settings), `GameArgumentsTests` (the bare-`--` contract via the pure
-`BuildLauncherArgs` seam: empty emits no `--`, multiple emit one `--` then each
-arg as its own element in order, values with spaces + quotes stay one element),
+`BuildLauncherArgs(gameBinary, modPath, logFile, LaunchSettings)` seam: empty
+emits no `--`, multiple emit one `--` then each arg as its own element in order,
+values with spaces + quotes stay one element; the bare `--lua-logs` +
+`--skip-splash` flags append after `--log-file` when the matching toggles are
+on, neither path-translated),
 `ProcessLauncherTests`
 (the deterministic `ProcessLauncher.BuildStartInfo` path: a requested inherited
 key is removed, an unrelated inherited key remains, an override is applied, an

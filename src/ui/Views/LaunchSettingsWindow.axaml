@@ -123,14 +123,24 @@
               </Border>
             </StackPanel>
 
+            <!-- Game startup section -->
+            <StackPanel Spacing="6">
+              <TextBlock Text="{ReflectionBinding [LaunchSettings_StartupHeader], Source={StaticResource Loc}}"
+                         FontWeight="SemiBold" />
+              <CheckBox IsChecked="{Binding SkipSplash, Mode=TwoWay}"
+                        Content="{ReflectionBinding [LaunchSettings_SkipSplash], Source={StaticResource Loc}}"
+                        ToolTip.Tip="{ReflectionBinding [LaunchSettings_SkipSplashTooltip], Source={StaticResource Loc}}"
+                        Margin="0,4" />
+            </StackPanel>
+
             <!-- Logging section -->
             <StackPanel Spacing="6">
               <TextBlock Text="{ReflectionBinding [LaunchSettings_LoggingHeader], Source={StaticResource Loc}}"
                          FontWeight="SemiBold" />
               <CheckBox IsChecked="{Binding EnableLuaLogs, Mode=TwoWay}"
-                        Content="{ReflectionBinding [LaunchSettings_EnableLuaLogs], Source={StaticResource Loc}}"
-                        ToolTip.Tip="{ReflectionBinding [LaunchSettings_EnableLuaLogsTooltip], Source={StaticResource Loc}}"
-                        Margin="0,4" />
+                         Content="{ReflectionBinding [LaunchSettings_EnableLuaLogs], Source={StaticResource Loc}}"
+                         ToolTip.Tip="{ReflectionBinding [LaunchSettings_EnableLuaLogsTooltip], Source={StaticResource Loc}}"
+                         Margin="0,4" />
             </StackPanel>
 
             <!-- Static next-launch hint. -->

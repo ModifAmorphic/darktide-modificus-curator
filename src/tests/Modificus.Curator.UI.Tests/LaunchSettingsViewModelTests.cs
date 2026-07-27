@@ -269,6 +269,50 @@ public sealed class LaunchSettingsViewModelTests
         Assert.False(saved.EnableLuaLogs);
     }
 
+    // ---- skip-splash toggle: load + persist --------------------------------
+
+    [Fact]
+    public void Construction_loads_skip_splash_from_the_profile()
+    {
+        var profiles = TestDoubles.Profiles(new ProfileSummary(Guid.NewGuid(), "P"));
+        var id = profiles.ListProfiles().First().Id;
+        profiles.LaunchSettingsByProfile[id] = new LaunchSettings { SkipSplash = true };
+
+        var vm = Build(profiles, id);
+
+        Assert.True(vm.SkipSplash);
+    }
+
+    [Fact]
+    public void Flipping_skip_splash_is_persisted_on_save()
+    {
+        var profiles = TestDoubles.Profiles(new ProfileSummary(Guid.NewGuid(), "P"));
+        var id = profiles.ListProfiles().First().Id;
+        var vm = Build(profiles, id);
+        vm.SkipSplash = true;
+
+        vm.SaveCommand.Execute(null);
+
+        Assert.True(vm.SaveResult);
+        var (_, saved) = Assert.Single(profiles.SetLaunchSettingsCalls);
+        Assert.True(saved.SkipSplash);
+    }
+
+    [Fact]
+    public void Skip_splash_defaults_to_false_and_persists_false()
+    {
+        var profiles = TestDoubles.Profiles(new ProfileSummary(Guid.NewGuid(), "P"));
+        var id = profiles.ListProfiles().First().Id;
+        var vm = Build(profiles, id);
+
+        Assert.False(vm.SkipSplash);
+
+        vm.SaveCommand.Execute(null);
+
+        var (_, saved) = Assert.Single(profiles.SetLaunchSettingsCalls);
+        Assert.False(saved.SkipSplash);
+    }
+
     // ---- validation: inline localized errors keep the modal open ------------
 
     [Fact]
