@@ -36,14 +36,6 @@ public interface INexusClient
     Task<Response<ValidateInfo>> ValidateAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// Fetches the OAuth user info (identity + membership roles). Hits
-    /// <c>GET /oauth/userinfo</c> on the OAuth base URL. Throws
-    /// <see cref="NexusApiException"/> on a non-2xx; throws
-    /// <see cref="NexusNotAuthenticatedException"/> when auth is not <c>OAuth</c>.
-    /// </summary>
-    Task<Response<OAuthUserInfo>> GetOAuthUserInfoAsync(CancellationToken ct = default);
-
-    /// <summary>
     /// Lists mods updated in the past <paramref name="period"/> for
     /// <paramref name="gameDomain"/>. Hits
     /// <c>GET /v1/games/{domain}/mods/updated.json?period={1d|1w|1m}</c>.

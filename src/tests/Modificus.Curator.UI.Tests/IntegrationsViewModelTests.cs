@@ -287,6 +287,10 @@ public sealed class IntegrationsViewModelTests
         await vm.LoginWithOAuthCommand.ExecuteAsync(null);
 
         Assert.Equal(1, auth.OAuthLoginCalls);
+        // The VM forwards a real (non-default) CancellationToken so the login
+        // is cancelable on Detach (CancelOAuthOnToken is not set here; this
+        // just proves the command passes a live token rather than default).
+        Assert.NotEqual(CancellationToken.None, auth.LastOAuthCancellationToken);
         Assert.Equal(
             Localization.Format("Integrations_StatusSignedInOAuth", "OAuthUser"),
             vm.StatusLine);
@@ -295,6 +299,33 @@ public sealed class IntegrationsViewModelTests
         // Switching to OAuth clears the API-key field (the field is the
         // inactive alternative now).
         Assert.Equal(string.Empty, vm.ApiKey);
+    }
+
+    [Fact]
+    public async Task LoginWithOAuth_is_canceled_when_dialog_detaches()
+    {
+        // The Integrations dialog calls Detach from OnClosed. Detach cancels the
+        // in-flight login's token so the singleton LoopbackBrowser's listener
+        // is freed promptly instead of waiting out the 3-minute flow timeout
+        // (the retry-without-restart bug). The fake's login task completes as
+        // canceled when the token it was handed fires.
+        var (vm, auth, _, _) = await BuildAndRefresh(state: null);
+        auth.CancelOAuthOnToken = true;
+
+        var commandTask = vm.LoginWithOAuthCommand.ExecuteAsync(null);
+        Assert.NotNull(auth.LastOAuthTask);
+
+        vm.Detach();
+
+        // The login task must cancel promptly (not hang for the 3-minute
+        // timeout). Assert it finishes within 2s and lands in the canceled state.
+        var finished = await Task.WhenAny(auth.LastOAuthTask!, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.Same(auth.LastOAuthTask, finished);
+        Assert.True(auth.LastOAuthTask!.IsCanceled);
+
+        // The command swallows the OperationCanceledException (the catch
+        // surfaces it as a status line) and completes normally.
+        await commandTask;
     }
 
     [Fact]
@@ -353,6 +384,23 @@ public sealed class IntegrationsViewModelTests
     {
         var (vm, _, _, _) = await BuildAndRefresh(state: null);
         Assert.False(vm.SignOutCommand.CanExecute(null)); // not authenticated
+    }
+
+    [Fact]
+    public async Task RefreshAsync_enables_sign_out_after_resolving_authenticated_state()
+    {
+        // Regression: on dialog reopen, RefreshAsync resolves an authenticated
+        // OAuth state. ApplyState sets ActiveMethod first (which re-evaluates
+        // SignOutCommand while IsAuthenticated is still false), then sets
+        // IsAuthenticated = true. Without [NotifyCanExecuteChangedFor] on
+        // _isAuthenticated, Sign out stays disabled even though the status line
+        // shows signed-in. The notification makes the post-IsAuthenticated
+        // re-evaluation fire.
+        var (vm, _, _, _) = await BuildAndRefresh(
+            state: new NexusAuthState(NexusAuthMethod.OAuth, "OAuthUser", IsPremium: true));
+
+        Assert.True(vm.IsAuthenticated);
+        Assert.True(vm.SignOutCommand.CanExecute(null));
     }
 
     // ---- IsBusy gate ------------------------------------------------------
@@ -773,6 +821,20 @@ public sealed class IntegrationsViewModelTests
             NexusAuthResult.Success("ApiUser", isPremium: false);
         public Task<NexusAuthResult>? NextOAuthTask { get; set; }
 
+        // When true, LoginWithOAuthAsync returns a task that completes as
+        // canceled when the supplied CancellationToken fires, so a test can
+        // prove the VM cancels an in-flight login on Detach.
+        public bool CancelOAuthOnToken { get; set; }
+
+        // The CancellationToken the VM passed into the last LoginWithOAuthAsync
+        // call, so a test can assert the VM forwards a real (non-default) token.
+        public CancellationToken LastOAuthCancellationToken { get; private set; }
+
+        // The task returned by the last LoginWithOAuthAsync call (when
+        // CancelOAuthOnToken is set), so a test can await it and assert it
+        // cancels.
+        public Task<NexusAuthResult>? LastOAuthTask { get; private set; }
+
         // After a successful OAuth/API-key login, the VM calls GetCurrentStateAsync
         // to resolve the verified name. Tests drive the resulting status line by
         // setting these.
@@ -788,6 +850,17 @@ public sealed class IntegrationsViewModelTests
         public Task<NexusAuthResult> LoginWithOAuthAsync(CancellationToken ct = default)
         {
             OAuthLoginCalls++;
+            LastOAuthCancellationToken = ct;
+            if (CancelOAuthOnToken)
+            {
+                // Return a task that only completes when the VM cancels the token
+                // it handed us (Detach flips it). Records the task so the test can
+                // await it and assert IsCanceled.
+                var tcs = new TaskCompletionSource<NexusAuthResult>();
+                ct.Register(() => tcs.TrySetCanceled(ct));
+                LastOAuthTask = tcs.Task;
+                return tcs.Task;
+            }
             if (NextOAuthTask is not null)
             {
                 // Chain: after the awaited task completes, the VM will call

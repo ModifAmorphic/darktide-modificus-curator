@@ -1,6 +1,8 @@
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Duende.IdentityModel.Client;
 using Duende.IdentityModel.OidcClient;
 using Duende.IdentityModel.OidcClient.Browser;
 using Modificus.Curator.Config;
@@ -21,7 +23,7 @@ namespace Modificus.Curator.Integrations.Tests;
 /// <remarks>
 /// <para>
 /// The OAuth login path is exercised for both the happy path (success result +
-/// persisted tokens + cleared prior API key + userinfo fetch) and the failure
+/// persisted tokens + cleared prior API key + JWT claim parse) and the failure
 /// paths (<see cref="FakeBrowserMode.Timeout"/> / <see cref="FakeBrowserMode.UserCancel"/>
 /// surface a failure result without persisting).</para>
 /// <para>
@@ -64,7 +66,7 @@ public sealed class NexusAuthServiceTests
         // Switching methods clears the OTHER method's credentials: starting
         // from OAuth, validating an API key clears the OAuth tokens.
         var stub = new StubHttpMessageHandler(_ => HttpResponses.NexusOk(@"{ ""user_id"": 1, ""name"": ""U"" }"));
-        var priorTokens = new NexusOAuthTokens("AT", "RT", "openid profile email", DateTimeOffset.UtcNow.AddHours(1));
+        var priorTokens = new NexusOAuthTokens("AT", "RT", "openid", DateTimeOffset.UtcNow.AddHours(1));
         var (service, _, loader) = BuildService(stub, method: NexusAuthMethod.OAuth, tokens: priorTokens);
 
         await service.LoginWithApiKeyAsync("the-key");
@@ -80,7 +82,7 @@ public sealed class NexusAuthServiceTests
         // The validate call returns 401. The service reverts the speculative
         // write so the user's prior auth state is unchanged.
         var stub = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.Unauthorized));
-        var priorTokens = new NexusOAuthTokens("AT", "RT", "openid profile email", DateTimeOffset.UtcNow.AddHours(1));
+        var priorTokens = new NexusOAuthTokens("AT", "RT", "openid", DateTimeOffset.UtcNow.AddHours(1));
         var (service, _, loader) = BuildService(stub, method: NexusAuthMethod.OAuth, tokens: priorTokens);
 
         var result = await service.LoginWithApiKeyAsync("bad-key");
@@ -111,9 +113,16 @@ public sealed class NexusAuthServiceTests
     {
         // End-to-end through OidcClient.LoginAsync: discovery -> authorize URL
         // (with state + PKCE) -> FakeBrowser returns the auth code ->
-        // token exchange -> userinfo fetch. The FakeBrowser captures the state
-        // OidcClient generated (out of BrowserOptions.StartUrl) + echoes it back
-        // so OidcClient's CSRF check passes + the code is actually redeemed.
+        // token exchange -> JWT access-token parse. The FakeBrowser captures
+        // the state OidcClient generated (out of BrowserOption.StartUrl) +
+        // echoes it back so OidcClient's CSRF check passes + the code is
+        // actually redeemed.
+        //
+        // The access token is a JWT carrying the user claim (username +
+        // membership_roles); the service parses it for the display name +
+        // Premium state (no userinfo API call).
+        var accessToken = BuildJwt(
+            @"{""user"":{""id"":1,""username"":""OAuthUser"",""membership_roles"":[""premium""]}}");
         var stub = new StubHttpMessageHandler(req =>
         {
             var url = req.RequestUri!.ToString();
@@ -132,23 +141,48 @@ public sealed class NexusAuthServiceTests
             }
             if (url.Contains("/oauth/token"))
             {
+                // OidcClient sends client_secret_post (TokenClientCredentialStyle
+                // = PostBody), so both client_id + client_secret land in the
+                // form-urlencoded token request body. Assert the secret wiring
+                // is in effect (the test injects a non-empty secret via the
+                // ConfigureOidcOptions seam below, since the production const
+                // is empty in this test build: NEXUS_CLIENT_SECRET is not set,
+                // so OidcClient would otherwise omit it).
+                var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+                Assert.Contains("client_id", body, StringComparison.Ordinal);
+                Assert.Contains("client_secret", body, StringComparison.Ordinal);
                 return HttpResponses.Json(
-                    @"{ ""access_token"": ""AT"", ""refresh_token"": ""RT"", ""expires_in"": 3600, ""token_type"": ""Bearer"" }");
+                    @"{ ""access_token"": """ + accessToken + @""", ""refresh_token"": ""RT"", ""expires_in"": 3600, ""token_type"": ""Bearer"" }");
             }
-            // The post-login userinfo fetch the v1 client makes (now bearing the
-            // freshly-persisted access token via the OAuth factory).
-            return HttpResponses.NexusOk(
-                @"{ ""sub"": ""1"", ""name"": ""OAuthUser"", ""membership_roles"": [""premium""] }");
+            return HttpResponses.Json(@"{}");
         });
-        var (service, _, loader) = BuildService(
+        var (service, tokenStore, loader) = BuildService(
             stub,
             method: NexusAuthMethod.None,
             apiKey: "leftover-key",
             browser: new FakeBrowser(FakeBrowserMode.Success, code: "the-auth-code"));
 
+        // The production const NexusOAuthConstants.ClientSecret is
+        // build-injected from NEXUS_CLIENT_SECRET and empty in this test build
+        // (the env var is not set), so OidcClient would omit it from the token
+        // body. Inject a non-empty one via the test seam to prove the PostBody
+        // + secret wiring actually carries both client credentials into the
+        // token request.
+        var priorConfigure = tokenStore.ConfigureOidcOptions;
+        tokenStore.ConfigureOidcOptions = options =>
+        {
+            priorConfigure?.Invoke(options);
+            // Assert production wired the const + PostBody BEFORE the overwrite,
+            // so the body assertion below proves Curator's wiring, not just
+            // OidcClient's runtime behavior with any configured secret.
+            Assert.Equal(NexusOAuthConstants.ClientSecret, options.ClientSecret);
+            Assert.Equal(ClientCredentialStyle.PostBody, options.TokenClientCredentialStyle);
+            options.ClientSecret = "test-secret";
+        };
+
         var result = await service.LoginWithOAuthAsync();
 
-        // Success carries the userinfo-resolved name + premium flag.
+        // Success carries the JWT-claim-resolved name + premium flag.
         Assert.True(result.IsSuccess);
         Assert.Equal("OAuthUser", result.Name);
         Assert.True(result.IsPremium);
@@ -157,20 +191,19 @@ public sealed class NexusAuthServiceTests
         var nexus = loader.Config.Integrations.Nexus;
         Assert.Equal(NexusAuthMethod.OAuth, nexus.AuthMethod);
         Assert.NotNull(nexus.OAuth);
-        Assert.Equal("AT", nexus.OAuth!.AccessToken);
+        Assert.Equal(accessToken, nexus.OAuth!.AccessToken);
         Assert.Equal("RT", nexus.OAuth.RefreshToken);
-        Assert.Equal("openid profile email", nexus.OAuth.Scope);
+        Assert.Equal("openid", nexus.OAuth.Scope);
         AssertWithin(DateTimeOffset.UtcNow.AddSeconds(3600), nexus.OAuth.ExpiresAt, TimeSpan.FromMinutes(1));
 
         // Switching methods clears the OTHER method's credentials: the leftover
         // API key is gone.
         Assert.Null(nexus.ApiKey);
 
-        // The post-login userinfo fetch happened (the v1 client's GET on the
-        // OAuth userinfo endpoint, bearing the new access token).
-        Assert.Contains(stub.Requests,
-            r => r.Method == HttpMethod.Get
-                && r.RequestUri?.ToString().Contains("/oauth/userinfo") == true);
+        // No userinfo API call: the name + premium come from the access token's
+        // JWT payload, not a post-login fetch.
+        Assert.DoesNotContain(stub.Requests,
+            r => r.RequestUri?.ToString().Contains("/oauth/userinfo") == true);
     }
 
     [Fact]
@@ -221,7 +254,7 @@ public sealed class NexusAuthServiceTests
         var (service, _, loader) = BuildService(
             stub,
             method: NexusAuthMethod.OAuth,
-            tokens: new NexusOAuthTokens("AT", "RT", "openid profile email", DateTimeOffset.UtcNow.AddHours(1)));
+            tokens: new NexusOAuthTokens("AT", "RT", "openid", DateTimeOffset.UtcNow.AddHours(1)));
 
         await service.SignOutAsync();
 
@@ -242,11 +275,18 @@ public sealed class NexusAuthServiceTests
     }
 
     [Fact]
-    public async Task GetCurrentState_OAuth_hits_userinfo_and_returns_resolved_state()
+    public async Task GetCurrentState_OAuth_parses_access_token_jwt_and_returns_resolved_state()
     {
-        var stub = new StubHttpMessageHandler(_ =>
-            HttpResponses.NexusOk(@"{ ""sub"": ""1"", ""name"": ""OAuthUser"", ""membership_roles"": [""premium""] }"));
-        var (service, _, _) = BuildService(stub, method: NexusAuthMethod.OAuth, tokens: AnyTokens());
+        // The OAuth branch reads the access token's JWT payload (no API call),
+        // so the stub is never hit. Seed a JWT carrying the user claim so the
+        // parse resolves the name + Premium state.
+        var jwt = BuildJwt(
+            @"{""user"":{""id"":1,""username"":""OAuthUser"",""membership_roles"":[""premium""]}}");
+        var stub = new StubHttpMessageHandler(_ => HttpResponses.Json(@"{}"));
+        var (service, _, _) = BuildService(
+            stub,
+            method: NexusAuthMethod.OAuth,
+            tokens: new NexusOAuthTokens(jwt, "RT", "openid", DateTimeOffset.UtcNow.AddHours(1)));
 
         var state = await service.GetCurrentStateAsync();
 
@@ -254,13 +294,17 @@ public sealed class NexusAuthServiceTests
         Assert.Equal(NexusAuthMethod.OAuth, state!.Method);
         Assert.Equal("OAuthUser", state.Name);
         Assert.True(state.IsPremium);
+        // No API call was made (the JWT was parsed in-memory).
+        Assert.Empty(stub.Requests);
     }
 
     [Fact]
-    public async Task GetCurrentState_returns_unverified_state_on_failure()
+    public async Task GetCurrentState_OAuth_returns_unverified_state_when_access_token_is_not_a_jwt()
     {
-        // The verify call throws. The service returns an unverified state (with
-        // a null name) rather than throwing, so the dialog can still render.
+        // The OAuth branch parses the access token's JWT payload in-memory; a
+        // non-JWT access token (opaque, no dot-separated segments) yields null
+        // claims, so the service returns an unverified state (null name +
+        // null Premium) rather than throwing, so the dialog can still render.
         var stub = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.Unauthorized));
         var (service, _, _) = BuildService(stub, method: NexusAuthMethod.OAuth, tokens: AnyTokens());
 
@@ -269,6 +313,9 @@ public sealed class NexusAuthServiceTests
         Assert.NotNull(state);
         Assert.Equal(NexusAuthMethod.OAuth, state!.Method);
         Assert.Null(state.Name);
+        Assert.Null(state.IsPremium);
+        // No API call was made (the JWT parse is in-memory).
+        Assert.Empty(stub.Requests);
     }
 
     // ---- token store (RefreshAsync) ---------------------------------------
@@ -294,7 +341,7 @@ public sealed class NexusAuthServiceTests
         var (service, tokenStore, loader) = BuildService(
             stub,
             method: NexusAuthMethod.OAuth,
-            tokens: new NexusOAuthTokens("OLD-AT", "OLD-RT", "openid profile email", DateTimeOffset.UtcNow.AddHours(-1)));
+            tokens: new NexusOAuthTokens("OLD-AT", "OLD-RT", "openid", DateTimeOffset.UtcNow.AddHours(-1)));
 
         var refreshed = await tokenStore.RefreshAsync(default);
 
@@ -312,7 +359,7 @@ public sealed class NexusAuthServiceTests
         var (service, tokenStore, _) = BuildService(
             stub,
             method: NexusAuthMethod.OAuth,
-            tokens: new NexusOAuthTokens("AT", null, "openid profile email", DateTimeOffset.UtcNow.AddHours(1)));
+            tokens: new NexusOAuthTokens("AT", null, "openid", DateTimeOffset.UtcNow.AddHours(1)));
 
         Assert.Null(await tokenStore.RefreshAsync(default));
     }
@@ -326,7 +373,7 @@ public sealed class NexusAuthServiceTests
         var (service, tokenStore, _) = BuildService(
             stub,
             method: NexusAuthMethod.OAuth,
-            tokens: new NexusOAuthTokens("AT", "RT", "openid profile email", DateTimeOffset.UtcNow.AddHours(-1)));
+            tokens: new NexusOAuthTokens("AT", "RT", "openid", DateTimeOffset.UtcNow.AddHours(-1)));
 
         Assert.Null(await tokenStore.RefreshAsync(default));
     }
@@ -334,7 +381,24 @@ public sealed class NexusAuthServiceTests
     // ---- helpers -----------------------------------------------------------
 
     private static NexusOAuthTokens AnyTokens() =>
-        new("AT", "RT", "openid profile email", DateTimeOffset.UtcNow.AddHours(1));
+        new("AT", "RT", "openid", DateTimeOffset.UtcNow.AddHours(1));
+
+    /// <summary>
+    /// Builds an unsigned JWT (header.payload.) from the supplied payload JSON.
+    /// The parser does not verify the signature, so the signature segment is
+    /// empty; the header + payload are base64url-encoded. Used to shape the
+    /// access token the token-endpoint stub returns so the service's JWT parse
+    /// exercises a real claim set.
+    /// </summary>
+    private static string BuildJwt(string payloadJson)
+    {
+        const string HeaderJson = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
+        return Base64UrlEncode(Encoding.UTF8.GetBytes(HeaderJson)) + "."
+            + Base64UrlEncode(Encoding.UTF8.GetBytes(payloadJson)) + ".";
+    }
+
+    private static string Base64UrlEncode(byte[] bytes) =>
+        Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     /// <summary>
     /// Asserts <paramref name="actual"/> is within <paramref name="tolerance"/> of
@@ -397,7 +461,7 @@ public sealed class NexusAuthServiceTests
 
     /// <summary>
     /// Builds a NexusAuthService + its NexusOAuthTokenStore wired to a stub HTTP
-    /// handler (the v1 client's validate / userinfo calls). The OidcClient's
+    /// handler (the v1 client's validate calls). The OidcClient's
     /// backchannel (discovery + token + refresh) is wired to the SAME stub via
     /// the token store's <see cref="NexusOAuthTokenStore.ConfigureOidcOptions"/>
     /// test seam, so refresh + login flows run offline too. The browser defaults
@@ -455,7 +519,7 @@ public sealed class NexusAuthServiceTests
         var noneFactory = new NoneMessageFactory();
         var selector = new NexusAuthMessageFactorySelector(loader, apiKeyFactory, oauthFactory, noneFactory);
 
-        var client = new NexusClient(http, selector, loader, NullLogger<NexusClient>.Instance);
+        var client = new NexusClient(http, selector, NullLogger<NexusClient>.Instance);
 
         var service = new NexusAuthService(loader, client, tokenStore, NullLogger<NexusAuthService>.Instance);
         return (service, tokenStore, loader);
@@ -608,7 +672,7 @@ public sealed class NexusConfigRoundTripTests
                 Nexus = new NexusConfig
                 {
                     AuthMethod = NexusAuthMethod.OAuth,
-                    OAuth = new NexusOAuthTokens("AT", "RT", "openid profile email", DateTimeOffset.UnixEpoch),
+                    OAuth = new NexusOAuthTokens("AT", "RT", "openid", DateTimeOffset.UnixEpoch),
                 },
             },
         };
@@ -619,7 +683,7 @@ public sealed class NexusConfigRoundTripTests
         Assert.NotNull(roundTripped.Integrations.Nexus.OAuth);
         Assert.Equal("AT", roundTripped.Integrations.Nexus.OAuth!.AccessToken);
         Assert.Equal("RT", roundTripped.Integrations.Nexus.OAuth.RefreshToken);
-        Assert.Equal("openid profile email", roundTripped.Integrations.Nexus.OAuth.Scope);
+        Assert.Equal("openid", roundTripped.Integrations.Nexus.OAuth.Scope);
     }
 
     [Fact]

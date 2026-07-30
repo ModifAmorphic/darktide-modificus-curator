@@ -71,9 +71,14 @@ Relevant implementation:
 
 ### OAuth
 
-`GET /oauth/userinfo` returns membership roles. Curator computes
-`OAuthUserInfo.IsPremium` as true when the roles include `Premium` or
-`LifetimePremium`.
+The OAuth access token is a JWT. Its payload carries a `user` claim with the
+user's `username` and `membership_roles`. Curator parses the payload
+(`NexusAccessTokenClaims.TryParse`) and treats the presence of a `premium` or
+`lifetimepremium` role as Premium. The signature is not verified: the token was
+obtained over TLS via the authenticated exchange, and Curator makes no
+authorization decision on these claims (the bearer itself is validated
+server-side by Nexus on each API call). The `/oauth/userinfo` endpoint returns
+only `sub` for this client and is not used.
 
 The `Supporter` role does not count as Premium in this calculation. The API-key
 path does not reproduce this role calculation; it trusts Nexus's
@@ -83,8 +88,8 @@ disagreement is reconciled in Curator.
 
 Relevant implementation:
 
-- `src/integrations/NexusTypes.cs`, `OAuthUserInfo.IsPremium` and
-  `NexusMembershipRole`
+- `src/integrations/NexusAccessTokenClaims.cs`, `TryParse` (the JWT payload
+  parser) + `NexusMembershipRole` (the typed role model)
 - `src/integrations/NexusAuthService.cs`, `LoginWithOAuthAsync` and
   `GetCurrentStateAsync`
 

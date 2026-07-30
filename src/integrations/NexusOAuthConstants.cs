@@ -1,31 +1,47 @@
 namespace Modificus.Curator.Integrations;
 
 /// <summary>
-/// Build-time constants for the Nexus OAuth flow. The <c>client_id</c> is the
-/// SSO identifier Nexus issues when the application is registered for public
-/// use: per their API Acceptable Use Policy, a public-facing app is registered
-/// by contacting support with a testing build, after which Nexus issues a
-/// "slug" for the SSO, and that slug is the client_id. Until Curator is
-/// registered, <c>"modificus-curator"</c> is a development placeholder (live
-/// authorize will not recognize it); the API-key path is the validated auth
-/// method in the meantime, and OAuth is exercised against stubbed endpoints.
+/// Build-time constants for the Nexus OAuth flow. The <c>client_id</c>
+/// (<c>modificus_curator</c>) is the SSO slug Nexus issued when Curator was
+/// registered for public use; the matching <see cref="ClientSecret"/> is
+/// build-injected (see the remarks below).
 /// </summary>
 /// <remarks>
-/// <b>This is a build-time constant, not config and not an env var.</b> When
-/// Nexus issues the slug at registration, it lands here as a code change.
-/// Modificus Curator has no env-var pattern (config is file-based via
-/// <see cref="General.IConfigLoader"/>).
+/// <para>
+/// <see cref="ClientId"/> is a build-time const (not config, not an env var):
+/// the OAuth client id is public by spec, so it ships as a const here, the same
+/// native-client model every desktop OAuth app uses.
+/// </para>
+/// <para>
+/// <see cref="ClientSecret"/> is generated at build time from the
+/// <c>NEXUS_CLIENT_SECRET</c> environment variable by the
+/// <c>GenerateNexusClientSecret</c> target in this project's <c>.csproj</c>.
+/// When the env var is unset (local dev, PR-gate builds, <c>dotnet test</c>),
+/// the const is empty and the OAuth token exchange will not succeed in those
+/// builds. The release workflow supplies the real value from a GitHub repo
+/// secret. This is temporary: Nexus is expected to reclassify Curator as a
+/// public client (PKCE, no secret), at which point the secret requirement, the
+/// generation target, and the const are removed.
+/// </para>
 /// </remarks>
-internal static class NexusOAuthConstants
+internal static partial class NexusOAuthConstants
 {
-    /// <summary>The OAuth client identifier sent on authorize + token requests.</summary>
-    public const string ClientId = "modificus-curator";
+    /// <summary>The OAuth client identifier (the SSO slug Nexus issued), sent on
+    /// authorize + token requests.</summary>
+    public const string ClientId = "modificus_curator";
+
+    // ClientSecret is generated at build time from the NEXUS_CLIENT_SECRET
+    // env var by the GenerateNexusClientSecret target (see the class remarks
+    // above). Empty when unset; temporary, pending Nexus dropping the secret
+    // requirement for this public client.
 
     /// <summary>
-    /// The OAuth/OIDC scope. <c>openid</c> for the id token, <c>profile</c> +
-    /// <c>email</c> for the userinfo claims Nexus returns at <c>/oauth/userinfo</c>.
+    /// The OAuth/OIDC scope. <c>openid</c> is the OIDC scope OidcClient needs to
+    /// issue the id_token. The user's display name + Premium state are read from
+    /// the access token's JWT payload, not from userinfo or claim scopes, so no
+    /// additional scopes are requested.
     /// </summary>
-    public const string Scope = "openid profile email";
+    public const string Scope = "openid";
 
     /// <summary>
     /// The OAuth/OIDC protocol version sent in the <c>Protocol-Version</c> header
