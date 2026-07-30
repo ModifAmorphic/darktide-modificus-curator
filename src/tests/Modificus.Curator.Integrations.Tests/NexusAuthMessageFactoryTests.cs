@@ -57,7 +57,7 @@ public sealed class NexusAuthMessageFactoryTests
     [Fact]
     public async Task OAuthFactory_adds_bearer_authorization_and_app_headers()
     {
-        var tokens = new NexusOAuthTokens("AT", "RT", "openid profile email", DateTimeOffset.UtcNow.AddHours(1));
+        var tokens = new NexusOAuthTokens("AT", "RT", "openid", DateTimeOffset.UtcNow.AddHours(1));
         var store = new FakeTokenStore(tokens);
         var factory = new OAuth2MessageFactory(store, NullLogger<OAuth2MessageFactory>.Instance);
 
@@ -71,8 +71,8 @@ public sealed class NexusAuthMessageFactoryTests
     [Fact]
     public async Task OAuthFactory_OnUnauthorized_refreshes_and_returns_true_when_refresh_succeeds()
     {
-        var tokens = new NexusOAuthTokens("OLD", "RT", "openid profile email", DateTimeOffset.UtcNow.AddHours(-1));
-        var store = new FakeTokenStore(tokens, refreshResult: new NexusOAuthTokens("NEW", "RT2", "openid profile email", DateTimeOffset.UtcNow.AddHours(1)));
+        var tokens = new NexusOAuthTokens("OLD", "RT", "openid", DateTimeOffset.UtcNow.AddHours(-1));
+        var store = new FakeTokenStore(tokens, refreshResult: new NexusOAuthTokens("NEW", "RT2", "openid", DateTimeOffset.UtcNow.AddHours(1)));
         var factory = new OAuth2MessageFactory(store, NullLogger<OAuth2MessageFactory>.Instance);
 
         var result = await factory.OnUnauthorizedAsync(default);
@@ -87,7 +87,7 @@ public sealed class NexusAuthMessageFactoryTests
     [Fact]
     public async Task OAuthFactory_OnUnauthorized_returns_false_when_refresh_fails()
     {
-        var tokens = new NexusOAuthTokens("OLD", "RT", "openid profile email", DateTimeOffset.UtcNow.AddHours(-1));
+        var tokens = new NexusOAuthTokens("OLD", "RT", "openid", DateTimeOffset.UtcNow.AddHours(-1));
         var store = new FakeTokenStore(tokens, refreshResult: null);
         var factory = new OAuth2MessageFactory(store, NullLogger<OAuth2MessageFactory>.Instance);
 
@@ -103,8 +103,8 @@ public sealed class NexusAuthMessageFactoryTests
         // Two concurrent 401s (e.g. two in-flight requests) should coalesce:
         // the first wins the refresh gate, the second sees the new token +
         // skips its own refresh call.
-        var tokens = new NexusOAuthTokens("OLD", "RT", "openid profile email", DateTimeOffset.UtcNow.AddHours(-1));
-        var store = new FakeTokenStore(tokens, refreshResult: new NexusOAuthTokens("NEW", "RT2", "openid profile email", DateTimeOffset.UtcNow.AddHours(1)))
+        var tokens = new NexusOAuthTokens("OLD", "RT", "openid", DateTimeOffset.UtcNow.AddHours(-1));
+        var store = new FakeTokenStore(tokens, refreshResult: new NexusOAuthTokens("NEW", "RT2", "openid", DateTimeOffset.UtcNow.AddHours(1)))
         {
             RefreshDelay = TimeSpan.FromMilliseconds(50),
         };
@@ -123,7 +123,7 @@ public sealed class NexusAuthMessageFactoryTests
     public async Task OAuthFactory_IsAuthenticated_reflects_configured_tokens()
     {
         var withTokens = new OAuth2MessageFactory(
-            new FakeTokenStore(new NexusOAuthTokens("AT", "RT", "openid profile email", DateTimeOffset.UtcNow.AddHours(1))),
+            new FakeTokenStore(new NexusOAuthTokens("AT", "RT", "openid", DateTimeOffset.UtcNow.AddHours(1))),
             NullLogger<OAuth2MessageFactory>.Instance);
         var withoutTokens = new OAuth2MessageFactory(
             new FakeTokenStore(null),
@@ -159,7 +159,7 @@ public sealed class NexusAuthMessageFactoryTests
             loader,
             new ApiKeyMessageFactory(loader),
             new OAuth2MessageFactory(
-                new FakeTokenStore(new NexusOAuthTokens("AT", "RT", "openid profile email", DateTimeOffset.UtcNow.AddHours(1))),
+                new FakeTokenStore(new NexusOAuthTokens("AT", "RT", "openid", DateTimeOffset.UtcNow.AddHours(1))),
                 NullLogger<OAuth2MessageFactory>.Instance),
             new NoneMessageFactory());
 
@@ -176,7 +176,7 @@ public sealed class NexusAuthMessageFactoryTests
         var loader = Loader(method: NexusAuthMethod.None, apiKey: null);
         var apiKeyFactory = new ApiKeyMessageFactory(loader);
         var oauthFactory = new OAuth2MessageFactory(
-            new FakeTokenStore(new NexusOAuthTokens("AT", "RT", "openid profile email", DateTimeOffset.UtcNow.AddHours(1))),
+            new FakeTokenStore(new NexusOAuthTokens("AT", "RT", "openid", DateTimeOffset.UtcNow.AddHours(1))),
             NullLogger<OAuth2MessageFactory>.Instance);
         var selector = new NexusAuthMessageFactorySelector(loader, apiKeyFactory, oauthFactory, new NoneMessageFactory());
 
@@ -187,7 +187,7 @@ public sealed class NexusAuthMessageFactoryTests
         // this). The selector picks the OAuth factory on the next call.
         var nexus = loader.Config.Integrations.Nexus;
         nexus.AuthMethod = NexusAuthMethod.OAuth;
-        nexus.OAuth = new NexusOAuthTokens("AT", "RT", "openid profile email", DateTimeOffset.UtcNow.AddHours(1));
+        nexus.OAuth = new NexusOAuthTokens("AT", "RT", "openid", DateTimeOffset.UtcNow.AddHours(1));
 
         Assert.True(await selector.IsAuthenticatedAsync(default));
         var request = await selector.CreateAsync(HttpMethod.Get, new Uri("https://x"), default);

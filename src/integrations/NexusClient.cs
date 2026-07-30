@@ -4,7 +4,6 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Modificus.Curator.Config;
-using Modificus.Curator.General;
 using Microsoft.Extensions.Logging;
 
 namespace Modificus.Curator.Integrations;
@@ -20,11 +19,7 @@ namespace Modificus.Curator.Integrations;
 /// <remarks>
 /// <para>
 /// The <c>HttpClient</c> is supplied by <c>IHttpClientFactory</c> (typed-client
-/// pattern); the API base URL is the typed client's <c>BaseAddress</c>. The
-/// OAuth userinfo endpoint lives on a different host
-/// (<c>users.nexusmods.com</c>), so this client injects
-/// <see cref="IConfigLoader"/> to read the OAuth base URL live for that one
-/// endpoint (the same live-read pattern as the auth factory).</para>
+/// pattern); the API base URL is the typed client's <c>BaseAddress</c>.</para>
 /// <para>
 /// <b>Auth.</b> Per-request auth is owned by the auth factory (selected live by
 /// <see cref="NexusConfig.AuthMethod"/>); this client does not know which auth
@@ -43,18 +38,15 @@ internal sealed class NexusClient : INexusClient
 {
     private readonly HttpClient _http;
     private readonly INexusAuthMessageFactory _auth;
-    private readonly IConfigLoader _configLoader;
     private readonly ILogger<NexusClient> _logger;
 
     public NexusClient(
         HttpClient http,
         INexusAuthMessageFactory auth,
-        IConfigLoader configLoader,
         ILogger<NexusClient> logger)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _auth = auth ?? throw new ArgumentNullException(nameof(auth));
-        _configLoader = configLoader ?? throw new ArgumentNullException(nameof(configLoader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -64,20 +56,6 @@ internal sealed class NexusClient : INexusClient
         var (response, _) = await SendAsync<ValidateInfo>(
             HttpMethod.Get,
             RelativeUri("v1/users/validate.json"),
-            ct).ConfigureAwait(false);
-        return response;
-    }
-
-    /// <inheritdoc />
-    public async Task<Response<OAuthUserInfo>> GetOAuthUserInfoAsync(CancellationToken ct = default)
-    {
-        // The userinfo endpoint hangs off the OAuth base URL, not the API base
-        // URL. Resolve the absolute URI from the live config so the configured
-        // OAuth base URL is honored (tests can override it).
-        var oauthBase = NormalizeBaseUrl(_configLoader.Load().Integrations.Nexus.OAuthBaseUrl);
-        var (response, _) = await SendAsync<OAuthUserInfo>(
-            HttpMethod.Get,
-            new Uri(oauthBase + "/oauth/userinfo", UriKind.Absolute),
             ct).ConfigureAwait(false);
         return response;
     }
@@ -461,34 +439,6 @@ internal sealed class NexusClient : INexusClient
     /// to end with a trailing slash so relative URIs resolve predictably).
     /// </summary>
     private static Uri RelativeUri(string relative) => new(relative, UriKind.Relative);
-
-    /// <summary>
-    /// Normalizes a base URL: trims whitespace + trailing slashes, and strips a
-    /// trailing <c>/oauth</c> so a user (reasonably) pointing <c>OAuthBaseUrl</c>
-    /// at <c>https://users.nexusmods.com/oauth</c> (the OAuth endpoint-path
-    /// prefix, not the issuer root) doesn't double up to
-    /// <c>/oauth/oauth/userinfo</c>. Does not re-append a
-    /// slash (callers compose with their own <c>/...</c> suffix). Falls back to
-    /// the public OAuth root when blank.
-    /// </summary>
-    private static string NormalizeBaseUrl(string? baseUrl)
-    {
-        var trimmed = StripOAuthSuffix((baseUrl ?? string.Empty).Trim().TrimEnd('/'));
-        return trimmed.Length == 0 ? "https://users.nexusmods.com" : trimmed;
-    }
-
-    /// <summary>
-    /// Strips a trailing <c>/oauth</c> (case-insensitive) so the
-    /// <c>/oauth/&lt;endpoint&gt;</c> composition below doesn't double up when
-    /// the configured base URL is the OAuth issuer root.
-    /// </summary>
-    private static string StripOAuthSuffix(string trimmed)
-    {
-        const string OauthSuffix = "/oauth";
-        return trimmed.EndsWith(OauthSuffix, StringComparison.OrdinalIgnoreCase)
-            ? trimmed[..^OauthSuffix.Length]
-            : trimmed;
-    }
 }
 
 /// <summary>

@@ -1,3 +1,4 @@
+using Duende.IdentityModel.Client;
 using Duende.IdentityModel.OidcClient;
 using Duende.IdentityModel.OidcClient.Browser;
 using Modificus.Curator.Config;
@@ -175,21 +176,29 @@ public sealed class NexusOAuthTokenStore : INexusTokenStore
         // Authority must be the OIDC ISSUER root (https://users.nexusmods.com),
         // NOT the /oauth path. OidcClient resolves discovery at
         // <Authority>/.well-known/openid-configuration + reads the authorize /
-        // token / userinfo / jwks endpoints out of the doc; the issuer root is
-        // the path Nexus serves discovery at. Pointing Authority at the /oauth
-        // path 404s the discovery fetch (the bug fixed here).
+        // token / jwks endpoints out of the doc; the issuer root is the path
+        // Nexus serves discovery at. Pointing Authority at the /oauth path 404s
+        // the discovery fetch (the bug fixed here).
         var authority = NormalizeOAuthBaseUrl(nexus.OAuthBaseUrl);
 
         var options = new OidcClientOptions
         {
             Authority = authority,
             ClientId = NexusOAuthConstants.ClientId,
+            // Nexus's discovery doc declares
+            // token_endpoint_auth_methods_supported: ["client_secret_basic",
+            // "client_secret_post"] (no public/none method), so the token
+            // exchange requires the client secret. PostBody == client_secret_post
+            // (both land in the form-urlencoded token request), which Nexus
+            // supports. PKCE remains in effect (orthogonal to the secret).
+            ClientSecret = NexusOAuthConstants.ClientSecret,
+            TokenClientCredentialStyle = ClientCredentialStyle.PostBody,
             RedirectUri = ResolveBrowserRedirectUri(),
             Scope = NexusOAuthConstants.Scope,
             Browser = _browser,
-            // We fetch userinfo via the v1 client (single source of truth for
-            // the user-facing state) rather than via OidcClient's userinfo call,
-            // so disable OidcClient's built-in profile load.
+            // Curator reads the display name + Premium state from the access
+            // token's JWT payload (Nexus embeds them in a `user` claim), so
+            // OidcClient's built-in userinfo profile load is disabled.
             LoadProfile = false,
         };
 
@@ -217,8 +226,7 @@ public sealed class NexusOAuthTokenStore : INexusTokenStore
     {
         // Strip a trailing /oauth so a user (reasonably) pointing OAuthBaseUrl
         // at the OAuth path lands on the canonical issuer root, not at
-        // https://users.nexusmods.com/oauth (which 404s discovery). Mirrors
-        // NexusClient.NormalizeBaseUrl.
+        // https://users.nexusmods.com/oauth (which 404s discovery).
         var trimmed = (baseUrl ?? string.Empty).Trim().TrimEnd('/');
         const string OauthSuffix = "/oauth";
         if (trimmed.EndsWith(OauthSuffix, StringComparison.OrdinalIgnoreCase))
@@ -266,7 +274,8 @@ public interface INexusAuthService
     event EventHandler? AuthStateChanged;
 
     /// <summary>Runs the OAuth loopback login flow (browser + token exchange +
-    /// persist + user-info fetch). Returns the user-facing summary.</summary>
+    /// persist + display-name + Premium resolution from the access token's JWT
+    /// payload). Returns the user-facing summary.</summary>
     Task<NexusAuthResult> LoginWithOAuthAsync(CancellationToken ct = default);
 
     /// <summary>Validates the supplied API key + sets <c>AuthMethod = ApiKey</c>
@@ -314,8 +323,9 @@ public sealed class NexusAuthService : INexusAuthService
     /// Runs the OAuth loopback login flow: delegates to
     /// <see cref="NexusOAuthTokenStore.LoginAsync"/> for the browser + token
     /// exchange, persists the tokens + flips <c>AuthMethod = OAuth</c> (clearing
-    /// any API key), then fetches the user info for the status line. Returns the
-    /// user-facing summary (or an error).
+    /// any API key), then reads the user's display name + Premium state from
+    /// the access token's JWT payload. Returns the user-facing summary (or an
+    /// error).
     /// </summary>
     public async Task<NexusAuthResult> LoginWithOAuthAsync(CancellationToken ct = default)
     {
@@ -336,22 +346,14 @@ public sealed class NexusAuthService : INexusAuthService
         // synchronously.
         AuthStateChanged?.Invoke(this, EventArgs.Empty);
 
-        // Fetch the user info via the v1 client (now configured with the new
-        // tokens). Failures here are non-fatal: the user IS signed in; we just
-        // don't know their display name yet.
-        string? name = null;
-        bool? premium = null;
-        try
-        {
-            var info = await _client.GetOAuthUserInfoAsync(ct).ConfigureAwait(false);
-            name = info.Data.Name;
-            premium = info.Data.IsPremium;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Nexus OAuth login succeeded but fetching user info failed; status will show the generic signed-in state.");
-        }
+        // Read the display name + Premium state from the access token's JWT
+        // payload (Nexus embeds them in a `user` claim; the /oauth/userinfo
+        // endpoint returns only `sub` for this client). Pure in-memory parse,
+        // so a null/failed parse is non-fatal: the user IS signed in, we just
+        // don't know their display name.
+        var claims = NexusAccessTokenClaims.TryParse(tokens.AccessToken);
+        string? name = claims?.Username;
+        bool? premium = claims?.IsPremium;
 
         _logger.LogInformation("Nexus OAuth login succeeded for user {Name}.", name ?? "(unknown)");
         return NexusAuthResult.Success(name, premium);
@@ -447,9 +449,11 @@ public sealed class NexusAuthService : INexusAuthService
     }
 
     /// <summary>
-    /// The current auth state, for the Integrations dialog's status line. Hits
-    /// the v1 API to resolve the display name + premium state (one network call
-    /// per open). Returns <c>null</c> when <c>AuthMethod == None</c>. On a
+    /// The current auth state, for the Integrations dialog's status line. For
+    /// OAuth, reads the display name + premium from the access token's JWT
+    /// payload (pure in-memory parse, no API call). For API key, hits the v1
+    /// <c>validate</c> endpoint to resolve them (one network call per open).
+    /// Returns <c>null</c> when <c>AuthMethod == None</c>. On an API-key
     /// network/auth failure, returns a "signed in (couldn't verify)" state
     /// rather than throwing, so the dialog can still render.
     /// </summary>
@@ -461,14 +465,18 @@ public sealed class NexusAuthService : INexusAuthService
             return null;
         }
 
+        if (nexus.AuthMethod == NexusAuthMethod.OAuth)
+        {
+            // Read the access token + parse the user claim out of its JWT
+            // payload. No API call: the access token carries the username +
+            // membership roles. A null/failed parse yields the unverified
+            // state (matches the API-key catch-block degradation).
+            var claims = NexusAccessTokenClaims.TryParse(_tokens.GetOAuthTokens()?.AccessToken);
+            return new NexusAuthState(nexus.AuthMethod, claims?.Username, claims?.IsPremium);
+        }
+
         try
         {
-            if (nexus.AuthMethod == NexusAuthMethod.OAuth)
-            {
-                var info = await _client.GetOAuthUserInfoAsync(ct).ConfigureAwait(false);
-                return new NexusAuthState(nexus.AuthMethod, info.Data.Name, info.Data.IsPremium);
-            }
-
             var validate = await _client.ValidateAsync(ct).ConfigureAwait(false);
             return new NexusAuthState(nexus.AuthMethod, validate.Data.Name, validate.Data.IsPremium, nexus.ApiKey);
         }
@@ -480,8 +488,7 @@ public sealed class NexusAuthService : INexusAuthService
             // the configured method with a null name; the dialog renders a
             // generic "signed in" string. Carry the API key (when configured)
             // so the dialog can still show the masked-key indicator + re-validate.
-            var apiKey = nexus.AuthMethod == NexusAuthMethod.ApiKey ? nexus.ApiKey : null;
-            return new NexusAuthState(nexus.AuthMethod, null, null, apiKey);
+            return new NexusAuthState(nexus.AuthMethod, null, null, nexus.ApiKey);
         }
     }
 }

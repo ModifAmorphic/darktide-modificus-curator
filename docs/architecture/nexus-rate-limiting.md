@@ -155,10 +155,8 @@ Only authenticated calls to `api.nexusmods.com` count. Per operation:
   disabled setting costs no extra call. The DMF prompt makes a similar
   per-prompt verify call on its download branch.
 - **API-key validate:** 1 call (`ValidateAsync`), only when the user validates
-  an API key in the Integrations dialog.
-- **OAuth userinfo:** on `users.nexusmods.com` (a separate host, the OIDC
-  issuer), not `api.nexusmods.com`. The `x-rl-*` quota is the API host's; the
-  OAuth userinfo endpoint does not carry it.
+  an API key in the Integrations dialog. (The OAuth path resolves the display
+  name + Premium state from the access token's JWT payload, with no API call.)
 - **The archive CDN download** (the actual file bytes): served from a CDN URL
   returned by `DownloadLinksAsync`, on a separate CDN host. Not an API call, not
   counted.

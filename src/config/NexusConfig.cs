@@ -22,7 +22,11 @@ namespace Modificus.Curator.Config;
 /// <para>
 /// <b>The OAuth client id is a build-time constant</b> (in
 /// <c>Modificus.Curator.Integrations.NexusOAuthConstants</c>), not config and not
-/// an env var. Modificus Curator has no env-var pattern; do not introduce one.</para>
+/// a runtime env var. The OAuth client secret is compile-time too, but is
+/// injected from the <c>NEXUS_CLIENT_SECRET</c> build-time env var (the release
+/// workflow supplies it; empty in local + PR builds). Runtime config is
+/// file-based via <c>IConfigLoader</c>; Curator has no runtime env-var config
+/// pattern.</para>
 /// </remarks>
 public sealed class NexusConfig
 {
@@ -34,7 +38,7 @@ public sealed class NexusConfig
 
     /// <summary>
     /// The Nexus OAuth issuer root, without a trailing slash. The OIDC discovery,
-    /// authorize, token, and userinfo endpoints hang off this root. Defaults to
+    /// authorize, token, and jwks endpoints hang off this root. Defaults to
     /// the public endpoint; override only for testing.
     /// </summary>
     public string OAuthBaseUrl { get; set; } = "https://users.nexusmods.com";

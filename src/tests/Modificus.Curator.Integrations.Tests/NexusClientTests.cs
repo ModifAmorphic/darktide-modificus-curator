@@ -1,6 +1,4 @@
 using System.Net;
-using Modificus.Curator.Config;
-using Modificus.Curator.General;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -25,14 +23,6 @@ public sealed class NexusClientTests
       ""is_supporter"": false,
       ""email"": ""test@example.com"",
       ""profile_url"": ""https://www.nexusmods.com/users/12345""
-    }";
-
-    private const string OAuthUserInfoJson = @"
-    {
-      ""sub"": ""12345"",
-      ""name"": ""OAuthUser"",
-      ""avatar"": ""https://www.nexusmods.com/avatar.png"",
-      ""membership_roles"": [""member"", ""premium""]
     }";
 
     private const string ModUpdatesJson = @"
@@ -71,36 +61,20 @@ public sealed class NexusClientTests
 
     /// <summary>
     /// Builds a NexusClient wired to a stub handler + a "fake auth factory" that
-    /// applies a fixed bearer token + always reports authenticated. The default
-    /// <see cref="FakeConfigLoader"/> sets <c>AuthMethod = OAuth</c> + a token so
-    /// the client's pre-send gate passes.
+    /// applies no credentials + reports authenticated (so the client's pre-send
+    /// gate passes). Pass <c>authFactory</c> to drive the auth gate / 401-retry
+    /// paths deterministically.
     /// </summary>
     private static (NexusClient client, StubHttpMessageHandler handler) CreateClient(
         Func<HttpRequestMessage, HttpResponseMessage> respond,
-        NexusAuthMethod method = NexusAuthMethod.OAuth,
-        string? apiKey = null,
-        NexusOAuthTokens? tokens = null,
         INexusAuthMessageFactory? authFactory = null,
-        string apiBase = ApiBase,
-        string oauthBase = "https://users.nexusmods.com")
+        string apiBase = ApiBase)
     {
         var handler = new StubHttpMessageHandler(respond);
         var http = new HttpClient(handler) { BaseAddress = new Uri(apiBase) };
 
-        var nexus = new NexusConfig
-        {
-            BaseUrl = apiBase.TrimEnd('/'),
-            OAuthBaseUrl = oauthBase,
-            AuthMethod = method,
-            ApiKey = apiKey,
-            OAuth = tokens ?? new NexusOAuthTokens("access-token", "refresh-token", "openid profile email", DateTimeOffset.UtcNow.AddHours(1)),
-        };
-        var config = new CuratorConfig();
-        config.Integrations.Nexus = nexus;
-        var loader = new FakeConfigLoader { Config = config };
-
         var auth = authFactory ?? new FakeAuthFactory(authenticated: true);
-        var client = new NexusClient(http, auth, loader, NullLogger<NexusClient>.Instance);
+        var client = new NexusClient(http, auth, NullLogger<NexusClient>.Instance);
         return (client, handler);
     }
 
@@ -122,39 +96,6 @@ public sealed class NexusClientTests
         var request = Assert.Single(handler.Requests);
         Assert.Equal(new Uri(ApiBase + "v1/users/validate.json"), request.RequestUri);
         Assert.Equal(HttpMethod.Get, request.Method);
-    }
-
-    // ---- GetOAuthUserInfo -------------------------------------------------
-
-    [Fact]
-    public async Task GetOAuthUserInfoAsync_hits_oauth_userinfo_endpoint_and_parses_roles()
-    {
-        var (client, handler) = CreateClient(_ => HttpResponses.NexusOk(OAuthUserInfoJson, daily: 1000, hourly: 100));
-
-        var response = await client.GetOAuthUserInfoAsync();
-
-        Assert.Equal("OAuthUser", response.Data.Name);
-        Assert.True(response.Data.IsPremium); // roles contain "premium"
-        Assert.Contains(NexusMembershipRole.Premium, response.Data.MembershipRoles);
-
-        var request = Assert.Single(handler.Requests);
-        Assert.Equal(new Uri("https://users.nexusmods.com/oauth/userinfo"), request.RequestUri);
-    }
-
-    [Fact]
-    public async Task GetOAuthUserInfoAsync_uses_configured_oauth_base_url()
-    {
-        // The userinfo endpoint hangs off the OAuth base URL, not the API base.
-        // Tests override the OAuth base URL; the client must compose against it
-        // (not hard-code the production URL).
-        var (client, handler) = CreateClient(
-            _ => HttpResponses.NexusOk(OAuthUserInfoJson),
-            oauthBase: "https://users.test.local");
-
-        await client.GetOAuthUserInfoAsync();
-
-        var request = Assert.Single(handler.Requests);
-        Assert.Equal(new Uri("https://users.test.local/oauth/userinfo"), request.RequestUri);
     }
 
     // ---- ModUpdates -------------------------------------------------------
@@ -469,13 +410,10 @@ public sealed class NexusClientTests
     [Fact]
     public async Task Unauthenticated_client_throws_NexusNotAuthenticatedException()
     {
-        // The auth factory reports not-authenticated (AuthMethod == None with no
-        // credentials). The client must surface this BEFORE sending a request.
+        // The auth factory reports not-authenticated. The client must surface
+        // this BEFORE sending a request.
         var (client, handler) = CreateClient(
             _ => HttpResponses.NexusOk(ValidateJson),
-            method: NexusAuthMethod.None,
-            apiKey: null,
-            tokens: null,
             authFactory: new FakeAuthFactory(authenticated: false));
 
         await Assert.ThrowsAsync<NexusNotAuthenticatedException>(
