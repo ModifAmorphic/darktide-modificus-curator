@@ -67,6 +67,12 @@ public partial class IntegrationsViewModel : ObservableObject
     private readonly INxmHandlerRegistrar? _nxmRegistrar;
     private readonly ILogger<IntegrationsViewModel> _logger;
 
+    // Backs the in-flight OAuth login or API-key validate. Swapped per attempt
+    // via NewLoginToken + canceled on Detach (see Detach). Lets the two auth
+    // commands cancel each other's in-flight call, and frees the loopback
+    // listener promptly when the Integrations dialog closes mid-flight.
+    private CancellationTokenSource? _loginCts;
+
     public IntegrationsViewModel(
         INexusAuthService auth,
         LocalizationService localization,
@@ -153,9 +159,13 @@ public partial class IntegrationsViewModel : ObservableObject
     /// <summary>
     /// Whether a Nexus auth method is currently configured (OAuth or ApiKey).
     /// Drives the Sign-out button availability (sign-out only enabled when
-    /// authenticated).
+    /// authenticated). Notifies <see cref="SignOutCommand"/> so a refresh that
+    /// flips this without an <see cref="IsBusy"/> toggle (e.g. the dialog-open
+    /// <see cref="RefreshAsync"/> resolving an authenticated state) still
+    /// re-evaluates the Sign-out CanExecute.
     /// </summary>
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SignOutCommand))]
     private bool _isAuthenticated;
 
     /// <summary>
@@ -347,9 +357,10 @@ public partial class IntegrationsViewModel : ObservableObject
 
     /// <summary>
     /// Starts the Nexus OAuth loopback flow: opens the browser, awaits the
-    /// callback, exchanges for tokens, fetches the user info. Updates the status
-    /// line on success; surfaces a localized error inline on failure. Disabled
-    /// while the game runs or another auth op is in flight.
+    /// callback, exchanges for tokens, and reads the display name + Premium
+    /// state from the access token's JWT payload. Updates the status line on
+    /// success; surfaces a localized error inline on failure. Disabled while
+    /// the game runs or another auth op is in flight.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanStartAuth))]
     private async Task LoginWithOAuth()
@@ -358,8 +369,13 @@ public partial class IntegrationsViewModel : ObservableObject
         StatusLine = _localization["Integrations_StartingOAuth"];
         try
         {
-            var result = await _auth.LoginWithOAuthAsync();
+            var token = NewLoginToken();
+            var result = await _auth.LoginWithOAuthAsync(token);
             await RefreshStatusAsync(result);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when the dialog closes mid-login via Detach; not an error.
         }
         catch (Exception ex)
         {
@@ -394,8 +410,13 @@ public partial class IntegrationsViewModel : ObservableObject
         StatusLine = _localization["Integrations_Validating"];
         try
         {
-            var result = await _auth.LoginWithApiKeyAsync(ApiKey);
+            var token = NewLoginToken();
+            var result = await _auth.LoginWithApiKeyAsync(ApiKey, token);
             await RefreshStatusAsync(result);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when the dialog closes mid-login via Detach; not an error.
         }
         catch (Exception ex)
         {
@@ -456,6 +477,21 @@ public partial class IntegrationsViewModel : ObservableObject
     private bool CanSignOut() => !IsBusy && IsAuthenticated;
     private bool CanToggleReveal() => !IsBusy;
 
+    /// <summary>
+    /// Cancels + disposes any prior login CTS and returns a fresh token for a
+    /// new auth attempt. OAuth login and API-key validate share this so the two
+    /// commands cancel each other's in-flight call (one auth attempt at a time),
+    /// and <see cref="Detach"/> cancels whichever is in flight when the dialog
+    /// closes.
+    /// </summary>
+    private CancellationToken NewLoginToken()
+    {
+        _loginCts?.Cancel();
+        _loginCts?.Dispose();
+        _loginCts = new CancellationTokenSource();
+        return _loginCts.Token;
+    }
+
     // ---- live state -------------------------------------------------------
 
     /// <summary>
@@ -463,8 +499,9 @@ public partial class IntegrationsViewModel : ObservableObject
     /// from the persisted auth state, the update-check toggle + interval from
     /// the persisted config, and the nxm handler registration state from the OS
     /// registrar. Called on dialog open (after construction) + after each auth
-    /// command + after a register/unregister. Hits the v1 API to resolve the
-    /// display name + premium state.
+    /// command + after a register/unregister. Resolves the display name +
+    /// premium state by method: OAuth reads it from the access token's JWT
+    /// payload in memory; API key hits <c>/v1/users/validate.json</c>.
     /// </summary>
     public async Task RefreshAsync()
     {
@@ -743,6 +780,16 @@ public partial class IntegrationsViewModel : ObservableObject
     /// </summary>
     public void Detach()
     {
+        // The Integrations dialog calls Detach() from OnClosed. Cancel any
+        // in-flight login first so the singleton LoopbackBrowser's HttpListener
+        // stops promptly instead of waiting out the 3-minute flow timeout: a
+        // failed authorize (no redirect returns) would otherwise strand the
+        // pre-grabbed port, and a reopen + retry could not rebind it (the
+        // retry-without-restart bug).
+        _loginCts?.Cancel();
+        _loginCts?.Dispose();
+        _loginCts = null;
+
         _localization.PropertyChanged -= OnCultureChanged;
     }
 }

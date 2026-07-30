@@ -101,40 +101,13 @@ public sealed class ValidateInfo
 }
 
 /// <summary>
-/// The response from <c>GET /oauth/userinfo</c> (OAuth user info). Carries the
-/// user's identity + membership roles, which encode premium state (a
-/// <see cref="NexusMembershipRole.Premium"/> or
-/// <see cref="NexusMembershipRole.LifetimePremium"/> role means premium).
-/// </summary>
-public sealed class OAuthUserInfo
-{
-    [JsonPropertyName("sub")]
-    public string Sub { get; set; } = string.Empty;
-
-    [JsonPropertyName("name")]
-    public string Name { get; set; } = string.Empty;
-
-    [JsonPropertyName("avatar")]
-    public Uri? Avatar { get; set; }
-
-    [JsonPropertyName("membership_roles")]
-    public NexusMembershipRole[] MembershipRoles { get; set; } = Array.Empty<NexusMembershipRole>();
-
-    /// <summary>
-    /// Whether the user has any premium role (<see cref="NexusMembershipRole.Premium"/>
-    /// or <see cref="NexusMembershipRole.LifetimePremium"/>). Convenience over the
-    /// raw role list for the Integrations dialog's status line.
-    /// </summary>
-    public bool IsPremium =>
-        MembershipRoles.Contains(NexusMembershipRole.Premium)
-        || MembershipRoles.Contains(NexusMembershipRole.LifetimePremium);
-}
-
-/// <summary>
-/// A Nexus membership role, as reported in
-/// <see cref="OAuthUserInfo.MembershipRoles"/>. Lowercase snake-case wire form
-/// via <see cref="JsonStringEnumConverter"/> (member, supporter, premium,
-/// lifetimepremium).
+/// A Nexus membership role, as embedded in the access token's JWT
+/// <c>user.membership_roles</c> claim. Lowercase snake-case wire form
+/// (member, supporter, premium, lifetimepremium). The
+/// <see cref="JsonStringEnumConverter{TEnum}"/> binds the lowercase wire forms
+/// case-insensitively should a future caller deserialize the array; the access-
+/// token parser (<see cref="NexusAccessTokenClaims"/>) compares the raw role
+/// strings directly so an unexpected value cannot fail the parse.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<NexusMembershipRole>))]
 public enum NexusMembershipRole

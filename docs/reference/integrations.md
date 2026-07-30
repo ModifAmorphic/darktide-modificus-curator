@@ -18,7 +18,6 @@ downloads, + mod-file listing; the v2 GraphQL endpoint covers the update check
 public interface INexusClient
 {
     Task<Response<ValidateInfo>> ValidateAsync(CancellationToken ct = default);              // API key
-    Task<Response<OAuthUserInfo>> GetOAuthUserInfoAsync(CancellationToken ct = default);     // OAuth
     Task<Response<ModUpdate[]>> ModUpdatesAsync(string gameDomain, NexusPeriod period, CancellationToken ct = default);
     Task<Response<DownloadLink[]>> DownloadLinksAsync(string gameDomain, int modId, int fileId, CancellationToken ct = default);                                  // premium
     Task<Response<DownloadLink[]>> DownloadLinksAsync(string gameDomain, int modId, int fileId, string nxmKey, long expiresEpoch, CancellationToken ct = default); // free user
@@ -29,7 +28,6 @@ public interface INexusClient
 ```
 
 - `ValidateAsync` -- hits `GET /v1/users/validate.json` (API-key validate).
-- `GetOAuthUserInfoAsync` -- hits `GET /oauth/userinfo` on the OAuth base URL.
 - `ModUpdatesAsync` -- hits `GET /v1/games/{domain}/mods/updated.json?period={1d|1w|1m}`.
   (Retained on the v1 API surface; the update check no longer calls it.)
 - `DownloadLinksAsync` (premium) -- hits `GET /v1/games/{domain}/mods/{modId}/files/{fileId}/download_link.json`.
@@ -87,14 +85,9 @@ public sealed class ValidateInfo          // API-key validate response
     public Uri? ProfileUrl { get; set; }
 }
 
-public sealed class OAuthUserInfo          // OAuth userinfo response
-{
-    public string Sub { get; set; }
-    public string Name { get; set; }
-    public Uri? Avatar { get; set; }
-    public NexusMembershipRole[] MembershipRoles { get; set; }
-    public bool IsPremium { get; }         // premium or lifetimepremium role
-}
+// NexusAccessTokenClaims: parsed from the OAuth access token's JWT payload
+// (user.username + user.membership_roles). No signature verification; the
+// claims are for UI display only. See NexusAccessTokenClaims.TryParse.
 
 public enum NexusMembershipRole { Member, Supporter, Premium, LifetimePremium }
 
@@ -195,14 +188,15 @@ public sealed class NexusOAuthTokenStore : INexusTokenStore;   // OidcClient + t
   handler status after the dialog closes; the DMF prompt is profile-creation-only
   and does not subscribe.
 - `LoginWithOAuthAsync` -- runs the OAuth loopback flow (browser + token exchange
-  + persist), flips `AuthMethod = OAuth` (clearing any API key), fetches the
-  user info via the v1 client.
+  + persist), flips `AuthMethod = OAuth` (clearing any API key), reads the
+  display name + Premium state from the access token's JWT payload.
 - `LoginWithApiKeyAsync` -- speculative-write + revert-on-failure; flips
   `AuthMethod = ApiKey` (clearing any OAuth tokens).
 - `SignOutAsync` -- clears OAuth tokens + API key + resets to `None`.
 - `GetCurrentStateAsync` -- returns the verified auth state (name + premium) for
-  the Integrations dialog's status line; null when `None`. Returns an unverified
-  state on a network failure rather than throwing.
+  the Integrations dialog's status line; null when `None`. For OAuth, reads the
+  access token's JWT payload (no API call); for API key, hits the v1 validate
+  endpoint. Returns an unverified state on a failure rather than throwing.
 
 ### OAuth loopback browser
 
@@ -329,8 +323,16 @@ tests inject a pass-through. The handler is registered AFTER `AddNxm()` so DI
 
 ### OAuth constants (build-time)
 
-`NexusOAuthConstants.ClientId` = `"modificus-curator"` (a build-time const, NOT
-config and NOT an env var). `Scope` = `"openid profile email"`. Application
+`NexusOAuthConstants.ClientId` = `"modificus_curator"` (a build-time const, NOT
+config and NOT an env var). `NexusOAuthConstants.ClientSecret` = the Nexus-issued
+SSO secret, generated at build time from the `NEXUS_CLIENT_SECRET` environment
+variable by the `GenerateNexusClientSecret` target in this project's `.csproj`
+(empty when the env var is unset, e.g. local dev, PR-gate builds, `dotnet test`;
+the release workflow supplies the real value). `Scope` = `"openid"` (the OIDC
+scope OidcClient needs for the id_token; the display name + Premium state come
+from the access token's JWT payload, so no additional scopes are requested). The
+secret is sent as `client_secret_post` (`TokenClientCredentialStyle = PostBody`)
+on the token exchange, which Nexus's token endpoint requires. Application
 headers: `Application-Name: Modificus-Curator`, `Application-Version: <asm>`,
 `Protocol-Version: 1.0.0`, `User-Agent: Modificus-Curator/<ver>`.
 

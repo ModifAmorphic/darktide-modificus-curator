@@ -113,7 +113,7 @@ Nexus fields:
 - `BaseUrl`: the Nexus REST API root, without a trailing slash. Defaults to the
   public endpoint; override only for testing.
 - `OAuthBaseUrl`: the Nexus OAuth issuer root, without a trailing slash. The
-  OIDC discovery, authorize, token, and userinfo endpoints hang off this root.
+  OIDC discovery, authorize, token, and jwks endpoints hang off this root.
   Defaults to the public endpoint; override only for testing.
 - `AuthMethod`: the user's explicit auth-method choice, read live by the auth
   message factory selector on every request. `None` is the default
@@ -155,7 +155,10 @@ Nexus fields:
 
 The `NexusAuthMethod` enum carries the three explicit choices. The OAuth client
 id is a build-time constant (in `Modificus.Curator.Integrations.NexusOAuthConstants`),
-not config and not an env var.
+not config and not a runtime env var. The OAuth client secret is compile-time too,
+but injected from the `NEXUS_CLIENT_SECRET` build-time env var (the release
+workflow supplies it; empty in local + PR builds). Runtime config is file-based
+via `IConfigLoader`; there is no runtime env-var config pattern.
 
 `NexusOAuthTokens` is an immutable record holding the OAuth session state:
 

@@ -43,8 +43,7 @@ public static class ServiceCollectionExtensions
     {
         // The typed Nexus client. Base URL + default headers are configured here
         // (the auth headers are per-request via the auth factory; the BaseAddress
-        // is the API root, used for everything except the OAuth userinfo endpoint,
-        // which the client composes from the OAuth base URL it reads live).
+        // is the API root, used for every request the client makes).
         services.AddHttpClient<INexusClient, NexusClient>((serviceProvider, client) =>
         {
             var nexus = serviceProvider.GetRequiredService<IConfigLoader>().Load().Integrations.Nexus;
