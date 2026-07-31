@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.1](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.19.0...v0.19.1) (2026-07-30)
+
+
+### Bug Fixes
+
+* **integrations:** correct Nexus OAuth for the approved SSO ([#151](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/151)) ([1b62774](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/1b62774b4cdbeb37150ebcd13d7b72875dfbca85))
+
 ## [0.19.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.18.0...v0.19.0) (2026-07-27)
 
 
