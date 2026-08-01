@@ -264,9 +264,12 @@ public partial class ModItemViewModel : ObservableObject
     }
 
     /// <summary>
-    /// The source badge text (localized): "Local" / "Nexus #{id}" / "External"
-    /// / "Folder unavailable", or a "not found" marker when <see cref="Found"/>
-    /// is <c>false</c>. Linked rows resolve to "External" when the external
+    /// The source badge text (localized): "Local" / "Nexus #{id}" (with the
+    /// resolved version appended for a Nexus + Latest row that has one, e.g.
+    /// "Nexus #{id} · {version}") / "External" / "Folder unavailable", or a
+    /// "not found" marker when <see cref="Found"/> is <c>false</c>. Pinned rows
+    /// keep their version in the pin dropdown, so the badge stays plain
+    /// "Nexus #{id}". Linked rows resolve to "External" when the external
     /// folder is available and "Folder unavailable" when it is missing; the
     /// XAML swaps the clickable pill for non-clickable warning text on the same
     /// flag (see <see cref="IsLinkedAvailable"/> / <see cref="IsLinkedBroken"/>).
@@ -282,6 +285,8 @@ public partial class ModItemViewModel : ObservableObject
 
             return Source switch
             {
+                NexusSource n when Policy is LatestPolicy && !string.IsNullOrEmpty(ActualVersion)
+                    => _localization.Format("ModRow_SourceNexusWithVersion", n.ModId, ActualVersion),
                 NexusSource n => _localization.Format("ModRow_SourceNexus", n.ModId),
                 LinkedSource => IsExternalBroken
                     ? _localization["ModRow_LinkedFolderBroken"]

@@ -475,6 +475,10 @@
     <value>Nexus #{0}</value>
     <comment>Source badge text for a Nexus Mods mod. {0} is the Nexus mod id.</comment>
   </data>
+  <data name="ModRow_SourceNexusWithVersion" xml:space="preserve">
+    <value>Nexus #{0} · {1}</value>
+    <comment>Source badge text for a Nexus Mods mod on the Latest policy that has a resolved version. {0} is the Nexus mod id; {1} is the installed release tag. Pinned rows show their version in the pin dropdown instead.</comment>
+  </data>
   <data name="ModRow_SourceLinked" xml:space="preserve">
     <value>External</value>
     <comment>Source badge text for a linked mod whose external folder is present. The badge is a clickable pill that opens the folder in the OS file manager.</comment>

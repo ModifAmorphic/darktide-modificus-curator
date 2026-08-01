@@ -73,7 +73,7 @@ public sealed class ModListViewModelTests
         Assert.Equal("DMF", vm.Mods[0].Name);
         Assert.Equal("SoundPack", vm.Mods[1].Name);
         // Source / version joined from the repo by container id.
-        Assert.Equal("Nexus #1234", Row(vm, "DMF").SourceBadgeText);
+        Assert.Equal("Nexus #1234 · 1.0", Row(vm, "DMF").SourceBadgeText);
         Assert.Equal("Untracked", Row(vm, "SoundPack").SourceBadgeText);
         Assert.True(Row(vm, "DMF").Enabled);
         Assert.False(Row(vm, "SoundPack").Enabled);
@@ -1331,6 +1331,38 @@ public sealed class ModListViewModelTests
     }
 
     [Fact]
+    public void SourceBadgeText_appends_version_for_nexus_latest_only()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");
+        var vId = repo.Get(nexus.Id)!.Versions[0].Folder;
+        var nexusNoVer = repo.Seed(new NexusSource { ModId = 9 }, "NoVer", "");
+        var untracked = repo.Seed(new UntrackedSource(), "Local", "");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = new PinnedPolicy(vId) },
+            new ModListEntry { ContainerId = nexusNoVer.Id, Order = 1, Policy = ModVersionPolicy.Latest },
+            new ModListEntry { ContainerId = untracked.Id, Order = 2, Policy = ModVersionPolicy.Latest });
+        var vm = Build(profiles, new FakeProfileSession { ActiveProfileId = a.Id }, repo);
+
+        // Nexus + Pinned: plain badge (version is in the pin dropdown).
+        Assert.Equal("Nexus #8", Row(vm, "DMF").SourceBadgeText);
+        // Nexus + Latest but empty resolved version: plain badge (nothing to append).
+        Assert.Equal("Nexus #9", Row(vm, "NoVer").SourceBadgeText);
+        // Untracked: never Nexus.
+        Assert.Equal("Untracked", Row(vm, "Local").SourceBadgeText);
+
+        // Switch the Nexus row to Latest: now the version appends to the badge.
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest },
+            new ModListEntry { ContainerId = nexusNoVer.Id, Order = 1, Policy = ModVersionPolicy.Latest },
+            new ModListEntry { ContainerId = untracked.Id, Order = 2, Policy = ModVersionPolicy.Latest });
+        vm.Reload();
+        Assert.Equal("Nexus #8 · 1.0", Row(vm, "DMF").SourceBadgeText);
+    }
+
+    [Fact]
     public void NexusModId_returns_the_row_source_mod_id()
     {
         var a = Profile("Alpha");
@@ -2209,7 +2241,7 @@ public sealed class ModListViewModelTests
         Assert.False(row.IsExternalBroken);
         Assert.True(row.IsBadgeHyperlink);
         Assert.True(row.IsPolicyEditable);
-        Assert.Equal("Nexus #8", row.SourceBadgeText);
+        Assert.Equal("Nexus #8 · 1.0", row.SourceBadgeText);
     }
 
     // ---- broken linked row interactions still route to the parent -----------

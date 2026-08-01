@@ -163,7 +163,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           (caution brush; `IsExternalBroken` pushed from
                           `IsExternalAvailable` at Reload). The policy ComboBox is
                           disabled for linked rows + the update-action cell stays
-                          empty (space preserved). `ModItemViewModel`
+                          empty (space preserved). A Nexus + Latest row's source
+                          badge appends the installed release tag inline
+                          (e.g. `Nexus #8 · 1.0`, the `ActualVersion` joined from the
+                          repo); Pinned exposes its version in the pin dropdown +
+                          Untracked isn't Nexus-sourced, so neither appends it to the
+                          badge. `ModItemViewModel`
                           carries the INPC state + derived `SourceUrl`/`UpdatePageUrl`/
                           `IsNexusLatest`/`CanShowUpdateAction`/
                           `UpdateActionEnabled`/`UpdateActionTooltip`/`NexusModId`;
