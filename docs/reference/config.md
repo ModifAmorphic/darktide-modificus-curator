@@ -57,6 +57,7 @@ public sealed class LoggingConfig
 {
     public string Level { get; set; } = "Information";   // Serilog level name
     public string LogFile { get; set; }                   // default <app-data>/logs/curator-.log (Serilog day-rolled)
+    public string RelayLogFile { get; set; }             // default <app-data>/logs/relay-.log (day-stamped by relay-client)
     public int RetainedLogFileCount { get; set; } = 5;
 }
 ```
@@ -66,9 +67,17 @@ public sealed class LoggingConfig
 - `LogFile`: the structured log file Serilog writes. Day-rolled
   (`RollingInterval.Day`): the date is inserted before the extension, so a stem
   of `curator-` yields `curator-<yyyyMMdd>.log` (one file per day, appended
-  across starts within the same day, rolled at local midnight). Relay keeps its
-  own `relay-<yyyyMMdd>.log` in this file's directory; relay-client resolves and
-  prunes that file at launch.
+  across starts within the same day, rolled at local midnight).
+- `RelayLogFile`: the stem for Mod Relay's own day-stamped log, parallel to
+  `LogFile`. Relay's `mod_loader` writes the `--log-file` Curator passes
+  directly (an external process, not Serilog), so relay-client inserts the day
+  stamp (`yyyyMMdd`) before the extension itself at each launch: a stem of
+  `relay-` resolves to `relay-<yyyyMMdd>.log`. Defaults to `<app-data>/logs/relay-.log`
+  (the same directory as `LogFile`, so the two file sets group by type) but can
+  be pointed anywhere, including a custom directory (the launch service ensures
+  the directory exists, best-effort). The prune derives its glob from this stem
+  (`relay-.log` matches `relay-*.log`), so a custom prefix or extension is
+  honored too. Pruned to `RetainedLogFileCount` at launch.
 - `RetainedLogFileCount`: how many day-rolled log files to keep. Default 5. The
   shared user-facing retention knob: it feeds Serilog's `retainedFileCountLimit`
   for Curator's own `curator-*.log` (pruning the oldest) AND the relay-client

@@ -34,6 +34,13 @@ public static class AppPaths
     // stem (trailing dash) yields curator-<yyyyMMdd>.log (the dash is the stem's
     // own separator; a stem without it would read curator<yyyyMMdd>.log).
     public static readonly string DefaultLogFile = Path.Combine(AppDataDir, "logs", "curator-.log");
+
+    // relay-client inserts the day stamp before the extension at each launch
+    // (Relay's file is written by mod_loader, not Serilog), so this stem
+    // (trailing dash) yields relay-<yyyyMMdd>.log under the same rule as
+    // DefaultLogFile. Defaults to the same logs directory so the two file sets
+    // group by type.
+    public static readonly string DefaultRelayLogFile = Path.Combine(AppDataDir, "logs", "relay-.log");
     public static readonly string DefaultProfilesBaseFolder = Path.Combine(AppDataDir, "profiles");
     public static readonly string DefaultModsFolder = Path.Combine(AppDataDir, "mods");
     public static readonly string DefaultRelayDir = Path.Combine(AppDataDir, "relay");

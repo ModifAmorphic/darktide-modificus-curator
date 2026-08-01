@@ -4,6 +4,7 @@
   "Logging": {
     "Level": "Information",
     "LogFile": "<app-data>/logs/curator-.log",
+    "RelayLogFile": "<app-data>/logs/relay-.log",
     "RetainedLogFileCount": 5
   },
   "ProfilesBaseFolder": "<app-data>/profiles",

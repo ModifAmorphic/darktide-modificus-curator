@@ -34,9 +34,9 @@ public sealed class RelayLaunchServiceTests
         Assert.DoesNotContain("run", fx.Launcher.Arguments!);
 
         // Relay writes its own relay-<yyyyMMdd>.log (resolved at launch from the
-        // configured Curator log directory), so the --log-file value is that
-        // computed path, not the configured Curator log file.
-        var expectedRelayLog = RelayLog.ResolveRelayLogPath(fx.Config.Logging.LogFile, DateTime.Now);
+        // configured RelayLogFile stem), so the --log-file value is that
+        // computed path, not the configured stem.
+        var expectedRelayLog = RelayLog.ResolveRelayLogPath(fx.Config.Logging.RelayLogFile, DateTime.Now);
 
         Assert.Equal(
             new[] { "--game-binary", FakeDiscovery.WindowsGameBinary,
@@ -56,11 +56,11 @@ public sealed class RelayLaunchServiceTests
     {
         // Guard: every path-valued flag must pass through unchanged on Windows
         // (no Z:\ prefix) -- translation is a Linux-only concern. The --log-file
-        // value is the computed relay-<date>.log in the configured log directory.
+        // value is the computed relay-<date>.log resolved from RelayLogFile.
         using var fx = new RelayFixture();
         fx.Steam.Result = FakeDiscovery.CompleteWindows;
-        const string LogFile = @"C:\curator\logs\curator.log";
-        fx.Config.Logging.LogFile = LogFile;
+        const string RelayLogFile = @"C:\curator\logs\relay-.log";
+        fx.Config.Logging.RelayLogFile = RelayLogFile;
         var svc = fx.BuildWindowsService();
 
         svc.Launch(Guid.NewGuid());
@@ -69,7 +69,7 @@ public sealed class RelayLaunchServiceTests
         var game = args[IndexOf(args, "--game-binary") + 1];
         var log = args[IndexOf(args, "--log-file") + 1];
         Assert.Equal(FakeDiscovery.WindowsGameBinary, game);
-        Assert.Equal(RelayLog.ResolveRelayLogPath(LogFile, DateTime.Now), log);
+        Assert.Equal(RelayLog.ResolveRelayLogPath(RelayLogFile, DateTime.Now), log);
         Assert.DoesNotContain("Z:", game);
         Assert.DoesNotContain("Z:", log);
         // The bare --log-append flag is present and untranslated too.
@@ -80,13 +80,13 @@ public sealed class RelayLaunchServiceTests
     public void Launch_passes_the_computed_relay_log_file_path()
     {
         // Relay writes its own relay-<yyyyMMdd>.log (resolved at launch from the
-        // configured Curator log directory), not Curator's Serilog log file and
+        // configured RelayLogFile stem), not Curator's Serilog log file and
         // not a bootstrap-pinned path. Uses the Windows strategy so the path
         // passes through verbatim (no Z:\ translation).
         using var fx = new RelayFixture();
         fx.Steam.Result = FakeDiscovery.CompleteWindows;
-        const string ConfiguredLog = @"C:\curator\logs\curator-.log";
-        fx.Config.Logging.LogFile = ConfiguredLog;
+        const string ConfiguredRelayLog = @"C:\curator\logs\relay-.log";
+        fx.Config.Logging.RelayLogFile = ConfiguredRelayLog;
         var svc = fx.BuildWindowsService();
 
         svc.Launch(Guid.NewGuid());
@@ -95,8 +95,8 @@ public sealed class RelayLaunchServiceTests
         var log = args[IndexOf(args, "--log-file") + 1];
         // The computed path: relay-<8 digit date>.log in the configured directory.
         Assert.Matches(@"relay-\d{8}\.log$", Path.GetFileName(log));
-        Assert.Equal(Path.GetDirectoryName(ConfiguredLog), Path.GetDirectoryName(log));
-        Assert.NotEqual(ConfiguredLog, log);
+        Assert.Equal(Path.GetDirectoryName(ConfiguredRelayLog), Path.GetDirectoryName(log));
+        Assert.NotEqual(ConfiguredRelayLog, log);
     }
 
     [Fact]
@@ -143,18 +143,19 @@ public sealed class RelayLaunchServiceTests
     {
         // The launcher runs under Wine and opens --log-file itself, so it must
         // be Z:\-translated on Linux (else the Relay shell log can't be written
-        // where Curator expects). The value is the computed relay-<date>.log.
+        // where Curator expects). The value is the computed relay-<date>.log
+        // resolved from the configured RelayLogFile stem.
         using var fx = new RelayFixture();
         fx.Steam.Result = FakeDiscovery.CompleteLinux;
-        const string LogFile = "/home/u/.local/share/Modificus Curator/logs/curator.log";
-        fx.Config.Logging.LogFile = LogFile;
+        const string RelayLogFile = "/home/u/.local/share/Modificus Curator/logs/relay-.log";
+        fx.Config.Logging.RelayLogFile = RelayLogFile;
         var svc = fx.BuildLinuxService();
 
         svc.Launch(Guid.NewGuid());
 
         var args = fx.Launcher.Arguments!;
         var log = args[IndexOf(args, "--log-file") + 1];
-        Assert.Equal(WinePath.ToWine(RelayLog.ResolveRelayLogPath(LogFile, DateTime.Now)), log);
+        Assert.Equal(WinePath.ToWine(RelayLog.ResolveRelayLogPath(RelayLogFile, DateTime.Now)), log);
     }
 
     [Fact]

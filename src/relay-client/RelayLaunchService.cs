@@ -79,7 +79,7 @@ internal sealed class RelayLaunchService : IRelayLaunchService
             // One live config snapshot for the whole launch. RelayDir is read
             // once here; a runtime config change via the Settings window takes
             // effect on the next launch. The Relay log path is resolved from the
-            // same snapshot's Logging.LogFile below.
+            // same snapshot's Logging.RelayLogFile below.
             var config = _configLoader.Load();
 
             // Discovery first: if we cannot launch, do not touch the profile's
@@ -139,12 +139,27 @@ internal sealed class RelayLaunchService : IRelayLaunchService
             var gameBinary = discovery.DarktideGameBinaryPath!;
 
             // Relay writes its own per-day log: its mod_loader opens --log-file
-            // directly (an external process, not Serilog). Resolve today's
-            // relay-<yyyyMMdd>.log alongside Curator's Serilog day-rolled log
-            // (shared directory), then prune old Relay logs to the same retained
-            // count Curator uses. Best-effort prune: a failure never blocks launch.
-            var logFile = RelayLog.ResolveRelayLogPath(config.Logging.LogFile, DateTime.Now);
-            RelayLog.PruneOldRelayLogs(logFile, config.Logging.RetainedLogFileCount);
+            // directly (an external process, not Serilog). Resolve today's path
+            // from the configured RelayLogFile stem (relay-client inserts the
+            // day stamp; the file defaults to the same directory as Curator's
+            // Serilog day-rolled log but can be pointed elsewhere). Ensure its
+            // directory exists (best-effort, mirroring the logging bootstrap's
+            // LogFile directory creation), then prune old Relay logs to the same
+            // retained count Curator uses. The prune takes the configured stem
+            // (not the dated path) so its glob matches every day's file.
+            // Best-effort prune: a failure never blocks launch.
+            var logFile = RelayLog.ResolveRelayLogPath(config.Logging.RelayLogFile, DateTime.Now);
+
+            // Ensure the Relay log directory exists; a RelayLogFile pointed at a
+            // custom directory otherwise fails to write on first launch.
+            var relayLogDir = Path.GetDirectoryName(logFile);
+            if (!string.IsNullOrEmpty(relayLogDir))
+            {
+                try { Directory.CreateDirectory(relayLogDir); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best-effort */ }
+            }
+
+            RelayLog.PruneOldRelayLogs(config.Logging.RelayLogFile, config.Logging.RetainedLogFileCount);
 
             // Read the profile's launch settings fresh on each launch (they apply next launch; editing
             // is unlocked while Darktide runs). GetLaunchSettings throws KeyNotFoundException for an

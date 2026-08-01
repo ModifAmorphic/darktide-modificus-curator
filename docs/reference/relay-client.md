@@ -120,17 +120,22 @@ Wine `Z:\` form (`/` → `\`, `Z:` prefix) for the launcher-under-Wine flags; it
 used only by `LinuxLaunchStrategy`.
 
 `RelayLog` (internal) owns Mod Relay's own log lifecycle: `ResolveRelayLogPath`
-builds `relay-<yyyyMMdd>.log` in the directory of the configured
-`Logging.LogFile` (the fixed-width stamp means lexicographic order matches
+splits the configured `Logging.RelayLogFile` stem into directory + stem +
+extension and reassembles `<stem><yyyyMMdd><ext>` (the date lands before the
+extension, mirroring Serilog's `RollingInterval.Day`, so a `relay-` stem yields
+`relay-<yyyyMMdd>.log`; the fixed-width stamp means lexicographic order matches
 chronological), and `PruneOldRelayLogs` keeps the newest
-`Logging.RetainedLogFileCount` `relay-*.log` files, deleting the rest. The
-launch service runs both right before spawning the strategy: Relay's mod_loader
-writes the `--log-file` it receives directly (an external process, not Serilog),
-so Curator, not the logging bootstrap, owns that file. The prune is best-effort
-(any directory-read or delete failure is swallowed so it never blocks a launch)
-and leaves unrelated files (including Curator's `curator-*.log`) untouched.
-`RetainedLogFileCount` is the shared knob: it feeds Serilog's
-`retainedFileCountLimit` for Curator's log and this prune for Relay's.
+`Logging.RetainedLogFileCount` files matching the `<stem>*<ext>` glob derived
+from that same configured stem (so `relay-.log` matches `relay-*.log`), deleting
+the rest. Both take the configured `RelayLogFile` (the undated stem), not the
+dated resolved path. The launch service runs both right before spawning the
+strategy: Relay's `mod_loader` writes the `--log-file` it receives directly (an
+external process, not Serilog), so Curator, not the logging bootstrap, owns that
+file. The prune is best-effort (any directory-read or delete failure is
+swallowed so it never blocks a launch) and leaves unrelated files (including
+Curator's `curator-*.log`) untouched. `RetainedLogFileCount` is the shared knob:
+it feeds Serilog's `retainedFileCountLimit` for Curator's log and this prune for
+Relay's.
 
 ## Cross-platform notes
 
@@ -173,7 +178,7 @@ so the precedence is unit-testable on any CI OS.
 native Windows paths. Args: `--game-binary`, `--mod-path`, `--log-file`
 (verbatim, untranslated; the value is Relay's own per-day log path
 `relay-<yyyyMMdd>.log` resolved at launch by `RelayLog` from the configured
-`Logging.LogFile` directory); then an unconditional bare `--log-append` flag
+`Logging.RelayLogFile` stem); then an unconditional bare `--log-append` flag
 (Relay writes a per-day file shared across launches, so it must append rather
 than overwrite each launch; no value, appended right after `--log-file`); then,
 when the profile's `EnableLuaLogs` toggle is on, a bare `--log-lua` flag (tees
@@ -205,7 +210,7 @@ Command: `<proton> run <launcher.exe> <args>`, where:
   Windows paths) -- including `--log-file`, otherwise the Relay shell log
   couldn't be written where Curator expects. The `--log-file` value is Relay's
   own per-day log path `relay-<yyyyMMdd>.log` (resolved at launch by `RelayLog`
-  from the configured `Logging.LogFile` directory, then `Z:\`-translated). After
+  from the configured `Logging.RelayLogFile` stem, then `Z:\`-translated). After
   `--log-file`'s value comes an unconditional bare `--log-append` flag (Relay
   writes a per-day file shared across launches, so it must append; a bare flag,
   NOT path-valued, so it is not `Z:\`-translated). When the profile's
@@ -328,10 +333,11 @@ from the container.
 
 ## Dependencies
 
-- **Curator libraries:** `config` (`RelayDir`; `Logging.LogFile` whose directory
-  anchors Relay's own `relay-<yyyyMMdd>.log`, and `Logging.RetainedLogFileCount`
-  for the relay-log prune), `general` (`IConfigLoader`, the live config read at
-  launch, reached transitively via `steam`), `profiles`
+- **Curator libraries:** `config` (`RelayDir`; `Logging.RelayLogFile`, the stem
+  relay-client day-stamps into Relay's own `relay-<yyyyMMdd>.log`, and
+  `Logging.RetainedLogFileCount` for the relay-log prune), `general`
+  (`IConfigLoader`, the live config read at launch, reached transitively via
+  `steam`), `profiles`
   (`IProfileService.PrepareModRoot` + `GetLaunchSettings`), `steam`
   (`ISteamService.Discover`).
 - **NuGet:** `Microsoft.Extensions.DependencyInjection.Abstractions`,

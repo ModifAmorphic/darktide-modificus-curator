@@ -479,7 +479,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         AppImage identity; Relay writes its own per-day log
                         (relay-<yyyyMMdd>.log next to Curator's Serilog
                         curator-<yyyyMMdd>.log, resolved at launch from the
-                        configured Logging.LogFile directory by RelayLog + pruned
+                        configured Logging.RelayLogFile stem by RelayLog, which
+                        inserts the day stamp before the extension, + pruned
                         to the same RetainedLogFileCount, best-effort, before the
                         spawn) passed as --log-file, followed by an unconditional
                         bare --log-append (Relay's per-day file is shared across
@@ -753,9 +754,11 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   Day-rolling log file (Serilog `RollingInterval.Day` writes
   `curator-<yyyyMMdd>.log`, appended across starts within a day, rolled at
   midnight, pruned to `Logging:RetainedLogFileCount` default 5; Serilog owns
-  the day-naming, midnight rolling, and pruning). Relay keeps its own
-  `relay-<yyyyMMdd>.log` in the same directory; relay-client resolves and prunes
-  it to the same retained count at launch and passes it as `--log-file`.
+  the day-naming, midnight rolling, and pruning). Relay has its own parallel
+  `Logging:RelayLogFile` stem (defaults to `relay-<yyyyMMdd>.log` next to
+  Curator's); relay-client inserts the day stamp before the extension, resolves
+  and prunes it to the same retained count at launch, and passes it as
+  `--log-file`.
 - The backend libraries are all implemented: **Profiles** (profile data model +
   lifecycle; container-based staging, where `PrepareModRoot` discovers each
   enabled mod's base folder name inside the resolved version folder via
