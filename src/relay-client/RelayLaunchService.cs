@@ -151,7 +151,14 @@ internal sealed class RelayLaunchService : IRelayLaunchService
             // unknown profile, caught below as Error (PrepareModRoot would have thrown it first).
             var launchSettings = _profiles.GetLaunchSettings(profileId);
 
-            var started = _strategy.Start(launcherPath, discovery, gameBinary, modPath, logFile, launchSettings);
+            // Hide the Relay console window unless the global ShowRelayConsole
+            // preference opts in (read live from the snapshot taken above, so a
+            // Preferences change takes effect on the next launch). CreateNoWindow
+            // is honored by the launcher with UseShellExecute=false; on Linux no
+            // console appears regardless, so the flag is a harmless no-op there.
+            var createNoWindow = !config.Preferences.ShowRelayConsole;
+
+            var started = _strategy.Start(launcherPath, discovery, gameBinary, modPath, logFile, launchSettings, createNoWindow);
 
             if (!started)
             {

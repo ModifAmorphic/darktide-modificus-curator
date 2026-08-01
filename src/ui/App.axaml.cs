@@ -83,7 +83,7 @@ public class App : Application
         Resources["Loc"] = localization;
         var prefs = config.Preferences;
         services.GetRequiredService<IPreferencesService>()
-            .ApplyAndPersist(prefs.Theme, prefs.FontScale, prefs.Language);
+            .ApplyAndPersist(prefs.Theme, prefs.FontScale, prefs.Language, prefs.ShowRelayConsole);
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {

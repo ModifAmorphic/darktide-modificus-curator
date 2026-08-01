@@ -142,9 +142,11 @@ public interface IDialogService
   splash state) and `EnableLuaLogs` emits `--log-lua` (tees Lua `print` output
   into the log file).
 - `ShowPreferencesAsync()`: the Preferences modal (theme / font scale /
-  language). Each change applies immediately through `IPreferencesService`
-  (which also persists), so on completion the running app and the persisted
-  config already reflect the user's choices.
+  language / show-Relay-console toggle). Each change applies immediately
+  through `IPreferencesService` (which also persists), so on completion the
+  running app and the persisted config already reflect the user's choices.
+  `ShowRelayConsole` has no live-apply step; it is read at launch time by the
+  Relay launcher.
 - `ShowImportModAsync(request)`: the per-mod import modal (source chooser,
   conditional Version and URL), pre-filled from `request`. Returns the
   confirmed `ImportModResult` (URL parsed to canonical source) when the user
@@ -202,12 +204,13 @@ the [mods](mods.md) library; the UI consumes them.
 ### `IPreferencesService`
 
 The single authority for applying user-facing preferences (theme, font scale,
-language) to the running app and persisting them to `CuratorConfig`.
+language, show-Relay-console) to the running app and persisting them to
+`CuratorConfig`.
 
 ```csharp
 public interface IPreferencesService
 {
-    void ApplyAndPersist(ThemeMode theme, double fontScale, string language);
+    void ApplyAndPersist(ThemeMode theme, double fontScale, string language, bool showRelayConsole);
 }
 ```
 
@@ -215,9 +218,11 @@ public interface IPreferencesService
 the font scale via application-level `AppFontSize` + `AppStatusFontSize`
 resources (cascading to all controls through inheritance and `DynamicResource`),
 and the language via `LocalizationService.SetCulture`. It then persists all
-three to the config file via a read-modify-save through `IConfigLoader`. Safe
-to call at startup (the values may match the loaded config, which is a
-no-op apply).
+four to the config file via a read-modify-save through `IConfigLoader`.
+`showRelayConsole` is persisted only (no live-apply): it is read at launch time
+by the Relay launcher to decide whether to hide the console window. Safe to
+call at startup (the values may match the loaded config, which is a no-op
+apply).
 
 `ThemeMode` and `PreferencesConfig` live in the [config](config.md) library.
 
@@ -1023,7 +1028,7 @@ No backend library references the UI (the dependency direction is one-way).
   name refresh (refreshed when the flag is set, untouched when it is not).
 - **`PreferencesViewModelTests`** + **`PreferencesServiceTests`**: the
   Preferences dialog view model and the service that applies theme / font
-  scale / language and persists.
+  scale / language / show-Relay-console and persists.
 - **`LocalizationServiceTests`**: the indexer, `Format`, `SetCulture`
   (unknown name -> invariant), the `Item[]` event that refreshes every
   indexer binding.

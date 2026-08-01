@@ -63,7 +63,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
   ui/                   Modificus.Curator.UI -- the Avalonia executable + DI composition root
                           (shell + profile management: dropdown switch,
                           persisted active profile, create/rename/delete dialog;
-                          global Preferences (theme + font scale + language)
+                          global Preferences (theme + font scale + language +
+                          the show-Relay-console toggle, hidden by default)
                           via `IPreferencesService` + the i18n infrastructure: `Strings.resx`
                           + `LocalizationService` for dynamic culture switching;
                           the mod-list UI;
@@ -493,10 +494,14 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         each arg as its own ArgumentList entry (Relay's --
                         contract; no version preflight); the spawn seam IProcessLauncher takes
                         one immutable ProcessLaunchRequest with FilePath,
-                        Arguments, EnvironmentOverrides, and
-                        EnvironmentVariablesToRemove, applied by ProcessLauncher
-                        as UseShellExecute=false + ArgumentList + remove-then-override
-                        over the inherited environment; ResolveLauncherPath prefers the
+                        Arguments, EnvironmentOverrides, EnvironmentVariablesToRemove,
+                        and CreateNoWindow, applied by ProcessLauncher
+                        as UseShellExecute=false + CreateNoWindow + ArgumentList +
+                        remove-then-override over the inherited environment;
+                        CreateNoWindow hides the Relay console window unless the
+                        global ShowRelayConsole preference opts in (read live from
+                        config at launch; a harmless no-op on Linux, where no
+                        console appears regardless); ResolveLauncherPath prefers the
                         configured RelayDir, then on both platforms falls back to the
                         app-local relay/ shipped inside a Velopack payload at
                         <BaseDirectory>/relay/, then uses the portable sibling fallback

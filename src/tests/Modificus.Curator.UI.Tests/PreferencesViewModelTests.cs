@@ -105,6 +105,27 @@ public sealed class PreferencesViewModelTests
     }
 
     [Fact]
+    public void Constructor_restores_show_relay_console_false_from_a_default_config()
+    {
+        // ShowRelayConsole defaults to false (the window is hidden). The restore
+        // reads it straight from the loaded config's Preferences section.
+        var vm = Build();
+
+        Assert.False(vm.ShowRelayConsole);
+    }
+
+    [Fact]
+    public void Constructor_restores_show_relay_console_true_from_the_config()
+    {
+        var config = CuratorConfig.CreateDefault();
+        config.Preferences.ShowRelayConsole = true;
+
+        var vm = Build(config: config);
+
+        Assert.True(vm.ShowRelayConsole);
+    }
+
+    [Fact]
     public void Constructor_does_not_apply_during_the_initial_restore()
     {
         // Restoring the persisted values is a no-op apply: they already match the
@@ -202,6 +223,20 @@ public sealed class PreferencesViewModelTests
         vm.FontScalePercent = percent;
 
         Assert.Equal(persisted, prefs.LastFontScale);
+    }
+
+    [Fact]
+    public void Changing_show_relay_console_applies_and_persists_immediately()
+    {
+        // The checkbox has no live-apply step, but flipping it still routes
+        // through the authority so the value is persisted for the next launch.
+        var prefs = new FakePreferencesService();
+        var vm = Build(prefs: prefs);
+
+        vm.ShowRelayConsole = true;
+
+        Assert.Equal(1, prefs.ApplyCalls);
+        Assert.True(prefs.LastShowRelayConsole);
     }
 
     // ---- ThemeOption / LanguageOption labels localize ----------------------

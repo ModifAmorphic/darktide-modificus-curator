@@ -43,7 +43,7 @@ public sealed class CuratorConfig
 | `RelayDir` | `<app-data>/relay` | Where `mod_relay.exe`, `relay_shell.dll`, and `mod_loader/` live (consumed by [relay-client](relay-client.md)). |
 | `Discovery` | see `DiscoveryConfig` | User-supplied discovery overrides (Steam / Darktide / compatdata / Proton paths). Validated on disk + healed from the discoverer + persisted by `SteamService.Discover()`. |
 | `Integrations` | see `IntegrationsConfig` | External-service (mod-source) integration settings. |
-| `Preferences` | see `PreferencesConfig` | User-facing global preferences (theme, font scale, language). |
+| `Preferences` | see `PreferencesConfig` | User-facing global preferences (theme, font scale, language, show-Relay-console toggle). |
 
 `<app-data>` is `AppPaths.AppDataDir`: `Environment.SpecialFolder.LocalApplicationData`
 plus an app-data segment that is `ModifAmorphic\Modificus Curator` on Windows (an
@@ -186,6 +186,8 @@ sign-out.
 User-facing global preferences, exposed through the Preferences dialog. The
 dialog applies each change immediately (theme + font scale + language take
 effect live) and persists through `ConfigLoader.Save`; there is no commit step.
+`ShowRelayConsole` has no live-apply step: it is read at launch time by the
+Relay launcher.
 
 ```csharp
 public sealed class PreferencesConfig
@@ -193,6 +195,7 @@ public sealed class PreferencesConfig
     public ThemeMode Theme { get; set; } = ThemeMode.System;
     public double FontScale { get; set; } = 1.0;
     public string Language { get; set; } = "en";
+    public bool ShowRelayConsole { get; set; }            // default false (hidden)
 }
 
 public enum ThemeMode
@@ -216,6 +219,13 @@ public enum ThemeMode
   translated `Strings.<culture>.resx` files (no code change). Switching language
   updates the live UI through the UI-layer `LocalizationService` (dynamic, no
   restart).
+- `ShowRelayConsole`: whether to show the Mod Relay console window when launching
+  the game. `false` by default (the window is hidden); Relay's output is captured
+  in its `relay-<yyyyMMdd>.log` regardless, so the console is redundant. Read
+  live from config at launch (one snapshot per launch); a Preferences change
+  takes effect on the next launch. On Linux no console window appears regardless,
+  so the flag has no observable effect there. Surfaced as a checkbox in the
+  Preferences dialog.
 
 ### `DiscoveryConfig`
 

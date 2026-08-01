@@ -39,7 +39,7 @@ public sealed class PreferencesServiceTests
     {
         var (svc, _, _) = Build();
 
-        svc.ApplyAndPersist(ThemeMode.Dark, 1.0, "fr");
+        svc.ApplyAndPersist(ThemeMode.Dark, 1.0, "fr", showRelayConsole: false);
 
         Assert.Equal("fr", Localization.Culture.Name);
     }
@@ -49,7 +49,7 @@ public sealed class PreferencesServiceTests
     {
         var (svc, _, _) = Build();
 
-        svc.ApplyAndPersist(ThemeMode.System, 1.0, "");
+        svc.ApplyAndPersist(ThemeMode.System, 1.0, "", showRelayConsole: false);
 
         Assert.Equal(CultureInfo.InvariantCulture, Localization.Culture);
     }
@@ -63,7 +63,7 @@ public sealed class PreferencesServiceTests
         // indexer keeps resolving to the neutral resx.
         var (svc, _, _) = Build();
 
-        var ex = Record.Exception(() => svc.ApplyAndPersist(ThemeMode.System, 1.0, "xx-XX"));
+        var ex = Record.Exception(() => svc.ApplyAndPersist(ThemeMode.System, 1.0, "xx-XX", showRelayConsole: false));
 
         Assert.Null(ex);
     }
@@ -73,17 +73,18 @@ public sealed class PreferencesServiceTests
     {
         // ApplyAndPersist reads the live snapshot, overwrites the Preferences
         // section, and saves. The fake captures the saved config; its
-        // Preferences mirror the applied triple (proving the read-modify-save
+        // Preferences mirror the applied quartet (proving the read-modify-save
         // carried the values onto the snapshot without clobbering siblings).
         var (svc, loader, _) = Build();
 
-        svc.ApplyAndPersist(ThemeMode.Light, 1.25, "fr");
+        svc.ApplyAndPersist(ThemeMode.Light, 1.25, "fr", showRelayConsole: true);
 
         Assert.Equal(1, loader.SaveCalls);
         Assert.NotNull(loader.LastSaved);
         Assert.Equal(ThemeMode.Light, loader.LastSaved!.Preferences.Theme);
         Assert.Equal(1.25, loader.LastSaved.Preferences.FontScale);
         Assert.Equal("fr", loader.LastSaved.Preferences.Language);
+        Assert.True(loader.LastSaved.Preferences.ShowRelayConsole);
     }
 
     [Fact]
@@ -98,7 +99,7 @@ public sealed class PreferencesServiceTests
         var loader = new FakeConfigLoader { Config = config };
         var svc = new PreferencesService(loader, Localization, NullLogger<PreferencesService>.Instance);
 
-        svc.ApplyAndPersist(ThemeMode.Dark, 1.0, "en");
+        svc.ApplyAndPersist(ThemeMode.Dark, 1.0, "en", showRelayConsole: false);
 
         Assert.Equal("/custom/runtime", loader.LastSaved!.RelayDir);
     }
@@ -110,7 +111,7 @@ public sealed class PreferencesServiceTests
         // apply paths must guard against that (the persistence path still runs).
         var (svc, loader, _) = Build();
 
-        var ex = Record.Exception(() => svc.ApplyAndPersist(ThemeMode.Dark, 1.5, "en"));
+        var ex = Record.Exception(() => svc.ApplyAndPersist(ThemeMode.Dark, 1.5, "en", showRelayConsole: false));
 
         Assert.Null(ex);
         Assert.Equal(1, loader.SaveCalls);

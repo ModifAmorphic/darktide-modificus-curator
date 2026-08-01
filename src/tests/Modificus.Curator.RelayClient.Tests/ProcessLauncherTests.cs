@@ -31,6 +31,29 @@ public sealed class ProcessLauncherTests
     }
 
     [Fact]
+    public void BuildStartInfo_sets_CreateNoWindow_from_request()
+    {
+        // CreateNoWindow suppresses the child's console window (honored only with
+        // UseShellExecute=false, which BuildStartInfo always sets). The request's
+        // flag flows straight through to ProcessStartInfo.CreateNoWindow.
+        var hidden = new ProcessLaunchRequest("/bin/true", createNoWindow: true);
+        var shown = new ProcessLaunchRequest("/bin/true", createNoWindow: false);
+
+        Assert.True(ProcessLauncher.BuildStartInfo(hidden).CreateNoWindow);
+        Assert.False(ProcessLauncher.BuildStartInfo(shown).CreateNoWindow);
+    }
+
+    [Fact]
+    public void BuildStartInfo_defaults_CreateNoWindow_to_false_when_not_requested()
+    {
+        // The ctor default is false, so a caller that does not opt in keeps the
+        // prior behavior (the child console is shown per the platform default).
+        var request = new ProcessLaunchRequest("/bin/true");
+
+        Assert.False(ProcessLauncher.BuildStartInfo(request).CreateNoWindow);
+    }
+
+    [Fact]
     public void BuildStartInfo_sets_FileName_from_request()
     {
         var request = new ProcessLaunchRequest("/opt/curator/mod_relay.exe");

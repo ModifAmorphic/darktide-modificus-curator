@@ -313,6 +313,56 @@ public sealed class RelayLaunchServiceTests
             result.MissingDiscoveryFields);
     }
 
+    // ---- Relay console window preference (global) --------------------------
+
+    [Fact]
+    public void Default_config_hides_the_relay_console_window()
+    {
+        // ShowRelayConsole defaults to false, so the launch request must carry
+        // CreateNoWindow=true (the console window is suppressed). Read live from
+        // the config snapshot the fixture injects.
+        using var fx = new RelayFixture();
+        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        var svc = fx.BuildWindowsService();
+
+        svc.Launch(Guid.NewGuid());
+
+        Assert.True(fx.Launcher.CreateNoWindow);
+    }
+
+    [Fact]
+    public void ShowRelayConsole_true_shows_the_relay_console_window()
+    {
+        // Opting in (Preferences checkbox on) yields CreateNoWindow=false, so the
+        // Relay console window appears. One platform is enough: both strategies
+        // thread createNoWindow through the same ProcessLaunchRequest ctor.
+        using var fx = new RelayFixture();
+        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Config.Preferences.ShowRelayConsole = true;
+        var svc = fx.BuildWindowsService();
+
+        svc.Launch(Guid.NewGuid());
+
+        Assert.False(fx.Launcher.CreateNoWindow);
+    }
+
+    [Fact]
+    public void ShowRelayConsole_preference_is_read_live_per_launch()
+    {
+        // The preference is read from the live config snapshot each launch (no
+        // cached value), so flipping it between launches flips the request flag.
+        using var fx = new RelayFixture();
+        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        var svc = fx.BuildLinuxService();
+
+        svc.Launch(Guid.NewGuid());
+        Assert.True(fx.Launcher.CreateNoWindow); // default hidden
+
+        fx.Config.Preferences.ShowRelayConsole = true;
+        svc.Launch(Guid.NewGuid());
+        Assert.False(fx.Launcher.CreateNoWindow); // opted in -> shown
+    }
+
     // ---- Profile integration ------------------------------------------------
 
     [Fact]

@@ -1380,8 +1380,9 @@ internal sealed class FakeModImportService : IModImportService
 
 /// <summary>
 /// Recording <see cref="IPreferencesService"/> for tests. Captures the last
-/// applied (theme, fontScale, language) triple + the number of apply calls so
-/// tests can assert the Preferences VM routes changes through the authority.
+/// applied (theme, fontScale, language, showRelayConsole) quartet + the number
+/// of apply calls so tests can assert the Preferences VM routes changes through
+/// the authority.
 /// </summary>
 internal sealed class FakePreferencesService : IPreferencesService
 {
@@ -1389,13 +1390,15 @@ internal sealed class FakePreferencesService : IPreferencesService
     public ThemeMode LastTheme { get; private set; } = ThemeMode.System;
     public double LastFontScale { get; private set; } = 1.0;
     public string LastLanguage { get; private set; } = "en";
+    public bool LastShowRelayConsole { get; private set; }
 
-    public void ApplyAndPersist(ThemeMode theme, double fontScale, string language)
+    public void ApplyAndPersist(ThemeMode theme, double fontScale, string language, bool showRelayConsole)
     {
         ApplyCalls++;
         LastTheme = theme;
         LastFontScale = fontScale;
         LastLanguage = language;
+        LastShowRelayConsole = showRelayConsole;
     }
 }
 

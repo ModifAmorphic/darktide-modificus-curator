@@ -36,7 +36,7 @@ internal sealed class WindowsLaunchStrategy : IPlatformLaunchStrategy
     }
 
     /// <inheritdoc />
-    public bool Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings)
+    public bool Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings, bool createNoWindow)
     {
         ArgumentNullException.ThrowIfNull(launchSettings);
 
@@ -61,7 +61,7 @@ internal sealed class WindowsLaunchStrategy : IPlatformLaunchStrategy
         }
 
         _logger.LogInformation("Launching (Windows) {Launcher} {Args}", launcherPath, FormatArgs(args));
-        var request = new ProcessLaunchRequest(launcherPath, args, environmentOverrides: env);
+        var request = new ProcessLaunchRequest(launcherPath, args, environmentOverrides: env, createNoWindow: createNoWindow);
         return _launcher.Start(request);
     }
 

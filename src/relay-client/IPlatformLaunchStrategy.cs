@@ -61,5 +61,9 @@ internal interface IPlatformLaunchStrategy
     /// Darktide's intro splash state; appended after <c>--log-lua</c>, no value,
     /// not path-translated).
     /// </param>
-    bool Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings);
+    /// <param name="createNoWindow">When <c>true</c>, suppresses the spawned
+    /// Relay process's console window (flows through to the launch request's
+    /// <see cref="ProcessLaunchRequest.CreateNoWindow"/>). The orchestrator
+    /// derives this from the global <c>ShowRelayConsole</c> preference.</param>
+    bool Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings, bool createNoWindow);
 }

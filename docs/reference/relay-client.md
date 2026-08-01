@@ -42,7 +42,9 @@ expected conditions:
   configured `<RelayDir>/mod_relay.exe` path.
 - Spawns the launcher via the active `IPlatformLaunchStrategy` (directly on
   Windows; under `proton run` on Linux) -- the service itself contains no
-  per-launch OS branch.
+  per-launch OS branch. The spawn's `CreateNoWindow` is derived from the global
+  `PreferencesConfig.ShowRelayConsole` preference (read live from the launch's
+  config snapshot): the Relay console window is hidden unless the user opts in.
 
 ```csharp
 public sealed record LaunchResult(
@@ -74,13 +76,16 @@ public enum LaunchStatus { Launched, DiscoveryIncomplete, StagingFailed, Error }
   - `RequiredDiscoveryFields(discovery)` -- the discovery fields this platform
     requires but could not resolve (Windows: Steam + game binary; Linux: +
     compatdata + Proton).
-  - `Start(launcherPath, discovery, gameBinary, modPath, logFile, launchSettings) → bool`
+  - `Start(launcherPath, discovery, gameBinary, modPath, logFile, launchSettings, createNoWindow) → bool`
     -- the spawn. Windows: a direct invocation of the launcher with native
     (untranslated) args; Linux: `<proton> run <launcher.exe> <args>` with both
     `STEAM_COMPAT_*` env vars and the path-valued flags `Z:\`-translated. The
     `launchSettings` parameter carries the profile's environment variables
     (merged into the spawn request) + game arguments (appended after the
     launcher's own flags as a bare `--` separator then one argv entry each).
+    `createNoWindow` flows through to the launch request's `CreateNoWindow`
+    (hides the child console window); the orchestrator derives it from the
+    global `ShowRelayConsole` preference.
   - `Name` -- a short label ("Windows" / "Linux") for log messages.
   - Two implementations (`WindowsLaunchStrategy`, `LinuxLaunchStrategy`),
     selected once at DI time from the host OS (see
@@ -94,18 +99,21 @@ public enum LaunchStatus { Launched, DiscoveryIncomplete, StagingFailed, Error }
   request lists in `EnvironmentVariablesToRemove` from the inherited parent
   environment, then applies each `EnvironmentOverrides` entry on top (overrides
   win when a key appears in both sets), and adds each argument verbatim to
-  `ArgumentList` (argv-correct, no shell, no injection surface). The
+  `ArgumentList` (argv-correct, no shell, no injection surface). It also forwards
+  the request's `CreateNoWindow` to `ProcessStartInfo.CreateNoWindow` (honored
+  with `UseShellExecute = false`; hides the child console window). The
   deterministic `ProcessStartInfo` construction is factored into an internal
   `BuildStartInfo(ProcessLaunchRequest)` pure helper that production `Start`
   uses verbatim, so tests can inspect the final environment + argument layout
   without spawning a real process.
 
   The request is the immutable public `ProcessLaunchRequest` sealed object
-  (`FilePath`, `Arguments`, `EnvironmentOverrides`, `EnvironmentVariablesToRemove`).
-  Collections are snapshotted into genuinely immutable containers at construction
-  and exposed as empty collections rather than `null`. The single-value API
-  keeps the launcher straightforward for the two strategies and any future
-  per-profile environment overrides.
+  (`FilePath`, `Arguments`, `EnvironmentOverrides`,
+  `EnvironmentVariablesToRemove`, `CreateNoWindow`). Collections are snapshotted
+  into genuinely immutable containers at construction and exposed as empty
+  collections rather than `null`. The single-value API keeps the launcher
+  straightforward for the two strategies and any future per-profile environment
+  overrides.
 
 `WinePath.ToWine(posixPath)` (internal) translates an absolute POSIX path to its
 Wine `Z:\` form (`/` → `\`, `Z:` prefix) for the launcher-under-Wine flags; it is
@@ -339,7 +347,8 @@ fake `IProcessLauncher`, `DiscoveryIncomplete` missing-field derivation,
 and the Windows empty-removal/override assertion, plus the launch-settings merge --
 Linux profile env before Proton startup alongside the AppImage removals + the
 `STEAM_COMPAT_*` overrides; Windows profile env as overrides; empty/legacy when no
-settings), `GameArgumentsTests` (the bare-`--` contract via the pure
+settings, plus the `CreateNoWindow` derivation from the global `ShowRelayConsole`
+preference read live per launch), `GameArgumentsTests` (the bare-`--` contract via the pure
 `BuildLauncherArgs(gameBinary, modPath, logFile, LaunchSettings)` seam: empty
 emits no `--`, multiple emit one `--` then each arg as its own element in order,
 values with spaces + quotes stay one element; the unconditional bare
@@ -350,8 +359,9 @@ the best-effort prune of old `relay-*.log` to the shared retained count),
 `ProcessLauncherTests`
 (the deterministic `ProcessLauncher.BuildStartInfo` path: a requested inherited
 key is removed, an unrelated inherited key remains, an override is applied, an
-override wins after removal, `UseShellExecute` is false, arguments stay distinct
-including values with spaces and shell metacharacters), `WinePathTests`, the
+override wins after removal, `UseShellExecute` is false, `CreateNoWindow` flows
+from the request, arguments stay distinct including values with spaces and
+shell metacharacters), `WinePathTests`, the
 `AddRelayClient` DI wiring, all against the
 fakes in `TestDoubles.cs`. Tests inject the concrete strategy to exercise either
 path on any CI OS. `dotnet run -- <discover|list|launch>` runs the **composition

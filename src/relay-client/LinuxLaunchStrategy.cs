@@ -79,7 +79,7 @@ internal sealed class LinuxLaunchStrategy : IPlatformLaunchStrategy
     }
 
     /// <inheritdoc />
-    public bool Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings)
+    public bool Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings, bool createNoWindow)
     {
         ArgumentNullException.ThrowIfNull(launchSettings);
 
@@ -125,7 +125,8 @@ internal sealed class LinuxLaunchStrategy : IPlatformLaunchStrategy
             discovery.ProtonBinaryPath!,
             arguments,
             environmentOverrides: env,
-            environmentVariablesToRemove: AppImageIdentityVariables);
+            environmentVariablesToRemove: AppImageIdentityVariables,
+            createNoWindow: createNoWindow);
         return _launcher.Start(request);
     }
 

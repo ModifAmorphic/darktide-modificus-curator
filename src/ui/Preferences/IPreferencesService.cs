@@ -20,13 +20,14 @@ public interface IPreferencesService
     /// <summary>
     /// Applies <paramref name="theme"/> / <paramref name="fontScale"/> /
     /// <paramref name="language"/> to the running app (theme variant, global
-    /// font scale, UI culture), then persists them to the config file via a
-    /// read-modify-save through <see cref="IConfigLoader"/> (load the live
-    /// snapshot, overwrite the <see cref="PreferencesConfig"/> section, save).
-    /// Safe to call at startup (the values may match the loaded config, which is
-    /// a no-op apply).
+    /// font scale, UI culture), then persists all four preferences (including
+    /// <paramref name="showRelayConsole"/>, which has no live-apply step) to the
+    /// config file via a read-modify-save through <see cref="IConfigLoader"/>
+    /// (load the live snapshot, overwrite the <see cref="PreferencesConfig"/>
+    /// section, save). Safe to call at startup (the values may match the loaded
+    /// config, which is a no-op apply).
     /// </summary>
-    void ApplyAndPersist(ThemeMode theme, double fontScale, string language);
+    void ApplyAndPersist(ThemeMode theme, double fontScale, string language, bool showRelayConsole);
 }
 
 /// <summary>
@@ -73,9 +74,10 @@ public sealed class PreferencesService : IPreferencesService
     }
 
     /// <inheritdoc />
-    public void ApplyAndPersist(ThemeMode theme, double fontScale, string language)
+    public void ApplyAndPersist(ThemeMode theme, double fontScale, string language, bool showRelayConsole)
     {
-        // 1. Apply to the running app.
+        // 1. Apply to the running app. (showRelayConsole has no live-apply step:
+        //    it is read at launch time by the Relay launcher.)
         ApplyTheme(theme);
         ApplyFontScale(fontScale);
         ApplyLanguage(language);
@@ -91,13 +93,15 @@ public sealed class PreferencesService : IPreferencesService
         config.Preferences.Theme = theme;
         config.Preferences.FontScale = fontScale;
         config.Preferences.Language = language;
+        config.Preferences.ShowRelayConsole = showRelayConsole;
         _configLoader.Save(config);
 
         _logger.LogInformation(
-            "Preferences applied + persisted: theme={Theme}; fontScale={FontScale:F2}; language={Language}",
+            "Preferences applied + persisted: theme={Theme}; fontScale={FontScale:F2}; language={Language}; showRelayConsole={ShowRelayConsole}",
             theme,
             fontScale,
-            language);
+            language,
+            showRelayConsole);
     }
 
     /// <summary>

@@ -385,6 +385,10 @@
     <value>English</value>
     <comment>Language dropdown option: English (the only shipped language).</comment>
   </data>
+  <data name="Preferences_ShowRelayConsole" xml:space="preserve">
+    <value>Show console window when launching the game</value>
+    <comment>Checkbox in the Preferences dialog to show the Mod Relay console window on launch (hidden by default).</comment>
+  </data>
   <data name="Preferences_DoneButton" xml:space="preserve">
     <value>Done</value>
     <comment>The Done button at the bottom of the Preferences dialog.</comment>

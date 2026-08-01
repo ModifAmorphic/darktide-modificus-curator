@@ -2,9 +2,10 @@ namespace Modificus.Curator.Config;
 
 /// <summary>
 /// User-facing global preferences (the "Preferences" dialog): the UI theme,
-/// the font-scale multiplier, and the display language. Bound from the
-/// <c>Preferences</c> section of <see cref="CuratorConfig"/> by the config loader
-/// in <c>Modificus.Curator.General</c>, and persisted back through
+/// the font-scale multiplier, the display language, and whether to show the
+/// Mod Relay console window on launch. Bound from the <c>Preferences</c>
+/// section of <see cref="CuratorConfig"/> by the config loader in
+/// <c>Modificus.Curator.General</c>, and persisted back through
 /// <c>ConfigLoader.Save</c> when the user changes a value in the dialog.
 /// Every field carries a default so an absent section yields a usable object
 /// (first-run safe).
@@ -17,6 +18,10 @@ namespace Modificus.Curator.Config;
 /// <para><b>Language:</b> a culture name (e.g. <c>en</c>, <c>fr</c>). English
 /// ships; the selector + culture switching are in place, real translations are
 /// content added later via translated resx files. Empty / <c>"en"</c> = neutral.</para>
+/// <para><b>ShowRelayConsole:</b> whether to show the Mod Relay console window
+/// when launching the game. <c>false</c> by default (the window is hidden);
+/// Relay's output is captured in its log file regardless. Read at launch time
+/// by the Relay launcher, not applied live to the running app.</para>
 /// </remarks>
 public sealed class PreferencesConfig
 {
@@ -39,6 +44,14 @@ public sealed class PreferencesConfig
     /// this at runtime updates the live UI through the LocalizationService.
     /// </summary>
     public string Language { get; set; } = "en";
+
+    /// <summary>
+    /// Whether to show the Mod Relay console window when launching the game.
+    /// <c>false</c> by default (the window is hidden). Relay's output is captured
+    /// in its log file regardless, so the console is redundant. Read at launch
+    /// time by the Relay launcher; not applied live to the running app.
+    /// </summary>
+    public bool ShowRelayConsole { get; set; }
 }
 
 /// <summary>
