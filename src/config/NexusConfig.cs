@@ -66,6 +66,16 @@ public sealed class NexusConfig
     public NexusOAuthTokens? OAuth { get; set; }
 
     /// <summary>
+    /// Developer-only toggle (no UI control) gating the Integrations dialog's
+    /// API-key auth block visibility. <c>false</c> by default: the Integrations
+    /// dialog hides its API-key block and OAuth is the sole sign-in path.
+    /// <c>true</c> shows the API-key block. Read live from config when the
+    /// dialog opens, so editing <c>config.json</c> takes effect on the next
+    /// dialog open (or a restart). No UI control writes this.
+    /// </summary>
+    public bool ApiKeyAuthEnabled { get; set; }
+
+    /// <summary>
     /// Whether the periodic background update check runs while a profile is
     /// active. <c>true</c> by default. This gates ONLY the periodic timer; the
     /// profile-load check (startup + active-profile switch) and the manual

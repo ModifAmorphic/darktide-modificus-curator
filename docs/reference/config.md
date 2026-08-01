@@ -94,6 +94,7 @@ public sealed class NexusConfig
     public NexusAuthMethod AuthMethod { get; set; } = NexusAuthMethod.None;
     public string? ApiKey { get; set; }                          // used when AuthMethod == ApiKey
     public NexusOAuthTokens? OAuth { get; set; }                 // used when AuthMethod == OAuth
+    public bool ApiKeyAuthEnabled { get; set; }                  // dev toggle: show Integrations API-key block, default false
     public bool AutoUpdateCheckEnabled { get; set; } = true;
     public int AutoUpdateCheckIntervalMinutes { get; set; } = 10;
     public bool AutomaticUpdatesEnabled { get; set; }            // opt-in Premium auto-install, default false
@@ -126,9 +127,14 @@ Nexus fields:
 - `ApiKey`: the Nexus API key (sent as the `apikey` header). Set when
   `AuthMethod == ApiKey`; cleared on sign-out or when switching to OAuth.
   `null`/whitespace is treated as "not configured".
-- `OAuth`: the persisted OAuth tokens. Set when `AuthMethod == OAuth`; cleared
-  on sign-out or when switching to API key. `null` is treated as "not
+- `OAuth`: the persisted OAuth tokens. Set when `AuthMethod == OAuth`; cleared on
+  sign-out or when switching to API key. `null` is treated as "not
   authenticated". See `NexusOAuthTokens` below.
+- `ApiKeyAuthEnabled`: developer-only toggle (no UI control) gating the
+  Integrations dialog's API-key auth block visibility. `false` by default: the
+  API-key block is hidden and OAuth is the sole sign-in path. `true` shows the
+  API-key block. Read live when the dialog opens, so editing `config.json` takes
+  effect on the next dialog open; no UI control writes it.
 - `AutoUpdateCheckEnabled`: whether the periodic background update check runs
   while a profile is active. `true` by default. Gates ONLY the periodic timer;
   the profile-load check (startup + active-profile switch) and the manual "check

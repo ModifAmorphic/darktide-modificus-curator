@@ -115,6 +115,16 @@ public partial class IntegrationsViewModel : ObservableObject
     public bool IsApiKeyActive => ActiveMethod == NexusAuthMethod.ApiKey;
 
     /// <summary>
+    /// Whether the Integrations dialog's API-key block is shown. Read live from
+    /// <c>NexusConfig.ApiKeyAuthEnabled</c> on dialog open (a developer-only
+    /// config.json toggle; there is no UI control for it). Default false: the
+    /// API-key block is hidden and OAuth is the sole sign-in path unless the flag
+    /// is set in config.json.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isApiKeyAuthEnabled;
+
+    /// <summary>
     /// The API key as the TextBox sees it. Two-way bound. When the configured
     /// method is <c>ApiKey</c>, <see cref="RefreshAsync"/> populates this with
     /// the persisted key (the field masks it via
@@ -509,6 +519,7 @@ public partial class IntegrationsViewModel : ObservableObject
         ApplyState(state);
         LoadAutoUpdateSettings();
         RefreshNxmState();
+        IsApiKeyAuthEnabled = _configLoader.Load().Integrations.Nexus.ApiKeyAuthEnabled;
     }
 
     /// <summary>

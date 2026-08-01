@@ -191,8 +191,8 @@
                download-links section). Self-contained with its own bindings.
                The "testing only" note signals its pre-registration status; the
                release-time remove-vs-hide decision is separate. -->
-          <Separator Margin="0,4" />
-          <StackPanel Spacing="8" Margin="0,4">
+          <Separator Margin="0,4" IsVisible="{Binding IsApiKeyAuthEnabled}" />
+          <StackPanel Spacing="8" Margin="0,4" IsVisible="{Binding IsApiKeyAuthEnabled}">
 
             <!-- Block header. -->
             <TextBlock Text="{Binding ApiKeyLabel}"

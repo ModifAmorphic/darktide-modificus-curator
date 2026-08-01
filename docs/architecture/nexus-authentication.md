@@ -111,6 +111,12 @@ method in the Integrations dialog; switching methods clears the other
 method's credentials (clean transition, no stale leftovers). Sign-out resets
 to `None`.
 
+The API-key block in the Integrations dialog is gated behind the
+`ApiKeyAuthEnabled` `config.json` developer toggle (default off). There is no
+UI control for it: OAuth is the default and sole sign-in path unless a
+developer opts in by setting the flag, in which case the API-key block is
+shown on the next dialog open (read live from config).
+
 ## Auth method selection (no probing, no fallback)
 
 `NexusConfig.AuthMethod` (`None` / `OAuth` / `ApiKey`) is the user's explicit

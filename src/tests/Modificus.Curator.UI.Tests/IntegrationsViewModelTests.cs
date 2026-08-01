@@ -783,6 +783,32 @@ public sealed class IntegrationsViewModelTests
         Assert.Empty(dialogs.AlertCalls);
     }
 
+    // ---- ApiKeyAuthEnabled (developer config toggle) ---------------------
+
+    [Fact]
+    public async Task RefreshAsync_defaults_IsApiKeyAuthEnabled_false()
+    {
+        // The developer toggle defaults to false: no UI control sets it, so a
+        // default config hides the Integrations dialog's API-key block (OAuth
+        // is the sole sign-in path).
+        var (vm, _, _, _) = await BuildAndRefresh(state: null);
+
+        Assert.False(vm.IsApiKeyAuthEnabled);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_loads_IsApiKeyAuthEnabled_from_config()
+    {
+        // Setting the developer toggle in config shows the API-key block on the
+        // next dialog open (read live; no restart required).
+        var configLoader = new FakeConfigLoader();
+        configLoader.Config.Integrations.Nexus.ApiKeyAuthEnabled = true;
+
+        var (vm, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
+
+        Assert.True(vm.IsApiKeyAuthEnabled);
+    }
+
     // ---- helpers -----------------------------------------------------------
 
     private static async Task<(IntegrationsViewModel vm, FakeNexusAuthService auth, FakeDialogService dialogs, FakeNxmHandlerRegistrar? registrar)> BuildAndRefresh(

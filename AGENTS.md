@@ -88,7 +88,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           the Integrations dialog (Nexus-only) + its
                           `OpenIntegrationsCommand` on the shell (left of the profiles button),
                           wired through `IDialogService.ShowIntegrationsAsync` -> `IntegrationsViewModel`
-                          -> `INexusAuthService` (OAuth loopback + API-key validate + sign-out); auth
+                          -> `INexusAuthService` (OAuth loopback + API-key validate + sign-out; the
+                          API-key block is gated behind the `ApiKeyAuthEnabled` developer config flag,
+                          default off, so OAuth is the sole sign-in path unless a developer opts in); auth
                           controls stay usable while Darktide runs (only launch + active-profile
                           changes are blocked); the Integrations dialog also owns the explicit
                           `nxm://` handler registration (a "Nexus download links" section over
