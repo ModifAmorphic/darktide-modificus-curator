@@ -90,10 +90,10 @@ through a registered library interface. The UI registers only its own surface
    startup cache would only create staleness for the Settings window, which
    writes config at runtime; #31).
 2. **Build the logger**: `LoggingBootstrap.CreateLoggerFactory(config)`
-   (Serilog console + file, level-honored; per-process datetime-named log-file
-   rotation with retention, the resolved path shared with Relay via
-   `--log-file`). Both config and the logger are constructed **outside** DI
-   because DI itself needs them.
+   (Serilog console + file, level-honored; day-rolling log file via
+   `RollingInterval.Day`, `curator-<yyyyMMdd>.log` appended across starts within
+   a day and pruned to `RetainedLogFileCount`). Both config and the logger are
+   constructed **outside** DI because DI itself needs them.
 3. **Compose services**: `new ServiceCollection()`, then the `Add<Library>()`
    extensions in their real order:
    - `AddSingleton<IConfigLoader>(loader)`: pre-registered before `AddGeneral`
@@ -148,8 +148,11 @@ Stable surface (Relay is built; this is the boundary Curator builds against):
 
 - **Invocation:** subprocess `mod_relay.exe`, precedence **flag > env > default**.
 - **Flags:** `--game-binary <path>` (required) · `--mod-path <path>` (the mod
-  root) · `--log-file <path>` · `--log-level <level>` · `--steam-app-id <id>`
-  (default `1361210`) · `--lua-logs` (a bare boolean: tees Lua `print` output
+  root) · `--log-file <path>` · `--log-append` (a bare flag Curator always emits
+  right after `--log-file`: Relay writes a per-day `relay-<yyyyMMdd>.log` shared
+  across launches, so it appends rather than overwrites) · `--log-level <level>`
+  · `--steam-app-id <id>`
+  (default `1361210`) · `--log-lua` (a bare boolean: tees Lua `print` output
   from the mod loader, DMF, and mods into the `--log-file`; off by default) ·
   `--skip-splash` (a bare boolean: skips Darktide's intro splash state so the
   game advances directly to the title screen; off by default).
@@ -185,7 +188,7 @@ for the full contract (env-var table, logging, the hook-ready handshake).
   bare-`--` contract). The skip-splash toggle (`SkipSplash`) emits Relay's bare
   `--skip-splash` flag, skipping Darktide's intro splash state; its Relay env
   form `RELAY_SKIP_SPLASH` is reserved so the toggle is the single source of
-  truth. The Lua-logging toggle (`EnableLuaLogs`) emits Relay's bare `--lua-logs`
+  truth. The Lua-logging toggle (`EnableLuaLogs`) emits Relay's bare `--log-lua`
   flag, teeing Lua `print` output into the log file; its Relay env form
   `RELAY_LUA_LOGS` is reserved so the toggle is the single source of truth.
   Editing is unlocked while Darktide runs (changes apply next launch). Env names
@@ -509,11 +512,13 @@ The launch path **diverges by OS**. In both cases Curator resolves the profile,
 writes `mods.lst` into the profile's mod root, reads the profile's launch
 settings (environment variables + Darktide command-line arguments + the
 skip-splash and Lua-logging toggles), then invokes the Relay launcher with
-`--game-binary`, `--mod-path`, `--log-file`. When the profile's `EnableLuaLogs`
-toggle is on, Curator appends the bare `--lua-logs` flag (a tee of Lua print
+`--game-binary`, `--mod-path`, `--log-file`, then an unconditional bare
+`--log-append` (Relay writes its own per-day `relay-<yyyyMMdd>.log` shared
+across launches, so it appends). When the profile's `EnableLuaLogs`
+toggle is on, Curator appends the bare `--log-lua` flag (a tee of Lua print
 output into the log file; not a redirect, so Darktide's console log stays
 complete). When the profile's `SkipSplash` toggle is on, Curator appends the
-bare `--skip-splash` flag (skips Darktide's intro splash state). Both are bare
+bare `--skip-splash` flag (skips Darktide's intro splash state). All are bare
 flags (no value); Relay requires only that its own flags precede the `--`
 separator and that a value-taking flag be immediately followed by its value.
 (Curator does not emit `--log-level`; the Relay shell's level
@@ -653,10 +658,12 @@ exactly the fields launch reported missing.
 One global config file for system-level settings (structured -- e.g. JSON or
 TOML):
 
-- Log file location + level (per-process datetime-named rotation: each manager
-  start writes a new `curator-{DateTime}.log` pinned for the process lifetime,
-  with older files pruned to `RetainedLogFileCount`; the resolved path is shared
-  with Relay via `--log-file`).
+- Log file location + level (Serilog day-rolling: the file sink's
+  `RollingInterval.Day` writes `curator-<yyyyMMdd>.log`, one file per day,
+  appended across starts within the same day and rolled at local midnight, with
+  older files pruned to `RetainedLogFileCount`. Relay keeps its own separate
+  `relay-<yyyyMMdd>.log` in the same directory; relay-client resolves and prunes
+  that file to the same retained count at launch and passes it as `--log-file`).
 - Profiles base folder (where profiles, mods, and settings are stored).
 - Mods folder (the global mod store; see
   [Mod repository](#mod-repository)).

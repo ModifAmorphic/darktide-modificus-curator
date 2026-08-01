@@ -7,17 +7,6 @@ namespace Modificus.Curator.Config;
 public sealed class LoggingConfig
 {
     /// <summary>
-    /// The token in <see cref="LogFile"/> that Curator replaces with the process
-    /// start timestamp (e.g. <c>curator-{DateTime}.log</c> becomes
-    /// <c>curator-20260723143000.log</c>). When present, each Curator start
-    /// writes a new, uniquely named file pinned for the process lifetime; older
-    /// files are pruned to <see cref="RetainedLogFileCount"/>. When absent, the
-    /// configured file is reused and truncated on each start (the legacy
-    /// behavior).
-    /// </summary>
-    public const string DateTimeToken = "{DateTime}";
-
-    /// <summary>
     /// The minimum log level, as a Serilog level name
     /// (<c>Verbose</c>, <c>Debug</c>, <c>Information</c>, <c>Warning</c>,
     /// <c>Error</c>, <c>Fatal</c>). Unknown values fall back to
@@ -26,22 +15,22 @@ public sealed class LoggingConfig
     public string Level { get; set; } = "Information";
 
     /// <summary>
-    /// The file the structured log is written to. May contain
-    /// <see cref="DateTimeToken"/>; when it does, Curator resolves the token to
-    /// the process start timestamp once at startup and pins that path for the
-    /// process lifetime (a new file per start, with older files pruned to
-    /// <see cref="RetainedLogFileCount"/>). When the token is absent, the file
-    /// is reused and truncated on each start. The resolved path is shared with
-    /// Mod Relay: Curator passes it to the launcher as <c>--log-file</c>, so the
-    /// two write the same per-process file.
+    /// The file Serilog writes the structured log to. Serilog day-rolls it
+    /// (<c>RollingInterval.Day</c>): the date is inserted before the extension,
+    /// so a stem of <c>curator-</c> yields <c>curator-&lt;yyyyMMdd&gt;.log</c>,
+    /// one file per day, appended to across starts within the same day and rolled
+    /// at local midnight. The file's directory is also the home of Relay's own
+    /// <c>relay-&lt;yyyyMMdd&gt;.log</c> (managed by relay-client at launch).
     /// </summary>
     public string LogFile { get; set; } = AppPaths.DefaultLogFile;
 
     /// <summary>
-    /// How many datetime-named log files to keep (including the current
-    /// process's file). Default 5. Only applies when <see cref="LogFile"/>
-    /// contains <see cref="DateTimeToken"/>. A value below 1 disables pruning
-    /// (keeps all).
+    /// How many day-rolled log files to retain. Default 5. Feeds Serilog's
+    /// <c>retainedFileCountLimit</c> for Curator's own log (pruning the oldest
+    /// <c>curator-*.log</c> files) AND the relay-client prune for Relay's log
+    /// (keeping the newest <c>relay-*.log</c> files): the single user-facing
+    /// retention knob for both. A value below 1 keeps everything (Serilog's own
+    /// convention for the null/unlimited case; the relay prune mirrors that).
     /// </summary>
     public int RetainedLogFileCount { get; set; } = 5;
 }

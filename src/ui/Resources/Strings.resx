@@ -244,10 +244,10 @@
   </data>
   <data name="LaunchSettings_EnableLuaLogs" xml:space="preserve">
     <value>Write Lua mod logs to the log file</value>
-    <comment>Checkbox label in the launch-settings modal. When on, Relay's --lua-logs flag is emitted at launch so Lua print output (the mod loader, DMF, and mods) is copied into the same log file Relay writes.</comment>
+    <comment>Checkbox label in the launch-settings modal. When on, Relay's --log-lua flag is emitted at launch so Lua print output (the mod loader, DMF, and mods) is copied into the same log file Relay writes.</comment>
   </data>
   <data name="LaunchSettings_EnableLuaLogsTooltip" xml:space="preserve">
-    <value>Copies Lua print output (the mod loader, DMF, and mods) into the same log file Relay writes. It is a tee, not a redirect; Darktide's console log stays complete. Adds Relay's --lua-logs flag at launch.</value>
+    <value>Copies Lua print output (the mod loader, DMF, and mods) into the same log file Relay writes. It is a tee, not a redirect; Darktide's console log stays complete. Adds Relay's --log-lua flag at launch.</value>
     <comment>Tooltip on the Lua-logs checkbox in the launch-settings modal.</comment>
   </data>
   <data name="LaunchSettings_StartupHeader" xml:space="preserve">

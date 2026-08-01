@@ -159,14 +159,48 @@ public sealed class GameArgumentsTests
         AssertGameArgsAfterSeparator(args, new[] { "-g" });
     }
 
-    // ---- --lua-logs: bare flag emitted when the profile opts in ------------
+    // ---- --log-append: bare flag always emitted right after --log-file ------
+
+    [Fact]
+    public void Windows_log_append_is_always_present_immediately_after_log_file_value()
+    {
+        // --log-append is unconditional (Relay's per-day file is shared across
+        // launches, so it appends). It sits right after --log-file's value and
+        // is a bare flag (no value).
+        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings());
+
+        var i = IndexOf(args, "--log-file");
+        Assert.True(i >= 0, "expected --log-file to be present");
+        Assert.True(i + 2 < args.Count, "expected an element after --log-file's value");
+        Assert.Equal("--log-append", args[i + 2]);
+        AssertBareFlag(args, "--log-append", present: true);
+        AssertPrecedesSeparator(args, "--log-append");
+    }
+
+    [Fact]
+    public void Linux_log_append_is_always_present_after_log_file_value_and_not_translated()
+    {
+        // Same contract on Linux, plus the bare flag is NOT Z:\-translated (only
+        // the path-valued flags --game-binary, --mod-path, --log-file are).
+        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings());
+
+        var i = IndexOf(args, "--log-file");
+        Assert.True(i >= 0, "expected --log-file to be present");
+        Assert.True(i + 2 < args.Count, "expected an element after --log-file's value");
+        Assert.Equal("--log-append", args[i + 2]);
+        AssertBareFlag(args, "--log-append", present: true);
+        AssertPrecedesSeparator(args, "--log-append");
+        Assert.DoesNotContain("Z:", args[i + 2]);
+    }
+
+    // ---- --log-lua: bare flag emitted when the profile opts in ------------
 
     [Fact]
     public void Windows_enable_lua_logs_emits_the_bare_flag()
     {
         var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings { EnableLuaLogs = true });
 
-        AssertBareFlag(args, "--lua-logs", present: true);
+        AssertBareFlag(args, "--log-lua", present: true);
         AssertSeparator(args, present: false);
     }
 
@@ -175,41 +209,41 @@ public sealed class GameArgumentsTests
     {
         var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings { EnableLuaLogs = true });
 
-        AssertBareFlag(args, "--lua-logs", present: true);
+        AssertBareFlag(args, "--log-lua", present: true);
         AssertSeparator(args, present: false);
 
         // Guards against accidentally routing the bare flag through WinePath: it
-        // carries no Z:\ prefix (a path-translated "--lua-logs" would be corrupt).
-        Assert.DoesNotContain("Z:", args[IndexOf(args, "--lua-logs")]);
+        // carries no Z:\ prefix (a path-translated "--log-lua" would be corrupt).
+        Assert.DoesNotContain("Z:", args[IndexOf(args, "--log-lua")]);
     }
 
     [Fact]
     public void Enable_lua_logs_flag_precedes_the_separator()
     {
-        // With both a lua-log toggle and a game arg, the bare --lua-logs flag
+        // With both a lua-log toggle and a game arg, the bare --log-lua flag
         // precedes the -- separator, and the game arg follows --. Covers both
         // Windows and Linux.
         var settings = new LaunchSettings { EnableLuaLogs = true, GameArguments = new[] { "-g" } };
         var win = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, settings);
         var lin = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, settings);
 
-        AssertBareFlag(win, "--lua-logs", present: true);
-        AssertPrecedesSeparator(win, "--lua-logs");
+        AssertBareFlag(win, "--log-lua", present: true);
+        AssertPrecedesSeparator(win, "--log-lua");
         AssertGameArgsAfterSeparator(win, new[] { "-g" });
 
-        AssertBareFlag(lin, "--lua-logs", present: true);
-        AssertPrecedesSeparator(lin, "--lua-logs");
+        AssertBareFlag(lin, "--log-lua", present: true);
+        AssertPrecedesSeparator(lin, "--log-lua");
         AssertGameArgsAfterSeparator(lin, new[] { "-g" });
     }
 
     [Fact]
     public void Disable_lua_logs_emits_no_flag()
     {
-        // Explicit false: --lua-logs is absent (one platform is enough; the
+        // Explicit false: --log-lua is absent (one platform is enough; the
         // signature is shared).
         var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings());
 
-        AssertBareFlag(args, "--lua-logs", present: false);
+        AssertBareFlag(args, "--log-lua", present: false);
     }
 
     // ---- --skip-splash: bare flag emitted when the profile opts in ---------
@@ -278,21 +312,21 @@ public sealed class GameArgumentsTests
         var win = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, settings);
         var lin = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, settings);
 
-        AssertBareFlag(win, "--lua-logs", present: true);
-        AssertPrecedesSeparator(win, "--lua-logs");
+        AssertBareFlag(win, "--log-lua", present: true);
+        AssertPrecedesSeparator(win, "--log-lua");
         AssertBareFlag(win, "--skip-splash", present: true);
         AssertPrecedesSeparator(win, "--skip-splash");
         AssertGameArgsAfterSeparator(win, new[] { "-g" });
 
-        AssertBareFlag(lin, "--lua-logs", present: true);
-        AssertPrecedesSeparator(lin, "--lua-logs");
+        AssertBareFlag(lin, "--log-lua", present: true);
+        AssertPrecedesSeparator(lin, "--log-lua");
         AssertBareFlag(lin, "--skip-splash", present: true);
         AssertPrecedesSeparator(lin, "--skip-splash");
         AssertGameArgsAfterSeparator(lin, new[] { "-g" });
 
         // Linux: the path-valued flag IS Z:\-translated; the bare flags are not.
         AssertFlagFollowedByValue(lin, "--log-file", WinePath.ToWine(LogFile));
-        Assert.DoesNotContain("Z:", lin[IndexOf(lin, "--lua-logs")]);
+        Assert.DoesNotContain("Z:", lin[IndexOf(lin, "--log-lua")]);
         Assert.DoesNotContain("Z:", lin[IndexOf(lin, "--skip-splash")]);
     }
 

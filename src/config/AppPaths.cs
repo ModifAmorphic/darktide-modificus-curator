@@ -30,7 +30,10 @@ public static class AppPaths
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         AppDataSegment);
 
-    public static readonly string DefaultLogFile = Path.Combine(AppDataDir, "logs", "curator-{DateTime}.log");
+    // Serilog's RollingInterval.Day stamps the file before the extension, so this
+    // stem (trailing dash) yields curator-<yyyyMMdd>.log (the dash is the stem's
+    // own separator; a stem without it would read curator<yyyyMMdd>.log).
+    public static readonly string DefaultLogFile = Path.Combine(AppDataDir, "logs", "curator-.log");
     public static readonly string DefaultProfilesBaseFolder = Path.Combine(AppDataDir, "profiles");
     public static readonly string DefaultModsFolder = Path.Combine(AppDataDir, "mods");
     public static readonly string DefaultRelayDir = Path.Combine(AppDataDir, "relay");

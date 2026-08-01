@@ -94,7 +94,7 @@ public sealed record LaunchSettings
     public IReadOnlyList<string> GameArguments { get; init; } = Array.Empty<string>();
 
     /// <summary>
-    /// Whether to emit Relay's <c>--lua-logs</c> flag at launch, teeing Lua
+    /// Whether to emit Relay's <c>--log-lua</c> flag at launch, teeing Lua
     /// <c>print</c> output (the mod loader, DMF, and mods) into the same log file
     /// Relay writes (the <c>--log-file</c> Curator always emits). It is a tee,
     /// not a redirect: Darktide's console log stays complete and authoritative.

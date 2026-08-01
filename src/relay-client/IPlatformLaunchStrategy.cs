@@ -51,12 +51,15 @@ internal interface IPlatformLaunchStrategy
     /// Windows: profile env as overrides on the Relay process). Game arguments
     /// are appended after the launcher's own flags as a single bare <c>--</c>
     /// separator then one argv entry each (Relay's <c>--</c> contract); empty
-    /// game args emit no <c>--</c>. <see cref="LaunchSettings.EnableLuaLogs"/>
-    /// controls emission of Relay's bare <c>--lua-logs</c> logging flag
-    /// (appended after <c>--log-file</c>, no value, not path-translated).
-    /// <see cref="LaunchSettings.SkipSplash"/> controls emission of Relay's bare
-    /// <c>--skip-splash</c> flag (skips Darktide's intro splash state; appended
-    /// after <c>--log-file</c>, no value, not path-translated).
+    /// game args emit no <c>--</c>. A bare <c>--log-append</c> is emitted
+    /// unconditionally right after <c>--log-file</c> (Relay's per-day file is
+    /// shared across launches, so it appends; no value, not path-translated).
+    /// <see cref="LaunchSettings.EnableLuaLogs"/> controls emission of Relay's
+    /// bare <c>--log-lua</c> logging flag (appended after <c>--log-append</c>,
+    /// no value, not path-translated). <see cref="LaunchSettings.SkipSplash"/>
+    /// controls emission of Relay's bare <c>--skip-splash</c> flag (skips
+    /// Darktide's intro splash state; appended after <c>--log-lua</c>, no value,
+    /// not path-translated).
     /// </param>
     bool Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings);
 }

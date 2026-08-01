@@ -14,19 +14,16 @@ logger the rest of the app shares.
 
 Builds the structured-logging pipeline from `CuratorConfig.Logging`. Serilog
 (console + file sinks) bridged into `Microsoft.Extensions.Logging`, filtered to
-the configured level. Per-process log-file rotation: when
-`config.Logging.LogFile` contains the `{DateTime}` token (the default), each
-Curator start resolves it to a fixed-width local timestamp (`yyyyMMddHHmmss`),
-pins that path for the process lifetime, and prunes the log directory to
-`RetainedLogFileCount` newest files (including the current). When the token is
-absent, the configured file is reused and truncated on each start (the legacy
-behavior). The resolved path is shared with Mod Relay (`--log-file`) so Curator
-and Relay write the same per-process file.
+the configured level. Day-rolling log file: the file sink's
+`RollingInterval.Day` inserts the date before the extension (the default
+`curator-.log` stem yields `curator-<yyyyMMdd>.log`), one file per day, appended
+across starts within the same day, rolled at local midnight, and pruned to
+`RetainedLogFileCount` newest files. Serilog owns the day-naming, midnight
+rolling, and pruning.
 
 ```csharp
 public static class LoggingBootstrap
 {
-    public static string? CurrentLogFile { get; }        // resolved, process-pinned path
     public static ILoggerFactory CreateLoggerFactory(CuratorConfig config);
 }
 ```
@@ -35,22 +32,18 @@ public static class LoggingBootstrap
 - Reads `config.Logging.Level` (a Serilog level name: `Verbose` / `Debug` /
   `Information` / `Warning` / `Error` / `Fatal`); an unknown value falls back to
   `Information`.
-- Resolves the log path once: substitutes `{DateTime}` in `config.Logging.LogFile`
-  with the process start timestamp (`yyyyMMddHHmmss`), or reuses the template
-  verbatim when the token is absent. The resolved path is stored on
-  `CurrentLogFile` for the Relay launcher (`--log-file`) and the startup banner.
 - Creates the log-file parent directory (the file sink does not reliably create
   missing parents).
-- When the token is present and `RetainedLogFileCount >= 1`: ensures the
-  resolved file exists (so it counts among the newest), then prunes the directory
-  to the newest `RetainedLogFileCount` files matching the template's pattern. The
-  resolved file's timestamp is the newest, so pruning never deletes it. Otherwise
-  (no token, or retention disabled): `File.Delete`s the path so this run starts a
-  fresh file (no-op when absent).
 - Builds a Serilog logger (`.MinimumLevel.Is(level)` + `.Enrich.FromLogContext()`
-  + console + file sinks), assigns it to the global `Log.Logger`, wraps it in a
-  `LoggerFactory` via `AddSerilog(logger, dispose: true)`, and returns it.
-  Disposing the factory disposes the Serilog logger (flushing the file sink).
+  + console + the day-rolling file sink at `config.Logging.LogFile` with
+  `RollingInterval.Day` and `retainedFileCountLimit: config.Logging.RetainedLogFileCount`),
+  assigns it to the global `Log.Logger`, wraps it in a `LoggerFactory` via
+  `AddSerilog(logger, dispose: true)`, and returns it. Disposing the factory
+  disposes the Serilog logger (flushing the file sink).
+
+Relay keeps its own separate log (`relay-<yyyyMMdd>.log`) in the same directory;
+relay-client resolves and prunes that file at launch (see
+[relay-client](relay-client.md)).
 
 ### `IConfigLoader` / `ConfigLoader`
 
@@ -217,10 +210,9 @@ v1). `loggerFactory` is a constructed object passed in; `IConfigLoader` +
 override binding, plus `Preferences` round-trip + `Save` coverage:
 round-trip, parent-dir creation, sibling-section preservation, enum-as-string
 serialization), `AppStateStore` (round-trip + first-run + corrupt-file safety +
-the app-data default path), `LoggingBootstrap` (level parsing, the `{DateTime}`
-token resolver, per-process datetime-named file creation + directory pruning to
-`RetainedLogFileCount`, and the legacy truncate-when-token-absent path), and the
-`AddGeneral` DI wiring (including the `TryAdd` `IConfigLoader` + `IAppStateStore`
+the app-data default path), `LoggingBootstrap` (level parsing, Serilog
+day-rolling file creation and the append-within-a-day behavior at
+`RetainedLogFileCount`), and the `AddGeneral` DI wiring (including the `TryAdd` `IConfigLoader` + `IAppStateStore`
 overrides, so the composition root + tests may pre-register their own instances).
 
 ```sh

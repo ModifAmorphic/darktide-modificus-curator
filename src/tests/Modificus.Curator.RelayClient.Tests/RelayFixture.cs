@@ -45,6 +45,10 @@ internal sealed class RelayFixture : IDisposable
 
         Config = CuratorConfig.CreateDefault();
         Config.RelayDir = RuntimeDir;
+        // Redirect the log file into the temp tree too: Launch now resolves +
+        // prunes Relay's relay-*.log in this directory, so the default app-data
+        // logs dir must not be touched by a test run.
+        Config.Logging.LogFile = Path.Combine(TempRoot, "logs", "curator-.log");
         // The fake returns the same mutable Config instance on each Load(), so a
         // test may mutate fx.Config between launches and the next Launch sees it.
         ConfigLoader = new FakeConfigLoader { Config = Config };

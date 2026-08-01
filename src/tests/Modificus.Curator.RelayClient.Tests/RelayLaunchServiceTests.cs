@@ -1,4 +1,3 @@
-using Modificus.Curator.General;
 using Modificus.Curator.Profiles;
 using Modificus.Curator.Steam;
 
@@ -34,10 +33,16 @@ public sealed class RelayLaunchServiceTests
         Assert.Empty(fx.Launcher.RemovedVariables);
         Assert.DoesNotContain("run", fx.Launcher.Arguments!);
 
+        // Relay writes its own relay-<yyyyMMdd>.log (resolved at launch from the
+        // configured Curator log directory), so the --log-file value is that
+        // computed path, not the configured Curator log file.
+        var expectedRelayLog = RelayLog.ResolveRelayLogPath(fx.Config.Logging.LogFile, DateTime.Now);
+
         Assert.Equal(
             new[] { "--game-binary", FakeDiscovery.WindowsGameBinary,
                     "--mod-path",    @"C:\curator\profiles\abc\staged",
-                    "--log-file",    fx.Config.Logging.LogFile },
+                    "--log-file",    expectedRelayLog,
+                    "--log-append" },
             fx.Launcher.Arguments);
 
         // --log-level is intentionally NOT emitted: the shell's level vocabulary
@@ -50,7 +55,8 @@ public sealed class RelayLaunchServiceTests
     public void Windows_paths_are_not_z_translated()
     {
         // Guard: every path-valued flag must pass through unchanged on Windows
-        // (no Z:\ prefix) -- translation is a Linux-only concern.
+        // (no Z:\ prefix) -- translation is a Linux-only concern. The --log-file
+        // value is the computed relay-<date>.log in the configured log directory.
         using var fx = new RelayFixture();
         fx.Steam.Result = FakeDiscovery.CompleteWindows;
         const string LogFile = @"C:\curator\logs\curator.log";
@@ -63,38 +69,34 @@ public sealed class RelayLaunchServiceTests
         var game = args[IndexOf(args, "--game-binary") + 1];
         var log = args[IndexOf(args, "--log-file") + 1];
         Assert.Equal(FakeDiscovery.WindowsGameBinary, game);
-        Assert.Equal(LogFile, log);
+        Assert.Equal(RelayLog.ResolveRelayLogPath(LogFile, DateTime.Now), log);
         Assert.DoesNotContain("Z:", game);
         Assert.DoesNotContain("Z:", log);
+        // The bare --log-append flag is present and untranslated too.
+        Assert.DoesNotContain("Z:", args[IndexOf(args, "--log-append")]);
     }
 
     [Fact]
-    public void Launch_uses_the_bootstrap_resolved_log_file_path()
+    public void Launch_passes_the_computed_relay_log_file_path()
     {
-        // Pins "Relay gets the resolved, process-pinned path": when the bootstrap
-        // has resolved a log file, the spawned --log-file arg is that path, not
-        // the raw config.Logging.LogFile template. Uses the Windows strategy so
-        // the path passes through verbatim (no Z:\ translation).
+        // Relay writes its own relay-<yyyyMMdd>.log (resolved at launch from the
+        // configured Curator log directory), not Curator's Serilog log file and
+        // not a bootstrap-pinned path. Uses the Windows strategy so the path
+        // passes through verbatim (no Z:\ translation).
         using var fx = new RelayFixture();
         fx.Steam.Result = FakeDiscovery.CompleteWindows;
-        const string Resolved = @"C:\resolved\curator-xyz.log";
-        var previous = LoggingBootstrap.CurrentLogFile;
-        LoggingBootstrap.CurrentLogFile = Resolved;
-        try
-        {
-            var svc = fx.BuildWindowsService();
+        const string ConfiguredLog = @"C:\curator\logs\curator-.log";
+        fx.Config.Logging.LogFile = ConfiguredLog;
+        var svc = fx.BuildWindowsService();
 
-            svc.Launch(Guid.NewGuid());
+        svc.Launch(Guid.NewGuid());
 
-            var args = fx.Launcher.Arguments!;
-            var log = args[IndexOf(args, "--log-file") + 1];
-            Assert.Equal(Resolved, log);
-            Assert.NotEqual(fx.Config.Logging.LogFile, log);
-        }
-        finally
-        {
-            LoggingBootstrap.CurrentLogFile = previous;
-        }
+        var args = fx.Launcher.Arguments!;
+        var log = args[IndexOf(args, "--log-file") + 1];
+        // The computed path: relay-<8 digit date>.log in the configured directory.
+        Assert.Matches(@"relay-\d{8}\.log$", Path.GetFileName(log));
+        Assert.Equal(Path.GetDirectoryName(ConfiguredLog), Path.GetDirectoryName(log));
+        Assert.NotEqual(ConfiguredLog, log);
     }
 
     [Fact]
@@ -141,7 +143,7 @@ public sealed class RelayLaunchServiceTests
     {
         // The launcher runs under Wine and opens --log-file itself, so it must
         // be Z:\-translated on Linux (else the Relay shell log can't be written
-        // where Curator expects).
+        // where Curator expects). The value is the computed relay-<date>.log.
         using var fx = new RelayFixture();
         fx.Steam.Result = FakeDiscovery.CompleteLinux;
         const string LogFile = "/home/u/.local/share/Modificus Curator/logs/curator.log";
@@ -152,7 +154,7 @@ public sealed class RelayLaunchServiceTests
 
         var args = fx.Launcher.Arguments!;
         var log = args[IndexOf(args, "--log-file") + 1];
-        Assert.Equal(@"Z:\home\u\.local\share\Modificus Curator\logs\curator.log", log);
+        Assert.Equal(WinePath.ToWine(RelayLog.ResolveRelayLogPath(LogFile, DateTime.Now)), log);
     }
 
     [Fact]
@@ -371,8 +373,8 @@ public sealed class RelayLaunchServiceTests
         svc.Launch(Guid.NewGuid());
 
         var args = fx.Launcher.Arguments!;
-        AssertBareFlag(args, "--lua-logs", present: true);
-        AssertPrecedesSeparator(args, "--lua-logs");
+        AssertBareFlag(args, "--log-lua", present: true);
+        AssertPrecedesSeparator(args, "--log-lua");
     }
 
     [Fact]
@@ -388,22 +390,22 @@ public sealed class RelayLaunchServiceTests
         var args = fx.Launcher.Arguments!;
         // Exactly once; the bare flag is not Z:\-translated (only path-valued
         // flags are).
-        AssertBareFlag(args, "--lua-logs", present: true);
-        AssertPrecedesSeparator(args, "--lua-logs");
-        Assert.DoesNotContain("Z:", args[IndexOf(args, "--lua-logs")]);
+        AssertBareFlag(args, "--log-lua", present: true);
+        AssertPrecedesSeparator(args, "--log-lua");
+        Assert.DoesNotContain("Z:", args[IndexOf(args, "--log-lua")]);
     }
 
     [Fact]
     public void Profile_without_enable_lua_logs_omits_flag()
     {
-        // Default LaunchSettings: EnableLuaLogs is false, so no --lua-logs.
+        // Default LaunchSettings: EnableLuaLogs is false, so no --log-lua.
         using var fx = new RelayFixture();
         fx.Steam.Result = FakeDiscovery.CompleteWindows;
         var svc = fx.BuildWindowsService();
 
         svc.Launch(Guid.NewGuid());
 
-        Assert.DoesNotContain("--lua-logs", fx.Launcher.Arguments!);
+        Assert.DoesNotContain("--log-lua", fx.Launcher.Arguments!);
     }
 
     [Fact]
@@ -472,12 +474,12 @@ public sealed class RelayLaunchServiceTests
         svc.Launch(Guid.NewGuid());
 
         var args = fx.Launcher.Arguments!;
-        var luaIndex = IndexOf(args, "--lua-logs");
+        var luaIndex = IndexOf(args, "--log-lua");
         var skipIndex = IndexOf(args, "--skip-splash");
         var sepIndex = IndexOf(args, "--");
-        Assert.True(luaIndex >= 0, "expected --lua-logs to be present");
+        Assert.True(luaIndex >= 0, "expected --log-lua to be present");
         Assert.True(skipIndex >= 0, "expected --skip-splash to be present");
-        Assert.True(sepIndex > luaIndex, "expected --lua-logs to precede the -- separator");
+        Assert.True(sepIndex > luaIndex, "expected --log-lua to precede the -- separator");
         Assert.True(sepIndex > skipIndex, "expected --skip-splash to precede the -- separator");
         Assert.Equal("-g", args[^1]);
     }

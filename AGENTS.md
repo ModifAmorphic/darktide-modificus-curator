@@ -305,8 +305,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           dialog). Bracketing the swap under `_syncing` makes
                           those events no-ops)
   general/              Modificus.Curator.General -- cross-cutting infra (logging bootstrap:
-                        per-process datetime-named log-file rotation + retention, with the
-                        resolved process-pinned path shared with Relay via --log-file,
+                        Serilog day-rolling log (RollingInterval.Day writes
+                        curator-<yyyyMMdd>.log, appended across starts within a day,
+                        rolled at midnight, pruned to RetainedLogFileCount),
                         config loader, app-state store (active profile id +
                         last update-check timestamp + manual-refresh throttle
                         window + profile-scoped known-update snapshots), AddGeneral() DI ext)
@@ -332,7 +333,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         external folder's own name) + per-profile launch settings
                         (EnvVar/LaunchSettings: ordered env-var entries + game
                         args + the EnableLuaLogs toggle (emits Relay's bare
-                        --lua-logs flag, teeing Lua print output into the log
+                        --log-lua flag, teeing Lua print output into the log
                         file) + the SkipSplash toggle (emits Relay's bare
                         --skip-splash flag, skipping Darktide's intro splash
                         state); GetLaunchSettings/SetLaunchSettings validate at the
@@ -474,11 +475,19 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         AppImage/desktop-identity variables APPDIR, APPIMAGE,
                         ARGV0, OWD, BAMF_DESKTOP_FILE_HINT from the inherited
                         environment so Darktide does not inherit Curator's
-                        AppImage identity; a profile's EnableLuaLogs emits Relay's
-                        bare --lua-logs flag appended after --log-file (a tee of
+                        AppImage identity; Relay writes its own per-day log
+                        (relay-<yyyyMMdd>.log next to Curator's Serilog
+                        curator-<yyyyMMdd>.log, resolved at launch from the
+                        configured Logging.LogFile directory by RelayLog + pruned
+                        to the same RetainedLogFileCount, best-effort, before the
+                        spawn) passed as --log-file, followed by an unconditional
+                        bare --log-append (Relay's per-day file is shared across
+                        launches, so it appends, no value, not Z:\-translated on
+                        Linux); a profile's EnableLuaLogs emits Relay's bare
+                        --log-lua flag appended after --log-append (a tee of
                         Lua print output into the log file, no value, not
                         Z:\-translated on Linux); a profile's SkipSplash emits
-                        Relay's bare --skip-splash flag appended after --log-file
+                        Relay's bare --skip-splash flag appended after --log-lua
                         (skips Darktide's intro splash state, no value, not
                         Z:\-translated on Linux); game args append one bare -- then
                         each arg as its own ArgumentList entry (Relay's --
@@ -575,7 +584,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             load, add/remove rows, inline localized validation --
                                             empty/`=`/NUL name, NUL value, case-insensitive
                                             duplicate, reserved name -- + a Logging toggle
-                                            (EnableLuaLogs emits Relay's bare --lua-logs flag) +
+                                            (EnableLuaLogs emits Relay's bare --log-lua flag) +
                                             a SkipSplash toggle (SkipSplash emits Relay's bare
                                             --skip-splash flag);
                                             Save persists once via
@@ -736,10 +745,12 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   file/dir → defaults (first-run safe).
 - **Logging** is Serilog (console + file) bridged into
   `Microsoft.Extensions.Logging`; honors `Logging:Level` + `Logging:LogFile`.
-  Per-process datetime-named log-file rotation: each start resolves the
-  `{DateTime}` token in `Logging:LogFile` to a timestamp, pins that path for the
-  process lifetime, and prunes to `Logging:RetainedLogFileCount` (default 5). The
-  resolved path is shared with Relay via `--log-file`.
+  Day-rolling log file (Serilog `RollingInterval.Day` writes
+  `curator-<yyyyMMdd>.log`, appended across starts within a day, rolled at
+  midnight, pruned to `Logging:RetainedLogFileCount` default 5; Serilog owns
+  the day-naming, midnight rolling, and pruning). Relay keeps its own
+  `relay-<yyyyMMdd>.log` in the same directory; relay-client resolves and prunes
+  it to the same retained count at launch and passes it as `--log-file`.
 - The backend libraries are all implemented: **Profiles** (profile data model +
   lifecycle; container-based staging, where `PrepareModRoot` discovers each
   enabled mod's base folder name inside the resolved version folder via

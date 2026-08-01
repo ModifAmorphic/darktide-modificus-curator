@@ -111,6 +111,19 @@ public enum LaunchStatus { Launched, DiscoveryIncomplete, StagingFailed, Error }
 Wine `Z:\` form (`/` → `\`, `Z:` prefix) for the launcher-under-Wine flags; it is
 used only by `LinuxLaunchStrategy`.
 
+`RelayLog` (internal) owns Mod Relay's own log lifecycle: `ResolveRelayLogPath`
+builds `relay-<yyyyMMdd>.log` in the directory of the configured
+`Logging.LogFile` (the fixed-width stamp means lexicographic order matches
+chronological), and `PruneOldRelayLogs` keeps the newest
+`Logging.RetainedLogFileCount` `relay-*.log` files, deleting the rest. The
+launch service runs both right before spawning the strategy: Relay's mod_loader
+writes the `--log-file` it receives directly (an external process, not Serilog),
+so Curator, not the logging bootstrap, owns that file. The prune is best-effort
+(any directory-read or delete failure is swallowed so it never blocks a launch)
+and leaves unrelated files (including Curator's `curator-*.log`) untouched.
+`RetainedLogFileCount` is the shared knob: it feeds Serilog's
+`retainedFileCountLimit` for Curator's log and this prune for Relay's.
+
 ## Cross-platform notes
 
 The launch path branches on platform via the active `IPlatformLaunchStrategy`,
@@ -150,20 +163,21 @@ so the precedence is unit-testable on any CI OS.
 
 `Process.Start(mod_relay.exe, args)`. No Proton, no path translation --
 native Windows paths. Args: `--game-binary`, `--mod-path`, `--log-file`
-(verbatim, untranslated; the value is Curator's startup-resolved, process-pinned
-log path from `LoggingBootstrap.CurrentLogFile`, so Relay writes the same
-per-process file as Curator, with the configured `Logging.LogFile` only a
-fallback when the bootstrap has not run); then, when the profile's `EnableLuaLogs` toggle is on,
-a bare `--lua-logs` flag (tees Lua `print` output into the log file; no value,
-appended right after `--log-file`); then, when the profile's `SkipSplash` toggle
-is on, a bare `--skip-splash` flag (skips Darktide's intro splash state; no
-value, appended after `--log-file`); then (when the profile has game arguments)
-one bare `--` + each game arg as its own argv entry. The profile's environment
-variables are applied as overrides on the Relay process; Relay creates Darktide
-with an inherited environment, so the values reach the game. No removals (Windows
-never runs from an AppImage mount, so there is nothing to sanitize); an empty
-profile env yields no overrides (the child inherits Curator's environment
-verbatim).
+(verbatim, untranslated; the value is Relay's own per-day log path
+`relay-<yyyyMMdd>.log` resolved at launch by `RelayLog` from the configured
+`Logging.LogFile` directory); then an unconditional bare `--log-append` flag
+(Relay writes a per-day file shared across launches, so it must append rather
+than overwrite each launch; no value, appended right after `--log-file`); then,
+when the profile's `EnableLuaLogs` toggle is on, a bare `--log-lua` flag (tees
+Lua `print` output into the log file; no value, appended after `--log-append`);
+then, when the profile's `SkipSplash` toggle is on, a bare `--skip-splash` flag
+(skips Darktide's intro splash state; no value, appended after `--log-lua`);
+then (when the profile has game arguments) one bare `--` + each game arg as its
+own argv entry. The profile's environment variables are applied as overrides on
+the Relay process; Relay creates Darktide with an inherited environment, so the
+values reach the game. No removals (Windows never runs from an AppImage mount,
+so there is nothing to sanitize); an empty profile env yields no overrides (the
+child inherits Curator's environment verbatim).
 
 ### Linux -- native Curator + Proton-at-launch
 
@@ -181,14 +195,17 @@ Command: `<proton> run <launcher.exe> <args>`, where:
 - The launcher's *own* path-valued flags (`--game-binary`, `--mod-path`,
   `--log-file`) are **`Z:\`-translated** (the launcher runs under Wine and needs
   Windows paths) -- including `--log-file`, otherwise the Relay shell log
-  couldn't be written where Curator expects. The `--log-file` value is Curator's
-  startup-resolved, process-pinned path (`LoggingBootstrap.CurrentLogFile`), so
-  Relay writes the same per-process file as Curator. When the profile's `EnableLuaLogs`
-  toggle is on, a bare `--lua-logs` flag is appended (a Relay-owned logging
-  flag with no value, so it is NOT path-valued and is not `Z:\`-translated).
-  When the profile's `SkipSplash` toggle is on, a bare `--skip-splash` flag is
-  appended (a Relay-owned flag with no value, so it is NOT path-valued and is
-  not `Z:\`-translated).
+  couldn't be written where Curator expects. The `--log-file` value is Relay's
+  own per-day log path `relay-<yyyyMMdd>.log` (resolved at launch by `RelayLog`
+  from the configured `Logging.LogFile` directory, then `Z:\`-translated). After
+  `--log-file`'s value comes an unconditional bare `--log-append` flag (Relay
+  writes a per-day file shared across launches, so it must append; a bare flag,
+  NOT path-valued, so it is not `Z:\`-translated). When the profile's
+  `EnableLuaLogs` toggle is on, a bare `--log-lua` flag is appended (a
+  Relay-owned logging flag with no value, so it is NOT path-valued and is not
+  `Z:\`-translated). When the profile's `SkipSplash` toggle is on, a bare
+  `--skip-splash` flag is appended (a Relay-owned flag with no value, so it is
+  NOT path-valued and is not `Z:\`-translated).
 - Environment: `STEAM_COMPAT_DATA_PATH = <compatdata>` (the Wine prefix) +
   `STEAM_COMPAT_CLIENT_INSTALL_PATH = <steam-install>` -- both required for Proton
   to use the right prefix and find the Steam client. Discovery guaranteed both
@@ -221,20 +238,27 @@ order). When empty, no `--` is emitted (legacy launch). Curator uses
 values -- Relay owns the final Windows `CreateProcess` quoting. No Relay version
 preflight is performed.
 
-**Lua logging:** when the profile's `EnableLuaLogs` toggle is on, Curator appends
-the bare `--lua-logs` flag right after `--log-file` (before any `--` + game
-args). It tees Lua `print` output (the mod loader, DMF, and mods) into the
-`--log-file` Curator always emits; it is a tee, not a redirect. The flag carries
+**Log append:** Curator always appends an unconditional bare `--log-append` flag
+right after `--log-file`'s value (before `--log-lua`, `--skip-splash`, and any
+`--` + game args). Relay writes a per-day `relay-<yyyyMMdd>.log` shared across
+launches, so it must append rather than overwrite each launch. The flag carries
 no value, so on Linux it is NOT `Z:\`-translated (only `--game-binary`,
+`--mod-path`, `--log-file` are path-valued).
+
+**Lua logging:** when the profile's `EnableLuaLogs` toggle is on, Curator appends
+the bare `--log-lua` flag right after `--log-append` (before `--skip-splash` and
+any `--` + game args). It tees Lua `print` output (the mod loader, DMF, and mods)
+into the `--log-file` Curator always emits; it is a tee, not a redirect. The flag
+carries no value, so on Linux it is NOT `Z:\`-translated (only `--game-binary`,
 `--mod-path`, `--log-file` are path-valued). Its Relay env form
 `RELAY_LUA_LOGS` is reserved so the toggle is the single source of truth.
 
 **Skip splash:** when the profile's `SkipSplash` toggle is on, Curator appends
-the bare `--skip-splash` flag after `--log-file` (before any `--` + game
-args). It skips Darktide's intro splash state (the splash screens and intro
-video) so the game advances directly to the title screen. The flag carries no
-value, so on Linux it is NOT `Z:\`-translated. Its Relay env form
-`RELAY_SKIP_SPLASH` is reserved so the toggle is the single source of truth.
+the bare `--skip-splash` flag after `--log-lua` (before any `--` + game args).
+It skips Darktide's intro splash state (the splash screens and intro video) so
+the game advances directly to the title screen. The flag carries no value, so on
+Linux it is NOT `Z:\`-translated. Its Relay env form `RELAY_SKIP_SPLASH` is
+reserved so the toggle is the single source of truth.
 
 #### AppImage desktop-identity sanitization
 
@@ -296,11 +320,12 @@ from the container.
 
 ## Dependencies
 
-- **Curator libraries:** `config` (`RelayDir`; `Logging.LogFile` as the fallback
-  log path), `general` (`LoggingBootstrap.CurrentLogFile`, the startup-resolved,
-  process-pinned log path forwarded to Relay as `--log-file`, reached
-  transitively via `steam`), `profiles` (`IProfileService.PrepareModRoot` +
-  `GetLaunchSettings`), `steam` (`ISteamService.Discover`).
+- **Curator libraries:** `config` (`RelayDir`; `Logging.LogFile` whose directory
+  anchors Relay's own `relay-<yyyyMMdd>.log`, and `Logging.RetainedLogFileCount`
+  for the relay-log prune), `general` (`IConfigLoader`, the live config read at
+  launch, reached transitively via `steam`), `profiles`
+  (`IProfileService.PrepareModRoot` + `GetLaunchSettings`), `steam`
+  (`ISteamService.Discover`).
 - **NuGet:** `Microsoft.Extensions.DependencyInjection.Abstractions`,
   `Microsoft.Extensions.Logging.Abstractions`.
 
@@ -317,9 +342,11 @@ Linux profile env before Proton startup alongside the AppImage removals + the
 settings), `GameArgumentsTests` (the bare-`--` contract via the pure
 `BuildLauncherArgs(gameBinary, modPath, logFile, LaunchSettings)` seam: empty
 emits no `--`, multiple emit one `--` then each arg as its own element in order,
-values with spaces + quotes stay one element; the bare `--lua-logs` +
-`--skip-splash` flags append after `--log-file` when the matching toggles are
-on, neither path-translated),
+values with spaces + quotes stay one element; the unconditional bare
+`--log-append` appends right after `--log-file`'s value, and the bare `--log-lua`
++ `--skip-splash` flags append after it when the matching toggles are on, none
+path-translated), `RelayLogTests` (Relay's own per-day log path resolution +
+the best-effort prune of old `relay-*.log` to the shared retained count),
 `ProcessLauncherTests`
 (the deterministic `ProcessLauncher.BuildStartInfo` path: a requested inherited
 key is removed, an unrelated inherited key remains, an override is applied, an

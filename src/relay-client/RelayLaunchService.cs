@@ -78,9 +78,8 @@ internal sealed class RelayLaunchService : IRelayLaunchService
         {
             // One live config snapshot for the whole launch. RelayDir is read
             // once here; a runtime config change via the Settings window takes
-            // effect on the next launch. The log file is the bootstrap-resolved,
-            // process-pinned path (LoggingBootstrap.CurrentLogFile), not the raw
-            // template, read once here too.
+            // effect on the next launch. The Relay log path is resolved from the
+            // same snapshot's Logging.LogFile below.
             var config = _configLoader.Load();
 
             // Discovery first: if we cannot launch, do not touch the profile's
@@ -138,11 +137,14 @@ internal sealed class RelayLaunchService : IRelayLaunchService
             }
 
             var gameBinary = discovery.DarktideGameBinaryPath!;
-            // The log file is resolved once at startup (a datetime-named,
-            // process-pinned path) by LoggingBootstrap; Relay writes the same
-            // per-process file. Fall back to the configured value if the
-            // bootstrap has not run (tests, edge hosts).
-            var logFile = LoggingBootstrap.CurrentLogFile ?? config.Logging.LogFile;
+
+            // Relay writes its own per-day log: its mod_loader opens --log-file
+            // directly (an external process, not Serilog). Resolve today's
+            // relay-<yyyyMMdd>.log alongside Curator's Serilog day-rolled log
+            // (shared directory), then prune old Relay logs to the same retained
+            // count Curator uses. Best-effort prune: a failure never blocks launch.
+            var logFile = RelayLog.ResolveRelayLogPath(config.Logging.LogFile, DateTime.Now);
+            RelayLog.PruneOldRelayLogs(logFile, config.Logging.RetainedLogFileCount);
 
             // Read the profile's launch settings fresh on each launch (they apply next launch; editing
             // is unlocked while Darktide runs). GetLaunchSettings throws KeyNotFoundException for an

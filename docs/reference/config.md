@@ -55,26 +55,25 @@ org/app hierarchy, kept distinct from the Velopack install root at
 ```csharp
 public sealed class LoggingConfig
 {
-    public const string DateTimeToken = "{DateTime}";
     public string Level { get; set; } = "Information";   // Serilog level name
-    public string LogFile { get; set; }                   // default <app-data>/logs/curator-{DateTime}.log
+    public string LogFile { get; set; }                   // default <app-data>/logs/curator-.log (Serilog day-rolled)
     public int RetainedLogFileCount { get; set; } = 5;
 }
 ```
 
 - `Level`: a Serilog level name (`Verbose`/`Debug`/`Information`/`Warning`/
   `Error`/`Fatal`); an unknown value falls back to `Information` at bootstrap.
-- `LogFile`: the structured log file. May contain `DateTimeToken` (`{DateTime}`);
-  when it does, the bootstrap resolves the token to a fixed-width local timestamp
-  (`yyyyMMddHHmmss`) once at startup and pins that path for the process lifetime
-  (a new file per start). The resolved path is shared with Mod Relay: Curator
-  passes it to the launcher as `--log-file`, so the two write the same per-process
-  file. When the token is absent, the configured file is reused and truncated on
-  each start (the legacy behavior).
-- `RetainedLogFileCount`: how many datetime-named log files to keep (including
-  the current process's file). Default 5. Only applies when `LogFile` contains
-  `DateTimeToken`; the log directory is pruned to the newest N after each start.
-  A value below 1 disables pruning (keeps all).
+- `LogFile`: the structured log file Serilog writes. Day-rolled
+  (`RollingInterval.Day`): the date is inserted before the extension, so a stem
+  of `curator-` yields `curator-<yyyyMMdd>.log` (one file per day, appended
+  across starts within the same day, rolled at local midnight). Relay keeps its
+  own `relay-<yyyyMMdd>.log` in this file's directory; relay-client resolves and
+  prunes that file at launch.
+- `RetainedLogFileCount`: how many day-rolled log files to keep. Default 5. The
+  shared user-facing retention knob: it feeds Serilog's `retainedFileCountLimit`
+  for Curator's own `curator-*.log` (pruning the oldest) AND the relay-client
+  prune for Relay's `relay-*.log` (keeping the newest N). A value below 1 keeps
+  everything.
 
 ### `IntegrationsConfig` / `NexusConfig`
 

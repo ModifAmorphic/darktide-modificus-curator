@@ -243,7 +243,7 @@ for the schema.
 | Field                          | Default                                         |
 | ------------------------------ | ----------------------------------------------- |
 | `Logging:Level`                | `Information`                                   |
-| `Logging:LogFile`              | `<app-data>/logs/curator-{DateTime}.log`        |
+| `Logging:LogFile`              | `<app-data>/logs/curator-.log`                  |
 | `Logging:RetainedLogFileCount` | `5`                                             |
 | `ProfilesBaseFolder`           | `<app-data>/profiles`                           |
 | `ModsFolder`                   | `<app-data>/mods`                               |

@@ -139,7 +139,7 @@ public interface IDialogService
   unlocked while Darktide runs (a `profile.json` write that does not touch the
   running process); changes apply on the next launch. The two toggles map to
   Relay bare flags: `SkipSplash` emits `--skip-splash` (skips Darktide's intro
-  splash state) and `EnableLuaLogs` emits `--lua-logs` (tees Lua `print` output
+  splash state) and `EnableLuaLogs` emits `--log-lua` (tees Lua `print` output
   into the log file).
 - `ShowPreferencesAsync()`: the Preferences modal (theme / font scale /
   language). Each change applies immediately through `IPreferencesService`
