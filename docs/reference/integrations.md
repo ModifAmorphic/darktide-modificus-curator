@@ -324,16 +324,14 @@ tests inject a pass-through. The handler is registered AFTER `AddNxm()` so DI
 ### OAuth constants (build-time)
 
 `NexusOAuthConstants.ClientId` = `"modificus_curator"` (a build-time const, NOT
-config and NOT an env var). `NexusOAuthConstants.ClientSecret` = the Nexus-issued
-SSO secret, generated at build time from the `NEXUS_CLIENT_SECRET` environment
-variable by the `GenerateNexusClientSecret` target in this project's `.csproj`
-(empty when the env var is unset, e.g. local dev, PR-gate builds, `dotnet test`;
-the release workflow supplies the real value). `Scope` = `"openid"` (the OIDC
-scope OidcClient needs for the id_token; the display name + Premium state come
-from the access token's JWT payload, so no additional scopes are requested). The
-secret is sent as `client_secret_post` (`TokenClientCredentialStyle = PostBody`)
-on the token exchange, which Nexus's token endpoint requires. Application
-headers: `Application-Name: Modificus-Curator`, `Application-Version: <asm>`,
+config and NOT an env var). No client secret is used: Nexus accepts this client
+as a public client, so `NexusOAuthConstants` carries no `ClientSecret` (PKCE S256
+protects the authorize leg). The `client_id` is posted in the token request body
+(`TokenClientCredentialStyle = PostBody`), which is OidcClient's default with no
+`ClientSecret` set. `Scope` = `"openid"` (the OIDC scope OidcClient needs for the
+id_token; the display name + Premium state come from the access token's JWT
+payload, so no additional scopes are requested). Application headers:
+`Application-Name: Modificus-Curator`, `Application-Version: <asm>`,
 `Protocol-Version: 1.0.0`, `User-Agent: Modificus-Curator/<ver>`.
 
 ## Update check service

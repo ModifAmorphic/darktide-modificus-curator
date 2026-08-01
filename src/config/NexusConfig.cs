@@ -22,9 +22,8 @@ namespace Modificus.Curator.Config;
 /// <para>
 /// <b>The OAuth client id is a build-time constant</b> (in
 /// <c>Modificus.Curator.Integrations.NexusOAuthConstants</c>), not config and not
-/// a runtime env var. The OAuth client secret is compile-time too, but is
-/// injected from the <c>NEXUS_CLIENT_SECRET</c> build-time env var (the release
-/// workflow supplies it; empty in local + PR builds). Runtime config is
+/// a runtime env var. No client secret is used: Nexus accepts this client as a
+/// public client, and PKCE S256 protects the OAuth flow. Runtime config is
 /// file-based via <c>IConfigLoader</c>; Curator has no runtime env-var config
 /// pattern.</para>
 /// </remarks>

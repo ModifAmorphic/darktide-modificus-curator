@@ -393,11 +393,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         the IBrowser impl with an HttpListener on an ephemeral
                         port; Duende.IdentityModel.OidcClient 7.1.0 for the
                         OAuth machinery; client_id "modificus_curator" is a
-                        build-time const; the client secret is generated at
-                        build time from the NEXUS_CLIENT_SECRET env var (empty
-                        when unset; the release workflow supplies the real
-                        value); both are sent as client_secret_post on the
-                        token exchange per the discovery doc; scope "openid";
+                        build-time const; no client secret (Nexus accepts this
+                        client as a public client; PKCE S256 protects the flow);
+                        client_id is posted in the token body; scope "openid";
                         IModAcquisitionService the download +
                         extract + place orchestrator over INexusClient +
                         IModImportService + a plain HttpClient for the CDN

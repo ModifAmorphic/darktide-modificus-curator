@@ -155,10 +155,10 @@ Nexus fields:
 
 The `NexusAuthMethod` enum carries the three explicit choices. The OAuth client
 id is a build-time constant (in `Modificus.Curator.Integrations.NexusOAuthConstants`),
-not config and not a runtime env var. The OAuth client secret is compile-time too,
-but injected from the `NEXUS_CLIENT_SECRET` build-time env var (the release
-workflow supplies it; empty in local + PR builds). Runtime config is file-based
-via `IConfigLoader`; there is no runtime env-var config pattern.
+not config and not a runtime env var. No client secret is used: Nexus accepts
+this client as a public client, and PKCE S256 protects the OAuth flow. Runtime
+config is file-based via `IConfigLoader`; there is no runtime env-var config
+pattern.
 
 `NexusOAuthTokens` is an immutable record holding the OAuth session state:
 

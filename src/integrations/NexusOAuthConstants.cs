@@ -3,37 +3,23 @@ namespace Modificus.Curator.Integrations;
 /// <summary>
 /// Build-time constants for the Nexus OAuth flow. The <c>client_id</c>
 /// (<c>modificus_curator</c>) is the SSO slug Nexus issued when Curator was
-/// registered for public use; the matching <see cref="ClientSecret"/> is
-/// build-injected (see the remarks below).
+/// registered for public use. No client secret is used: Nexus accepts this
+/// client as a public client, and PKCE S256 protects the authorize leg.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <see cref="ClientId"/> is a build-time const (not config, not an env var):
 /// the OAuth client id is public by spec, so it ships as a const here, the same
-/// native-client model every desktop OAuth app uses.
-/// </para>
-/// <para>
-/// <see cref="ClientSecret"/> is generated at build time from the
-/// <c>NEXUS_CLIENT_SECRET</c> environment variable by the
-/// <c>GenerateNexusClientSecret</c> target in this project's <c>.csproj</c>.
-/// When the env var is unset (local dev, PR-gate builds, <c>dotnet test</c>),
-/// the const is empty and the OAuth token exchange will not succeed in those
-/// builds. The release workflow supplies the real value from a GitHub repo
-/// secret. This is temporary: Nexus is expected to reclassify Curator as a
-/// public client (PKCE, no secret), at which point the secret requirement, the
-/// generation target, and the const are removed.
+/// native-client model every desktop OAuth app uses. It is posted in the token
+/// request body (<c>TokenClientCredentialStyle = PostBody</c>), which is
+/// OidcClient's default with no client secret set.
 /// </para>
 /// </remarks>
-internal static partial class NexusOAuthConstants
+internal static class NexusOAuthConstants
 {
     /// <summary>The OAuth client identifier (the SSO slug Nexus issued), sent on
     /// authorize + token requests.</summary>
     public const string ClientId = "modificus_curator";
-
-    // ClientSecret is generated at build time from the NEXUS_CLIENT_SECRET
-    // env var by the GenerateNexusClientSecret target (see the class remarks
-    // above). Empty when unset; temporary, pending Nexus dropping the secret
-    // requirement for this public client.
 
     /// <summary>
     /// The OAuth/OIDC scope. <c>openid</c> is the OIDC scope OidcClient needs to

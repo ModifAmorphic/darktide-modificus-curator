@@ -64,15 +64,13 @@ update-checks both call through it.
   misconfigured `OAuthBaseUrl` still resolves to the issuer root.
 - **`ClientId = NexusOAuthConstants.ClientId`** (the `"modificus_curator"` const;
   see [OAuth client credentials](#oauth-client-credentials) below).
-- **`ClientSecret = NexusOAuthConstants.ClientSecret`** with
-  **`TokenClientCredentialStyle = PostBody`** (client_secret_post). Nexus's
-  discovery doc declares
-  `token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"]`
-  (no public/`none` method), so the token exchange requires the client secret,
-  sent in the token request body. PKCE remains in effect alongside it. The const
-  itself is build-injected from `NEXUS_CLIENT_SECRET` (see
-  [OAuth client credentials](#oauth-client-credentials)); empty when the env var
-  is unset, so the token exchange only succeeds in builds that supply it.
+- **No client secret is sent.** Nexus accepts this client as a public client, so
+  Curator sets no `ClientSecret`. The `client_id` is posted in the token request
+  body via **`TokenClientCredentialStyle = PostBody`** (OidcClient's default with
+  no `ClientSecret` set), and PKCE S256 protects the authorize leg. Nexus's
+  discovery doc still advertises only `client_secret_basic` /
+  `client_secret_post` under `token_endpoint_auth_methods_supported` (no `none`
+  method), but the token endpoint accepts the no-secret request for this client.
 - **`RedirectUri = "http://127.0.0.1:<port>/callback"`** (the ephemeral port
   is assigned by the loopback listener, exposed as `LoopbackBrowser.RedirectUri`).
 - **`Scope = "openid"`**. `openid` is the OIDC scope OidcClient needs to issue
@@ -193,21 +191,12 @@ the SSO slug Nexus issued when Curator was registered for public use. The client
 id is public by spec and ships as a const in the binary (the same native-client
 model every desktop OAuth app uses).
 
-`NexusOAuthConstants.ClientSecret` is the matching secret Nexus issued at the
-same registration. Unlike the client id, it is NOT hardcoded in source: it is
-generated at build time from the `NEXUS_CLIENT_SECRET` environment variable by
-the `GenerateNexusClientSecret` MSBuild target in the Integrations `.csproj`.
-When the env var is unset (local dev, PR-gate builds, `dotnet test`), the const
-is empty, so the OAuth token exchange will not succeed in those builds. The
-release workflow supplies the real value from a GitHub repo secret. This is
-temporary: Nexus is expected to reclassify Curator as a public client (PKCE, no
-secret), at which point the secret requirement, the generation target, and the
-const are removed.
-
-The secret is required because Nexus's token endpoint advertises only
-secret-based auth methods (`client_secret_basic`, `client_secret_post`); Curator
-sends it as `client_secret_post`. PKCE still runs on the authorize leg alongside
-the secret.
+No client secret is used. Nexus accepts this client as a public client, so
+Curator sends no `client_secret`: the `client_id` is posted in the token request
+body (`TokenClientCredentialStyle = PostBody`), and PKCE S256 protects the
+authorize leg. (Nexus's discovery doc still lists only secret-based auth methods
+under `token_endpoint_auth_methods_supported`, but the token endpoint accepts
+the no-secret request for this client.)
 
 ## App-identification headers and rate limits
 
