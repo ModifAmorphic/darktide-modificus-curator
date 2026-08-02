@@ -90,7 +90,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `OpenIntegrationsCommand` on the shell (left of the profiles button),
                           wired through `IDialogService.ShowIntegrationsAsync` -> `IntegrationsViewModel`
                           -> `INexusAuthService` (OAuth loopback + API-key validate + sign-out; the
-                          API-key block is gated behind the `ApiKeyAuthEnabled` developer config flag,
+                          OAuth block is a single dual-state button, "Sign in to
+                          Nexus" when not signed in via OAuth (starts the loopback
+                          flow) vs "Clear Nexus sign-in" when signed in via OAuth
+                          (clears the tokens / signs out), with no separate Sign
+                          out so there is no re-login-over-existing; the API-key
+                          block is gated behind the `ApiKeyAuthEnabled` developer config flag,
                           default off, so OAuth is the sole sign-in path unless a developer opts in); auth
                           controls stay usable while Darktide runs (only launch + active-profile
                           changes are blocked); the Integrations dialog also owns the explicit

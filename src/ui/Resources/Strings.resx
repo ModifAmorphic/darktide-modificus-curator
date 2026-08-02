@@ -833,12 +833,20 @@
     <comment>Header over the Nexus section of the Integrations dialog.</comment>
   </data>
   <data name="Integrations_LoginWithNexus" xml:space="preserve">
-    <value>Log in with Nexus</value>
-    <comment>The primary OAuth login button in the Integrations dialog.</comment>
+    <value>Sign in to Nexus</value>
+    <comment>The OAuth sign-in button in the Integrations dialog, shown when not signed in via OAuth (the dual-state button's not-signed-in state).</comment>
   </data>
   <data name="Integrations_LoginWithNexusTooltip" xml:space="preserve">
     <value>Sign in via Nexus Mods (opens your browser to consent).</value>
-    <comment>Tooltip on the Log in with Nexus button.</comment>
+    <comment>Tooltip on the Sign in to Nexus button.</comment>
+  </data>
+  <data name="Integrations_ClearNexusSignIn" xml:space="preserve">
+    <value>Clear Nexus sign-in</value>
+    <comment>OAuth block button shown when already signed in via Nexus. Clears the stored OAuth tokens (signs out).</comment>
+  </data>
+  <data name="Integrations_ClearNexusSignInTooltip" xml:space="preserve">
+    <value>Clear the stored Nexus sign-in</value>
+    <comment>Tooltip on the Clear Nexus sign-in button.</comment>
   </data>
   <data name="Integrations_ApiKeyLabel" xml:space="preserve">
     <value>API key</value>

@@ -18,16 +18,20 @@
   <!--
     The Integrations modal. Nexus-only (no navigation structure). Custom chrome
     (DialogTitleBar) mirrors the Track A/D modal pattern. The Nexus section leads
-    with the OAuth block ("Sign in with Nexus"); the API-key block is demoted to
+    with the OAuth block ("Sign in to Nexus"); the API-key block is demoted to
     the bottom of the dialog (below the update-check settings + the nxm
     download-links section) and
     carries a "testing only, removed at release" note reflecting its
     pre-registration status. The two remain alternative auth methods, only one
     active at a time:
 
-      - OAuth block: a "Sign in with Nexus" button (always present, the
-        call-to-action when inactive). When active, a per-block Sign out button
-        appears next to it.
+      - OAuth block: a single dual-state button that toggles by IsOAuthActive
+        (the same two-button visibility-toggle pattern as the API-key field's
+        eye toggle): "Sign in to Nexus" when not signed in via OAuth (starts the
+        OAuth loopback flow), "Clear Nexus sign-in" when signed in via OAuth
+        (clears the stored tokens / signs out). No separate Sign out: the
+        signed-in state is the clear path, so there is no re-login-over-existing
+        (to re-login, Clear then Sign in).
       - API-key block (bottom): a masked TextBox (shows bullets when a key is
         configured, persisted across reopens) + a Show eye-toggle Path + a
         Validate button. When active, a per-block Sign out button appears.
@@ -63,11 +67,19 @@
 
             <!-- ============== OAuth block ============== -->
             <StackPanel Spacing="8" Margin="0,4">
-              <!-- Primary: "Sign in with Nexus" (OAuth loopback). Material
-                   "login" icon (24x24 source): an arrow into a door.
-                   Drawn geometry, themed via the button foreground. Always
-                   present; the call-to-action when OAuth is inactive. -->
+              <!-- Dual-state button (the same two-button visibility-toggle
+                   pattern as the API-key field's eye toggle): exactly one is
+                   visible at a time, bound to IsOAuthActive, so the signed-in
+                   state occupies the same visual position as the sign-in state.
+                   No separate Sign out: the signed-in state clears the OAuth
+                   tokens (signs out); to re-login you Clear then Sign in (no
+                   re-login-over-existing). -->
+              <!-- Sign-in state (not signed in via OAuth): "Sign in to Nexus"
+                   starts the OAuth loopback flow. Material "login" icon
+                   (24x24 source): an arrow into a door. Drawn geometry, themed
+                   via the button foreground. -->
               <Button Command="{Binding LoginWithOAuthCommand}"
+                      IsVisible="{Binding !IsOAuthActive}"
                       HorizontalAlignment="Stretch"
                       HorizontalContentAlignment="Left"
                       ToolTip.Tip="{ReflectionBinding [Integrations_LoginWithNexusTooltip], Source={StaticResource Loc}}">
@@ -82,18 +94,22 @@
                 </StackPanel>
               </Button>
 
-              <!-- Per-block Sign out: visible only when OAuth is the active
-                   method. Material "logout" icon. -->
+              <!-- Signed-in state (signed in via OAuth): "Clear Nexus sign-in"
+                   clears the stored OAuth tokens (signs out). Material "logout"
+                   icon (path data reused from the removed per-block Sign out).
+                   Matches the sign-in button's stretch + left-content layout so
+                   the two states occupy the same visual position. -->
               <Button Command="{Binding SignOutCommand}"
                       IsVisible="{Binding IsOAuthActive}"
-                      HorizontalAlignment="Left"
-                      MinWidth="120">
+                      HorizontalAlignment="Stretch"
+                      HorizontalContentAlignment="Left"
+                      ToolTip.Tip="{ReflectionBinding [Integrations_ClearNexusSignInTooltip], Source={StaticResource Loc}}">
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                  <Path Width="14" Height="14" Stretch="Uniform"
+                  <Path Width="16" Height="16" Stretch="Uniform"
                         VerticalAlignment="Center"
                         Fill="{Binding $parent[Button].Foreground}"
                         Data="M17 7l-1.4 1.4 1.6 1.6H8v2h9.2l-1.6 1.6L17 15l4-4-4-4zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z" />
-                  <TextBlock Text="{Binding SignOutLabel}"
+                  <TextBlock Text="{Binding ClearNexusSignInLabel}"
                              VerticalAlignment="Center"
                              Margin="8,0,0,0" />
                 </StackPanel>
