@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.19.1...v0.20.0) (2026-08-02)
+
+
+### Features
+
+* nexus auth, logging, and launch polish ([#154](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/154)) ([7f53670](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/7f5367055de8c0c3285446b11bcbd37aa70d1967))
+
 ## [0.19.1](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.19.0...v0.19.1) (2026-07-30)
 
 
