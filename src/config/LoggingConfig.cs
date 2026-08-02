@@ -40,8 +40,9 @@ public sealed class LoggingConfig
     /// <c>retainedFileCountLimit</c> for Curator's own log (pruning the oldest
     /// <c>curator-*.log</c> files) AND the relay-client prune for Relay's log
     /// (keeping the newest <c>relay-*.log</c> files): the single user-facing
-    /// retention knob for both. A value below 1 keeps everything (Serilog's own
-    /// convention for the null/unlimited case; the relay prune mirrors that).
+    /// retention knob for both. A value below 1 keeps everything: the bootstrap
+    /// maps it to Serilog's null/unlimited retention, and the relay prune
+    /// treats it as keep-all.
     /// </summary>
     public int RetainedLogFileCount { get; set; } = 5;
 }

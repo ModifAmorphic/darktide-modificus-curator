@@ -55,7 +55,14 @@ public static class LoggingBootstrap
             .WriteTo.File(
                 config.Logging.LogFile,
                 rollingInterval: RollingInterval.Day,
-                retainedFileCountLimit: config.Logging.RetainedLogFileCount)
+                // Serilog.Sinks.File rejects retainedFileCountLimit < 1 (it
+                // throws ArgumentException; unlimited requires null, not a
+                // sub-1 count). Map < 1 to null so a "keep everything" config
+                // value does not crash startup. Mirrors the relay-client prune,
+                // which treats < 1 as unlimited.
+                retainedFileCountLimit: config.Logging.RetainedLogFileCount < 1
+                    ? null
+                    : (int?)config.Logging.RetainedLogFileCount)
             .CreateLogger();
 
         Log.Logger = serilogLogger;

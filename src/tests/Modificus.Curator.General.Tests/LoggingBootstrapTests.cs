@@ -124,4 +124,62 @@ public sealed class LoggingBootstrapTests
             }
         }
     }
+
+    [Fact]
+    public void RetainedLogFileCount_below_one_does_not_throw()
+    {
+        // Serilog.Sinks.File rejects retainedFileCountLimit < 1: it requires
+        // null for the unlimited case, and a sub-1 value throws ArgumentException
+        // at logger creation. The bootstrap maps < 1 to null so a "keep
+        // everything" config value does not crash startup. This previously threw.
+        var dir = Path.Combine(Path.GetTempPath(), "curator-ret0-" + Guid.NewGuid());
+        var configured = Path.Combine(dir, "curator.log");
+
+        var config = CuratorConfig.CreateDefault();
+        config.Logging = new LoggingConfig { LogFile = configured, RetainedLogFileCount = 0 };
+
+        try
+        {
+            using var factory = LoggingBootstrap.CreateLoggerFactory(config);
+            factory.CreateLogger("test").LogInformation("kept-everything path");
+
+            // Reaching here means the < 1 -> null mapping took effect; no assert
+            // on a throw, and the logger still writes its day file.
+            Assert.NotEmpty(Directory.GetFiles(dir));
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void RetainedLogFileCount_normal_value_still_works()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "curator-ret5-" + Guid.NewGuid());
+        var configured = Path.Combine(dir, "curator.log");
+
+        var config = CuratorConfig.CreateDefault();
+        config.Logging = new LoggingConfig { LogFile = configured, RetainedLogFileCount = 5 };
+
+        try
+        {
+            using (var factory = LoggingBootstrap.CreateLoggerFactory(config))
+            {
+                factory.CreateLogger("test").LogInformation("retention knob honored");
+            }
+
+            Assert.NotEmpty(Directory.GetFiles(dir));
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
 }
