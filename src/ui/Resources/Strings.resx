@@ -244,10 +244,10 @@
   </data>
   <data name="LaunchSettings_EnableLuaLogs" xml:space="preserve">
     <value>Write Lua mod logs to the log file</value>
-    <comment>Checkbox label in the launch-settings modal. When on, Relay's --lua-logs flag is emitted at launch so Lua print output (the mod loader, DMF, and mods) is copied into the same log file Relay writes.</comment>
+    <comment>Checkbox label in the launch-settings modal. When on, Relay's --log-lua flag is emitted at launch so Lua print output (the mod loader, DMF, and mods) is copied into the same log file Relay writes.</comment>
   </data>
   <data name="LaunchSettings_EnableLuaLogsTooltip" xml:space="preserve">
-    <value>Copies Lua print output (the mod loader, DMF, and mods) into the same log file Relay writes. It is a tee, not a redirect; Darktide's console log stays complete. Adds Relay's --lua-logs flag at launch.</value>
+    <value>Copies Lua print output (the mod loader, DMF, and mods) into the same log file Relay writes. It is a tee, not a redirect; Darktide's console log stays complete. Adds Relay's --log-lua flag at launch.</value>
     <comment>Tooltip on the Lua-logs checkbox in the launch-settings modal.</comment>
   </data>
   <data name="LaunchSettings_StartupHeader" xml:space="preserve">
@@ -385,6 +385,10 @@
     <value>English</value>
     <comment>Language dropdown option: English (the only shipped language).</comment>
   </data>
+  <data name="Preferences_ShowRelayConsole" xml:space="preserve">
+    <value>Show console window when launching the game</value>
+    <comment>Checkbox in the Preferences dialog to show the Mod Relay console window on launch (hidden by default).</comment>
+  </data>
   <data name="Preferences_DoneButton" xml:space="preserve">
     <value>Done</value>
     <comment>The Done button at the bottom of the Preferences dialog.</comment>
@@ -474,6 +478,10 @@
   <data name="ModRow_SourceNexus" xml:space="preserve">
     <value>Nexus #{0}</value>
     <comment>Source badge text for a Nexus Mods mod. {0} is the Nexus mod id.</comment>
+  </data>
+  <data name="ModRow_SourceNexusWithVersion" xml:space="preserve">
+    <value>Nexus #{0} · {1}</value>
+    <comment>Source badge text for a Nexus Mods mod on the Latest policy that has a resolved version. {0} is the Nexus mod id; {1} is the installed release tag. Pinned rows show their version in the pin dropdown instead.</comment>
   </data>
   <data name="ModRow_SourceLinked" xml:space="preserve">
     <value>External</value>
@@ -825,12 +833,20 @@
     <comment>Header over the Nexus section of the Integrations dialog.</comment>
   </data>
   <data name="Integrations_LoginWithNexus" xml:space="preserve">
-    <value>Log in with Nexus</value>
-    <comment>The primary OAuth login button in the Integrations dialog.</comment>
+    <value>Sign in to Nexus</value>
+    <comment>The OAuth sign-in button in the Integrations dialog, shown when not signed in via OAuth (the dual-state button's not-signed-in state).</comment>
   </data>
   <data name="Integrations_LoginWithNexusTooltip" xml:space="preserve">
     <value>Sign in via Nexus Mods (opens your browser to consent).</value>
-    <comment>Tooltip on the Log in with Nexus button.</comment>
+    <comment>Tooltip on the Sign in to Nexus button.</comment>
+  </data>
+  <data name="Integrations_ClearNexusSignIn" xml:space="preserve">
+    <value>Clear Nexus sign-in</value>
+    <comment>OAuth block button shown when already signed in via Nexus. Clears the stored OAuth tokens (signs out).</comment>
+  </data>
+  <data name="Integrations_ClearNexusSignInTooltip" xml:space="preserve">
+    <value>Clear the stored Nexus sign-in</value>
+    <comment>Tooltip on the Clear Nexus sign-in button.</comment>
   </data>
   <data name="Integrations_ApiKeyLabel" xml:space="preserve">
     <value>API key</value>
@@ -869,15 +885,15 @@
     <comment>Status line when no Nexus auth method is configured.</comment>
   </data>
   <data name="Integrations_StatusSignedInOAuth" xml:space="preserve">
-    <value>Signed in as {0} (Regular) via Nexus login.</value>
+    <value>Signed in as {0} (Regular).</value>
     <comment>Status line when signed in via OAuth (non-premium). {0} is the user's display name.</comment>
   </data>
   <data name="Integrations_StatusSignedInOAuthPremium" xml:space="preserve">
-    <value>Signed in as {0} (Premium) via Nexus login.</value>
+    <value>Signed in as {0} (Premium).</value>
     <comment>Status line when signed in via OAuth with a premium account. {0} is the user's display name.</comment>
   </data>
   <data name="Integrations_StatusSignedInOAuthUnverified" xml:space="preserve">
-    <value>Signed in via Nexus login (couldn't verify the account; check your network).</value>
+    <value>Signed in (couldn't verify the account; check your network).</value>
     <comment>Status line when OAuth is configured but the verify call failed.</comment>
   </data>
   <data name="Integrations_StatusSignedInApiKey" xml:space="preserve">

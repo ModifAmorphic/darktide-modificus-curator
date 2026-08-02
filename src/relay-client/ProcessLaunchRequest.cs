@@ -63,6 +63,16 @@ public sealed class ProcessLaunchRequest
     public IReadOnlySet<string> EnvironmentVariablesToRemove { get; }
 
     /// <summary>
+    /// Whether to suppress the child's console window. Mirrors
+    /// <see cref="ProcessStartInfo.CreateNoWindow"/> (only honored when
+    /// <see cref="ProcessStartInfo.UseShellExecute"/> is <c>false</c>, which the
+    /// launcher always sets). <c>true</c> hides the window; <c>false</c> leaves
+    /// the platform default (a console child shows its console). Has no effect
+    /// on the game's own window.
+    /// </summary>
+    public bool CreateNoWindow { get; }
+
+    /// <summary>
     /// Creates a request. All collections are snapshotted into immutable
     /// containers; <c>null</c> inputs become empty collections.
     /// </summary>
@@ -81,11 +91,17 @@ public sealed class ProcessLaunchRequest
     /// Inherited environment-variable names to strip before overrides apply.
     /// May be <c>null</c> (nothing removed).
     /// </param>
+    /// <param name="createNoWindow">
+    /// When <c>true</c>, suppresses the child's console window
+    /// (<see cref="CreateNoWindow"/>). Defaults to <c>false</c> so existing
+    /// callers keep the prior behavior unless they opt in.
+    /// </param>
     public ProcessLaunchRequest(
         string filePath,
         IEnumerable<string>? arguments = null,
         IEnumerable<KeyValuePair<string, string>>? environmentOverrides = null,
-        IEnumerable<string>? environmentVariablesToRemove = null)
+        IEnumerable<string>? environmentVariablesToRemove = null,
+        bool createNoWindow = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
 
@@ -97,5 +113,6 @@ public sealed class ProcessLaunchRequest
         EnvironmentVariablesToRemove = environmentVariablesToRemove is null
             ? ImmutableHashSet<string>.Empty
             : environmentVariablesToRemove.ToImmutableHashSet(StringComparer.Ordinal);
+        CreateNoWindow = createNoWindow;
     }
 }

@@ -141,16 +141,14 @@ public sealed class NexusAuthServiceTests
             }
             if (url.Contains("/oauth/token"))
             {
-                // OidcClient sends client_secret_post (TokenClientCredentialStyle
-                // = PostBody), so both client_id + client_secret land in the
-                // form-urlencoded token request body. Assert the secret wiring
-                // is in effect (the test injects a non-empty secret via the
-                // ConfigureOidcOptions seam below, since the production const
-                // is empty in this test build: NEXUS_CLIENT_SECRET is not set,
-                // so OidcClient would otherwise omit it).
+                // Curator wires TokenClientCredentialStyle = PostBody with no
+                // client secret, so the token request body carries client_id
+                // and omits client_secret. Assert the no-secret wiring end to
+                // end (the ConfigureOidcOptions seam below verifies production
+                // built the options that way before this request went out).
                 var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
                 Assert.Contains("client_id", body, StringComparison.Ordinal);
-                Assert.Contains("client_secret", body, StringComparison.Ordinal);
+                Assert.DoesNotContain("client_secret", body, StringComparison.Ordinal);
                 return HttpResponses.Json(
                     @"{ ""access_token"": """ + accessToken + @""", ""refresh_token"": ""RT"", ""expires_in"": 3600, ""token_type"": ""Bearer"" }");
             }
@@ -162,22 +160,17 @@ public sealed class NexusAuthServiceTests
             apiKey: "leftover-key",
             browser: new FakeBrowser(FakeBrowserMode.Success, code: "the-auth-code"));
 
-        // The production const NexusOAuthConstants.ClientSecret is
-        // build-injected from NEXUS_CLIENT_SECRET and empty in this test build
-        // (the env var is not set), so OidcClient would omit it from the token
-        // body. Inject a non-empty one via the test seam to prove the PostBody
-        // + secret wiring actually carries both client credentials into the
-        // token request.
+        // Verify production wired no secret + PostBody (the no-secret public
+        // client flow). The ConfigureOidcOptions seam runs after BuildOidcOptions
+        // built the options, so the asserts below see production's wiring; the
+        // body assertion in the token stub then proves that wiring carried into
+        // the actual request.
         var priorConfigure = tokenStore.ConfigureOidcOptions;
         tokenStore.ConfigureOidcOptions = options =>
         {
             priorConfigure?.Invoke(options);
-            // Assert production wired the const + PostBody BEFORE the overwrite,
-            // so the body assertion below proves Curator's wiring, not just
-            // OidcClient's runtime behavior with any configured secret.
-            Assert.Equal(NexusOAuthConstants.ClientSecret, options.ClientSecret);
+            Assert.True(string.IsNullOrEmpty(options.ClientSecret));
             Assert.Equal(ClientCredentialStyle.PostBody, options.TokenClientCredentialStyle);
-            options.ClientSecret = "test-secret";
         };
 
         var result = await service.LoginWithOAuthAsync();
@@ -327,7 +320,8 @@ public sealed class NexusAuthServiceTests
         // endpoint. The stub discriminates by URL: discovery gets the real-shape
         // .well-known doc (issuer = host root, endpoints under /oauth/...) so
         // OidcClient populates ProviderInformation + succeeds, the token
-        // endpoint gets the canned refresh response.
+        // endpoint gets the canned refresh response + asserts the no-secret
+        // wiring on the refresh leg (same BuildOidcOptions as login).
         var stub = new StubHttpMessageHandler(req =>
         {
             var url = req.RequestUri!.ToString();
@@ -335,8 +329,17 @@ public sealed class NexusAuthServiceTests
             {
                 return HttpResponses.Json(OAuthDiscoveryDoc("https://users.nexusmods.com"));
             }
-            return HttpResponses.Json(
-                @"{ ""access_token"": ""NEW-AT"", ""refresh_token"": ""NEW-RT"", ""expires_in"": 3600, ""token_type"": ""Bearer"" }");
+            if (url.Contains("/oauth/token"))
+            {
+                // The refresh exchange shares BuildOidcOptions with login: no
+                // client secret is sent, client_id is posted in the body.
+                var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+                Assert.Contains("client_id", body, StringComparison.Ordinal);
+                Assert.DoesNotContain("client_secret", body, StringComparison.Ordinal);
+                return HttpResponses.Json(
+                    @"{ ""access_token"": ""NEW-AT"", ""refresh_token"": ""NEW-RT"", ""expires_in"": 3600, ""token_type"": ""Bearer"" }");
+            }
+            return HttpResponses.Json(@"{}");
         });
         var (service, tokenStore, loader) = BuildService(
             stub,

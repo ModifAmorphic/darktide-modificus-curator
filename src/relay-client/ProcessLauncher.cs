@@ -97,6 +97,12 @@ internal sealed class ProcessLauncher : IProcessLauncher
             // and to use ArgumentList (no shell). The launcher is an .exe even on
             // Linux (Proton runs it), so we never want the OS shell in the middle.
             UseShellExecute = false,
+            // CreateNoWindow suppresses the child's console window (honored only
+            // when UseShellExecute=false). Used to hide Relay's console window
+            // unless the global ShowRelayConsole preference opts in; a harmless
+            // no-op on Linux where no console appears regardless. The game's own
+            // window is unaffected.
+            CreateNoWindow = request.CreateNoWindow,
         };
 
         // ArgumentList quotes/escapes per-platform; callers hand us argv form, so

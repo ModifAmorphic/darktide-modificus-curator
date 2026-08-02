@@ -149,6 +149,7 @@ internal sealed class FakeProcessLauncher : IProcessLauncher
     public IReadOnlyList<string>? Arguments => LastRequest?.Arguments;
     public IReadOnlyDictionary<string, string>? Environment => LastRequest?.EnvironmentOverrides;
     public IReadOnlySet<string> RemovedVariables => LastRequest?.EnvironmentVariablesToRemove ?? ImmutableHashSet<string>.Empty;
+    public bool CreateNoWindow => LastRequest?.CreateNoWindow ?? false;
 
     /// <inheritdoc />
     public bool Start(ProcessLaunchRequest request)

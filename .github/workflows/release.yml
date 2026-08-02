@@ -44,8 +44,6 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-    env:
-      NEXUS_CLIENT_SECRET: ${{ secrets.NEXUS_CLIENT_SECRET }}
     defaults:
       run:
         working-directory: src
@@ -77,16 +75,16 @@ jobs:
             -p:Version="$version" -p:InformationalVersion="$version" -p:CuratorUseVelopack=true
       - name: Publish NXM handler (AOT win-x64)
         run: dotnet publish nxm-handler --configuration Release --runtime win-x64 --output stage/app
-      - name: Fetch latest Relay prerelease
+      - name: Fetch latest Relay release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           RELAY_TAG=$(gh release list --repo ModifAmorphic/darktide-mod-relay \
             --limit 100 --exclude-drafts --order desc --json tagName,isPrerelease,publishedAt \
-            --jq '[.[] | select(.isPrerelease == true)] | .[0].tagName // empty')
+            --jq '[.[] | select(.isPrerelease == false)] | .[0].tagName // empty')
           if [ -z "$RELAY_TAG" ]; then
-            echo "::error::No non-draft Relay prerelease found"
+            echo "::error::No non-draft Relay release found"
             exit 1
           fi
           echo "RELAY_TAG=$RELAY_TAG" >> "$GITHUB_ENV"
@@ -191,8 +189,6 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-    env:
-      NEXUS_CLIENT_SECRET: ${{ secrets.NEXUS_CLIENT_SECRET }}
     defaults:
       run:
         working-directory: src
@@ -227,15 +223,15 @@ jobs:
             -p:Version="$VERSION" -p:InformationalVersion="$VERSION"
       - name: Publish NXM handler (AOT linux-x64, standalone)
         run: dotnet publish nxm-handler --configuration Release --runtime linux-x64 --output stage/app
-      - name: Fetch latest Relay prerelease
+      - name: Fetch latest Relay release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           RELAY_TAG=$(gh release list --repo ModifAmorphic/darktide-mod-relay \
             --limit 100 --exclude-drafts --order desc --json tagName,isPrerelease,publishedAt \
-            --jq '[.[] | select(.isPrerelease == true)] | .[0].tagName // empty')
+            --jq '[.[] | select(.isPrerelease == false)] | .[0].tagName // empty')
           if [ -z "$RELAY_TAG" ]; then
-            echo "::error::No non-draft Relay prerelease found"
+            echo "::error::No non-draft Relay release found"
             exit 1
           fi
           echo "RELAY_TAG=$RELAY_TAG" >> "$GITHUB_ENV"

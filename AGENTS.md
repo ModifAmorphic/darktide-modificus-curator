@@ -63,7 +63,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
   ui/                   Modificus.Curator.UI -- the Avalonia executable + DI composition root
                           (shell + profile management: dropdown switch,
                           persisted active profile, create/rename/delete dialog;
-                          global Preferences (theme + font scale + language)
+                          global Preferences (theme + font scale + language +
+                          the show-Relay-console toggle, hidden by default)
                           via `IPreferencesService` + the i18n infrastructure: `Strings.resx`
                           + `LocalizationService` for dynamic culture switching;
                           the mod-list UI;
@@ -88,7 +89,14 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           the Integrations dialog (Nexus-only) + its
                           `OpenIntegrationsCommand` on the shell (left of the profiles button),
                           wired through `IDialogService.ShowIntegrationsAsync` -> `IntegrationsViewModel`
-                          -> `INexusAuthService` (OAuth loopback + API-key validate + sign-out); auth
+                          -> `INexusAuthService` (OAuth loopback + API-key validate + sign-out; the
+                          OAuth block is a single dual-state button, "Sign in to
+                          Nexus" when not signed in via OAuth (starts the loopback
+                          flow) vs "Clear Nexus sign-in" when signed in via OAuth
+                          (clears the tokens / signs out), with no separate Sign
+                          out so there is no re-login-over-existing; the API-key
+                          block is gated behind the `ApiKeyAuthEnabled` developer config flag,
+                          default off, so OAuth is the sole sign-in path unless a developer opts in); auth
                           controls stay usable while Darktide runs (only launch + active-profile
                           changes are blocked); the Integrations dialog also owns the explicit
                           `nxm://` handler registration (a "Nexus download links" section over
@@ -163,7 +171,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           (caution brush; `IsExternalBroken` pushed from
                           `IsExternalAvailable` at Reload). The policy ComboBox is
                           disabled for linked rows + the update-action cell stays
-                          empty (space preserved). `ModItemViewModel`
+                          empty (space preserved). A Nexus + Latest row's source
+                          badge appends the installed release tag inline
+                          (e.g. `Nexus #8 · 1.0`, the `ActualVersion` joined from the
+                          repo); Pinned exposes its version in the pin dropdown +
+                          Untracked isn't Nexus-sourced, so neither appends it to the
+                          badge. `ModItemViewModel`
                           carries the INPC state + derived `SourceUrl`/`UpdatePageUrl`/
                           `IsNexusLatest`/`CanShowUpdateAction`/
                           `UpdateActionEnabled`/`UpdateActionTooltip`/`NexusModId`;
@@ -298,8 +311,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           dialog). Bracketing the swap under `_syncing` makes
                           those events no-ops)
   general/              Modificus.Curator.General -- cross-cutting infra (logging bootstrap:
-                        per-process datetime-named log-file rotation + retention, with the
-                        resolved process-pinned path shared with Relay via --log-file,
+                        Serilog day-rolling log (RollingInterval.Day writes
+                        curator-<yyyyMMdd>.log, appended across starts within a day,
+                        rolled at midnight, pruned to RetainedLogFileCount),
                         config loader, app-state store (active profile id +
                         last update-check timestamp + manual-refresh throttle
                         window + profile-scoped known-update snapshots), AddGeneral() DI ext)
@@ -325,7 +339,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         external folder's own name) + per-profile launch settings
                         (EnvVar/LaunchSettings: ordered env-var entries + game
                         args + the EnableLuaLogs toggle (emits Relay's bare
-                        --lua-logs flag, teeing Lua print output into the log
+                        --log-lua flag, teeing Lua print output into the log
                         file) + the SkipSplash toggle (emits Relay's bare
                         --skip-splash flag, skipping Darktide's intro splash
                         state); GetLaunchSettings/SetLaunchSettings validate at the
@@ -388,11 +402,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         the IBrowser impl with an HttpListener on an ephemeral
                         port; Duende.IdentityModel.OidcClient 7.1.0 for the
                         OAuth machinery; client_id "modificus_curator" is a
-                        build-time const; the client secret is generated at
-                        build time from the NEXUS_CLIENT_SECRET env var (empty
-                        when unset; the release workflow supplies the real
-                        value); both are sent as client_secret_post on the
-                        token exchange per the discovery doc; scope "openid";
+                        build-time const; no client secret (Nexus accepts this
+                        client as a public client; PKCE S256 protects the flow);
+                        client_id is posted in the token body; scope "openid";
                         IModAcquisitionService the download +
                         extract + place orchestrator over INexusClient +
                         IModImportService + a plain HttpClient for the CDN
@@ -469,20 +481,33 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         AppImage/desktop-identity variables APPDIR, APPIMAGE,
                         ARGV0, OWD, BAMF_DESKTOP_FILE_HINT from the inherited
                         environment so Darktide does not inherit Curator's
-                        AppImage identity; a profile's EnableLuaLogs emits Relay's
-                        bare --lua-logs flag appended after --log-file (a tee of
+                        AppImage identity; Relay writes its own per-day log
+                        (relay-<yyyyMMdd>.log next to Curator's Serilog
+                        curator-<yyyyMMdd>.log, resolved at launch from the
+                        configured Logging.RelayLogFile stem by RelayLog, which
+                        inserts the day stamp before the extension, + pruned
+                        to the same RetainedLogFileCount, best-effort, before the
+                        spawn) passed as --log-file, followed by an unconditional
+                        bare --log-append (Relay's per-day file is shared across
+                        launches, so it appends, no value, not Z:\-translated on
+                        Linux); a profile's EnableLuaLogs emits Relay's bare
+                        --log-lua flag appended after --log-append (a tee of
                         Lua print output into the log file, no value, not
                         Z:\-translated on Linux); a profile's SkipSplash emits
-                        Relay's bare --skip-splash flag appended after --log-file
+                        Relay's bare --skip-splash flag appended after --log-lua
                         (skips Darktide's intro splash state, no value, not
                         Z:\-translated on Linux); game args append one bare -- then
                         each arg as its own ArgumentList entry (Relay's --
                         contract; no version preflight); the spawn seam IProcessLauncher takes
                         one immutable ProcessLaunchRequest with FilePath,
-                        Arguments, EnvironmentOverrides, and
-                        EnvironmentVariablesToRemove, applied by ProcessLauncher
-                        as UseShellExecute=false + ArgumentList + remove-then-override
-                        over the inherited environment; ResolveLauncherPath prefers the
+                        Arguments, EnvironmentOverrides, EnvironmentVariablesToRemove,
+                        and CreateNoWindow, applied by ProcessLauncher
+                        as UseShellExecute=false + CreateNoWindow + ArgumentList +
+                        remove-then-override over the inherited environment;
+                        CreateNoWindow hides the Relay console window unless the
+                        global ShowRelayConsole preference opts in (read live from
+                        config at launch; a harmless no-op on Linux, where no
+                        console appears regardless); ResolveLauncherPath prefers the
                         configured RelayDir, then on both platforms falls back to the
                         app-local relay/ shipped inside a Velopack payload at
                         <BaseDirectory>/relay/, then uses the portable sibling fallback
@@ -570,7 +595,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             load, add/remove rows, inline localized validation --
                                             empty/`=`/NUL name, NUL value, case-insensitive
                                             duplicate, reserved name -- + a Logging toggle
-                                            (EnableLuaLogs emits Relay's bare --lua-logs flag) +
+                                            (EnableLuaLogs emits Relay's bare --log-lua flag) +
                                             a SkipSplash toggle (SkipSplash emits Relay's bare
                                             --skip-splash flag);
                                             Save persists once via
@@ -731,10 +756,14 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   file/dir → defaults (first-run safe).
 - **Logging** is Serilog (console + file) bridged into
   `Microsoft.Extensions.Logging`; honors `Logging:Level` + `Logging:LogFile`.
-  Per-process datetime-named log-file rotation: each start resolves the
-  `{DateTime}` token in `Logging:LogFile` to a timestamp, pins that path for the
-  process lifetime, and prunes to `Logging:RetainedLogFileCount` (default 5). The
-  resolved path is shared with Relay via `--log-file`.
+  Day-rolling log file (Serilog `RollingInterval.Day` writes
+  `curator-<yyyyMMdd>.log`, appended across starts within a day, rolled at
+  midnight, pruned to `Logging:RetainedLogFileCount` default 5; Serilog owns
+  the day-naming, midnight rolling, and pruning). Relay has its own parallel
+  `Logging:RelayLogFile` stem (defaults to `relay-<yyyyMMdd>.log` next to
+  Curator's); relay-client inserts the day stamp before the extension, resolves
+  and prunes it to the same retained count at launch, and passes it as
+  `--log-file`.
 - The backend libraries are all implemented: **Profiles** (profile data model +
   lifecycle; container-based staging, where `PrepareModRoot` discovers each
   enabled mod's base folder name inside the resolved version folder via

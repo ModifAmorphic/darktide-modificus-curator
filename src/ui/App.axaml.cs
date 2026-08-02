@@ -62,14 +62,17 @@ public class App : Application
         var config = services.GetRequiredService<IConfigLoader>().Load();
 
         logger.LogInformation("Modificus Curator starting");
+        // Serilog day-rolls the log file itself, so Curator does not track the
+        // exact stamped filename. Report the log directory (where both Curator's
+        // curator-<date>.log and Relay's relay-<date>.log live) instead.
         logger.LogInformation(
             "Config loaded: ProfilesBaseFolder={Profiles}; ModsFolder={Mods}; " +
-            "RelayDir={Runtime}; LogLevel={Level}; LogFile={LogFile}",
+            "RelayDir={Runtime}; LogLevel={Level}; LogDir={LogDir}",
             config.ProfilesBaseFolder,
             config.ModsFolder,
             config.RelayDir,
             config.Logging.Level,
-            LoggingBootstrap.CurrentLogFile ?? config.Logging.LogFile);
+            Path.GetDirectoryName(config.Logging.LogFile));
 
         // Apply the user's preferences (theme, font scale, language) before any
         // window shows, so the first paint already reflects them. Swaps the XAML
@@ -80,7 +83,7 @@ public class App : Application
         Resources["Loc"] = localization;
         var prefs = config.Preferences;
         services.GetRequiredService<IPreferencesService>()
-            .ApplyAndPersist(prefs.Theme, prefs.FontScale, prefs.Language);
+            .ApplyAndPersist(prefs.Theme, prefs.FontScale, prefs.Language, prefs.ShowRelayConsole);
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {

@@ -187,6 +187,7 @@ public sealed class ConfigLoaderTests
             config.Preferences.Theme = ThemeMode.Dark;
             config.Preferences.FontScale = 1.5;
             config.Preferences.Language = "fr";
+            config.Preferences.ShowRelayConsole = true;
 
             loader.Save(config);
             var reloaded = loader.Load();
@@ -194,6 +195,7 @@ public sealed class ConfigLoaderTests
             Assert.Equal(ThemeMode.Dark, reloaded.Preferences.Theme);
             Assert.Equal(1.5, reloaded.Preferences.FontScale);
             Assert.Equal("fr", reloaded.Preferences.Language);
+            Assert.True(reloaded.Preferences.ShowRelayConsole);
         }
         finally
         {

@@ -43,7 +43,7 @@ public sealed class CuratorConfig
 | `RelayDir` | `<app-data>/relay` | Where `mod_relay.exe`, `relay_shell.dll`, and `mod_loader/` live (consumed by [relay-client](relay-client.md)). |
 | `Discovery` | see `DiscoveryConfig` | User-supplied discovery overrides (Steam / Darktide / compatdata / Proton paths). Validated on disk + healed from the discoverer + persisted by `SteamService.Discover()`. |
 | `Integrations` | see `IntegrationsConfig` | External-service (mod-source) integration settings. |
-| `Preferences` | see `PreferencesConfig` | User-facing global preferences (theme, font scale, language). |
+| `Preferences` | see `PreferencesConfig` | User-facing global preferences (theme, font scale, language, show-Relay-console toggle). |
 
 `<app-data>` is `AppPaths.AppDataDir`: `Environment.SpecialFolder.LocalApplicationData`
 plus an app-data segment that is `ModifAmorphic\Modificus Curator` on Windows (an
@@ -55,26 +55,34 @@ org/app hierarchy, kept distinct from the Velopack install root at
 ```csharp
 public sealed class LoggingConfig
 {
-    public const string DateTimeToken = "{DateTime}";
     public string Level { get; set; } = "Information";   // Serilog level name
-    public string LogFile { get; set; }                   // default <app-data>/logs/curator-{DateTime}.log
+    public string LogFile { get; set; }                   // default <app-data>/logs/curator-.log (Serilog day-rolled)
+    public string RelayLogFile { get; set; }             // default <app-data>/logs/relay-.log (day-stamped by relay-client)
     public int RetainedLogFileCount { get; set; } = 5;
 }
 ```
 
 - `Level`: a Serilog level name (`Verbose`/`Debug`/`Information`/`Warning`/
   `Error`/`Fatal`); an unknown value falls back to `Information` at bootstrap.
-- `LogFile`: the structured log file. May contain `DateTimeToken` (`{DateTime}`);
-  when it does, the bootstrap resolves the token to a fixed-width local timestamp
-  (`yyyyMMddHHmmss`) once at startup and pins that path for the process lifetime
-  (a new file per start). The resolved path is shared with Mod Relay: Curator
-  passes it to the launcher as `--log-file`, so the two write the same per-process
-  file. When the token is absent, the configured file is reused and truncated on
-  each start (the legacy behavior).
-- `RetainedLogFileCount`: how many datetime-named log files to keep (including
-  the current process's file). Default 5. Only applies when `LogFile` contains
-  `DateTimeToken`; the log directory is pruned to the newest N after each start.
-  A value below 1 disables pruning (keeps all).
+- `LogFile`: the structured log file Serilog writes. Day-rolled
+  (`RollingInterval.Day`): the date is inserted before the extension, so a stem
+  of `curator-` yields `curator-<yyyyMMdd>.log` (one file per day, appended
+  across starts within the same day, rolled at local midnight).
+- `RelayLogFile`: the stem for Mod Relay's own day-stamped log, parallel to
+  `LogFile`. Relay's `mod_loader` writes the `--log-file` Curator passes
+  directly (an external process, not Serilog), so relay-client inserts the day
+  stamp (`yyyyMMdd`) before the extension itself at each launch: a stem of
+  `relay-` resolves to `relay-<yyyyMMdd>.log`. Defaults to `<app-data>/logs/relay-.log`
+  (the same directory as `LogFile`, so the two file sets group by type) but can
+  be pointed anywhere, including a custom directory (the launch service ensures
+  the directory exists, best-effort). The prune derives its glob from this stem
+  (`relay-.log` matches `relay-*.log`), so a custom prefix or extension is
+  honored too. Pruned to `RetainedLogFileCount` at launch.
+- `RetainedLogFileCount`: how many day-rolled log files to keep. Default 5. The
+  shared user-facing retention knob: it feeds Serilog's `retainedFileCountLimit`
+  for Curator's own `curator-*.log` (pruning the oldest) AND the relay-client
+  prune for Relay's `relay-*.log` (keeping the newest N). A value below 1 keeps
+  everything.
 
 ### `IntegrationsConfig` / `NexusConfig`
 
@@ -94,6 +102,7 @@ public sealed class NexusConfig
     public NexusAuthMethod AuthMethod { get; set; } = NexusAuthMethod.None;
     public string? ApiKey { get; set; }                          // used when AuthMethod == ApiKey
     public NexusOAuthTokens? OAuth { get; set; }                 // used when AuthMethod == OAuth
+    public bool ApiKeyAuthEnabled { get; set; }                  // dev toggle: show Integrations API-key block, default false
     public bool AutoUpdateCheckEnabled { get; set; } = true;
     public int AutoUpdateCheckIntervalMinutes { get; set; } = 10;
     public bool AutomaticUpdatesEnabled { get; set; }            // opt-in Premium auto-install, default false
@@ -126,9 +135,14 @@ Nexus fields:
 - `ApiKey`: the Nexus API key (sent as the `apikey` header). Set when
   `AuthMethod == ApiKey`; cleared on sign-out or when switching to OAuth.
   `null`/whitespace is treated as "not configured".
-- `OAuth`: the persisted OAuth tokens. Set when `AuthMethod == OAuth`; cleared
-  on sign-out or when switching to API key. `null` is treated as "not
+- `OAuth`: the persisted OAuth tokens. Set when `AuthMethod == OAuth`; cleared on
+  sign-out or when switching to API key. `null` is treated as "not
   authenticated". See `NexusOAuthTokens` below.
+- `ApiKeyAuthEnabled`: developer-only toggle (no UI control) gating the
+  Integrations dialog's API-key auth block visibility. `false` by default: the
+  API-key block is hidden and OAuth is the sole sign-in path. `true` shows the
+  API-key block. Read live when the dialog opens, so editing `config.json` takes
+  effect on the next dialog open; no UI control writes it.
 - `AutoUpdateCheckEnabled`: whether the periodic background update check runs
   while a profile is active. `true` by default. Gates ONLY the periodic timer;
   the profile-load check (startup + active-profile switch) and the manual "check
@@ -155,10 +169,10 @@ Nexus fields:
 
 The `NexusAuthMethod` enum carries the three explicit choices. The OAuth client
 id is a build-time constant (in `Modificus.Curator.Integrations.NexusOAuthConstants`),
-not config and not a runtime env var. The OAuth client secret is compile-time too,
-but injected from the `NEXUS_CLIENT_SECRET` build-time env var (the release
-workflow supplies it; empty in local + PR builds). Runtime config is file-based
-via `IConfigLoader`; there is no runtime env-var config pattern.
+not config and not a runtime env var. No client secret is used: Nexus accepts
+this client as a public client, and PKCE S256 protects the OAuth flow. Runtime
+config is file-based via `IConfigLoader`; there is no runtime env-var config
+pattern.
 
 `NexusOAuthTokens` is an immutable record holding the OAuth session state:
 
@@ -181,6 +195,8 @@ sign-out.
 User-facing global preferences, exposed through the Preferences dialog. The
 dialog applies each change immediately (theme + font scale + language take
 effect live) and persists through `ConfigLoader.Save`; there is no commit step.
+`ShowRelayConsole` has no live-apply step: it is read at launch time by the
+Relay launcher.
 
 ```csharp
 public sealed class PreferencesConfig
@@ -188,6 +204,7 @@ public sealed class PreferencesConfig
     public ThemeMode Theme { get; set; } = ThemeMode.System;
     public double FontScale { get; set; } = 1.0;
     public string Language { get; set; } = "en";
+    public bool ShowRelayConsole { get; set; }            // default false (hidden)
 }
 
 public enum ThemeMode
@@ -211,6 +228,13 @@ public enum ThemeMode
   translated `Strings.<culture>.resx` files (no code change). Switching language
   updates the live UI through the UI-layer `LocalizationService` (dynamic, no
   restart).
+- `ShowRelayConsole`: whether to show the Mod Relay console window when launching
+  the game. `false` by default (the window is hidden); Relay's output is captured
+  in its `relay-<yyyyMMdd>.log` regardless, so the console is redundant. Read
+  live from config at launch (one snapshot per launch); a Preferences change
+  takes effect on the next launch. On Linux no console window appears regardless,
+  so the flag has no observable effect there. Surfaced as a checkbox in the
+  Preferences dialog.
 
 ### `DiscoveryConfig`
 

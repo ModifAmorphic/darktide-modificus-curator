@@ -32,6 +32,9 @@ namespace Modificus.Curator.UI.ViewModels;
 /// later as translated resx files (and extend this list, no code change to the
 /// apply path). Switching language updates the running UI through the
 /// <see cref="LocalizationService"/> (dynamic, no restart).</para>
+/// <para><b>ShowRelayConsole:</b> whether to show the Mod Relay console window
+/// on launch. Persisted immediately but read at launch time (no live-apply);
+/// <c>false</c> by default (the window is hidden).</para>
 /// </remarks>
 public partial class PreferencesViewModel : ObservableObject
 {
@@ -86,6 +89,7 @@ public partial class PreferencesViewModel : ObservableObject
             SelectedLanguage = LanguageOptions.FirstOrDefault(o =>
                 string.Equals(o.Name, configured.Language, StringComparison.OrdinalIgnoreCase))
                 ?? LanguageOptions[0];
+            ShowRelayConsole = configured.ShowRelayConsole;
         }
         finally
         {
@@ -119,9 +123,18 @@ public partial class PreferencesViewModel : ObservableObject
     [ObservableProperty]
     private LanguageOption _selectedLanguage = null!;
 
+    /// <summary>
+    /// Whether to show the Mod Relay console window when launching the game.
+    /// Persisted immediately (no live-apply: it is read at launch time). <c>false</c>
+    /// by default (the window is hidden).
+    /// </summary>
+    [ObservableProperty]
+    private bool _showRelayConsole;
+
     partial void OnSelectedThemeChanged(ThemeOption value) => ApplyAndPersist();
     partial void OnFontScalePercentChanged(int value) => ApplyAndPersist();
     partial void OnSelectedLanguageChanged(LanguageOption value) => ApplyAndPersist();
+    partial void OnShowRelayConsoleChanged(bool value) => ApplyAndPersist();
 
     /// <summary>
     /// Pushes the current selection through <see cref="IPreferencesService"/>:
@@ -139,7 +152,8 @@ public partial class PreferencesViewModel : ObservableObject
         _preferences.ApplyAndPersist(
             SelectedTheme.Mode,
             FontScalePercent / 100.0,
-            SelectedLanguage.Name);
+            SelectedLanguage.Name,
+            ShowRelayConsole);
     }
 
     /// <summary>

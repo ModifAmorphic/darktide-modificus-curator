@@ -100,7 +100,7 @@ public partial class LaunchSettingsViewModel : ObservableObject
     public ObservableCollection<GameArgRow> GameArguments { get; } = new();
 
     /// <summary>
-    /// Whether Relay's <c>--lua-logs</c> flag is emitted at launch (tees Lua
+    /// Whether Relay's <c>--log-lua</c> flag is emitted at launch (tees Lua
     /// print output into the log file). Loaded from the profile's launch
     /// settings; persisted on Save. No validation (a boolean toggle).
     /// </summary>

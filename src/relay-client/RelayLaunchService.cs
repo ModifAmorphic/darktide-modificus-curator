@@ -78,9 +78,8 @@ internal sealed class RelayLaunchService : IRelayLaunchService
         {
             // One live config snapshot for the whole launch. RelayDir is read
             // once here; a runtime config change via the Settings window takes
-            // effect on the next launch. The log file is the bootstrap-resolved,
-            // process-pinned path (LoggingBootstrap.CurrentLogFile), not the raw
-            // template, read once here too.
+            // effect on the next launch. The Relay log path is resolved from the
+            // same snapshot's Logging.RelayLogFile below.
             var config = _configLoader.Load();
 
             // Discovery first: if we cannot launch, do not touch the profile's
@@ -138,18 +137,43 @@ internal sealed class RelayLaunchService : IRelayLaunchService
             }
 
             var gameBinary = discovery.DarktideGameBinaryPath!;
-            // The log file is resolved once at startup (a datetime-named,
-            // process-pinned path) by LoggingBootstrap; Relay writes the same
-            // per-process file. Fall back to the configured value if the
-            // bootstrap has not run (tests, edge hosts).
-            var logFile = LoggingBootstrap.CurrentLogFile ?? config.Logging.LogFile;
+
+            // Relay writes its own per-day log: its mod_loader opens --log-file
+            // directly (an external process, not Serilog). Resolve today's path
+            // from the configured RelayLogFile stem (relay-client inserts the
+            // day stamp; the file defaults to the same directory as Curator's
+            // Serilog day-rolled log but can be pointed elsewhere). Ensure its
+            // directory exists (best-effort, mirroring the logging bootstrap's
+            // LogFile directory creation), then prune old Relay logs to the same
+            // retained count Curator uses. The prune takes the configured stem
+            // (not the dated path) so its glob matches every day's file.
+            // Best-effort prune: a failure never blocks launch.
+            var logFile = RelayLog.ResolveRelayLogPath(config.Logging.RelayLogFile, DateTime.Now);
+
+            // Ensure the Relay log directory exists; a RelayLogFile pointed at a
+            // custom directory otherwise fails to write on first launch.
+            var relayLogDir = Path.GetDirectoryName(logFile);
+            if (!string.IsNullOrEmpty(relayLogDir))
+            {
+                try { Directory.CreateDirectory(relayLogDir); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best-effort */ }
+            }
+
+            RelayLog.PruneOldRelayLogs(config.Logging.RelayLogFile, config.Logging.RetainedLogFileCount);
 
             // Read the profile's launch settings fresh on each launch (they apply next launch; editing
             // is unlocked while Darktide runs). GetLaunchSettings throws KeyNotFoundException for an
             // unknown profile, caught below as Error (PrepareModRoot would have thrown it first).
             var launchSettings = _profiles.GetLaunchSettings(profileId);
 
-            var started = _strategy.Start(launcherPath, discovery, gameBinary, modPath, logFile, launchSettings);
+            // Hide the Relay console window unless the global ShowRelayConsole
+            // preference opts in (read live from the snapshot taken above, so a
+            // Preferences change takes effect on the next launch). CreateNoWindow
+            // is honored by the launcher with UseShellExecute=false; on Linux no
+            // console appears regardless, so the flag is a harmless no-op there.
+            var createNoWindow = !config.Preferences.ShowRelayConsole;
+
+            var started = _strategy.Start(launcherPath, discovery, gameBinary, modPath, logFile, launchSettings, createNoWindow);
 
             if (!started)
             {

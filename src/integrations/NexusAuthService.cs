@@ -185,13 +185,14 @@ public sealed class NexusOAuthTokenStore : INexusTokenStore
         {
             Authority = authority,
             ClientId = NexusOAuthConstants.ClientId,
-            // Nexus's discovery doc declares
-            // token_endpoint_auth_methods_supported: ["client_secret_basic",
-            // "client_secret_post"] (no public/none method), so the token
-            // exchange requires the client secret. PostBody == client_secret_post
-            // (both land in the form-urlencoded token request), which Nexus
-            // supports. PKCE remains in effect (orthogonal to the secret).
-            ClientSecret = NexusOAuthConstants.ClientSecret,
+            // Nexus accepts this client as a public client, so no client secret
+            // is sent. The client_id is posted in the token request body
+            // (TokenClientCredentialStyle = PostBody), which is OidcClient's
+            // default with no ClientSecret set. PKCE S256 protects the authorize
+            // leg. (Nexus's discovery doc still lists only client_secret_basic /
+            // client_secret_post under token_endpoint_auth_methods_supported,
+            // but the token endpoint accepts the no-secret request for this
+            // client.)
             TokenClientCredentialStyle = ClientCredentialStyle.PostBody,
             RedirectUri = ResolveBrowserRedirectUri(),
             Scope = NexusOAuthConstants.Scope,

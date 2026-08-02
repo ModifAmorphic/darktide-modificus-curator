@@ -36,7 +36,7 @@ internal sealed class WindowsLaunchStrategy : IPlatformLaunchStrategy
     }
 
     /// <inheritdoc />
-    public bool Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings)
+    public bool Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings, bool createNoWindow)
     {
         ArgumentNullException.ThrowIfNull(launchSettings);
 
@@ -61,19 +61,22 @@ internal sealed class WindowsLaunchStrategy : IPlatformLaunchStrategy
         }
 
         _logger.LogInformation("Launching (Windows) {Launcher} {Args}", launcherPath, FormatArgs(args));
-        var request = new ProcessLaunchRequest(launcherPath, args, environmentOverrides: env);
+        var request = new ProcessLaunchRequest(launcherPath, args, environmentOverrides: env, createNoWindow: createNoWindow);
         return _launcher.Start(request);
     }
 
     /// <summary>
     /// Builds the launcher's own argument list (the flags AFTER
     /// <c>mod_relay.exe</c>). Paths pass through verbatim -- Windows needs no
-    /// <c>Z:\</c> translation. When <see cref="LaunchSettings.EnableLuaLogs"/>
-    /// is true, appends a bare <c>--lua-logs</c> flag (a Relay-owned logging
-    /// flag with no value, not path-translated) after <c>--log-file</c>, teeing
-    /// Lua <c>print</c> output into the log file. When
+    /// <c>Z:\</c> translation. A bare <c>--log-append</c> is emitted
+    /// unconditionally right after <c>--log-file</c> (Relay writes a per-day
+    /// file shared across launches, so it must append rather than overwrite on
+    /// each launch). When <see cref="LaunchSettings.EnableLuaLogs"/> is true,
+    /// appends a bare <c>--log-lua</c> flag after <c>--log-append</c> (a
+    /// Relay-owned logging flag with no value, not path-translated), teeing Lua
+    /// <c>print</c> output into the log file. When
     /// <see cref="LaunchSettings.SkipSplash"/> is true, appends a bare
-    /// <c>--skip-splash</c> flag after <c>--lua-logs</c> (a Relay-owned flag
+    /// <c>--skip-splash</c> flag after <c>--log-lua</c> (a Relay-owned flag
     /// with no value, not path-translated), skipping Darktide's intro splash
     /// state. When <see cref="LaunchSettings.GameArguments"/> is non-empty,
     /// appends a single bare <c>--</c> separator then each game arg as its own
@@ -83,7 +86,7 @@ internal sealed class WindowsLaunchStrategy : IPlatformLaunchStrategy
     /// <remarks>
     /// <c>--log-level</c> is intentionally NOT emitted: <c>CuratorConfig.Logging.Level</c>
     /// is a Serilog level name for Curator's own log, but the Relay shell's level
-    /// vocabulary differs -- forwarding the Serilog name silently mis-resolved levels.
+    /// vocabulary differs, so forwarding the Serilog name silently mis-resolved levels.
     /// The two logs are decoupled; the launcher's <c>info</c> default is used.
     /// </remarks>
     internal static List<string> BuildLauncherArgs(string gameBinary, string modPath, string logFile, LaunchSettings launchSettings)
@@ -95,10 +98,11 @@ internal sealed class WindowsLaunchStrategy : IPlatformLaunchStrategy
             "--game-binary", gameBinary,
             "--mod-path", modPath,
             "--log-file", logFile,
+            "--log-append",
         };
         if (launchSettings.EnableLuaLogs)
         {
-            args.Add("--lua-logs");
+            args.Add("--log-lua");
         }
         if (launchSettings.SkipSplash)
         {

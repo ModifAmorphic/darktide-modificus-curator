@@ -79,7 +79,7 @@ internal sealed class LinuxLaunchStrategy : IPlatformLaunchStrategy
     }
 
     /// <inheritdoc />
-    public bool Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings)
+    public bool Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings, bool createNoWindow)
     {
         ArgumentNullException.ThrowIfNull(launchSettings);
 
@@ -125,20 +125,25 @@ internal sealed class LinuxLaunchStrategy : IPlatformLaunchStrategy
             discovery.ProtonBinaryPath!,
             arguments,
             environmentOverrides: env,
-            environmentVariablesToRemove: AppImageIdentityVariables);
+            environmentVariablesToRemove: AppImageIdentityVariables,
+            createNoWindow: createNoWindow);
         return _launcher.Start(request);
     }
 
     /// <summary>
     /// Builds the launcher's own argument list (the flags AFTER
     /// <c>... proton run launcher.exe</c>). The path-valued flags are converted
-    /// to Wine <c>Z:\</c> form so the launcher-under-Wine can resolve them. When
+    /// to Wine <c>Z:\</c> form so the launcher-under-Wine can resolve them. A
+    /// bare <c>--log-append</c> is emitted unconditionally right after
+    /// <c>--log-file</c>'s value (Relay writes a per-day file shared across
+    /// launches, so it must append rather than overwrite on each launch); it is
+    /// a bare flag, NOT path-valued, so it is not <c>Z:\</c>-translated. When
     /// <see cref="LaunchSettings.EnableLuaLogs"/> is true, appends a bare
-    /// <c>--lua-logs</c> flag after <c>--log-file</c> (a Relay-owned logging
+    /// <c>--log-lua</c> flag after <c>--log-append</c> (a Relay-owned logging
     /// flag with no value, NOT path-valued, so it is not <c>Z:\</c>-translated),
     /// teeing Lua <c>print</c> output into the log file. When
     /// <see cref="LaunchSettings.SkipSplash"/> is true, appends a bare
-    /// <c>--skip-splash</c> flag after <c>--lua-logs</c> (a Relay-owned flag
+    /// <c>--skip-splash</c> flag after <c>--log-lua</c> (a Relay-owned flag
     /// with no value, NOT path-valued, so it is not <c>Z:\</c>-translated),
     /// skipping Darktide's intro splash state. When
     /// <see cref="LaunchSettings.GameArguments"/> is non-empty, appends a single
@@ -163,10 +168,11 @@ internal sealed class LinuxLaunchStrategy : IPlatformLaunchStrategy
             "--game-binary", WinePath.ToWine(gameBinary),
             "--mod-path", WinePath.ToWine(modPath),
             "--log-file", WinePath.ToWine(logFile),
+            "--log-append",
         };
         if (launchSettings.EnableLuaLogs)
         {
-            args.Add("--lua-logs");
+            args.Add("--log-lua");
         }
         if (launchSettings.SkipSplash)
         {

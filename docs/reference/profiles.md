@@ -166,7 +166,7 @@ public sealed record LaunchSettings
     public static readonly IReadOnlyCollection<string> ReservedEnvironmentNames;  // 14, case-insensitive
     public IReadOnlyList<EnvVar> EnvironmentVariables { get; init; }  // ordered, default empty
     public IReadOnlyList<string> GameArguments { get; init; }        // ordered, default empty
-    public bool EnableLuaLogs { get; init; }                         // emits Relay's --lua-logs when true
+    public bool EnableLuaLogs { get; init; }                         // emits Relay's --log-lua when true
     public bool SkipSplash { get; init; }                            // emits Relay's --skip-splash when true
 }
 ```

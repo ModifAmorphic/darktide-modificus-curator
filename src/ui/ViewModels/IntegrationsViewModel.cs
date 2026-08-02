@@ -14,10 +14,16 @@ namespace Modificus.Curator.UI.ViewModels;
 /// <summary>
 /// The view model behind the Integrations modal
 /// (<see cref="Views.IntegrationsWindow"/>). Nexus-only: two clearly
-/// alternative, visually separated blocks, "Sign in with Nexus" (OAuth) and
+/// alternative, visually separated blocks, "Sign in to Nexus" (OAuth) and
 /// "Use an API key", only one of which is active at a time. The active method
-/// is shown by a per-block Sign out button + the method-aware status line
-/// ("Signed in as X (Premium) via Nexus login" vs "...via API key"). The
+/// is shown by the method-aware status line ("Signed in as X (Premium) via
+/// Nexus login" vs "...via API key"). The OAuth block is a single dual-state
+/// button (the same two-button visibility-toggle pattern as the API-key
+/// field's eye toggle): "Sign in to Nexus" when not signed in via OAuth
+/// (starts the OAuth flow), "Clear Nexus sign-in" when signed in via OAuth
+/// (clears the stored tokens / signs out). There is no separate Sign out in
+/// the OAuth block: the signed-in state is the clear path, so there is no
+/// re-login-over-existing (to re-login you Clear then Sign in). The
 /// API-key field is masked by default, persisted across reopens (so the user
 /// sees one is configured), revealed on a Show eye toggle, + re-validatable
 /// without re-entering. Auth controls stay usable while Darktide runs (only
@@ -31,12 +37,13 @@ namespace Modificus.Curator.UI.ViewModels;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Auth method is the user's explicit choice.</b> Clicking "Sign in with
+/// <b>Auth method is the user's explicit choice.</b> Clicking "Sign in to
 /// Nexus" starts the OAuth loopback flow (<c>AuthMethod = OAuth</c>); pasting +
-/// validating an API key sets <c>AuthMethod = ApiKey</c>; Sign out resets to
-/// <c>None</c>. Switching methods clears the other method's credentials (handled
-/// in <see cref="NexusAuthService"/>). One active method at a time, no
-/// leftovers.</para>
+/// validating an API key sets <c>AuthMethod = ApiKey</c>; Sign out (the OAuth
+/// block's "Clear Nexus sign-in" button, or the API-key block's Sign out)
+/// resets to <c>None</c>. Switching methods clears the other method's
+/// credentials (handled in <see cref="NexusAuthService"/>). One active method at
+/// a time, no leftovers.</para>
 /// <para>
 /// <b>Status line is resolved server-side on open + after each action.</b>
 /// When the dialog opens, <see cref="RefreshAsync"/> calls
@@ -115,6 +122,16 @@ public partial class IntegrationsViewModel : ObservableObject
     public bool IsApiKeyActive => ActiveMethod == NexusAuthMethod.ApiKey;
 
     /// <summary>
+    /// Whether the Integrations dialog's API-key block is shown. Read live from
+    /// <c>NexusConfig.ApiKeyAuthEnabled</c> on dialog open (a developer-only
+    /// config.json toggle; there is no UI control for it). Default false: the
+    /// API-key block is hidden and OAuth is the sole sign-in path unless the flag
+    /// is set in config.json.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isApiKeyAuthEnabled;
+
+    /// <summary>
     /// The API key as the TextBox sees it. Two-way bound. When the configured
     /// method is <c>ApiKey</c>, <see cref="RefreshAsync"/> populates this with
     /// the persisted key (the field masks it via
@@ -148,9 +165,9 @@ public partial class IntegrationsViewModel : ObservableObject
     public char ApiKeyMaskChar => IsApiKeyRevealed ? '\0' : '\u2022';
 
     /// <summary>
-    /// The status line text, resolved through <see cref="LocalizationService"/>
-    /// + carrying the active-method indicator ("via Nexus login" /
-    /// "via API key"). Re-resolves on a culture change. Updated by
+    /// The status line text, resolved through <see cref="LocalizationService"/>,
+    /// reflecting the signed-in state (the API-key path appends a "via API key"
+    /// suffix). Re-resolves on a culture change. Updated by
     /// <see cref="RefreshAsync"/>.
     /// </summary>
     [ObservableProperty]
@@ -340,6 +357,7 @@ public partial class IntegrationsViewModel : ObservableObject
     public string WindowTitle => _localization["Integrations_Title"];
     public string NexusHeader => _localization["Integrations_NexusHeader"];
     public string LoginWithOAuthLabel => _localization["Integrations_LoginWithNexus"];
+    public string ClearNexusSignInLabel => _localization["Integrations_ClearNexusSignIn"];
     public string ApiKeyLabel => _localization["Integrations_ApiKeyLabel"];
     public string ValidateLabel => _localization["Integrations_ValidateButton"];
     public string ApiKeyHelpLink => _localization["Integrations_ApiKeyHelpUrl"];
@@ -448,8 +466,12 @@ public partial class IntegrationsViewModel : ObservableObject
 
     /// <summary>
     /// Signs out: clears the persisted OAuth tokens + API key + sets
-    /// <c>AuthMethod = None</c>. Idempotent. Used by BOTH block Sign-out buttons;
-    /// only one is visible at a time (the active block's).
+    /// <c>AuthMethod = None</c>. Idempotent. Routed to by both blocks' sign-out
+    /// affordances: the OAuth block's "Clear Nexus sign-in" button + the
+    /// API-key block's Sign out button. Only the active block's is visible at a
+    /// time (the OAuth block's Clear button is bound to
+    /// <see cref="IsOAuthActive"/>; the API-key block's Sign out to
+    /// <see cref="IsApiKeyActive"/>).
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanSignOut))]
     private async Task SignOut()
@@ -509,6 +531,7 @@ public partial class IntegrationsViewModel : ObservableObject
         ApplyState(state);
         LoadAutoUpdateSettings();
         RefreshNxmState();
+        IsApiKeyAuthEnabled = _configLoader.Load().Integrations.Nexus.ApiKeyAuthEnabled;
     }
 
     /// <summary>
@@ -750,6 +773,7 @@ public partial class IntegrationsViewModel : ObservableObject
         OnPropertyChanged(nameof(WindowTitle));
         OnPropertyChanged(nameof(NexusHeader));
         OnPropertyChanged(nameof(LoginWithOAuthLabel));
+        OnPropertyChanged(nameof(ClearNexusSignInLabel));
         OnPropertyChanged(nameof(ApiKeyLabel));
         OnPropertyChanged(nameof(ValidateLabel));
         OnPropertyChanged(nameof(ApiKeyHelpLink));

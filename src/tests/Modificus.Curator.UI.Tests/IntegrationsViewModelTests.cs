@@ -403,6 +403,37 @@ public sealed class IntegrationsViewModelTests
         Assert.True(vm.SignOutCommand.CanExecute(null));
     }
 
+    // ---- OAuth block dual-state button labels ----------------------------
+
+    [Fact]
+    public async Task ClearNexusSignInLabel_resolves_from_resx()
+    {
+        // The OAuth block's signed-in state is a "Clear Nexus sign-in" button
+        // bound to SignOutCommand. Its label resolves through the localization
+        // service like the other bound labels, so a culture flip refreshes it.
+        var (vm, _, _, _) = await BuildAndRefresh(state: null);
+
+        Assert.Equal(Localization["Integrations_ClearNexusSignIn"], vm.ClearNexusSignInLabel);
+    }
+
+    [Fact]
+    public async Task OAuth_block_dual_state_visibility_driven_by_IsOAuthActive()
+    {
+        // The dual-state button's two states are pure XAML visibility bindings
+        // to IsOAuthActive (no VM logic added): not signed in via OAuth shows
+        // the sign-in path; signed in via OAuth shows the clear path. The
+        // underlying IsOAuthActive + SignOutCommand + LoginWithOAuthCommand are
+        // unchanged (the API-key block's Sign out depends on the same command).
+        var (signedOut, _, _, _) = await BuildAndRefresh(state: null);
+        Assert.False(signedOut.IsOAuthActive);
+        Assert.True(signedOut.LoginWithOAuthCommand.CanExecute(null));
+
+        var (signedIn, _, _, _) = await BuildAndRefresh(
+            state: new NexusAuthState(NexusAuthMethod.OAuth, "U", IsPremium: false));
+        Assert.True(signedIn.IsOAuthActive);
+        Assert.True(signedIn.SignOutCommand.CanExecute(null));
+    }
+
     // ---- IsBusy gate ------------------------------------------------------
 
     [Fact]
@@ -781,6 +812,32 @@ public sealed class IntegrationsViewModelTests
 
         Assert.Equal(0, dialogs.ConfirmCalls);
         Assert.Empty(dialogs.AlertCalls);
+    }
+
+    // ---- ApiKeyAuthEnabled (developer config toggle) ---------------------
+
+    [Fact]
+    public async Task RefreshAsync_defaults_IsApiKeyAuthEnabled_false()
+    {
+        // The developer toggle defaults to false: no UI control sets it, so a
+        // default config hides the Integrations dialog's API-key block (OAuth
+        // is the sole sign-in path).
+        var (vm, _, _, _) = await BuildAndRefresh(state: null);
+
+        Assert.False(vm.IsApiKeyAuthEnabled);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_loads_IsApiKeyAuthEnabled_from_config()
+    {
+        // Setting the developer toggle in config shows the API-key block on the
+        // next dialog open (read live; no restart required).
+        var configLoader = new FakeConfigLoader();
+        configLoader.Config.Integrations.Nexus.ApiKeyAuthEnabled = true;
+
+        var (vm, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
+
+        Assert.True(vm.IsApiKeyAuthEnabled);
     }
 
     // ---- helpers -----------------------------------------------------------
