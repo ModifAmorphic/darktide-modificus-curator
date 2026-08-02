@@ -36,10 +36,10 @@
         configured, persisted across reopens) + a Show eye-toggle Path + a
         Validate button. When active, a per-block Sign out button appears.
 
-    The shared status line above the OAuth block carries the active-method
-    indicator ("Signed in as X (Premium) via Nexus login" / "...via API key"),
-    so the user always knows WHICH method is configured. Auth controls stay
-    usable while Darktide runs (only launch + active-profile changes are
+    The shared status line above the OAuth block reflects the signed-in state
+    ("Signed in as X (Premium)"); the API-key path appends a "via API key"
+    suffix, so the API-key method (rather than OAuth) is distinguishable.
+    Auth controls stay usable while Darktide runs (only launch + active-profile changes are
     blocked); the eye-toggle is excluded from the in-flight IsBusy gate because
     revealing a masked key is a read-only op that changes no credentials.
   -->
@@ -58,8 +58,8 @@
             <TextBlock Text="{Binding NexusHeader}"
                        FontWeight="SemiBold" />
 
-            <!-- Shared status line: signed-in state with the active-method
-                 indicator ("via Nexus login" / "via API key") or an error. -->
+            <!-- Shared status line: the signed-in state (the API-key path
+                 appends a "via API key" suffix) or an error. -->
             <TextBlock Text="{Binding StatusLine}"
                        TextWrapping="Wrap"
                        Margin="0,4,0,8"

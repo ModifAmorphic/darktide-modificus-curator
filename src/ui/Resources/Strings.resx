@@ -885,15 +885,15 @@
     <comment>Status line when no Nexus auth method is configured.</comment>
   </data>
   <data name="Integrations_StatusSignedInOAuth" xml:space="preserve">
-    <value>Signed in as {0} (Regular) via Nexus login.</value>
+    <value>Signed in as {0} (Regular).</value>
     <comment>Status line when signed in via OAuth (non-premium). {0} is the user's display name.</comment>
   </data>
   <data name="Integrations_StatusSignedInOAuthPremium" xml:space="preserve">
-    <value>Signed in as {0} (Premium) via Nexus login.</value>
+    <value>Signed in as {0} (Premium).</value>
     <comment>Status line when signed in via OAuth with a premium account. {0} is the user's display name.</comment>
   </data>
   <data name="Integrations_StatusSignedInOAuthUnverified" xml:space="preserve">
-    <value>Signed in via Nexus login (couldn't verify the account; check your network).</value>
+    <value>Signed in (couldn't verify the account; check your network).</value>
     <comment>Status line when OAuth is configured but the verify call failed.</comment>
   </data>
   <data name="Integrations_StatusSignedInApiKey" xml:space="preserve">

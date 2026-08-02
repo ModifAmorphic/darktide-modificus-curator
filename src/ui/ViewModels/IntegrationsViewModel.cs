@@ -165,9 +165,9 @@ public partial class IntegrationsViewModel : ObservableObject
     public char ApiKeyMaskChar => IsApiKeyRevealed ? '\0' : '\u2022';
 
     /// <summary>
-    /// The status line text, resolved through <see cref="LocalizationService"/>
-    /// + carrying the active-method indicator ("via Nexus login" /
-    /// "via API key"). Re-resolves on a culture change. Updated by
+    /// The status line text, resolved through <see cref="LocalizationService"/>,
+    /// reflecting the signed-in state (the API-key path appends a "via API key"
+    /// suffix). Re-resolves on a culture change. Updated by
     /// <see cref="RefreshAsync"/>.
     /// </summary>
     [ObservableProperty]
