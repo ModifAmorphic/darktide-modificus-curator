@@ -31,7 +31,7 @@ dialogs, preferences, and i18n fit together.
 │  ┌─ Content area ──────────────────────────────────────────────────────┐ │
 │  │ ModListView (the active profile's mod list; drag-and-drop target)   │ │
 │  │   header: title · rate-limit notice · refresh ·                  │ │
-│  │           auto-sort · Add split button (archive / folder / link)    │ │
+│  │           auto-sort · Add split button (Nexus Mods + 3 pickers)     │ │
 │  │   rows:   name · progress + source badge · enabled · policy ·        │ │
 │  │           update-action cell (button) · up · down · remove            │ │
 │  └─────────────────────────────────────────────────────────────────────┘ │
@@ -218,10 +218,14 @@ The command set:
   The current resolver is the identity stub (a no-op); a real
   dependency-driven resolver is out of v1. The seam is DI-swappable, so the
   UI wires against the abstraction now.
-- **Add** (`AddMods`): the Add split button (archive picker + folder picker) and
-  drag-and-drop both reduce to this command, which processes paths
-  sequentially. A third flyout item, "Link external folder" (folder picker, no
-  modal), reduces to `LinkMods` instead.
+- **Add** (`AddMods`): the Add split button's four flyout items are all modes
+  that set themselves as the default on click (the face label tracks the mode):
+  "Add Nexus Mods" (the default; opens the Darktide Nexus Mods games page in the
+  browser via `AddNexusMods`), "Add Mod (archive)", "Add Mod (folder)", and
+  "Link external folder". The archive + folder modes open their pickers and
+  share an entry point with drag-and-drop; all reduce to `AddMods`, which
+  processes paths sequentially. The "Link external folder" mode reduces to
+  `LinkMods` instead (folder picker, no modal).
 
 ### The import flow
 

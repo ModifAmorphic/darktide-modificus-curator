@@ -412,7 +412,11 @@
   </data>
   <data name="ModList_AddButtonTooltip" xml:space="preserve">
     <value>Add a mod to this profile</value>
-    <comment>Tooltip on the Add split button in the mod list header (the primary click opens the current mode's picker).</comment>
+    <comment>Tooltip on the Add split button in the mod list header (the primary click runs the current mode's action).</comment>
+  </data>
+  <data name="ModList_AddNexusMods" xml:space="preserve">
+    <value>Add Nexus Mods</value>
+    <comment>The first flyout item on the Add split button: opens the Darktide Nexus Mods games page in the browser so the user can browse/download mods (nxm:// links route back into Curator when it owns the OS handler).</comment>
   </data>
   <data name="ModList_AddArchive" xml:space="preserve">
     <value>Add Mod (archive)</value>
@@ -424,7 +428,7 @@
   </data>
   <data name="ModList_LinkExternalFolder" xml:space="preserve">
     <value>Link external folder</value>
-    <comment>The third flyout item on the Add split button: links an external mod folder into the profile without copying it (the folder stays where it is; Curator stages from it at launch).</comment>
+    <comment>The "Link external folder" flyout item on the Add split button: links an external mod folder into the profile without copying it (the folder stays where it is; Curator stages from it at launch).</comment>
   </data>
   <data name="ModList_NxmDownloadHint" xml:space="preserve">
     <value>On Nexus, click the 'Vortex' or 'Mod manager download' button.</value>
@@ -550,6 +554,14 @@
   <data name="ModList_OpenFilesFailedMessage" xml:space="preserve">
     <value>Could not open the Nexus files page for '{0}'. Visit it manually: {1}</value>
     <comment>Body of the launcher-failure alert. {0} is the mod's display name; {1} is the files-page URL (for manual copy).</comment>
+  </data>
+  <data name="ModList_OpenNexusModsFailedTitle" xml:space="preserve">
+    <value>Couldn't open the Nexus Mods page</value>
+    <comment>Title of the alert shown when the "Add Nexus Mods" flyout item fails to launch the browser for the Nexus Mods games page.</comment>
+  </data>
+  <data name="ModList_OpenNexusModsFailedMessage" xml:space="preserve">
+    <value>Curator couldn't open the page in your browser. You can open it manually: {0}</value>
+    <comment>Body of the launcher-failure alert for the Nexus Mods games page. {0} is the URL (for manual copy).</comment>
   </data>
   <data name="ModList_OpenFolderFailedTitle" xml:space="preserve">
     <value>Could not open the folder</value>

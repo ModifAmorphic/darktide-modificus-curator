@@ -22,14 +22,15 @@ namespace Modificus.Curator.UI.Views;
 /// stay in the (unit-tested) VM; this is pure view mechanics.
 /// </summary>
 /// <remarks>
-/// <para><b>Add split button:</b> the primary click opens the current mode's
-/// picker (archive file picker by default; folder picker after the folder flyout item
-/// is chosen). The flyout's first two items switch the mode (one-click import) and the
-/// VM's <see cref="ModListViewModel.AddMode"/> is mirrored so the split button's
-/// label reflects it. The third flyout item ("Link external folder") opens its own
-/// folder picker routed to the link command (a separate action, not a mode switch).
-/// Folders get a picker path because a native picker cannot mix files +
-/// folders.</para>
+/// <para><b>Add split button:</b> all four flyout items are modes. Each item
+/// sets itself as the default on click (the VM's <see cref="ModListViewModel.AddMode"/>
+/// is mirrored via <see cref="SetAddMode"/> so the face label updates through
+/// <see cref="ModListViewModel.AddModeLabel"/>) and runs its action: NexusMods
+/// opens the Darktide Nexus Mods games page, Archive + Folder open their import
+/// pickers, and LinkExternal opens the link-external-folder picker. NexusMods is
+/// the default, so the face first reads "+ Add Nexus Mods"; clicking the face
+/// runs the current default's action. Archive + Folder are separate modes
+/// because a native picker cannot mix files + folders.</para>
 /// <para><b>Drag-and-drop:</b> the content area has
 /// <c>DragDrop.AllowDrop="True"</c> + <c>Drop</c>/<c>DragOver</c> handlers. The
 /// drop reads the files (folders AND archives, multi) via the sync
@@ -53,31 +54,52 @@ public partial class ModListView : UserControl
     private ModListViewModel? ViewModel => DataContext as ModListViewModel;
 
     /// <summary>
-    /// The Add split button's current mode (which picker the primary click
-    /// opens). Defaults to <see cref="ModAddMode.Archive"/>. Kept in sync with the
-    /// VM's <see cref="ModListViewModel.AddMode"/> (via <see cref="SetAddMode"/>)
-    /// so the split button's label tracks the selected mode.
+    /// The Add split button's current mode (which action the primary click runs).
+    /// Defaults to <see cref="ModAddMode.NexusMods"/>. Kept in sync with the VM's
+    /// <see cref="ModListViewModel.AddMode"/> (via <see cref="SetAddMode"/>) so
+    /// the split button's label tracks the selected mode.
     /// </summary>
-    private ModAddMode _addMode = ModAddMode.Archive;
+    private ModAddMode _addMode = ModAddMode.NexusMods;
 
     // ---- add: split button (archive + folder pickers) --------------------------
 
     /// <summary>
-    /// The Add split button's primary click: opens the picker for the current
-    /// mode (archive file picker by default; folder picker after the folder flyout
-    /// item is chosen). A native picker cannot mix files + folders, so the two
-    /// flyout items switch the mode for one-click import.
+    /// The Add split button's primary click: runs the current mode's action.
+    /// NexusMods opens the Darktide Nexus Mods games page; Archive + Folder open
+    /// their import pickers; LinkExternal opens the link-external-folder picker.
+    /// Archive + Folder are separate modes because a native picker cannot mix
+    /// files + folders.
     /// </summary>
     private async void Add_Click(object? sender, RoutedEventArgs e)
     {
-        if (_addMode == ModAddMode.Folder)
+        switch (_addMode)
         {
-            await OpenFolderPickerAsync();
+            case ModAddMode.NexusMods:
+                ViewModel?.AddNexusModsCommand.Execute(null);
+                break;
+            case ModAddMode.Archive:
+                await OpenArchivePickerAsync();
+                break;
+            case ModAddMode.Folder:
+                await OpenFolderPickerAsync();
+                break;
+            case ModAddMode.LinkExternal:
+                await OpenLinkFolderPickerAsync();
+                break;
         }
-        else
-        {
-            await OpenArchivePickerAsync();
-        }
+    }
+
+    /// <summary>
+    /// The "Add Nexus Mods" flyout item (the first item on the Add split button):
+    /// sets the mode to NexusMods (so subsequent primary clicks reopen the games
+    /// page) and opens the Darktide Nexus Mods games page in the user's default
+    /// browser. The command owns the external-launch + fallback alert (the
+    /// established forwarder pattern).
+    /// </summary>
+    private void AddNexusMods_Click(object? sender, RoutedEventArgs e)
+    {
+        SetAddMode(ModAddMode.NexusMods);
+        ViewModel?.AddNexusModsCommand.Execute(null);
     }
 
     /// <summary>
@@ -104,15 +126,14 @@ public partial class ModListView : UserControl
     }
 
     /// <summary>
-    /// The "Link external folder" flyout item: opens a folder picker and forwards
-    /// the selected folder paths to the VM's link command (records each folder as
-    /// a metadata-only linked container, no copy). Mirrors
-    /// <see cref="AddFolder_Click"/> minus the mode switch: linking is a separate
-    /// action, not a mode of the copy import, so the split button's primary
-    /// label / default picker is unaffected.
+    /// The "Link external folder" flyout item: sets the mode to LinkExternal (so
+    /// subsequent primary clicks reopen the link picker) and opens a folder
+    /// picker, forwarding the selected folder paths to the VM's link command
+    /// (records each folder as a metadata-only linked container, no copy).
     /// </summary>
     private async void LinkFolder_Click(object? sender, RoutedEventArgs e)
     {
+        SetAddMode(ModAddMode.LinkExternal);
         await OpenLinkFolderPickerAsync();
     }
 

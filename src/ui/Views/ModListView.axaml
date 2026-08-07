@@ -158,12 +158,13 @@
                    VerticalAlignment="Center" />
       </StackPanel>
       <!--
-        Add split button: primary click opens the current mode's picker (archive file
-        picker by default, folder picker after the folder flyout item is chosen);
-        the arrow opens the flyout to switch modes. The TextBlock binds to the
-        VM's AddModeLabel so it reads "Add Mod (archive)" / "Add Mod (folder)". The
-        arrow is built-in theme chrome (no authored glyph). Folders need a
-        picker path because a native picker cannot mix files + folders.
+        Add split button: primary click runs the current mode's action; the
+        arrow opens the flyout. All four flyout items are modes that set
+        themselves as the default on click (the face label tracks the mode via
+        AddModeLabel): "Add Nexus Mods" (the default; opens the Darktide Nexus
+        Mods games page in the browser), "Add Mod (archive)", "Add Mod (folder)"
+        (separate because a native picker cannot mix files + folders), and "Link
+        external folder". The arrow is built-in theme chrome (no authored glyph).
       -->
       <SplitButton Grid.Column="5"
                    Click="Add_Click"
@@ -181,6 +182,8 @@
         </SplitButton.Content>
         <SplitButton.Flyout>
           <MenuFlyout>
+            <MenuItem Header="{ReflectionBinding [ModList_AddNexusMods], Source={StaticResource Loc}}"
+                      Click="AddNexusMods_Click" />
             <MenuItem Header="{ReflectionBinding [ModList_AddArchive], Source={StaticResource Loc}}"
                       Click="AddArchive_Click" />
             <MenuItem Header="{ReflectionBinding [ModList_AddFolder], Source={StaticResource Loc}}"
