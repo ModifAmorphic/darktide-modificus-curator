@@ -110,8 +110,10 @@
                     Orientation="Horizontal"
                     Spacing="8"
                     Margin="0,0,0,12"
-                    VerticalAlignment="Center">
-          <CheckBox IsChecked="{Binding ShowRelayConsole, Mode=TwoWay}"
+                    VerticalAlignment="Center"
+                    ToolTip.Tip="{Binding RelayConsoleTooltip}">
+          <CheckBox IsChecked="{Binding EffectiveRelayConsoleChecked, Mode=TwoWay}"
+                    IsEnabled="{Binding IsRelayConsoleToggleSupported}"
                     VerticalAlignment="Center" />
           <TextBlock Text="{ReflectionBinding [Preferences_ShowRelayConsole], Source={StaticResource Loc}}"
                      VerticalAlignment="Center" />

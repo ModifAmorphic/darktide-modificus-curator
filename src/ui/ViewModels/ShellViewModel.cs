@@ -122,6 +122,7 @@ public partial class ShellViewModel : ObservableObject
         // handler (which requests an active change) during the initial restore.
         _profiles = _profileService.ListProfiles();
         _isGameRunning = _session.IsRunning;
+        _hasPendingStagedChanges = _session.HasPendingChanges;
         _selectedProfile = ResolveActive();
 
         // Resolve the initial nxm handler status so the status strip paints the
@@ -193,12 +194,51 @@ public partial class ShellViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(GameRunningText))]
     [NotifyPropertyChangedFor(nameof(CanSwitchProfile))]
     [NotifyPropertyChangedFor(nameof(ProfileSwitchTooltip))]
+    [NotifyPropertyChangedFor(nameof(ShowNotRunningDot))]
+    [NotifyPropertyChangedFor(nameof(ShowRunningCleanDot))]
+    [NotifyPropertyChangedFor(nameof(ShowRunningDirtyDot))]
     private bool _isGameRunning;
+
+    /// <summary>
+    /// Whether the active profile has staged edits not yet reflected in the
+    /// running game's mod tree, mirrored from
+    /// <see cref="IProfileSession.HasPendingChanges"/>. Drives the dirty
+    /// status-strip indicator (the yellow dot) alongside
+    /// <see cref="IsGameRunning"/>.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(GameRunningText))]
+    [NotifyPropertyChangedFor(nameof(ShowNotRunningDot))]
+    [NotifyPropertyChangedFor(nameof(ShowRunningCleanDot))]
+    [NotifyPropertyChangedFor(nameof(ShowRunningDirtyDot))]
+    private bool _hasPendingStagedChanges;
+
+    /// <summary>
+    /// Whether the grey "not running" status dot should show: Darktide is not
+    /// running. One of three mutually-exclusive dot states (see
+    /// <see cref="ShowRunningCleanDot"/> + <see cref="ShowRunningDirtyDot"/>).
+    /// </summary>
+    public bool ShowNotRunningDot => !IsGameRunning;
+
+    /// <summary>
+    /// Whether the green "running, in sync" status dot should show: Darktide is
+    /// running with no pending (un-staged) profile edits.
+    /// </summary>
+    public bool ShowRunningCleanDot => IsGameRunning && !HasPendingStagedChanges;
+
+    /// <summary>
+    /// Whether the yellow "running, changes pending" status dot should show:
+    /// Darktide is running AND the active profile has edits that apply at the
+    /// next launch (Curator does not re-stage while the game runs).
+    /// </summary>
+    public bool ShowRunningDirtyDot => IsGameRunning && HasPendingStagedChanges;
 
     /// <summary>Status-strip label for the game-running indicator (localized).</summary>
     public string GameRunningText =>
         IsGameRunning
-            ? _localization["Status_GameRunning"]
+            ? HasPendingStagedChanges
+                ? _localization["Status_GameRunningChangesPending"]
+                : _localization["Status_GameRunning"]
             : _localization["Status_GameNotRunning"];
 
     /// <summary>
@@ -351,7 +391,9 @@ public partial class ShellViewModel : ObservableObject
     /// <summary>
     /// Mirrors the session's live running-state into <see cref="IsGameRunning"/>
     /// (the status strip, launch-availability, and dropdown-enable all cascade
-    /// from it). Active-id changes are handled at the known points they can occur
+    /// from it), and the session's pending-changes flag into
+    /// <see cref="HasPendingStagedChanges"/> (the dirty status-strip indicator).
+    /// Active-id changes are handled at the known points they can occur
     /// (dropdown request + after the dialog), not here.
     /// </summary>
     private void OnSessionPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -359,6 +401,10 @@ public partial class ShellViewModel : ObservableObject
         if (e.PropertyName == nameof(IProfileSession.IsRunning))
         {
             IsGameRunning = _session.IsRunning;
+        }
+        else if (e.PropertyName == nameof(IProfileSession.HasPendingChanges))
+        {
+            HasPendingStagedChanges = _session.HasPendingChanges;
         }
     }
 
@@ -676,6 +722,10 @@ public partial class ShellViewModel : ObservableObject
                 // eventually, but the user just clicked Launch; they should see
                 // the change immediately. The session's Refresh is the source
                 // of truth; the shell mirrors IsRunning from it.
+                // The successful stage+spawn just re-staged the active profile's
+                // mod tree, so any prior pending edits are now reflected: clear
+                // the pending-changes flag (the dirty indicator drops).
+                _session.HasPendingChanges = false;
                 _session.Refresh();
                 _logger.LogInformation("Launched profile {Id} ('{Name}').", profile.Id, profile.Name);
                 break;

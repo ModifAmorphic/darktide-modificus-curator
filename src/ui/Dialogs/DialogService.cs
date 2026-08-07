@@ -235,8 +235,11 @@ public sealed class DialogService : IDialogService
     {
         // The VM reads its initial state from a live snapshot (no cached
         // singleton); subsequent changes flow through IPreferencesService, which
-        // read-modify-saves via the same loader.
-        var viewModel = new PreferencesViewModel(_preferences, _configLoader, _localization);
+        // read-modify-saves via the same loader. The console-toggle support is
+        // platform-resolved: functional on Windows, non-functional on Linux
+        // (Wine spawns the console regardless of CreateNoWindow).
+        var viewModel = new PreferencesViewModel(
+            _preferences, _configLoader, _localization, OperatingSystem.IsWindows());
         var window = new PreferencesWindow
         {
             DataContext = viewModel,

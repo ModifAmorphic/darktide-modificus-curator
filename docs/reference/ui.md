@@ -26,6 +26,7 @@ public interface IProfileSession : INotifyPropertyChanged
 {
     Guid? ActiveProfileId { get; }
     bool IsRunning { get; }
+    bool HasPendingChanges { get; set; }
     void RequestActive(Guid id);
     bool CanDeleteProfile(Guid id);
     void ReconcileActive();
@@ -40,6 +41,13 @@ public interface IProfileSession : INotifyPropertyChanged
   polling timer (~3 s, a cheap process scan). The status strip,
   launch-availability, and the switch-block gate all read this. Raises
   `PropertyChanged` on assignment.
+- `HasPendingChanges`: session-scoped edit/stage coordination state. True when
+  the active profile's `profile.json` has structural/version edits not yet
+  reflected in the staged tree the running game loaded. Set by mod-list edits
+  (toggle/move/policy/remove/add/link/auto-sort/update); cleared on the next
+  successful stage (a launch). In-memory only (never persisted). The shell
+  surfaces this as a yellow "changes pending" status dot while the game runs,
+  since Curator does not re-stage the mod tree mid-session.
 - `RequestActive(id)`: the sole active-change gate. Applied and persisted
   only when the game is not running; otherwise a no-op (the active stays
   put). Both the dropdown switch and the dialog's create-sets-active call
@@ -146,7 +154,14 @@ public interface IDialogService
   through `IPreferencesService` (which also persists), so on completion the
   running app and the persisted config already reflect the user's choices.
   `ShowRelayConsole` has no live-apply step; it is read at launch time by the
-  Relay launcher.
+  Relay launcher. The toggle is Windows-only: on Linux, Wine spawns the
+  console regardless of the setting, so the checkbox is shown checked +
+  disabled as a display-only reflection of the platform reality (the persisted
+  value is not forced or written). The checkbox binds
+  `EffectiveRelayConsoleChecked` (checked = `ShowRelayConsole` on Windows,
+  hard-coded `true` on Linux) and `IsRelayConsoleToggleSupported`
+  (`IsEnabled`, resolved from `OperatingSystem.IsWindows()` at construction);
+  the persisted value stays inert on Linux.
 - `ShowImportModAsync(request)`: the per-mod import modal (source chooser,
   conditional Version and URL), pre-filled from `request`. Returns the
   confirmed `ImportModResult` (URL parsed to canonical source) when the user
@@ -519,6 +534,17 @@ countdown tick to drive the disabled button and the `m:ss` countdown tooltip
 on every successful fire, so closing and reopening the app does not reset the
 free-refresh budget. See
 [the rate-limiting strategy](rate-limiting-strategy.md) for the thresholds.
+
+The header rate-limit pill is coupled to the refresh button, not the raw result
+flag: when a check result is rate-limited, the button stays disabled until the
+server-reported reset in `UpdateCheckResult.RateLimitResetsAt` elapses (or a
+1-minute client-side fallback when Nexus sent no reset, e.g. an HTTP 429 with no
+`x-rl-*` headers), and the pill reads "Refresh disabled due to rate-limiting"
+exactly while the button is rate-limit-blocked. Both clear together the moment
+the reset passes (the list VM re-evaluates `IsRateLimitActive` on each shared
+1-second countdown tick). The rate-limit reason takes tooltip precedence when
+both the rate limit and the manual fire-count throttle are active; the two
+causes share one countdown timer, so either keeps the button disabled.
 
 The runner never blocks on a check beyond the await the manual trigger opts
 into, never surfaces its result (the mod list reads
@@ -1024,7 +1050,9 @@ No backend library references the UI (the dependency direction is one-way).
   available/broken, disabled policy edit, empty update-action cell,
   `IsExternalBroken` on Reload), `CheckCompleted` per-row state,
   `UpdateCommand` success / failure / one-at-a-time / premium gating,
-  `CheckForUpdatesNow`, `IsRateLimited`, and the `NamesChanged` in-place row
+  `CheckForUpdatesNow`, `IsRateLimited` + the coupled `IsRateLimitActive`
+  refresh-button/pill gating (server reset + fallback cooldown, precedence over
+  the manual throttle), and the `NamesChanged` in-place row
   name refresh (refreshed when the flag is set, untouched when it is not).
 - **`PreferencesViewModelTests`** + **`PreferencesServiceTests`**: the
   Preferences dialog view model and the service that applies theme / font

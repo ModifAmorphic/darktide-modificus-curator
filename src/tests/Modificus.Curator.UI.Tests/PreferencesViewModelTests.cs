@@ -18,14 +18,15 @@ public sealed class PreferencesViewModelTests
     private static PreferencesViewModel Build(
         FakePreferencesService? prefs = null,
         FakeConfigLoader? loader = null,
-        CuratorConfig? config = null)
+        CuratorConfig? config = null,
+        bool isRelayConsoleToggleSupported = true)
     {
         prefs ??= new FakePreferencesService();
         // The VM reads one snapshot at construction; back the loader with the
         // test's config (or a fresh default) so the restore sees the values.
         config ??= CuratorConfig.CreateDefault();
         loader ??= new FakeConfigLoader { Config = config };
-        return new PreferencesViewModel(prefs, loader, Localization);
+        return new PreferencesViewModel(prefs, loader, Localization, isRelayConsoleToggleSupported);
     }
 
     // ---- initial restore (no re-apply) -------------------------------------
@@ -257,5 +258,73 @@ public sealed class PreferencesViewModelTests
         var vm = Build();
 
         Assert.Equal("English", vm.LanguageOptions.First(o => o.Name == "en").Label);
+    }
+
+    // ---- relay-console toggle platform support -----------------------------
+
+    [Fact]
+    public void IsRelayConsoleToggleSupported_flows_from_the_constructor_param_when_supported()
+    {
+        var vm = Build(isRelayConsoleToggleSupported: true);
+
+        Assert.True(vm.IsRelayConsoleToggleSupported);
+    }
+
+    [Fact]
+    public void IsRelayConsoleToggleSupported_flows_from_the_constructor_param_when_unsupported()
+    {
+        var vm = Build(isRelayConsoleToggleSupported: false);
+
+        Assert.False(vm.IsRelayConsoleToggleSupported);
+    }
+
+    [Fact]
+    public void RelayConsoleTooltip_resolves_the_normal_tooltip_when_supported()
+    {
+        var vm = Build(isRelayConsoleToggleSupported: true);
+
+        Assert.Equal(Localization["Preferences_ShowRelayConsoleTooltip"], vm.RelayConsoleTooltip);
+    }
+
+    [Fact]
+    public void RelayConsoleTooltip_resolves_the_locked_tooltip_when_unsupported()
+    {
+        var vm = Build(isRelayConsoleToggleSupported: false);
+
+        Assert.Equal(Localization["Preferences_ShowRelayConsoleLockedTooltip"], vm.RelayConsoleTooltip);
+    }
+
+    [Fact]
+    public void EffectiveRelayConsoleChecked_is_display_only_true_on_linux_without_forcing_the_persisted_value()
+    {
+        // On Linux the persisted ShowRelayConsole is inert (Wine spawns the
+        // console regardless of CreateNoWindow), so the checkbox shows checked +
+        // disabled as a display-only reflection of the platform reality. The
+        // persisted value is NOT forced to true: it still reflects whatever was
+        // configured (default false), and constructing the VM writes nothing.
+        var prefs = new FakePreferencesService();
+        var vm = Build(prefs: prefs, isRelayConsoleToggleSupported: false);
+
+        Assert.True(vm.EffectiveRelayConsoleChecked);
+        Assert.False(vm.ShowRelayConsole);   // configured default, not forced
+        Assert.Equal(0, prefs.ApplyCalls);   // no config write from the display state
+    }
+
+    [Fact]
+    public void EffectiveRelayConsoleChecked_two_way_reflects_show_relay_console_when_supported()
+    {
+        // On Windows the checkbox is enabled, so EffectiveRelayConsoleChecked is
+        // a plain two-way view of ShowRelayConsole (read it, write it back
+        // through the apply+persist path).
+        var prefs = new FakePreferencesService();
+        var vm = Build(prefs: prefs, isRelayConsoleToggleSupported: true);
+
+        Assert.False(vm.EffectiveRelayConsoleChecked); // matches the configured default
+
+        vm.EffectiveRelayConsoleChecked = true;
+
+        Assert.True(vm.ShowRelayConsole);
+        Assert.Equal(1, prefs.ApplyCalls);
+        Assert.True(prefs.LastShowRelayConsole);
     }
 }

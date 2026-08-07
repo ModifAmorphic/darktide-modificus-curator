@@ -36,6 +36,14 @@ public interface IProfileSession : INotifyPropertyChanged
     bool IsRunning { get; }
 
     /// <summary>
+    /// Session-scoped edit/stage coordination state: <c>true</c> when the active
+    /// profile has structural/version edits not yet reflected in the staged tree
+    /// the running game loaded. Set by mod-list edits; cleared on the next
+    /// successful stage (a launch). In-memory only (never persisted).
+    /// </summary>
+    bool HasPendingChanges { get; set; }
+
+    /// <summary>
     /// The SOLE active-change gate. Requests <paramref name="id"/> as the active
     /// profile: applied + persisted only when the game isn't running; otherwise a
     /// no-op (the active stays put). Rename and delete-of-active do not route

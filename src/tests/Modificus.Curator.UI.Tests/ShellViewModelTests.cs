@@ -578,4 +578,128 @@ public sealed class ShellViewModelTests
         Assert.True(vm.IsNxmRegistered);
         Assert.Equal(Localization["Status_NxmRegistered"], vm.NxmHandlerStatusText);
     }
+
+    // ---- "changes pending" status-strip signal ------------------------------
+
+    [Fact]
+    public void Status_dot_is_grey_and_text_says_not_running_when_the_game_is_stopped()
+    {
+        var vm = Build(TestDoubles.Profiles(new ProfileSummary(Guid.NewGuid(), "Alpha")),
+            new FakeProfileSession { IsRunning = false });
+
+        Assert.True(vm.ShowNotRunningDot);
+        Assert.False(vm.ShowRunningCleanDot);
+        Assert.False(vm.ShowRunningDirtyDot);
+        Assert.Equal(Localization["Status_GameNotRunning"], vm.GameRunningText);
+    }
+
+    [Fact]
+    public void Status_dot_is_green_and_text_says_running_when_running_and_in_sync()
+    {
+        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var vm = Build(TestDoubles.Profiles(a),
+            new FakeProfileSession { ActiveProfileId = a.Id, IsRunning = true, HasPendingChanges = false });
+
+        Assert.False(vm.ShowNotRunningDot);
+        Assert.True(vm.ShowRunningCleanDot);
+        Assert.False(vm.ShowRunningDirtyDot);
+        Assert.Equal(Localization["Status_GameRunning"], vm.GameRunningText);
+    }
+
+    [Fact]
+    public void Status_dot_is_yellow_and_text_says_changes_pending_when_running_and_dirty()
+    {
+        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var vm = Build(TestDoubles.Profiles(a),
+            new FakeProfileSession { ActiveProfileId = a.Id, IsRunning = true, HasPendingChanges = true });
+
+        Assert.False(vm.ShowNotRunningDot);
+        Assert.False(vm.ShowRunningCleanDot);
+        Assert.True(vm.ShowRunningDirtyDot);
+        Assert.Equal(Localization["Status_GameRunningChangesPending"], vm.GameRunningText);
+    }
+
+    [Fact]
+    public void Status_dot_reacts_when_the_session_pending_flag_flips_live()
+    {
+        // The shell mirrors the session's HasPendingChanges so a mod-list edit
+        // (which sets the session flag) flips the dot + text without a restart.
+        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var session = new FakeProfileSession { ActiveProfileId = a.Id, IsRunning = true };
+        var vm = Build(TestDoubles.Profiles(a), session);
+        Assert.True(vm.ShowRunningCleanDot);
+
+        session.HasPendingChanges = true;
+
+        Assert.True(vm.HasPendingStagedChanges);
+        Assert.True(vm.ShowRunningDirtyDot);
+        Assert.False(vm.ShowRunningCleanDot);
+    }
+
+    [Fact]
+    public async Task Launch_Launched_clears_pending_changes_after_the_successful_stage()
+    {
+        // A successful launch re-staged the active profile's mod tree, so any
+        // prior pending edits are now reflected: the flag clears (the dirty
+        // indicator drops).
+        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var session = new FakeProfileSession { ActiveProfileId = a.Id, IsRunning = false, HasPendingChanges = true };
+        var launch = new FakeLaunchService(); // default: Launched
+        var vm = Build(TestDoubles.Profiles(a), session, launch: launch);
+
+        await vm.LaunchCommand.ExecuteAsync(null);
+
+        Assert.False(session.HasPendingChanges);
+        Assert.False(vm.HasPendingStagedChanges);
+    }
+
+    [Fact]
+    public async Task Launch_DiscoveryIncomplete_does_not_clear_pending_changes()
+    {
+        // Nothing was staged on a DiscoveryIncomplete launch, so the pending flag
+        // is preserved (the edits still apply at the next successful stage).
+        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var session = new FakeProfileSession { ActiveProfileId = a.Id, HasPendingChanges = true };
+        var launch = new FakeLaunchService
+        {
+            NextResult = new LaunchResult(LaunchStatus.DiscoveryIncomplete, "missing", new[] { "SteamInstallPath" }),
+        };
+        var vm = Build(TestDoubles.Profiles(a), session, launch: launch);
+
+        await vm.LaunchCommand.ExecuteAsync(null);
+
+        Assert.True(session.HasPendingChanges);
+    }
+
+    [Fact]
+    public async Task Launch_StagingFailed_does_not_clear_pending_changes()
+    {
+        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var session = new FakeProfileSession { ActiveProfileId = a.Id, HasPendingChanges = true };
+        var launch = new FakeLaunchService
+        {
+            NextResult = new LaunchResult(LaunchStatus.StagingFailed, "staging blew up", Array.Empty<string>()),
+        };
+        var vm = Build(TestDoubles.Profiles(a), session, launch: launch);
+
+        await vm.LaunchCommand.ExecuteAsync(null);
+
+        Assert.True(session.HasPendingChanges);
+    }
+
+    [Fact]
+    public async Task Launch_Error_does_not_clear_pending_changes()
+    {
+        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var session = new FakeProfileSession { ActiveProfileId = a.Id, HasPendingChanges = true };
+        var launch = new FakeLaunchService
+        {
+            NextResult = new LaunchResult(LaunchStatus.Error, "boom", Array.Empty<string>()),
+        };
+        var vm = Build(TestDoubles.Profiles(a), session, launch: launch);
+
+        await vm.LaunchCommand.ExecuteAsync(null);
+
+        Assert.True(session.HasPendingChanges);
+    }
 }

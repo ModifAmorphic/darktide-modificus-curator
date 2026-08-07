@@ -67,7 +67,10 @@ public enum ModAddMode
 /// <para><b>Edits are allowed while the game runs:</b> the list is the active
 /// profile's config, not the running game's. The active profile is already locked
 /// against switching by the shell, so the list stays put while the game runs and
-/// edits land on the profile the user will launch next.</para>
+/// edits land on the profile the user will launch next. Edits are deferred to the
+/// next launch (Curator does not re-stage the mod tree while Darktide runs) and are
+/// surfaced via the session's pending-changes flag, which the shell's status strip
+/// surfaces as a yellow "changes pending" indicator while the game runs.</para>
 /// <para><b>Localized text is live:</b> the header count + empty-state messages
 /// re-resolve from <see cref="LocalizationService"/> on a culture change, and each
 /// row's badge + policy text refresh too (via <see cref="ModItemViewModel.Refresh"/>).</para>
@@ -105,6 +108,15 @@ public partial class ModListViewModel : ObservableObject
     /// </summary>
     private const string NexusModsGamesUrl = "https://www.nexusmods.com/games/" + GameDomain;
 
+    /// <summary>
+    /// The client-side cooldown applied when a rate-limited check did not carry
+    /// a server-reported reset (e.g. an HTTP 429 with no <c>x-rl-*</c> headers).
+    /// Measured from the result's <see cref="UpdateCheckResult.CheckedAt"/> so
+    /// the refresh button re-enables on a reasonable schedule even when Nexus
+    /// stays silent about when the window refills.
+    /// </summary>
+    private static readonly TimeSpan RateLimitFallbackCooldown = TimeSpan.FromMinutes(1);
+
     private readonly IProfileService _profiles;
     private readonly IProfileSession _session;
     private readonly IModRepository _repo;
@@ -123,6 +135,15 @@ public partial class ModListViewModel : ObservableObject
     private readonly Action<Action> _invokeOnUi;
     private readonly Action<Action>? _startCountdownTimer;
     private readonly Action? _stopCountdownTimer;
+    /// <summary>
+    /// The clock backing the rate-limit-active decision (a functional gate on
+    /// the refresh button, unlike the cosmetic-only manual-throttle countdown,
+    /// which reads <see cref="DateTimeOffset.UtcNow"/> directly). Defaults to
+    /// <see cref="DateTimeOffset.UtcNow"/>; tests inject a controllable clock so
+    /// the active flag + its elapsing are deterministic. Mirrors the
+    /// <c>UpdateCheckRunner</c> + <c>UpdateCheckService</c> clock seams.
+    /// </summary>
+    private readonly Func<DateTimeOffset> _getNow;
     private readonly Func<Uri, bool> _launchExternal;
     private readonly Func<string, bool> _launchExternalPath;
     private readonly INxmHandlerRegistrar? _nxmRegistrar;
@@ -155,6 +176,7 @@ public partial class ModListViewModel : ObservableObject
         ILogger<ModListViewModel> logger,
         Action<Action>? startCountdownTimer = null,
         Action? stopCountdownTimer = null,
+        Func<DateTimeOffset>? getNow = null,
         Func<Uri, bool>? launchExternal = null,
         Func<string, bool>? launchExternalPath = null,
         INxmHandlerRegistrar? nxmRegistrar = null)
@@ -177,6 +199,7 @@ public partial class ModListViewModel : ObservableObject
         _invokeOnUi = invokeOnUi ?? throw new ArgumentNullException(nameof(invokeOnUi));
         _startCountdownTimer = startCountdownTimer;
         _stopCountdownTimer = stopCountdownTimer;
+        _getNow = getNow ?? (() => DateTimeOffset.UtcNow);
         _launchExternal = launchExternal ?? LaunchExternalDefault;
         _launchExternalPath = launchExternalPath ?? LaunchExternalPathDefault;
         _nxmRegistrar = nxmRegistrar;
@@ -189,8 +212,9 @@ public partial class ModListViewModel : ObservableObject
         _automaticUpdates.ModUpdateProgress += OnAutomaticUpdateProgress;
 
         // The refresh button's tooltip defaults to the normal "check now"
-        // string. When the manual sliding-window throttle engages, the countdown
-        // owns the tooltip (RefreshManualRefreshThrottle / OnCountdownTick).
+        // string. ReevaluateRefreshGate owns the tooltip once a rate limit or
+        // the manual sliding-window throttle engages (each second via the
+        // countdown tick). Nothing is active at construction.
         ManualRefreshTooltip = _localization["ModList_CheckNowTooltip"];
 
         // Read the Nexus premium state once at construction. Fire-and-forget:
@@ -215,13 +239,18 @@ public partial class ModListViewModel : ObservableObject
 
     /// <summary>
     /// The automatic-update service finished a batch with at least one
-    /// successful install. Reload on the UI thread so the new versions + cleared
-    /// flags show. The event fires on the UI thread (the service is invoked from
-    /// the runner after it returns to the UI context), but marshal defensively
-    /// so a test that fires it off-thread stays correct.
+    /// successful install. Mark the active profile as having staged changes (the
+    /// batch changed one or more mod versions) and reload on the UI thread so the
+    /// new versions + cleared flags show. The event fires on the UI thread (the
+    /// service is invoked from the runner after it returns to the UI context),
+    /// but marshal defensively so a test that fires it off-thread stays correct.
     /// </summary>
     private void OnAutomaticUpdatesApplied(object? sender, EventArgs e) =>
-        _invokeOnUi(Reload);
+        _invokeOnUi(() =>
+        {
+            _session.HasPendingChanges = true;
+            Reload();
+        });
 
     /// <summary>
     /// The automatic-update service reports per-mod progress: a container's
@@ -326,10 +355,48 @@ public partial class ModListViewModel : ObservableObject
     /// Whether the last update check was rate-limited. Drives the header
     /// rate-limit notice (the "check incomplete" indicator). Set from
     /// <see cref="IUpdateCheckService.LastResult"/> on reload + on
-    /// <see cref="IUpdateCheckService.CheckCompleted"/>.
+    /// <see cref="IUpdateCheckService.CheckCompleted"/>. Stays <c>true</c>
+    /// until a later non-rate-limited result lands; the coupled
+    /// <see cref="IsRateLimitActive"/> flag (and the pill's visibility) is what
+    /// flips back when the reset elapses.
     /// </summary>
     [ObservableProperty]
     private bool _isRateLimited;
+
+    /// <summary>
+    /// The server-reported reset of the exhausted window from the last
+    /// rate-limited result (UTC), or <c>null</code> when the server gave none.
+    /// Paired with <see cref="_rateLimitCheckedAt"/> (the result timestamp) so
+    /// the active flag can fall back to <see cref="RateLimitFallbackCooldown"/>
+    /// when this is null. Cleared alongside <see cref="_isRateLimited"/> when a
+    /// later non-rate-limited result lands.
+    /// </summary>
+    [ObservableProperty]
+    private DateTimeOffset? _rateLimitResetsAt;
+
+    /// <summary>
+    /// The <see cref="UpdateCheckResult.CheckedAt"/> of the last rate-limited
+    /// result, backing the <see cref="RateLimitFallbackCooldown"/> computation
+    /// when <see cref="_rateLimitResetsAt"/> is null. Not observable: it feeds
+    /// only the derived active flag, which is re-fired on each re-evaluation.
+    /// </summary>
+    private DateTimeOffset? _rateLimitCheckedAt;
+
+    /// <summary>
+    /// Whether the refresh button is currently blocked by an active rate limit:
+    /// <c>true</c> when the last result was rate-limited AND the effective reset
+    /// (the server-reported <see cref="_rateLimitResetsAt"/>, or
+    /// <see cref="_rateLimitCheckedAt"/> + <see cref="RateLimitFallbackCooldown"/>
+    /// when the server was silent) has not yet elapsed. Drives
+    /// <see cref="IsRefreshEnabled"/> (the button disables) + the pill's
+    /// visibility, so the two stay coherent: the pill shows exactly while the
+    /// button is rate-limit-blocked, and both clear together when the reset
+    /// elapses. Re-evaluated on each result + each countdown tick by
+    /// <see cref="ReevaluateRefreshGate"/>.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsRefreshEnabled))]
+    private bool _isRateLimitActive;
 
     /// <summary>
     /// Whether the update coordinator reports an install in flight (manual or
@@ -355,7 +422,7 @@ public partial class ModListViewModel : ObservableObject
     /// <summary>
     /// Whether the manual sliding-window throttle is currently blocking the
     /// refresh button (the runner's free 10/hour budget is spent + the 2-minute
-    /// cooldown has not elapsed). Set by <see cref="RefreshManualRefreshThrottle"/>
+    /// cooldown has not elapsed). Set by <see cref="ReevaluateRefreshGate"/>
     /// after each manual attempt + re-evaluated on each countdown tick. Drives
     /// <see cref="IsRefreshEnabled"/> (the button disables) + the countdown
     /// tooltip (<see cref="ManualRefreshTooltip"/>).
@@ -365,25 +432,28 @@ public partial class ModListViewModel : ObservableObject
     private bool _isManualRefreshThrottled;
 
     /// <summary>
-    /// The refresh button's tooltip. The normal "Check for updates now" string
-    /// when not throttled; the live countdown string ("Rate limiting protection
-    /// enabled. Manual refresh will be available again in {m:ss}.") while
-    /// throttled. Updated each second by the countdown tick. Bound to the
-    /// button's <c>ToolTip.Tip</c>.
+    /// The refresh button's tooltip. Reflects the active cause by priority: a
+    /// server rate limit (the rate-limit tooltip) takes precedence, then the
+    /// manual sliding-window countdown, then the normal "Check for updates now"
+    /// string. Updated each second by the countdown tick while either cause is
+    /// active, and re-resolved on a culture change. Bound to the button's
+    /// <c>ToolTip.Tip</c>.
     /// </summary>
     [ObservableProperty]
     private string _manualRefreshTooltip;
 
     /// <summary>
     /// Whether the manual "check now" refresh button is enabled: NOT while a
-    /// thorough check is in flight (<see cref="IsCheckingNow"/>) AND NOT while
-    /// the manual sliding-window throttle is blocking (<see cref="IsManualRefreshThrottled"/>).
-    /// A single computed property so the view binds the button's IsEnabled to
-    /// one source; its dependencies each carry
+    /// thorough check is in flight (<see cref="IsCheckingNow"/>), NOT while the
+    /// manual sliding-window throttle is blocking
+    /// (<see cref="IsManualRefreshThrottled"/>), and NOT while an active rate
+    /// limit has not yet reset (<see cref="IsRateLimitActive"/>). A single
+    /// computed property so the view binds the button's IsEnabled to one source;
+    /// its dependencies each carry
     /// <c>[NotifyPropertyChangedFor(nameof(IsRefreshEnabled))]</c> so the
-    /// binding re-evaluates when either flips.
+    /// binding re-evaluates when any flips.
     /// </summary>
-    public bool IsRefreshEnabled => !IsCheckingNow && !IsManualRefreshThrottled;
+    public bool IsRefreshEnabled => !IsCheckingNow && !IsManualRefreshThrottled && !IsRateLimitActive;
 
     /// <summary>
     /// The localized split-button label for the current <see cref="AddMode"/>
@@ -437,9 +507,37 @@ public partial class ModListViewModel : ObservableObject
 
     /// <summary>
     /// The localized rate-limit notice text shown in the header when
-    /// <see cref="IsRateLimited"/> is true. Re-fires on a culture change.
+    /// <see cref="IsRateLimitActive"/> is true. Re-fires on a culture change.
     /// </summary>
     public string RateLimitedNoticeText => _localization["ModList_RateLimited"];
+
+    /// <summary>
+    /// The localized tooltip for the rate-limit pill and (when a rate limit is
+    /// the active cause) the refresh button. When the server reported a reset,
+    /// names the local time the window refills; otherwise falls back to a
+    /// time-free "try again later" message (the server stayed silent, e.g. an
+    /// HTTP 429 with no <c>x-rl-*</c> headers, so no specific time is promised).
+    /// Re-fires on a culture change + each re-evaluation.
+    /// </summary>
+    public string RateLimitedTooltip =>
+        RateLimitResetsAt is { } reset
+            ? _localization.Format(
+                "ModList_RateLimitedTooltipWithTime",
+                reset.ToLocalTime().ToString("t", _localization.Culture))
+            : _localization["ModList_RateLimitedTooltip"];
+
+    /// <summary>
+    /// The moment the active rate limit clears: the server-reported
+    /// <see cref="RateLimitResetsAt"/>, or (when the server was silent) the
+    /// rate-limited result's <see cref="_rateLimitCheckedAt"/> plus
+    /// <see cref="RateLimitFallbackCooldown"/>. <c>null</c> when no rate-limited
+    /// result has landed (or it has been cleared). A pure function of the
+    /// observable fields, so the active flag stays a pure function of the clock.
+    /// </summary>
+    private DateTimeOffset? EffectiveRateLimitReset =>
+        RateLimitResetsAt ?? (_rateLimitCheckedAt is { } checkedAt
+            ? checkedAt + RateLimitFallbackCooldown
+            : null);
 
     /// <summary>
     /// Session-driven reload: the active id changed (dropdown switch, create,
@@ -473,14 +571,11 @@ public partial class ModListViewModel : ObservableObject
         OnPropertyChanged(nameof(NxmDownloadHintText));
         OnPropertyChanged(nameof(AddModeLabel));
         OnPropertyChanged(nameof(RateLimitedNoticeText));
-        // When not throttled, the refresh tooltip re-resolves to the normal
-        // resx string (the culture changed, so the localized value changed).
-        // When throttled, the countdown tick owns the tooltip and re-renders it
-        // with the new culture's throttle string on the next tick.
-        if (!IsManualRefreshThrottled)
-        {
-            ManualRefreshTooltip = _localization["ModList_CheckNowTooltip"];
-        }
+        // Re-resolve the refresh-gate state so the rate-limit + throttle
+        // tooltips pick up the new culture immediately (the countdown tick will
+        // also re-resolve on its next fire, but this keeps the UI honest without
+        // waiting). OnCultureChanged re-fires the tooltipped affordances.
+        ReevaluateRefreshGate();
         foreach (var row in Mods)
         {
             row.Refresh();
@@ -519,6 +614,11 @@ public partial class ModListViewModel : ObservableObject
     private void ApplyCheckLanded(UpdateCheckResult? result)
     {
         IsRateLimited = result?.RateLimited == true;
+        RateLimitResetsAt = result?.RateLimitResetsAt;
+        _rateLimitCheckedAt = result?.CheckedAt;
+        // Re-evaluate the coupled refresh gate so the button + pill reflect the
+        // just-landed rate-limit state (or its clearing) at once.
+        ReevaluateRefreshGate();
 
         if (Mods.Count == 0)
         {
@@ -810,6 +910,7 @@ public partial class ModListViewModel : ObservableObject
         }
 
         _profiles.SetModEnabled(id, row.ContainerId, row.Enabled);
+        _session.HasPendingChanges = true;
         _logger.LogDebug("Toggled {Container} enabled={Enabled}", row.ContainerId, row.Enabled);
     }
 
@@ -849,6 +950,7 @@ public partial class ModListViewModel : ObservableObject
         (ids[from], ids[to]) = (ids[to], ids[from]);
 
         _profiles.SetModOrder(id, ids);
+        _session.HasPendingChanges = true;
         Reload();
     }
 
@@ -898,6 +1000,7 @@ public partial class ModListViewModel : ObservableObject
         }
 
         _profiles.SetModPolicy(id, row.ContainerId, policy);
+        _session.HasPendingChanges = true;
         Reload();
         _logger.LogDebug("Set policy {Policy} on container {Container}", policy, row.ContainerId);
     }
@@ -926,6 +1029,7 @@ public partial class ModListViewModel : ObservableObject
         }
 
         _profiles.RemoveMod(id, row.ContainerId);
+        _session.HasPendingChanges = true;
         Reload();
         _logger.LogInformation("Removed container {Container} from profile {Id}", row.ContainerId, id);
     }
@@ -946,7 +1050,7 @@ public partial class ModListViewModel : ObservableObject
     /// the result to the rows when it lands. The command is a no-op (via the
     /// runner) when no profile is active; a second click while one is in flight
     /// is a no-op (the <see cref="IsCheckingNow"/> guard). After the await,
-    /// <see cref="RefreshManualRefreshThrottle"/> re-evaluates the runner's
+    /// <see cref="ReevaluateRefreshGate"/> re-evaluates the runner's
     /// sliding-window throttle so the button disables + the countdown tooltip
     /// engages when the manual path is rate-limited.
     /// </summary>
@@ -969,11 +1073,11 @@ public partial class ModListViewModel : ObservableObject
             // synchronously. The runner's Task.Run dispatches the actual check
             // to a thread-pool task; we only await its completion here.
             await _updateCheckRunner.CheckNowAsync();
-            // Re-evaluate the manual throttle after every attempt (a fire that
+            // Re-evaluate the refresh gate after every attempt (a fire that
             // spent the free budget engages the countdown; a blocked attempt
             // also lands here as CompletedTask with the throttle active). Stays
             // on the UI thread (no ConfigureAwait above).
-            RefreshManualRefreshThrottle();
+            ReevaluateRefreshGate();
         }
         finally
         {
@@ -981,64 +1085,86 @@ public partial class ModListViewModel : ObservableObject
         }
     }
 
-    // ---- manual-refresh throttle (countdown tooltip + disabled button) -------
+    // ---- refresh gate (rate-limit + manual-throttle countdown, shared timer) --
 
     /// <summary>
-    /// Re-reads <see cref="UpdateCheckRunner.NextManualRefreshAllowedAt"/> and
-    /// applies the throttle state to <see cref="IsManualRefreshThrottled"/>,
-    /// <see cref="ManualRefreshTooltip"/>, and the countdown timer. Called after
-    /// every <c>CheckForUpdatesNow</c> attempt. When throttled, starts the
-    /// 1-second countdown timer (which re-evaluates via <see cref="OnCountdownTick"/>
-    /// until the cooldown elapses). When not throttled, stops the timer and
-    /// restores the normal tooltip.
+    /// Re-evaluates the refresh affordance against both disabling causes, the
+    /// server rate limit (active until the effective reset elapses) and the
+    /// manual sliding-window throttle (the runner's free-budget cooldown), and
+    /// applies the result to <see cref="IsRateLimitActive"/>,
+    /// <see cref="IsManualRefreshThrottled"/>, <see cref="ManualRefreshTooltip"/>,
+    /// and the countdown timer. Called after every <c>CheckForUpdatesNow</c>
+    /// attempt, when a check result lands (<see cref="ApplyCheckLanded"/>), on
+    /// each 1-second tick (<see cref="OnCountdownTick"/>), and on a culture
+    /// change.
     /// </summary>
-    private void RefreshManualRefreshThrottle()
+    /// <remarks>
+    /// The two causes share a single countdown timer: it runs while EITHER has
+    /// an unelapsed deadline (so the rate-limit pill clears the instant its
+    /// reset passes, even mid-throttle) and stops when neither does. The tooltip
+    /// takes the rate-limit reason when active (the more informative,
+    /// server-driven cause) and otherwise falls back to the throttle countdown
+    /// or the normal "check now" string. Production's start delegate is
+    /// idempotent (no-op if already running), so invoking it on every re-eval is
+    /// safe.
+    /// </remarks>
+    private void ReevaluateRefreshGate()
     {
+        // (1) Rate-limit active: the last result was rate-limited AND the
+        //     effective reset (server-reported, or CheckedAt + the fallback
+        //     cooldown when the server was silent) has not elapsed.
+        var effectiveReset = EffectiveRateLimitReset;
+        bool rateLimitActive = IsRateLimited
+            && effectiveReset is { } reset
+            && _getNow() < reset;
+        IsRateLimitActive = rateLimitActive;
+
+        // (2) Manual sliding-window throttle: the runner reports the next
+        //     allowed manual fire, or null once the cooldown has elapsed.
         var next = _updateCheckRunner.NextManualRefreshAllowedAt;
-        if (next is null)
+        bool throttled = next is not null;
+        IsManualRefreshThrottled = throttled;
+
+        // (3) Shared timer: run while either cause has an unelapsed deadline,
+        //     stop when neither does.
+        if (rateLimitActive || throttled)
         {
-            IsManualRefreshThrottled = false;
+            _startCountdownTimer?.Invoke(OnCountdownTick);
+        }
+        else
+        {
             _stopCountdownTimer?.Invoke();
-            ManualRefreshTooltip = _localization["ModList_CheckNowTooltip"];
-            return;
         }
 
-        IsManualRefreshThrottled = true;
-        // Production's start delegate is idempotent (no-op if already running),
-        // so invoking it on every throttled re-eval is safe.
-        _startCountdownTimer?.Invoke(OnCountdownTick);
-        ManualRefreshTooltip = BuildThrottleTooltip(next.Value);
+        // (4) Tooltip by priority: rate-limit > throttle > normal.
+        ManualRefreshTooltip = rateLimitActive
+            ? RateLimitedTooltip
+            : throttled && next is { } allowed
+                ? BuildThrottleTooltip(allowed)
+                : _localization["ModList_CheckNowTooltip"];
+
+        // (5) Re-fire the rate-limit tooltip (its time/later branch depends on
+        //     RateLimitResetsAt, which may have just changed).
+        OnPropertyChanged(nameof(RateLimitedTooltip));
     }
 
     /// <summary>
     /// The 1-second countdown tick callback (production wires a
-    /// <c>DispatcherTimer</c>; tests invoke the captured callback directly).
-    /// Re-reads <see cref="UpdateCheckRunner.NextManualRefreshAllowedAt"/>: when
-    /// the cooldown has elapsed (null), clears the throttle, stops the timer,
-    /// and restores the normal tooltip; otherwise recomputes the remaining time
-    /// and updates the tooltip.
+    /// <c>DispatcherTimer</c>; tests invoke the captured callback directly). A
+    /// thin wrapper over <see cref="ReevaluateRefreshGate"/> so each tick clears
+    /// a now-elapsed rate limit / throttle, updates the tooltip, and stops the
+    /// timer once neither cause remains.
     /// </summary>
-    private void OnCountdownTick()
-    {
-        var next = _updateCheckRunner.NextManualRefreshAllowedAt;
-        if (next is null)
-        {
-            IsManualRefreshThrottled = false;
-            _stopCountdownTimer?.Invoke();
-            ManualRefreshTooltip = _localization["ModList_CheckNowTooltip"];
-            return;
-        }
-
-        ManualRefreshTooltip = BuildThrottleTooltip(next.Value);
-    }
+    private void OnCountdownTick() => ReevaluateRefreshGate();
 
     /// <summary>
     /// Formats the throttle tooltip from the absolute unlock instant: resolves
     /// the localized throttle template with the remaining time formatted as
     /// <c>m:ss</c>. The remaining time is a COSMETIC computation for the tooltip
     /// only (the throttle enforcement is entirely in the runner, testable via
-    /// the injected clock), so this uses <see cref="DateTimeOffset.UtcNow"/>
-    /// directly and keeps the VM clock-free.
+    /// the injected clock), so it does not need the injected clock seam the
+    /// functional rate-limit decision uses and reads <see cref="DateTimeOffset.UtcNow"/>
+    /// directly.
     /// </summary>
     private string BuildThrottleTooltip(DateTimeOffset nextAllowedAt)
     {
@@ -1154,6 +1280,7 @@ public partial class ModListViewModel : ObservableObject
             // flag, so clearing it is enough; ApplyKnownUpdateState (inside
             // Reload) reads the cleared state.
             AcknowledgeUpdateAndReload(row.ContainerId);
+            _session.HasPendingChanges = true;
 
             _logger.LogInformation("Updated mod {Container} to the latest Nexus release.", row.ContainerId);
         }
@@ -1355,6 +1482,7 @@ public partial class ModListViewModel : ObservableObject
         var entries = _profiles.GetModList(id);
         var order = _orderResolver.ResolveOrder(entries);
         _profiles.SetModOrder(id, order);
+        _session.HasPendingChanges = true;
         Reload();
         _logger.LogDebug("Auto-sorted via {Resolver}", _orderResolver.GetType().Name);
     }
@@ -1399,6 +1527,10 @@ public partial class ModListViewModel : ObservableObject
             return;
         }
 
+        // Tracks whether any path actually landed a mod in the profile. A
+        // cancelled-first-modal or all-failing batch imports nothing, so it must
+        // not set the pending-changes flag (no structural change occurred).
+        var changed = false;
         foreach (var path in paths)
         {
             var modName = DeriveModName(path);
@@ -1485,10 +1617,15 @@ public partial class ModListViewModel : ObservableObject
                 ? new PinnedPolicy(versionId)
                 : ModVersionPolicy.Latest;
             _profiles.AddMod(id, containerId, policy);
+            changed = true;
             _logger.LogInformation("Imported {Mod} from {Path} (source={Source}, version={Version}, policy={Policy}) onto container {Container}",
                 canonicalName, path, result.Source, result.Version, policy, containerId);
         }
 
+        if (changed)
+        {
+            _session.HasPendingChanges = true;
+        }
         Reload();
     }
 
@@ -1557,6 +1694,10 @@ public partial class ModListViewModel : ObservableObject
             return;
         }
 
+        // Tracks whether any path actually landed a linked mod in the profile.
+        // A failed-peek or all-colliding batch links nothing, so it must not set
+        // the pending-changes flag (no structural change occurred).
+        var changed = false;
         foreach (var path in paths)
         {
             // (1) Peek the base folder name. The picked folder IS the base; this
@@ -1613,11 +1754,16 @@ public partial class ModListViewModel : ObservableObject
             }
 
             _profiles.AddMod(id, containerId, ModVersionPolicy.Latest);
+            changed = true;
             _logger.LogInformation(
                 "Linked {Mod} from {Path} (policy=Latest) onto container {Container}",
                 baseName, path, containerId);
         }
 
+        if (changed)
+        {
+            _session.HasPendingChanges = true;
+        }
         Reload();
     }
 

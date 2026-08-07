@@ -147,12 +147,20 @@
             BorderThickness="0,1,0,0"
             Padding="20,6">
       <StackPanel Orientation="Horizontal" Spacing="6">
-        <Ellipse Width="11" Height="11" VerticalAlignment="Center"
-                 Fill="#22A06B"
-                 IsVisible="{Binding IsGameRunning}" />
+        <!-- Game-running indicator: three mutually-exclusive dots driven by the
+             shell's Show*Dot states. Grey = not running; green = running, in
+             sync; yellow = running with changes that apply at the next launch
+             (Curator does not re-stage the mod tree while Darktide runs). The
+             yellow fill reuses the caution brush the rate-limit pill dot uses. -->
         <Ellipse Width="11" Height="11" VerticalAlignment="Center"
                  Fill="{DynamicResource SystemControlForegroundBaseMediumBrush}"
-                 IsVisible="{Binding !IsGameRunning}" />
+                 IsVisible="{Binding ShowNotRunningDot}" />
+        <Ellipse Width="11" Height="11" VerticalAlignment="Center"
+                 Fill="#22A06B"
+                 IsVisible="{Binding ShowRunningCleanDot}" />
+        <Ellipse Width="11" Height="11" VerticalAlignment="Center"
+                 Fill="{DynamicResource SystemControlForegroundCautionBrush}"
+                 IsVisible="{Binding ShowRunningDirtyDot}" />
         <TextBlock Text="{Binding GameRunningText}"
                    FontSize="{DynamicResource AppStatusFontSize}" Opacity="0.8"
                    VerticalAlignment="Center" />

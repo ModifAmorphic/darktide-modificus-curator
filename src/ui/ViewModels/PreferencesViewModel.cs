@@ -34,7 +34,11 @@ namespace Modificus.Curator.UI.ViewModels;
 /// <see cref="LocalizationService"/> (dynamic, no restart).</para>
 /// <para><b>ShowRelayConsole:</b> whether to show the Mod Relay console window
 /// on launch. Persisted immediately but read at launch time (no live-apply);
-/// <c>false</c> by default (the window is hidden).</para>
+/// <c>false</c> by default (the window is hidden). The toggle is Windows-only:
+/// on Linux, Wine spawns the console regardless of the setting, so the checkbox
+/// is shown checked + disabled as a display-only reflection of the platform
+/// reality (the persisted value stays inert; see
+/// <see cref="EffectiveRelayConsoleChecked"/>).</para>
 /// </remarks>
 public partial class PreferencesViewModel : ObservableObject
 {
@@ -49,6 +53,7 @@ public partial class PreferencesViewModel : ObservableObject
     private static readonly ThemeMode DefaultTheme = ThemeMode.System;
 
     private readonly IPreferencesService _preferences;
+    private readonly LocalizationService _localization;
 
     /// <summary>Whether a property change should fire <see cref="ApplyAndPersist"/>.</summary>
     /// <remarks>
@@ -58,12 +63,24 @@ public partial class PreferencesViewModel : ObservableObject
     /// </remarks>
     private bool _suppressApply;
 
+    /// <param name="preferences">The apply+persist authority.</param>
+    /// <param name="configLoader">The one-off snapshot read of the current
+    /// preferences.</param>
+    /// <param name="localization">Resolves the localized tooltip text and refreshes
+    /// it on a culture change.</param>
+    /// <param name="isRelayConsoleToggleSupported">Whether the Show console on launch
+    /// toggle is functional on this platform. True on Windows; false on Linux, where
+    /// Wine spawns the console regardless of the setting until a Relay-side
+    /// GUI-subsystem fix.</param>
     public PreferencesViewModel(
         IPreferencesService preferences,
         IConfigLoader configLoader,
-        LocalizationService localization)
+        LocalizationService localization,
+        bool isRelayConsoleToggleSupported)
     {
         _preferences = preferences;
+        _localization = localization;
+        IsRelayConsoleToggleSupported = isRelayConsoleToggleSupported;
 
         ThemeOptions = new ThemeOption[]
         {
@@ -94,6 +111,58 @@ public partial class PreferencesViewModel : ObservableObject
         finally
         {
             _suppressApply = false;
+        }
+
+        // Re-resolve the platform-aware tooltip when the UI culture flips so it
+        // refreshes alongside the rest of the dialog text.
+        _localization.PropertyChanged += OnCultureChanged;
+    }
+
+    /// <summary>
+    /// Whether the Show console on launch toggle is functional on this platform.
+    /// True on Windows; false on Linux, where the Relay console always shows
+    /// under Proton (Wine spawns it regardless of <c>CreateNoWindow</c>). Binds
+    /// the checkbox's <c>IsEnabled</c> so the non-functional state is represented
+    /// honestly rather than silently ignored.
+    /// </summary>
+    public bool IsRelayConsoleToggleSupported { get; }
+
+    /// <summary>
+    /// The platform-aware tooltip for the Show console on launch row: the normal
+    /// tooltip when the toggle is supported, or the locked-on-Linux tooltip when it
+    /// is not. Resolves through <see cref="LocalizationService"/> and re-fires on a
+    /// culture change.
+    /// </summary>
+    public string RelayConsoleTooltip => IsRelayConsoleToggleSupported
+        ? _localization["Preferences_ShowRelayConsoleTooltip"]
+        : _localization["Preferences_ShowRelayConsoleLockedTooltip"];
+
+    /// <summary>
+    /// The checkbox's effective checked state. On Windows (toggle supported) this
+    /// is a plain two-way view of <see cref="ShowRelayConsole"/>. On Linux the
+    /// toggle is non-functional (Wine spawns the console regardless of
+    /// <c>CreateNoWindow</c>), so the box shows checked + disabled as a
+    /// display-only reflection of the platform reality: the getter returns
+    /// <c>true</c> without forcing or writing the persisted value. The setter is
+    /// only reachable when the checkbox is enabled (Windows, via the binding), so
+    /// it routes straight to <see cref="ShowRelayConsole"/> and preserves the
+    /// existing apply+persist path.
+    /// </summary>
+    public bool EffectiveRelayConsoleChecked
+    {
+        get => IsRelayConsoleToggleSupported ? ShowRelayConsole : true;
+        set => ShowRelayConsole = value;
+    }
+
+    /// <summary>
+    /// Re-fires <see cref="RelayConsoleTooltip"/> when the UI culture flips so the
+    /// platform-aware tooltip refreshes with the rest of the dialog text.
+    /// </summary>
+    private void OnCultureChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(LocalizationService.Culture) or "Item[]")
+        {
+            OnPropertyChanged(nameof(RelayConsoleTooltip));
         }
     }
 
@@ -134,7 +203,13 @@ public partial class PreferencesViewModel : ObservableObject
     partial void OnSelectedThemeChanged(ThemeOption value) => ApplyAndPersist();
     partial void OnFontScalePercentChanged(int value) => ApplyAndPersist();
     partial void OnSelectedLanguageChanged(LanguageOption value) => ApplyAndPersist();
-    partial void OnShowRelayConsoleChanged(bool value) => ApplyAndPersist();
+    partial void OnShowRelayConsoleChanged(bool value)
+    {
+        ApplyAndPersist();
+        // The display-only checked state tracks ShowRelayConsole on Windows, so a
+        // change here must re-fire EffectiveRelayConsoleChecked for the binding.
+        OnPropertyChanged(nameof(EffectiveRelayConsoleChecked));
+    }
 
     /// <summary>
     /// Pushes the current selection through <see cref="IPreferencesService"/>:

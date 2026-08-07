@@ -64,7 +64,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           (shell + profile management: dropdown switch,
                           persisted active profile, create/rename/delete dialog;
                           global Preferences (theme + font scale + language +
-                          the show-Relay-console toggle, hidden by default)
+                          the show-Relay-console toggle, hidden by default;
+                          Windows-only, shown checked + disabled on Linux as a
+                          display-only reflection of the console that always
+                          shows under Proton until a Relay-side GUI-subsystem
+                          fix)
                           via `IPreferencesService` + the i18n infrastructure: `Strings.resx`
                           + `LocalizationService` for dynamic culture switching;
                           the mod-list UI;
@@ -130,8 +134,15 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           restart inside the interval gate shows prior flags
                           before any API call) for per-row `UpdateAvailable`
                           (matched by ContainerId) + the list-level `IsRateLimited`
-                          notice (the latter still from the in-memory LastResult,
-                          session-only), reads
+                          notice + the coupled `IsRateLimitActive` gate (the
+                          latter still from the in-memory LastResult, session-only;
+                          a rate-limited check disables the refresh button until
+                          the server-reported reset in `UpdateCheckResult.RateLimitResetsAt`
+                          elapses, with a 1-minute client-side fallback when Nexus
+                          sent no reset, and the pill reads "Refresh disabled due
+                          to rate-limiting" exactly while the button is rate-limit-blocked,
+                          distinct from the client-side manual fire-count throttle
+                          which remains), reads
                           `INexusAuthService.GetCurrentStateAsync` once at construction
                           for the per-row premium behavior (`IsPremiumUser` pushed
                           down to rows; no mid-session refresh),
@@ -149,7 +160,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           the header refresh button; the await now also covers the
                           chained automatic-update batch) and drives the manual
                           sliding-window throttle's countdown tooltip + disabled
-                          button via the runner's `NextManualRefreshAllowedAt`).
+                          button via the runner's `NextManualRefreshAllowedAt`,
+                          sharing one countdown timer with the rate-limit gate so
+                          either cause keeps the button disabled and the rate-limit
+                          reason takes tooltip precedence when both are active).
                           The view's source badge
                           is a `HyperlinkButton` to the mod's remote page; the
                           stable update-action cell is a fixed-width `Panel`
@@ -797,7 +811,10 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   last update-check timestamp + manual-refresh throttle window, persisted to
   `app-state.json`). The UI includes the shell + profile
   management (with an `IProfileSession` (ui/) as the single authority for the
-  active profile, the switch-block gate, and the live running-state), global
+  active profile, the switch-block gate, and the live running-state, plus a
+  session-scoped `HasPendingChanges` flag the mod-list edits set and Launch
+  clears, surfaced as a yellow "changes pending" status dot while the game
+  runs), global
   Preferences + i18n infrastructure, the mod-list UI (view mods with
   source/version badges, enable/disable, remove-with-confirm, reorder, per-mod
   Latest/Pinned policy, auto-sort identity stub, local folder/archive import
@@ -806,7 +823,8 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   `ContainerId`), and Launch (`LaunchCommand` -> `IRelayLaunchService.Launch`
   -> branch on `LaunchResult.Status` (`Launched` -> an immediate
   `IsGameRunning` refresh (the session's `Refresh`) so the running indicator +
-  launch/switch gates react at once; `DiscoveryIncomplete` -> the focused discovery
+  launch/switch gates react at once, and clears `HasPendingChanges` since the
+  successful stage re-staged the profile; `DiscoveryIncomplete` -> the focused discovery
   escape-hatch modal over the shared `DiscoveryField` descriptor; `StagingFailed`
   -> a localized modal alert whose body appends the raised staging exception's
   message (a runtime/OS error) to the localized framing; `Error` -> modal alert) + a Settings window editing `CuratorConfig.Discovery` user

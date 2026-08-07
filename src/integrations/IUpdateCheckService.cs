@@ -41,9 +41,10 @@ namespace Modificus.Curator.Integrations;
 /// <para>
 /// <b>Best-effort, never throws to the caller.</b> A transient API failure, a
 /// missing auth config, or an exhausted rate limit all surface as an empty
-/// result (with <see cref="UpdateCheckResult.RateLimited"/> set when applicable)
-/// rather than a thrown exception; cancellation alone propagates. The caller has
-/// nothing to gain from catching.</para>
+/// result (with <see cref="UpdateCheckResult.RateLimited"/> set, and
+/// <see cref="UpdateCheckResult.RateLimitResetsAt"/> carrying the server-reported
+/// reset, when applicable) rather than a thrown exception; cancellation alone
+/// propagates. The caller has nothing to gain from catching.</para>
 /// </remarks>
 public interface IUpdateCheckService
 {
@@ -108,8 +109,9 @@ public interface IUpdateCheckService
 
 /// <summary>
 /// The result of an update check: the mods with an update available, the check
-/// timestamp, whether the check was rate-limited, whether it was the
-/// thorough path, and whether the name-sync pass renamed at least one container.
+/// timestamp, whether the check was rate-limited (and, when so, when the
+/// exhausted window refills), whether it was the thorough path, and whether the
+/// name-sync pass renamed at least one container.
 /// </summary>
 /// <param name="Updates">The mods with an update available (flagged by any of the
 /// three tiers: tier 1 <c>viewerUpdateAvailable</c>, tier 2 a version mismatch, or
@@ -135,13 +137,19 @@ public interface IUpdateCheckService
 /// real API success from the short-circuit / failure paths. <see cref="CheckOutcome.Success"/>
 /// is the only outcome that may replace persisted known-update state; every other
 /// outcome preserves it.</param>
+    /// <param name="RateLimitResetsAt">When <paramref name="RateLimited"/> is
+    /// <c>true</c>, the soonest server-reported reset of an actually-exhausted
+    /// window (UTC), or <c>null</c> when the server reported a rate limit without
+    /// a reset (e.g. an HTTP 429 carrying no <c>x-rl-*</c> headers). <c>null</c>
+    /// whenever the check was not rate-limited.</param>
 public sealed record UpdateCheckResult(
     IReadOnlyList<ModUpdateInfo> Updates,
     DateTimeOffset CheckedAt,
     bool RateLimited,
     bool Thorough,
     bool NamesChanged = false,
-    CheckOutcome Outcome = CheckOutcome.Failed);
+    CheckOutcome Outcome = CheckOutcome.Failed,
+    DateTimeOffset? RateLimitResetsAt = null);
 
 /// <summary>
 /// The authoritative outcome of an update check, distinguishing a real API

@@ -530,6 +530,178 @@ public sealed class UpdateCheckServiceTests
         Assert.Equal(NexusLatestContainer, flagged.ContainerId);
     }
 
+    [Fact]
+    public async Task CheckAsync_rate_limited_from_exception_carries_the_hourly_reset()
+    {
+        // The thrown NexusRateLimitException carries parsed limits with an
+        // hourly reset; the result's RateLimitResetsAt threads it through so
+        // the UI can keep the refresh button disabled until the window refills.
+        var reset = DateTimeOffset.UtcNow.AddMinutes(30);
+        var nexus = new FakeNexusClient
+        {
+            GraphQlThrows = new NexusRateLimitException(429, new NexusRateLimits(
+                DailyLimit: 100, DailyRemaining: 50, DailyReset: null,
+                HourlyLimit: 100, HourlyRemaining: 0, HourlyReset: reset)),
+        };
+        var repository = new FakeModRepository();
+        repository.Containers[NexusLatestContainer] =
+            NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
+        var profiles = new FakeProfileService
+        {
+            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
+        };
+        var service = CreateService(nexus, profiles, repository);
+
+        var result = await service.CheckAsync(ProfileId);
+
+        Assert.True(result.RateLimited);
+        Assert.Equal(reset, result.RateLimitResetsAt);
+    }
+
+    [Fact]
+    public async Task CheckAsync_rate_limited_from_post_call_gate_carries_the_reset()
+    {
+        // The post-call gate (headers on a 2xx, not a thrown exception) reports
+        // an exhausted window; the reset it carries threads through too.
+        var reset = DateTimeOffset.UtcNow.AddHours(2);
+        var nexus = new FakeNexusClient
+        {
+            GraphQlResponse = new Response<ModUpdateStatus[]>(
+                new[] { Status(UpdatedModId, viewerUpdateAvailable: true) },
+                new NexusRateLimits(
+                    DailyLimit: 100, DailyRemaining: 0, DailyReset: reset,
+                    HourlyLimit: 100, HourlyRemaining: 50, HourlyReset: null)),
+        };
+        var repository = new FakeModRepository();
+        repository.Containers[NexusLatestContainer] =
+            NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
+        var profiles = new FakeProfileService
+        {
+            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
+        };
+        var service = CreateService(nexus, profiles, repository);
+
+        var result = await service.CheckAsync(ProfileId);
+
+        Assert.True(result.RateLimited);
+        Assert.Equal(reset, result.RateLimitResetsAt);
+    }
+
+    [Fact]
+    public async Task CheckAsync_rate_limited_picks_the_soonest_future_reset()
+    {
+        // Both windows are exhausted: the daily reset is hours away, the hourly
+        // reset is minutes away. The result carries the EARLIER future reset so
+        // the refresh button re-enables as soon as the first window refills.
+        var now = DateTimeOffset.UtcNow;
+        var dailyReset = now.AddHours(20);
+        var hourlyReset = now.AddMinutes(5);
+        var nexus = new FakeNexusClient
+        {
+            GraphQlResponse = new Response<ModUpdateStatus[]>(
+                new[] { Status(UpdatedModId, viewerUpdateAvailable: true) },
+                new NexusRateLimits(
+                    DailyLimit: 100, DailyRemaining: 0, DailyReset: dailyReset,
+                    HourlyLimit: 100, HourlyRemaining: 0, HourlyReset: hourlyReset)),
+        };
+        var repository = new FakeModRepository();
+        repository.Containers[NexusLatestContainer] =
+            NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
+        var profiles = new FakeProfileService
+        {
+            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
+        };
+        var service = CreateService(nexus, profiles, repository);
+
+        var result = await service.CheckAsync(ProfileId);
+
+        Assert.True(result.RateLimited);
+        Assert.Equal(hourlyReset, result.RateLimitResetsAt);
+    }
+
+    [Fact]
+    public async Task CheckAsync_rate_limited_with_unknown_limits_has_null_reset()
+    {
+        // An HTTP 429 carrying no x-rl-* headers surfaces as the all-zero
+        // NexusRateLimits.Unknown. No window reports an exhausted budget with a
+        // reset, so RateLimitResetsAt is null (the UI falls back to its
+        // client-side cooldown).
+        var nexus = new FakeNexusClient
+        {
+            GraphQlThrows = new NexusRateLimitException(429, NexusRateLimits.Unknown),
+        };
+        var repository = new FakeModRepository();
+        repository.Containers[NexusLatestContainer] =
+            NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
+        var profiles = new FakeProfileService
+        {
+            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
+        };
+        var service = CreateService(nexus, profiles, repository);
+
+        var result = await service.CheckAsync(ProfileId);
+
+        Assert.True(result.RateLimited);
+        Assert.Null(result.RateLimitResetsAt);
+    }
+
+    [Fact]
+    public async Task CheckAsync_rate_limited_drops_a_reset_already_in_the_past()
+    {
+        // An exhausted window whose reset has already passed yields no FUTURE
+        // candidate, so RateLimitResetsAt is null even though the window reads
+        // exhausted. The UI fallback cooldown (not a stale instant) governs.
+        var nexus = new FakeNexusClient
+        {
+            GraphQlResponse = new Response<ModUpdateStatus[]>(
+                new[] { Status(UpdatedModId, viewerUpdateAvailable: true) },
+                new NexusRateLimits(
+                    DailyLimit: 100, DailyRemaining: 0,
+                    DailyReset: DateTimeOffset.UtcNow.AddHours(-1),
+                    HourlyLimit: 100, HourlyRemaining: 0,
+                    HourlyReset: DateTimeOffset.UtcNow.AddMinutes(-5))),
+        };
+        var repository = new FakeModRepository();
+        repository.Containers[NexusLatestContainer] =
+            NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
+        var profiles = new FakeProfileService
+        {
+            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
+        };
+        var service = CreateService(nexus, profiles, repository);
+
+        var result = await service.CheckAsync(ProfileId);
+
+        Assert.True(result.RateLimited);
+        Assert.Null(result.RateLimitResetsAt);
+    }
+
+    [Fact]
+    public async Task CheckAsync_non_rate_limited_result_has_null_reset()
+    {
+        // A normal successful result is not rate-limited, so it carries no
+        // reset (the field is meaningful only alongside RateLimited = true).
+        var nexus = new FakeNexusClient
+        {
+            GraphQlResponse = new Response<ModUpdateStatus[]>(
+                new[] { Status(UpdatedModId, viewerUpdateAvailable: true) },
+                NexusRateLimits.Unknown),
+        };
+        var repository = new FakeModRepository();
+        repository.Containers[NexusLatestContainer] =
+            NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
+        var profiles = new FakeProfileService
+        {
+            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
+        };
+        var service = CreateService(nexus, profiles, repository);
+
+        var result = await service.CheckAsync(ProfileId);
+
+        Assert.False(result.RateLimited);
+        Assert.Null(result.RateLimitResetsAt);
+    }
+
     // ---- best-effort failure -----------------------------------------------
 
     [Fact]
