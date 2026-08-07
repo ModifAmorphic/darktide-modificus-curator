@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.20.0...v0.21.0) (2026-08-07)
+
+
+### Features
+
+* **ui:** add Nexus Mods item and unify Add flyout modes ([#157](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/157)) ([00f79dd](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/00f79ddde9000589405b1466760ad486d8811e8a))
+
 ## [0.20.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.19.1...v0.20.0) (2026-08-02)
 
 
