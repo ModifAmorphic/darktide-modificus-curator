@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.21.0...v0.22.0) (2026-08-07)
+
+
+### Features
+
+* **ui:** pending-changes indicator and rate-limit refresh coupling ([#160](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/160)) ([0cb8ce0](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/0cb8ce08853b0c9256241df5853efcd1d9e69941))
+
 ## [0.21.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.20.0...v0.21.0) (2026-08-07)
 
 
