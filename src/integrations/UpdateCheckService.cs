@@ -296,7 +296,8 @@ internal sealed class UpdateCheckService : IUpdateCheckService
                 "Nexus update check rate-limited; reporting rate-limited result.");
             return Publish(profileId, new UpdateCheckResult(
                 Array.Empty<ModUpdateInfo>(), DateTimeOffset.UtcNow, RateLimited: true, Thorough: thorough,
-                Outcome: CheckOutcome.RateLimited));
+                Outcome: CheckOutcome.RateLimited,
+                RateLimitResetsAt: ComputeRateLimitResetsAt(ex.Limits, DateTimeOffset.UtcNow)));
         }
         catch (Exception ex)
         {
@@ -321,7 +322,8 @@ internal sealed class UpdateCheckService : IUpdateCheckService
                 limits.HourlyRemaining, limits.HourlyLimit);
             return Publish(profileId, new UpdateCheckResult(
                 Array.Empty<ModUpdateInfo>(), DateTimeOffset.UtcNow, RateLimited: true, Thorough: thorough,
-                Outcome: CheckOutcome.RateLimited));
+                Outcome: CheckOutcome.RateLimited,
+                RateLimitResetsAt: ComputeRateLimitResetsAt(limits, DateTimeOffset.UtcNow)));
         }
 
         // 5. Map the batch response to the flagged list (tiers 1 + 2). Index the
@@ -587,4 +589,35 @@ internal sealed class UpdateCheckService : IUpdateCheckService
     private static UpdateCheckResult EmptyResult(bool thorough, CheckOutcome outcome) =>
         new(Array.Empty<ModUpdateInfo>(), DateTimeOffset.UtcNow, RateLimited: false, Thorough: thorough,
             Outcome: outcome);
+
+    /// <summary>
+    /// Resolves the soonest server-reported reset of an actually-exhausted
+    /// rate-limit window, for the result's <see cref="UpdateCheckResult.RateLimitResetsAt"/>.
+    /// A window counts only when its remaining budget is zero AND it carries a
+    /// reset strictly in the future; the earliest such reset wins. Returns
+    /// <c>null</c> when <paramref name="limits"/> is null, when no window is
+    /// exhausted, or when every exhausted window's reset is absent or already
+    /// past (so the caller's fallback cooldown, not a stale instant, governs
+    /// re-enabling). The all-zero <see cref="NexusRateLimits.Unknown"/> (a 429
+    /// with no <c>x-rl-*</c> headers) has no remaining budgets reported as
+    /// exhausted with a reset, so it yields <c>null</c> here.
+    /// </summary>
+    private static DateTimeOffset? ComputeRateLimitResetsAt(NexusRateLimits? limits, DateTimeOffset now)
+    {
+        if (limits is null)
+        {
+            return null;
+        }
+
+        DateTimeOffset? earliest = null;
+        if (limits.DailyRemaining <= 0 && limits.DailyReset is { } daily && daily > now)
+        {
+            earliest = daily;
+        }
+        if (limits.HourlyRemaining <= 0 && limits.HourlyReset is { } hourly && hourly > now)
+        {
+            earliest = earliest is { } current && current <= hourly ? current : hourly;
+        }
+        return earliest;
+    }
 }

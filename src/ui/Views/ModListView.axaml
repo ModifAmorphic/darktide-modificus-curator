@@ -69,10 +69,11 @@
 
   <Grid RowDefinitions="Auto,*" Margin="20,12,20,12">
 
-    <!-- Header: title + rate-limit notice + check-now refresh + auto-sort
+    <!-- Header: title + check-now refresh + rate-limit notice + auto-sort
          toggle + Add split button (hidden until a profile is active). The title
          reads the plain "Mods" label (no count; the row list itself is the
-         count). -->
+         count). The rate-limit notice sits after the refresh button it
+         describes. -->
     <Grid Grid.Row="0"
           ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto"
           IsVisible="{Binding HasActiveProfile}"
@@ -80,20 +81,20 @@
       <!-- Title: the plain localized "Mods" label (no count; the row list itself
            is the count). Bound to HeaderCountText so it live-refreshes on a
            culture change (the VM re-fires the property). Sits in column 0,
-           immediately before the rate-limit notice + the refresh button. -->
+           immediately before the refresh button + the rate-limit notice. -->
       <TextBlock Grid.Column="0"
                  Text="{Binding HeaderCountText}"
                  FontSize="16" FontWeight="SemiBold"
                  VerticalAlignment="Center" />
-      <Border Grid.Column="1"
+      <Border Grid.Column="2"
               Classes="rateLimitedNotice"
-              IsVisible="{Binding IsRateLimited}"
+              IsVisible="{Binding IsRateLimitActive}"
               Background="{DynamicResource SystemControlBackgroundCautionBrush}"
               CornerRadius="8"
               Padding="6,1"
               Margin="8,0,0,0"
               VerticalAlignment="Center"
-              ToolTip.Tip="{ReflectionBinding [ModList_RateLimitedTooltip], Source={StaticResource Loc}}">
+              ToolTip.Tip="{Binding RateLimitedTooltip}">
         <StackPanel Orientation="Horizontal" Spacing="4">
           <Ellipse Width="6" Height="6"
                    Fill="{DynamicResource SystemControlForegroundCautionBrush}"
@@ -111,15 +112,16 @@
         drives the IsCheckingNow affordance while it runs. The result lands via
         the existing CheckCompleted subscription. The button stays visible at
         all times; it disables while a thorough check is in flight
-        (IsCheckingNow) OR while the manual sliding-window throttle is active
-        (IsRefreshEnabled covers both), and an indeterminate progress spinner
-        overlays the refresh icon for the duration. The tooltip is the VM's
-        ManualRefreshTooltip: the normal "check for updates now" string
-        normally, or the live m:ss countdown ("Rate limiting protection
-        enabled. Manual refresh will be available again in {time}.") while
-        throttled.
+        (IsCheckingNow), while the manual sliding-window throttle is active, OR
+        while an active rate limit has not yet reset (IsRefreshEnabled covers all
+        three), and an indeterminate progress spinner overlays the refresh icon
+        for the duration. The tooltip is the VM's ManualRefreshTooltip: the
+        normal "check for updates now" string normally, the rate-limit message
+        while a rate limit is active (server-driven, takes precedence), or the
+        live m:ss countdown ("Rate limiting protection enabled. Manual refresh
+        will be available again in {time}.") while the manual throttle is active.
       -->
-      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
                   Margin="8,0,0,0" VerticalAlignment="Center">
         <Button Classes="icon"
                 Click="RefreshUpdates_Click"

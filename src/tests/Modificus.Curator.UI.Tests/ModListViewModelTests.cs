@@ -1421,7 +1421,7 @@ public sealed class ModListViewModelTests
     /// Drives the runner into the throttled state by firing 10 manual refreshes
     /// through the VM's CheckForUpdatesNow command (advancing the runner clock
     /// 1s before each so the timestamps are distinct but within 2 minutes of
-    /// each other). The 10th fire engages the throttle: RefreshManualRefreshThrottle
+    /// each other). The 10th fire engages the throttle: ReevaluateRefreshGate
     /// runs after the await + sees the count at 10.
     /// </summary>
     private static async Task DriveIntoThrottleAsync(
@@ -1502,6 +1502,177 @@ public sealed class ModListViewModelTests
 
         Assert.False(vm.IsManualRefreshThrottled);
         Assert.Equal(Localization["ModList_CheckNowTooltip"], vm.ManualRefreshTooltip);
+    }
+
+    // ---- rate-limit coupling (refresh button + pill gated by active reset) --
+
+    /// <summary>
+    /// Builds a VM wired with a controllable clock (shared by the runner + the
+    /// VM's rate-limit-active decision) + a captured countdown-timer tick, and
+    /// exposes the fake update-check service so a test can raise rate-limited
+    /// results. Mirrors <see cref="BuildForThrottle"/> but returns the
+    /// <see cref="FakeUpdateCheckService"/> for result injection.
+    /// </summary>
+    private static (ModListViewModel Vm, FakeUpdateCheckService UpdateCheck, Action Tick, Action<DateTimeOffset> SetClock)
+        BuildForRateLimit()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var container = repo.Seed(new UntrackedSource(), "DMF", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = container.Id, Order = 0 });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+
+        var updateCheck = new FakeUpdateCheckService();
+        var now = DateTimeOffset.UtcNow;
+        Action? capturedTick = null;
+        var vm = TestDoubles.BuildModList(
+            profiles: profiles,
+            session: session,
+            repo: repo,
+            updateCheck: updateCheck,
+            getNow: () => now,
+            startCountdownTimer: t => capturedTick ??= t);
+        return (vm, updateCheck, () => capturedTick!.Invoke(), value => now = value);
+    }
+
+    [Fact]
+    public void RateLimited_result_with_server_reset_disables_refresh_and_shows_pill()
+    {
+        // A rate-limited result carrying a future server reset sets the raw +
+        // active rate-limit flags, disables the refresh button, and reads the
+        // coupled pill text. The tooltip names the local retry time.
+        var (vm, uc, _, setClock) = BuildForRateLimit();
+        var now = DateTimeOffset.UtcNow;
+        setClock(now);
+        var reset = now.AddMinutes(5);
+
+        uc.RaiseCheckCompleted(new UpdateCheckResult(
+            Array.Empty<ModUpdateInfo>(), now, RateLimited: true, Thorough: false,
+            Outcome: CheckOutcome.RateLimited, RateLimitResetsAt: reset));
+
+        Assert.True(vm.IsRateLimited);
+        Assert.Equal(reset, vm.RateLimitResetsAt);
+        Assert.True(vm.IsRateLimitActive);
+        Assert.False(vm.IsRefreshEnabled);
+        Assert.Equal("Refresh disabled due to rate-limiting", vm.RateLimitedNoticeText);
+        Assert.Contains("Try again at", vm.RateLimitedTooltip);
+    }
+
+    [Fact]
+    public void RateLimited_active_clears_when_clock_advances_past_reset()
+    {
+        // Driving the countdown tick after advancing the shared clock past the
+        // reset flips IsRateLimitActive off, re-enables the refresh button, and
+        // would hide the pill (the pill binds IsRateLimitActive).
+        var (vm, uc, tick, setClock) = BuildForRateLimit();
+        var now = DateTimeOffset.UtcNow;
+        setClock(now);
+        var reset = now.AddMinutes(5);
+
+        uc.RaiseCheckCompleted(new UpdateCheckResult(
+            Array.Empty<ModUpdateInfo>(), now, RateLimited: true, Thorough: false,
+            Outcome: CheckOutcome.RateLimited, RateLimitResetsAt: reset));
+        Assert.True(vm.IsRateLimitActive);
+        Assert.False(vm.IsRefreshEnabled);
+
+        // A tick before the reset keeps the active state.
+        setClock(reset.AddSeconds(-1));
+        tick();
+        Assert.True(vm.IsRateLimitActive);
+
+        // Advance past the reset: the tick clears the active state.
+        setClock(reset.AddSeconds(1));
+        tick();
+
+        Assert.False(vm.IsRateLimitActive);
+        Assert.True(vm.IsRefreshEnabled);
+        Assert.Equal(Localization["ModList_CheckNowTooltip"], vm.ManualRefreshTooltip);
+    }
+
+    [Fact]
+    public void RateLimited_null_reset_uses_fallback_cooldown_from_checked_at()
+    {
+        // When Nexus stayed silent about the reset (null), the active state
+        // lasts CheckedAt + the fallback cooldown (1 minute). The tooltip then
+        // uses the time-free "Try again later." form (no specific time promised).
+        var (vm, uc, tick, setClock) = BuildForRateLimit();
+        var now = DateTimeOffset.UtcNow;
+        setClock(now);
+
+        uc.RaiseCheckCompleted(new UpdateCheckResult(
+            Array.Empty<ModUpdateInfo>(), now, RateLimited: true, Thorough: false,
+            Outcome: CheckOutcome.RateLimited, RateLimitResetsAt: null));
+        Assert.True(vm.IsRateLimitActive);
+        Assert.Null(vm.RateLimitResetsAt);
+        Assert.Equal(Localization["ModList_RateLimitedTooltip"], vm.RateLimitedTooltip);
+        Assert.Contains("Try again later", vm.RateLimitedTooltip);
+
+        // Halfway through the fallback: still active.
+        setClock(now.AddSeconds(30));
+        tick();
+        Assert.True(vm.IsRateLimitActive);
+
+        // Past the 1-minute fallback: clears.
+        setClock(now.AddMinutes(1).AddSeconds(1));
+        tick();
+        Assert.False(vm.IsRateLimitActive);
+        Assert.True(vm.IsRefreshEnabled);
+    }
+
+    [Fact]
+    public void Non_rate_limited_result_clears_rate_limit_state()
+    {
+        // A later non-rate-limited result clears IsRateLimited + the reset +
+        // the active flag, so the refresh button re-enables immediately (no
+        // waiting for a server reset the next check superseded).
+        var (vm, uc, _, setClock) = BuildForRateLimit();
+        var now = DateTimeOffset.UtcNow;
+        setClock(now);
+
+        uc.RaiseCheckCompleted(new UpdateCheckResult(
+            Array.Empty<ModUpdateInfo>(), now, RateLimited: true, Thorough: false,
+            Outcome: CheckOutcome.RateLimited, RateLimitResetsAt: now.AddMinutes(5)));
+        Assert.True(vm.IsRateLimited);
+        Assert.True(vm.IsRateLimitActive);
+
+        uc.RaiseCheckCompleted(new UpdateCheckResult(
+            Array.Empty<ModUpdateInfo>(), now, RateLimited: false, Thorough: false,
+            Outcome: CheckOutcome.Success));
+
+        Assert.False(vm.IsRateLimited);
+        Assert.Null(vm.RateLimitResetsAt);
+        Assert.False(vm.IsRateLimitActive);
+        Assert.True(vm.IsRefreshEnabled);
+    }
+
+    [Fact]
+    public async Task Rate_limit_and_manual_throttle_both_disable_rate_limit_tooltip_takes_precedence()
+    {
+        // Coexistence: the manual sliding-window throttle engaged AND a
+        // rate-limited result active both keep the button disabled. The refresh
+        // button tooltip shows the rate-limit reason (the more informative,
+        // server-driven cause), not the throttle countdown.
+        var (vm, uc, _, setClock) = BuildForRateLimit();
+        Assert.True(vm.IsRefreshEnabled); // nothing active at construction
+
+        await DriveIntoThrottleAsync(vm, setClock);
+        Assert.True(vm.IsManualRefreshThrottled);
+
+        var now = DateTimeOffset.UtcNow;
+        setClock(now);
+        uc.RaiseCheckCompleted(new UpdateCheckResult(
+            Array.Empty<ModUpdateInfo>(), now, RateLimited: true, Thorough: false,
+            Outcome: CheckOutcome.RateLimited, RateLimitResetsAt: now.AddMinutes(5)));
+
+        Assert.True(vm.IsManualRefreshThrottled);
+        Assert.True(vm.IsRateLimitActive);
+        Assert.False(vm.IsRefreshEnabled);
+        // Rate-limit precedence: the button tooltip equals the rate-limit
+        // tooltip, not the throttle countdown string.
+        Assert.Equal(vm.RateLimitedTooltip, vm.ManualRefreshTooltip);
+        Assert.DoesNotContain("Rate limiting protection enabled", vm.ManualRefreshTooltip);
     }
 
     // ---- FormatRemaining (pure helper) -------------------------------------
@@ -2345,5 +2516,204 @@ public sealed class ModListViewModelTests
         var call = Assert.Single(profiles.RemoveModCalls);
         Assert.Equal(a.Id, call.Id);
         Assert.Equal(linked.Id, call.ContainerId);
+    }
+
+    // ---- HasPendingChanges: structural edits flag the session ---------------
+    //
+    // Each structural / version-affecting edit sets the session's
+    // HasPendingChanges so the shell's status strip surfaces a "changes pending"
+    // indicator while the game runs (Curator does not re-stage mid-session).
+
+    private static (ModListViewModel Vm, FakeProfileSession Session) BuildWithSession(
+        FakeProfileService? profiles = null, FakeModRepository? repo = null,
+        FakeModImportService? importService = null, FakeDialogService? dialogs = null)
+    {
+        profiles ??= TestDoubles.Profiles();
+        repo ??= new FakeModRepository();
+        importService ??= new FakeModImportService(repo);
+        var session = new FakeProfileSession(() => profiles.ListProfiles())
+        {
+            ActiveProfileId = profiles.ListProfiles()[0].Id,
+        };
+        var vm = TestDoubles.BuildModList(profiles, session, repo, importService,
+            dialogs: dialogs, localization: Localization);
+        return (vm, session);
+    }
+
+    private static (ModListViewModel Vm, FakeProfileSession Session, ProfileSummary Profile)
+        BuildWithOneMod(FakeDialogService? dialogs = null)
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var dmf = Seed(repo, new UntrackedSource(), "DMF");
+        profiles.WithMods(a.Id, new ModListEntry { ContainerId = dmf.Id, Enabled = true, Order = 0 });
+        var (vm, session) = BuildWithSession(profiles, repo, dialogs: dialogs);
+        return (vm, session, a);
+    }
+
+    [Fact]
+    public void ToggleEnabled_sets_HasPendingChanges()
+    {
+        var (vm, session, _) = BuildWithOneMod();
+        Assert.False(session.HasPendingChanges);
+        var row = Row(vm, "DMF");
+
+        row.Enabled = false;
+        vm.ToggleEnabledCommand.Execute(row);
+
+        Assert.True(session.HasPendingChanges);
+    }
+
+    [Fact]
+    public void MoveUp_sets_HasPendingChanges()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var dmf = Seed(repo, new UntrackedSource(), "DMF");
+        var sound = Seed(repo, new UntrackedSource(), "SoundPack");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = dmf.Id, Order = 0 },
+            new ModListEntry { ContainerId = sound.Id, Order = 1 });
+        var (vm, session) = BuildWithSession(profiles, repo);
+        Assert.False(session.HasPendingChanges);
+
+        vm.MoveUpCommand.Execute(Row(vm, "SoundPack"));
+
+        Assert.True(session.HasPendingChanges);
+    }
+
+    [Fact]
+    public void SetPolicyLatest_sets_HasPendingChanges()
+    {
+        var (vm, session, _) = BuildWithOneMod();
+        Assert.False(session.HasPendingChanges);
+
+        vm.SetPolicyLatestCommand.Execute(Row(vm, "DMF"));
+
+        Assert.True(session.HasPendingChanges);
+    }
+
+    [Fact]
+    public async Task Remove_sets_HasPendingChanges()
+    {
+        var (vm, session, _) = BuildWithOneMod(
+            dialogs: new FakeDialogService { ConfirmResult = true });
+        Assert.False(session.HasPendingChanges);
+
+        await vm.RemoveCommand.ExecuteAsync(Row(vm, "DMF"));
+
+        Assert.True(session.HasPendingChanges);
+    }
+
+    [Fact]
+    public void AutoSort_sets_HasPendingChanges()
+    {
+        var (vm, session, _) = BuildWithOneMod();
+        Assert.False(session.HasPendingChanges);
+
+        vm.AutoSortCommand.Execute(null);
+
+        Assert.True(session.HasPendingChanges);
+    }
+
+    [Fact]
+    public async Task AddMods_sets_HasPendingChanges_after_a_successful_import()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var import = new FakeModImportService(repo);
+        var dialogs = new FakeDialogService
+        {
+            ImportResult = new ImportModResult(new UntrackedSource(), "", ModVersionPolicy.Latest),
+        };
+        var (vm, session) = BuildWithSession(profiles, repo, import, dialogs);
+        Assert.False(session.HasPendingChanges);
+
+        await vm.AddModsCommand.ExecuteAsync(new[] { "/mods/DMF" });
+
+        Assert.True(session.HasPendingChanges);
+    }
+
+    [Fact]
+    public async Task AddMods_does_not_set_HasPendingChanges_when_nothing_is_imported()
+    {
+        // A cancelled modal (or an all-failing batch) imports nothing, so the
+        // pending flag must stay clear (no structural change landed).
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var import = new FakeModImportService(repo);
+        var dialogs = new FakeDialogService { ImportResult = null }; // user cancels
+        var (vm, session) = BuildWithSession(profiles, repo, import, dialogs);
+
+        await vm.AddModsCommand.ExecuteAsync(new[] { "/mods/DMF" });
+
+        Assert.False(session.HasPendingChanges);
+    }
+
+    [Fact]
+    public async Task LinkMods_sets_HasPendingChanges_after_a_successful_link()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var import = new FakeModImportService(repo);
+        var (vm, session) = BuildWithSession(profiles, repo, import);
+        Assert.False(session.HasPendingChanges);
+
+        await vm.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
+
+        Assert.True(session.HasPendingChanges);
+    }
+
+    [Fact]
+    public async Task Update_premium_success_sets_HasPendingChanges()
+    {
+        // The Premium install branch changes a mod's version, so it flags the
+        // session like any other version-affecting edit. Built with a captured
+        // session so the flag is assertable.
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var uc = new FakeUpdateCheckService();
+        var acquisition = new FakeModAcquisitionService();
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            updateCheck: uc, acquisition: acquisition);
+        uc.RaiseCheckCompleted(new UpdateCheckResult(
+            new[] { new ModUpdateInfo(nexus.Id, 8, "DMF", "1.0", DateTimeOffset.UtcNow) },
+            DateTimeOffset.UtcNow, false, Thorough: false, Outcome: CheckOutcome.Success));
+        Assert.True(vm.IsPremiumUser);
+        Assert.False(session.HasPendingChanges);
+
+        await vm.UpdateCommand.ExecuteAsync(Row(vm, "DMF"));
+
+        Assert.True(session.HasPendingChanges);
+    }
+
+    [Fact]
+    public void AutomaticUpdatesApplied_sets_HasPendingChanges()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var automaticUpdates = new FakeAutomaticUpdateService();
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            automaticUpdates: automaticUpdates, localization: Localization);
+        Assert.False(session.HasPendingChanges);
+
+        automaticUpdates.RaiseUpdatesApplied();
+
+        Assert.True(session.HasPendingChanges);
     }
 }

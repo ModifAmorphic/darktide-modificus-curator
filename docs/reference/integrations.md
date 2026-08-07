@@ -367,7 +367,8 @@ public sealed record UpdateCheckResult(
     bool RateLimited,
     bool Thorough,
     bool NamesChanged = false,
-    CheckOutcome Outcome = CheckOutcome.Failed);
+    CheckOutcome Outcome = CheckOutcome.Failed,
+    DateTimeOffset? RateLimitResetsAt = null);
 
 public sealed record ModUpdateInfo(
     Guid ContainerId,
@@ -415,6 +416,12 @@ public enum CheckOutcome { Failed, Success, NoAuth, NoNexusMods, RateLimited }
   place when this is set. Only the normal completion path can set it `true`;
   the short-circuit paths (no auth, no Nexus mods, rate-limited, failure) leave
   it `false`.
+- `RateLimitResetsAt`: when `RateLimited` is `true`, the soonest server-reported
+  reset of an actually-exhausted window (UTC); `null` when the server reported a
+  rate limit without a reset (e.g. an HTTP 429 with no `x-rl-*` headers, the
+  all-zero `NexusRateLimits.Unknown` case), or whenever the check was not
+  rate-limited. The UI keeps the refresh button disabled until this elapses,
+  falling back to a short client-side cooldown when it is absent.
 
 The latest-MAIN filter (`NexusModFiles.LatestMain`, category_id 1 +
 non-archived, newest by `UploadedTimestamp`) is shared across two call sites:
@@ -448,15 +455,20 @@ the `Thorough` flag on the result).
    Pinned), so Pinned ids ride along for the name sync. The client computes UIDs
    (`uid = game_id * 2^32 + mod_id`), builds the `modsByUid` GraphQL query, and
    POSTs to `/v2/graphql`. A `NexusRateLimitException` is caught + surfaces as a
-   rate-limited result. A non-cancellation `Exception` is caught + surfaces as an
-   empty result (the check is best-effort). Cancellation propagates.
-5. **Rate-limit gate (post-call).** From `response.RateLimits`: treat as
+   rate-limited result (carrying the soonest server-reported reset of an
+   exhausted window, picked from the exception's `NexusRateLimits`). A
+   non-cancellation `Exception` is caught + surfaces as an empty result (the
+   check is best-effort). Cancellation propagates.
+ 5. **Rate-limit gate (post-call).** From `response.RateLimits`: treat as
    rate-limited only when a limit was reported AND remaining is zero:
    `(DailyLimit > 0 && DailyRemaining <= 0) || (HourlyLimit > 0 && HourlyRemaining <= 0)`.
    The `> 0` guard avoids a false positive on `NexusRateLimits.Unknown` (the
    all-zero fallback when headers are absent, e.g. test stubs or non-rate-limited
    gateways). If rate-limited -> return an empty result with `RateLimited = true`
-   (the mod-list UI surfaces a "check incomplete" indicator).
+   and `RateLimitResetsAt` set to the soonest future reset of an exhausted
+   window (the mod-list UI disables the refresh button until that instant
+   elapses, falling back to a short client-side cooldown when the server gave
+   none).
 6. **Map results to flagged list (tiers 1 + 2).** Index the response nodes by
    UID (`Dictionary<long, ModUpdateStatus>`). For each CHECKABLE (Latest-only)
    mod, compute its UID + look up the node. Flag the mod if **either** signal

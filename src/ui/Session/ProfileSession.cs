@@ -72,6 +72,13 @@ public sealed partial class ProfileSession : ObservableObject, IProfileSession
     private bool _isRunning;
 
     /// <summary>
+    /// Session-scoped edit/stage coordination state. See
+    /// <see cref="IProfileSession.HasPendingChanges"/>.
+    /// </summary>
+    [ObservableProperty]
+    private bool _hasPendingChanges;
+
+    /// <summary>
     /// The SOLE active-change gate. Applies + persists only when the game isn't
     /// running; otherwise a no-op. See <see cref="IProfileSession.RequestActive"/>.
     /// </summary>

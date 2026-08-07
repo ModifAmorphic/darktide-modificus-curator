@@ -97,6 +97,10 @@
     <value>Darktide: not running</value>
     <comment>Status-strip label when Darktide is not running.</comment>
   </data>
+  <data name="Status_GameRunningChangesPending" xml:space="preserve">
+    <value>Darktide: running (changes pending)</value>
+    <comment>Status-strip label when Darktide is running and the active profile has edits that apply at the next launch (Curator does not re-stage the mod tree while the game runs). Shown with the yellow status dot.</comment>
+  </data>
   <data name="Status_NxmRegistered" xml:space="preserve">
     <value>Nexus links: enabled</value>
     <comment>Status-strip label when Curator is the registered OS handler for nxm:// links.</comment>
@@ -386,8 +390,16 @@
     <comment>Language dropdown option: English (the only shipped language).</comment>
   </data>
   <data name="Preferences_ShowRelayConsole" xml:space="preserve">
-    <value>Show console window when launching the game</value>
+    <value>Show console on launch</value>
     <comment>Checkbox in the Preferences dialog to show the Mod Relay console window on launch (hidden by default).</comment>
+  </data>
+  <data name="Preferences_ShowRelayConsoleTooltip" xml:space="preserve">
+    <value>Shows the console window used to launch the modded game.</value>
+    <comment>Tooltip on the Show console on launch row in the Preferences dialog.</comment>
+  </data>
+  <data name="Preferences_ShowRelayConsoleLockedTooltip" xml:space="preserve">
+    <value>On Linux the Relay console always shows under Proton and can't be hidden from here.</value>
+    <comment>Tooltip on the Show console on launch row in the Preferences dialog on Linux, where the checkbox is shown checked + disabled (Wine spawns the console regardless of the setting until a Relay-side GUI-subsystem fix, so the persisted value is not forced or written).</comment>
   </data>
   <data name="Preferences_DoneButton" xml:space="preserve">
     <value>Done</value>
@@ -524,12 +536,16 @@
     <comment>Tooltip on the stable update-action button when no update is available (the button is disabled).</comment>
   </data>
   <data name="ModList_RateLimited" xml:space="preserve">
-    <value>Update check limited</value>
-    <comment>Short banner shown in the mod-list header when the last update check was rate-limited (the badges may not reflect every available update).</comment>
+    <value>Refresh disabled due to rate-limiting</value>
+    <comment>Short banner shown in the mod-list header while a rate-limited update check keeps the refresh button disabled (until the server-reported reset elapses). Pairs with the disabled refresh button; the pill hides when the reset passes and the button re-enables.</comment>
   </data>
   <data name="ModList_RateLimitedTooltip" xml:space="preserve">
-    <value>The Nexus update check was rate-limited, so some available updates may not be shown. Try again later.</value>
-    <comment>Tooltip on the rate-limit banner in the mod-list header.</comment>
+    <value>Nexus rate-limited the update check. Try again later.</value>
+    <comment>Tooltip on the rate-limit banner / refresh button while a rate limit is active and Nexus did not report when the window refills (no specific retry time is shown).</comment>
+  </data>
+  <data name="ModList_RateLimitedTooltipWithTime" xml:space="preserve">
+    <value>Nexus rate-limited the update check. Try again at {0}.</value>
+    <comment>Tooltip on the rate-limit banner / refresh button while a rate limit is active and Nexus reported when the window refills. {0} is the reset instant in local short-time form (e.g. 3:45 PM).</comment>
   </data>
   <data name="ModList_CheckNowTooltip" xml:space="preserve">
     <value>Check for updates now</value>

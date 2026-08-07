@@ -189,6 +189,7 @@ internal static class TestDoubles
             NullLogger<ModListViewModel>.Instance,
             startCountdownTimer,
             stopCountdownTimer,
+            getNow,
             launchExternal,
             launchExternalPath,
             nxmRegistrar);
@@ -943,6 +944,13 @@ internal sealed class FakeProfileSession : ObservableObject, IProfileSession
         get => _isRunning;
         set => SetProperty(ref _isRunning, value);
     }
+
+    public bool HasPendingChanges
+    {
+        get => _hasPendingChanges;
+        set => SetProperty(ref _hasPendingChanges, value);
+    }
+    private bool _hasPendingChanges;
 
     public int RequestActiveCalls { get; private set; }
     public Guid? LastRequestedId { get; private set; }
