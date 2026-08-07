@@ -137,11 +137,11 @@ public interface IUpdateCheckService
 /// real API success from the short-circuit / failure paths. <see cref="CheckOutcome.Success"/>
 /// is the only outcome that may replace persisted known-update state; every other
 /// outcome preserves it.</param>
-    /// <param name="RateLimitResetsAt">When <paramref name="RateLimited"/> is
-    /// <c>true</c>, the soonest server-reported reset of an actually-exhausted
-    /// window (UTC), or <c>null</c> when the server reported a rate limit without
-    /// a reset (e.g. an HTTP 429 carrying no <c>x-rl-*</c> headers). <c>null</c>
-    /// whenever the check was not rate-limited.</param>
+/// <param name="RateLimitResetsAt">When <paramref name="RateLimited"/> is
+/// <c>true</c>, the soonest server-reported reset of an actually-exhausted
+/// window (UTC), or <c>null</c> when the server reported a rate limit without
+/// a reset (e.g. an HTTP 429 carrying no <c>x-rl-*</c> headers). <c>null</c>
+/// whenever the check was not rate-limited.</param>
 public sealed record UpdateCheckResult(
     IReadOnlyList<ModUpdateInfo> Updates,
     DateTimeOffset CheckedAt,
