@@ -892,17 +892,21 @@ public sealed class ModListViewModelTests
     // ---- add split-button view state ---------------------------------------
 
     [Fact]
-    public void AddMode_defaults_to_Archive_and_the_label_tracks_the_mode()
+    public void AddMode_defaults_to_NexusMods_and_the_label_tracks_the_mode()
     {
         var vm = Build();
 
-        Assert.Equal(ModAddMode.Archive, vm.AddMode);
+        Assert.Equal(ModAddMode.NexusMods, vm.AddMode);
+        Assert.Equal("Add Nexus Mods", vm.AddModeLabel);
+
+        vm.AddMode = ModAddMode.Archive;
         Assert.Equal("Add Mod (archive)", vm.AddModeLabel);
 
         vm.AddMode = ModAddMode.Folder;
-
-        Assert.Equal(ModAddMode.Folder, vm.AddMode);
         Assert.Equal("Add Mod (folder)", vm.AddModeLabel);
+
+        vm.AddMode = ModAddMode.LinkExternal;
+        Assert.Equal("Link external folder", vm.AddModeLabel);
     }
 
     // ---- update-check -> per-row state -------------------------------------
@@ -1784,6 +1788,35 @@ public sealed class ModListViewModelTests
         Assert.Equal("https://www.nexusmods.com/warhammer40kdarktide/mods/8?tab=files",
             opened.AbsoluteUri);
         TestLauncher.Reset();
+    }
+
+    // ---- add Nexus Mods (AddNexusModsCommand) ------------------------------
+
+    [Fact]
+    public void AddNexusModsCommand_opens_nexus_games_page_in_browser()
+    {
+        var launches = new List<Uri>();
+        var vm = TestDoubles.BuildModList(localization: Localization,
+            launchExternal: uri => { launches.Add(uri); return true; });
+
+        vm.AddNexusModsCommand.Execute(null);
+
+        var opened = Assert.Single(launches);
+        Assert.Equal("https://www.nexusmods.com/games/warhammer40kdarktide", opened.AbsoluteUri);
+    }
+
+    [Fact]
+    public void AddNexusModsCommand_launcher_failure_surfaces_an_alert()
+    {
+        var dialogs = new FakeDialogService();
+        var vm = TestDoubles.BuildModList(localization: Localization,
+            dialogs: dialogs,
+            launchExternal: _ => false); // simulate launch failure
+
+        vm.AddNexusModsCommand.Execute(null);
+
+        var alert = Assert.Single(dialogs.AlertCalls);
+        Assert.Contains("nexusmods.com", alert.Message);
     }
 
     // ---- automatic-update per-mod progress ---------------------------------

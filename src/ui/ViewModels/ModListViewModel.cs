@@ -15,18 +15,25 @@ using Microsoft.Extensions.Logging;
 namespace Modificus.Curator.UI.ViewModels;
 
 /// <summary>
-/// The add flow's current mode (which picker the Add split button's primary
-/// click opens). Tracked by the view code-behind + mirrored on the VM (as
+/// The add flow's current mode (which action the Add split button's primary
+/// click runs). Tracked by the view code-behind + mirrored on the VM (as
 /// <see cref="ModListViewModel.AddMode"/>) so the split button's label reflects
-/// the selected mode. Archive is the default.
+/// the selected mode. All four modes are equal: each flyout item sets itself as
+/// the default on click and runs its action. NexusMods is the default.
 /// </summary>
 public enum ModAddMode
 {
-    /// <summary>Import archives (zip, 7z, rar) via the file picker (default).</summary>
+    /// <summary>Opens the Darktide Nexus Mods games page in the browser (default).</summary>
+    NexusMods,
+
+    /// <summary>Import archives (zip, 7z, rar) via the file picker.</summary>
     Archive,
 
     /// <summary>Import mod folders via the folder picker.</summary>
     Folder,
+
+    /// <summary>Link an external mod folder into the profile via the folder picker (no copy).</summary>
+    LinkExternal,
 }
 
 /// <summary>
@@ -64,19 +71,23 @@ public enum ModAddMode
 /// <para><b>Localized text is live:</b> the header count + empty-state messages
 /// re-resolve from <see cref="LocalizationService"/> on a culture change, and each
 /// row's badge + policy text refresh too (via <see cref="ModItemViewModel.Refresh"/>).</para>
-/// <para><b>Add flow:</b> the Add split button (archive picker + folder picker) +
-/// drag-and-drop all reduce to <see cref="AddModsCommand"/>, which processes
-/// paths sequentially: one import modal per path, then
-/// <c>IModImportService.Import</c> (extract/copy into the repository, returning
-/// the container id) + <c>IProfileService.AddMod</c> (the profile reference). A
-/// cancelled modal cancels the whole remaining batch.</para>
-/// <para><b>Link flow:</b> the Add split button's third flyout item ("Link
-/// external folder") reduces to <see cref="LinkModsCommand"/>, which peeks the
-/// base name (validates the mod-folder shape), checks the base-name collision
-/// (excluding a re-link of the same path), then records the metadata-only
-/// container via <see cref="IModImportService.LinkFolder"/> + adds the profile
-/// reference with <see cref="ModVersionPolicy.Latest"/> (inert for linked). No
-/// modal; the folder is linked, not copied.</para>
+/// <para><b>Add flow:</b> the Add split button's four flyout items are all modes
+/// that set themselves as the default on click (the face label tracks the mode):
+/// "Add Nexus Mods" (the default; opens the Darktide Nexus Mods games page in
+/// the browser via <see cref="AddNexusModsCommand"/>), "Add Mod (archive)",
+/// "Add Mod (folder)", and "Link external folder". The archive + folder modes
+/// open their pickers and share an entry point with drag-and-drop; all reduce to
+/// <see cref="AddModsCommand"/>, which processes paths sequentially: one import
+/// modal per path, then <c>IModImportService.Import</c> (extract/copy into the
+/// repository, returning the container id) + <c>IProfileService.AddMod</c> (the
+/// profile reference). A cancelled modal cancels the whole remaining batch.</para>
+/// <para><b>Link flow:</b> the Add split button's "Link external folder" flyout
+/// item reduces to <see cref="LinkModsCommand"/>, which peeks the base name
+/// (validates the mod-folder shape), checks the base-name collision (excluding a
+/// re-link of the same path), then records the metadata-only container via
+/// <see cref="IModImportService.LinkFolder"/> + adds the profile reference with
+/// <see cref="ModVersionPolicy.Latest"/> (inert for linked). No modal; the folder
+/// is linked, not copied.</para>
 /// </remarks>
 public partial class ModListViewModel : ObservableObject
 {
@@ -86,6 +97,13 @@ public partial class ModListViewModel : ObservableObject
     /// <c>ModAcquisitionService</c>).
     /// </summary>
     private const string GameDomain = "warhammer40kdarktide";
+
+    /// <summary>
+    /// The Nexus Mods games page for Darktide (the "Add Nexus Mods" flyout item's
+    /// target). Built from <see cref="GameDomain"/> so the domain literal lives
+    /// in one place.
+    /// </summary>
+    private const string NexusModsGamesUrl = "https://www.nexusmods.com/games/" + GameDomain;
 
     private readonly IProfileService _profiles;
     private readonly IProfileSession _session;
@@ -281,15 +299,16 @@ public partial class ModListViewModel : ObservableObject
     private bool _autoSortEnabled;
 
     /// <summary>
-    /// The Add split button's current mode (which picker the primary click
-    /// opens). Defaults to <see cref="ModAddMode.Archive"/>. The view sets this from
-    /// the split button's flyout items + main click (public setter); the
+    /// The Add split button's current mode (which action the primary click runs).
+    /// Defaults to <see cref="ModAddMode.NexusMods"/>. The view sets this from the
+    /// split button's flyout items + main click (public setter); the
     /// <see cref="AddModeLabel"/> derived string tracks it so the button reads
-    /// "Add Mod (archive)" / "Add Mod (folder)" per the current mode.
+    /// "Add Nexus Mods" / "Add Mod (archive)" / "Add Mod (folder)" /
+    /// "Link external folder" per the current mode.
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(AddModeLabel))]
-    private ModAddMode _addMode = ModAddMode.Archive;
+    private ModAddMode _addMode = ModAddMode.NexusMods;
 
     /// <summary>
     /// Whether the Nexus account is premium. Read once at construction (see the
@@ -368,13 +387,18 @@ public partial class ModListViewModel : ObservableObject
 
     /// <summary>
     /// The localized split-button label for the current <see cref="AddMode"/>
-    /// (mirrors the operator's mock: "Add Mod (archive)" / "Add Mod (folder)").
-    /// Re-fires on a culture change (live-refresh with the rest of the UI).
+    /// (mirrors the operator's mock: "Add Nexus Mods" / "Add Mod (archive)" /
+    /// "Add Mod (folder)" / "Link external folder"). Re-fires on a culture
+    /// change (live-refresh with the rest of the UI).
     /// </summary>
-    public string AddModeLabel =>
-        AddMode == ModAddMode.Folder
-            ? _localization["ModList_AddFolder"]
-            : _localization["ModList_AddArchive"];
+    public string AddModeLabel => AddMode switch
+    {
+        ModAddMode.NexusMods => _localization["ModList_AddNexusMods"],
+        ModAddMode.Archive => _localization["ModList_AddArchive"],
+        ModAddMode.Folder => _localization["ModList_AddFolder"],
+        ModAddMode.LinkExternal => _localization["ModList_LinkExternalFolder"],
+        _ => _localization["ModList_AddNexusMods"],
+    };
 
     /// <summary>
     /// The localized header label: "Mods". Shown for both the active-profile +
@@ -1199,6 +1223,55 @@ public partial class ModListViewModel : ObservableObject
         await _dialogs.ShowAlertAsync(
             _localization["ModList_OpenFilesFailedTitle"],
             _localization.Format("ModList_OpenFilesFailedMessage", modName, url));
+    }
+
+    /// <summary>
+    /// The command behind the "Add Nexus Mods" flyout item + the face button's
+    /// NexusMods mode (the Add split button's default): opens the Darktide Nexus
+    /// Mods games page in the user's default browser via the
+    /// <see cref="_launchExternal"/> seam, surfacing a fallback alert (with the
+    /// URL for manual copy) on a launch failure. Lets the user browse + download
+    /// mods; nxm:// links route back into Curator when it owns the OS handler.
+    /// </summary>
+    [RelayCommand]
+    private void AddNexusMods()
+    {
+        var url = NexusModsGamesUrl;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return;
+        }
+
+        try
+        {
+            if (!_launchExternal(uri))
+            {
+                // The seam returns false on a launch failure (no default browser,
+                // headless, etc.). Surface a fallback alert rather than swallowing
+                // it so the user can act (the URL is included for manual copy).
+                _logger.LogWarning("Opening the Nexus Mods games page failed.");
+                _ = ShowNexusModsLaunchFailedAlertAsync(url);
+            }
+        }
+        catch (Exception ex)
+        {
+            // The default launcher's exception filter is narrow; a real wiring
+            // bug surfaces here as a fallback alert rather than being swallowed.
+            _logger.LogError(ex, "Launching the Nexus Mods games page threw.");
+            _ = ShowNexusModsLaunchFailedAlertAsync(url);
+        }
+    }
+
+    /// <summary>
+    /// Shows the localized launcher-failure alert for the Nexus Mods games page
+    /// (fire-and-forget on the UI thread; the click handler is sync). Includes
+    /// the URL so the user can open it manually.
+    /// </summary>
+    private async Task ShowNexusModsLaunchFailedAlertAsync(string url)
+    {
+        await _dialogs.ShowAlertAsync(
+            _localization["ModList_OpenNexusModsFailedTitle"],
+            _localization.Format("ModList_OpenNexusModsFailedMessage", url));
     }
 
     /// <summary>

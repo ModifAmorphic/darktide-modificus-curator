@@ -160,9 +160,14 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           enabled + accent-blue arrow when flagged); Pinned/
                           Untracked rows keep the reserved cell but no button. The
                           rate-limit notice sits in the header. The Add split
-                          button gains a third flyout item, "Link external folder"
-                          (folder picker, no modal); `LinkModsCommand` peeks the
-                          base name, runs the collision check (excluding a re-link),
+                          button has four flyout items, all modes that set
+                          the default on click (the face label tracks the
+                          mode): "Add Nexus Mods" (the default; opens the
+                          Darktide Nexus Mods games page in the browser), "Add
+                          Mod (archive)", "Add Mod (folder)", and "Link
+                          external folder" (folder picker, no modal);
+                          `LinkModsCommand` peeks the base name, runs the
+                          collision check (excluding a re-link),
                           then `LinkFolder` + `AddMod(LatestPolicy)`. A linked row's
                           badge cell is a two-state indicator: available shows an
                           "External" pill (`OpenFolderCommand` opens the OS file
