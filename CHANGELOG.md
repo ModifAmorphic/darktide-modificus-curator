@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.1](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.22.0...v0.22.1) (2026-08-08)
+
+
+### Bug Fixes
+
+* **ui:** define app caution brushes undefined by FluentTheme ([#163](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/163)) ([566a1f6](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/566a1f643a8d7ea88182e5853f9a7e5119b36bdc))
+
 ## [0.22.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.21.0...v0.22.0) (2026-08-07)
 
 
