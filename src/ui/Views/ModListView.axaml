@@ -89,7 +89,7 @@
       <Border Grid.Column="2"
               Classes="rateLimitedNotice"
               IsVisible="{Binding IsRateLimitActive}"
-              Background="{DynamicResource SystemControlBackgroundCautionBrush}"
+              Background="{DynamicResource CuratorCautionBackgroundBrush}"
               CornerRadius="8"
               Padding="6,1"
               Margin="8,0,0,0"
@@ -97,7 +97,7 @@
               ToolTip.Tip="{Binding RateLimitedTooltip}">
         <StackPanel Orientation="Horizontal" Spacing="4">
           <Ellipse Width="6" Height="6"
-                   Fill="{DynamicResource SystemControlForegroundCautionBrush}"
+                   Fill="{DynamicResource CuratorCautionBrush}"
                    VerticalAlignment="Center" />
           <TextBlock Text="{Binding RateLimitedNoticeText}"
                      FontSize="11" VerticalAlignment="Center" />
@@ -322,7 +322,7 @@
                             IsVisible="{Binding IsLinkedBroken}"
                             ToolTip.Tip="{ReflectionBinding [ModRow_LinkedBrokenTooltip], Source={StaticResource Loc}}">
                       <TextBlock Text="{Binding SourceBadgeText}" FontSize="11"
-                                 Foreground="{DynamicResource SystemControlForegroundCautionBrush}" />
+                                 Foreground="{DynamicResource CuratorCautionBrush}" />
                     </Border>
                   </StackPanel>
 

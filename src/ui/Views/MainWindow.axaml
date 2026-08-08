@@ -159,7 +159,7 @@
                  Fill="#22A06B"
                  IsVisible="{Binding ShowRunningCleanDot}" />
         <Ellipse Width="11" Height="11" VerticalAlignment="Center"
-                 Fill="{DynamicResource SystemControlForegroundCautionBrush}"
+                 Fill="{DynamicResource CuratorCautionBrush}"
                  IsVisible="{Binding ShowRunningDirtyDot}" />
         <TextBlock Text="{Binding GameRunningText}"
                    FontSize="{DynamicResource AppStatusFontSize}" Opacity="0.8"
