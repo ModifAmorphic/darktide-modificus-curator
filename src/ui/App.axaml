@@ -17,29 +17,50 @@
     </Application.Styles>
 
     <Application.Resources>
-        <!--
-          The LocalizationService is exposed app-wide as a resource so every
-          view binds localized strings through one source + one instance:
-            <TextBlock Text="{Binding [App_Title], Source={StaticResource Loc}}" />
-          The instance is replaced with the real DI singleton at startup (in
-          App.OnFrameworkInitializationCompleted), so the XAML-time instance is
-          only a design-time placeholder.
-        -->
-        <loc:LocalizationService x:Key="Loc" />
-        <!--
-          Base UI font size, in pixels. The PreferencesService applies the user's
-          font scale by overwriting this resource; the Window style above binds
-          Window.FontSize to it, and child controls inherit. Default = unscaled
-          (overwritten at startup from the loaded config).
-        -->
-        <x:Double x:Key="AppFontSize">14</x:Double>
-        <!--
-          Status-strip font size, in pixels. Smaller than the body font (the
-          status strip is a secondary, low-emphasis line). The PreferencesService
-          overwrites it with the same scale as AppFontSize; MainWindow's status
-          TextBlock binds FontSize to it. Default = unscaled (overwritten at
-          startup from the loaded config).
-        -->
-        <x:Double x:Key="AppStatusFontSize">12</x:Double>
+        <ResourceDictionary>
+            <!--
+              App-owned caution brushes. Avalonia's FluentTheme ships no
+              SystemControl*Caution* keys (only Base*/Error*/Accent*/Chrome*),
+              so a DynamicResource to the SystemControl*Caution* names resolves
+              to null and renders nothing. These are the app-owned replacements;
+              do not revert to the SystemControl*Caution* names. ThemeDictionaries
+              Light/Dark resolve per the active theme and DynamicResource recolors
+              on a theme switch automatically.
+            -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="CuratorCautionBrush" Color="#8A6D00" />
+                    <SolidColorBrush x:Key="CuratorCautionBackgroundBrush" Color="#FFF1CC" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="CuratorCautionBrush" Color="#E2C019" />
+                    <SolidColorBrush x:Key="CuratorCautionBackgroundBrush" Color="#3D3200" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+            <!--
+              The LocalizationService is exposed app-wide as a resource so every
+              view binds localized strings through one source + one instance:
+                <TextBlock Text="{Binding [App_Title], Source={StaticResource Loc}}" />
+              The instance is replaced with the real DI singleton at startup (in
+              App.OnFrameworkInitializationCompleted), so the XAML-time instance is
+              only a design-time placeholder.
+            -->
+            <loc:LocalizationService x:Key="Loc" />
+            <!--
+              Base UI font size, in pixels. The PreferencesService applies the user's
+              font scale by overwriting this resource; the Window style above binds
+              Window.FontSize to it, and child controls inherit. Default = unscaled
+              (overwritten at startup from the loaded config).
+            -->
+            <x:Double x:Key="AppFontSize">14</x:Double>
+            <!--
+              Status-strip font size, in pixels. Smaller than the body font (the
+              status strip is a secondary, low-emphasis line). The PreferencesService
+              overwrites it with the same scale as AppFontSize; MainWindow's status
+              TextBlock binds FontSize to it. Default = unscaled (overwritten at
+              startup from the loaded config).
+            -->
+            <x:Double x:Key="AppStatusFontSize">12</x:Double>
+        </ResourceDictionary>
     </Application.Resources>
 </Application>
