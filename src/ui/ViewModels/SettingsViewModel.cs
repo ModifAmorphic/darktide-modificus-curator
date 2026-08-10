@@ -15,8 +15,9 @@ using Microsoft.Extensions.Logging;
 namespace Modificus.Curator.UI.ViewModels;
 
 /// <summary>
-/// The view model behind the Settings modal (<see cref="Views.SettingsWindow"/>).
-/// Three sections:
+/// The view model behind the Settings destination content (hosted by
+/// <see cref="Views.SettingsView"/>). Three
+/// sections:
 /// <list type="bullet">
 /// <item><description><b>Discovery:</b> the user-override paths
 /// (<c>UserSteamInstallPath</c>, <c>UserDarktideGameBinaryPath</c>,
@@ -26,8 +27,8 @@ namespace Modificus.Curator.UI.ViewModels;
 /// ignores them, so they would be silently ineffective on Windows). Each
 /// row's TextBox is pre-filled with the current override (or empty when the
 /// field is set to auto-discover). Editing writes the override immediately
-/// via a read-modify-save through <see cref="IConfigLoader"/> (the Track D
-/// Preferences pattern: apply + persist per change). An empty TextBox
+/// via a read-modify-save through <see cref="IConfigLoader"/> (apply + persist
+/// per change, mirroring the Preferences flow). An empty TextBox
 /// clears the override (writes <c>null</c>, so the field falls back to
 /// auto-discovery).</description></item>
 /// <item><description><b>Storage:</b> two buttons, each opening the OS file
@@ -60,10 +61,11 @@ public partial class SettingsViewModel : ObservableObject
     private readonly ILogger<SettingsViewModel> _logger;
 
     /// <summary>
-    /// True during the initial restore (constructing the VM pre-fills the bound
-    /// controls from the current config without re-writing each field back). The
-    /// values already match what is persisted, so re-writing would be a noisy
-    /// no-op.
+    /// True while <see cref="RefreshFromConfig"/> rehydrates the bound controls
+    /// from a live config snapshot (the initial fill at construction + later
+    /// rehydrations on entering Settings), so the row change callbacks + the
+    /// toggle change handler do not save. The values already match what is
+    /// persisted, so re-writing would be a noisy no-op.
     /// </summary>
     private bool _suppressApply;
 
@@ -124,51 +126,73 @@ public partial class SettingsViewModel : ObservableObject
         _logger = logger;
         _launchExternalPath = launchExternalPath ?? LaunchExternalPathDefault;
 
-        _suppressApply = true;
-        try
-        {
-            var discovery = _configLoader.Load().Discovery;
-
-            // Each discovery row's change callback is the write-through: the
-            // value lands in config (read-modify-save) the moment the TextBox
-            // edits (or the Browse picker sets it). Suppressed only during the
-            // initial restore, which is what pre-fills the boxes.
-            //
-            // Platform-gated: on Windows the compatdata + Proton overrides are
-            // Linux-only (WindowsLaunchStrategy.ComputeStatus never reads them,
-            // so surfacing them would be silently ineffective rows). Only the
-            // Steam install + Darktide binary rows render on Windows. The
-            // escape-hatch is already correct (it renders only the names in
-            // LaunchResult.MissingDiscoveryFields, which on Windows never
-            // includes the Linux-only ones).
-            DiscoveryRows = new ObservableCollection<DiscoveryFieldRowViewModel>(
-                DiscoveryFields.All
-                    .Where(field => OperatingSystem.IsLinux() || !IsLinuxOnlyField(field))
-                    .Select(field => new DiscoveryFieldRowViewModel(
-                        field,
-                        InitialValue(field, discovery),
-                        _localization,
-                        onValueChanged: WriteThroughDiscovery)));
-
-            // Pre-fill the app-update startup-check toggle. Inside the
-            // _suppressApply block so the OnCheckOnStartupChanged write-back is
-            // a no-op during the restore.
-            CheckOnStartup = _configLoader.Load().AppUpdates.CheckOnStartup;
-        }
-        finally
-        {
-            _suppressApply = false;
-        }
+        // Build the platform-gated discovery rows once (each carries its
+        // write-through callback + localization subscription). Initial values
+        // are populated by RefreshFromConfig below, so construction + later
+        // rehydrations share one restoration path.
+        //
+        // Platform-gated: on Windows the compatdata + Proton overrides are
+        // Linux-only (WindowsLaunchStrategy.ComputeStatus never reads them, so
+        // surfacing them would be silently ineffective rows). Only the Steam
+        // install + Darktide binary rows render on Windows. The escape-hatch is
+        // already correct (it renders only the names in
+        // LaunchResult.MissingDiscoveryFields, which on Windows never includes
+        // the Linux-only ones).
+        DiscoveryRows = new ObservableCollection<DiscoveryFieldRowViewModel>(
+            DiscoveryFields.All
+                .Where(field => OperatingSystem.IsLinux() || !IsLinuxOnlyField(field))
+                .Select(field => new DiscoveryFieldRowViewModel(
+                    field,
+                    initialValue: string.Empty,
+                    _localization,
+                    onValueChanged: WriteThroughDiscovery)));
 
         // Subscribe for the localized section headers + labels; the row VMs
         // each subscribe on their own.
         _localization.PropertyChanged += OnCultureChanged;
 
         // Subscribe to the app self-update state so a check that lands while
-        // Settings is open refreshes the inline status. Also reflect any result
-        // the startup check already published so the section shows the current
-        // state immediately on open.
+        // Settings is open refreshes the inline status. RefreshFromConfig then
+        // reflects any result the startup check already published so the section
+        // shows the current state immediately.
         _appUpdate.UpdateStateChanged += OnAppUpdateStateChanged;
+
+        // Populate the bound values from the live config + the app-update
+        // display state. Runs under the write-suppression guard so the row
+        // callbacks + toggle handler do not save.
+        RefreshFromConfig();
+    }
+
+    /// <summary>
+    /// Rehydrates the discovery row values + the startup-update toggle from a
+    /// live config snapshot, then refreshes the app-update display/command
+    /// state. Idempotent and safe to call repeatedly (the constructor calls it
+    /// once for the initial fill; the host calls it when entering Settings so
+    /// changes made through the discovery escape-hatch are visible on a later
+    /// visit). Executes under <see cref="_suppressApply"/> so the row change
+    /// callbacks + the toggle change handler do not save. Does not replace
+    /// <see cref="DiscoveryRows"/> or re-subscribe: existing row object
+    /// instances are preserved (their Value setters fire the change callbacks,
+    /// which the suppress guard no-ops).
+    /// </summary>
+    public void RefreshFromConfig()
+    {
+        var config = _configLoader.Load();
+
+        _suppressApply = true;
+        try
+        {
+            foreach (var row in DiscoveryRows)
+            {
+                row.Value = InitialValue(row.Field, config.Discovery);
+            }
+            CheckOnStartup = config.AppUpdates.CheckOnStartup;
+        }
+        finally
+        {
+            _suppressApply = false;
+        }
+
         RefreshAppUpdateStatus();
     }
 
@@ -235,8 +259,8 @@ public partial class SettingsViewModel : ObservableObject
     /// Persisted when the user flips <see cref="CheckOnStartup"/>. Read-modify-
     /// saves <c>CuratorConfig.AppUpdates.CheckOnStartup</c> (no caching, mirrors
     /// <c>IntegrationsViewModel.SaveAutoUpdateSettings</c>). Suppressed during
-    /// the initial restore so pre-filling the field does not trigger a redundant
-    /// write-back.
+    /// <see cref="RefreshFromConfig"/> so rehydrating the field does not trigger
+    /// a redundant write-back.
     /// </summary>
     partial void OnCheckOnStartupChanged(bool value)
     {
@@ -273,22 +297,6 @@ public partial class SettingsViewModel : ObservableObject
     /// Restart button's visibility + the download command's CanExecute.
     /// </summary>
     public bool IsAppUpdateAvailable => _appUpdate.LastCheckResult is not null;
-
-    /// <summary>
-    /// Detaches the VM's culture subscription + each row's, so the short-lived
-    /// dialog VM is collectable after its window closes (the localization service
-    /// is a singleton that outlives the dialog). Called by the Settings window
-    /// on close.
-    /// </summary>
-    public void Detach()
-    {
-        _localization.PropertyChanged -= OnCultureChanged;
-        _appUpdate.UpdateStateChanged -= OnAppUpdateStateChanged;
-        foreach (var row in DiscoveryRows)
-        {
-            row.Detach();
-        }
-    }
 
     /// <summary>
     /// Re-fires the localized derived strings (section headers) on a culture
@@ -529,7 +537,8 @@ public partial class SettingsViewModel : ObservableObject
     /// The write-through for a discovery field change: read-modify-save the
     /// matching <c>User*Path</c> in <see cref="DiscoveryConfig"/>. An empty /
     /// whitespace value writes <c>null</c> (clears the override -> auto-discover).
-    /// Suppressed during the initial restore.
+    /// Suppressed during <see cref="RefreshFromConfig"/> (the initial fill +
+    /// later rehydrations).
     /// </summary>
     private void WriteThroughDiscovery(DiscoveryFieldRowViewModel row)
     {

@@ -56,7 +56,7 @@ public enum ModAddMode
 /// state). All service calls live here; the view routes row interactions (toggle,
 /// move, policy, remove, open external folder) through code-behind handlers
 /// calling these commands with the row as the parameter (the established
-/// <c>ManageProfilesWindow</c> pattern).</para>
+/// per-row code-behind pattern).</para>
 /// <para><b>The join key is <see cref="ModContainer.Id"/></b> (the profile entry's
 /// identity): on reload, each entry's container is looked up via
 /// <see cref="IModRepository.Get"/> for the display name, source badge, and
@@ -470,13 +470,6 @@ public partial class ModListViewModel : ObservableObject
         _ => _localization["ModList_AddNexusMods"],
     };
 
-    /// <summary>
-    /// The localized header label: "Mods". Shown for both the active-profile +
-    /// no-profile states (the per-profile mod count was removed; the row list
-    /// itself is the count). Re-fires on a culture change.
-    /// </summary>
-    public string HeaderCountText => _localization["ModList_Header"];
-
     /// <summary>The localized empty-state message for the no-profile case.</summary>
     public string EmptyNoProfileText => _localization["ModList_EmptyNoProfile"];
 
@@ -565,7 +558,6 @@ public partial class ModListViewModel : ObservableObject
             return;
         }
 
-        OnPropertyChanged(nameof(HeaderCountText));
         OnPropertyChanged(nameof(EmptyNoProfileText));
         OnPropertyChanged(nameof(AddModsHintText));
         OnPropertyChanged(nameof(NxmDownloadHintText));

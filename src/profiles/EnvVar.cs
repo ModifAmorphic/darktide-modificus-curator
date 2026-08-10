@@ -9,7 +9,7 @@ namespace Modificus.Curator.Profiles;
 /// <remarks>
 /// <para>
 /// Stored as an ordered entry (not a dictionary key) so duplicate-name
-/// detection happens in <see cref="IProfileService.SetLaunchSettings"/>
+/// detection happens in <see cref="IProfileService.UpdateProfile"/>
 /// validation, not as silent dictionary collapse at the storage boundary. The
 /// pair is stored exactly: values may carry spaces or be empty, and a name is
 /// stored verbatim (case is preserved on save; duplicate detection is
@@ -21,8 +21,8 @@ namespace Modificus.Curator.Profiles;
 /// </remarks>
 /// <param name="Name">The environment-variable name. Validated (non-empty, no
 /// <c>=</c>, no NUL, not a reserved name, unique case-insensitively) at
-/// <see cref="IProfileService.SetLaunchSettings"/>.</param>
+/// <see cref="IProfileService.UpdateProfile"/>.</param>
 /// <param name="Value">The environment-variable value, stored exactly
 /// (spaces + empty values preserved; NUL rejected at
-/// <see cref="IProfileService.SetLaunchSettings"/>).</param>
+/// <see cref="IProfileService.UpdateProfile"/>).</param>
 public sealed record EnvVar(string Name, string Value);

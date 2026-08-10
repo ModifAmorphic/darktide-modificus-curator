@@ -202,6 +202,96 @@ public sealed class SettingsViewModelTests
         Assert.Equal("/new/steam", loader.LastSaved.Discovery.UserSteamInstallPath);
     }
 
+    // ---- RefreshFromConfig (hosted rehydrate) ----------------------------
+    //
+    // The hosted VM stays alive across navigation. When the discovery escape-
+    // hatch (or any other surface) writes new overrides + a new CheckOnStartup
+    // to config while Settings is away, RefreshFromConfig reflects them on the
+    // next visit without persisting.
+
+    [Fact]
+    public void RefreshFromConfig_reflects_external_changes_without_saving()
+    {
+        var (vm, loader, _) = Build();
+        Assert.True(vm.CheckOnStartup); // default
+
+        // Simulate external writes to the live config (e.g. the escape-hatch).
+        var external = CuratorConfig.CreateDefault();
+        external.Discovery = new DiscoveryConfig
+        {
+            UserSteamInstallPath = "/ext/steam",
+            UserDarktideGameBinaryPath = "/ext/darktide.exe",
+            UserCompatdataPath = "/ext/compat",
+            UserProtonBinaryPath = "/ext/proton",
+        };
+        external.AppUpdates.CheckOnStartup = false;
+        loader.Config = external;
+
+        vm.RefreshFromConfig();
+
+        Assert.Equal("/ext/steam", Row(vm, "SteamInstallPath").Value);
+        Assert.Equal("/ext/darktide.exe", Row(vm, "DarktideGameBinaryPath").Value);
+        // Compatdata + Proton are platform-gated rows; assert only on Linux.
+        if (OperatingSystem.IsLinux())
+        {
+            Assert.Equal("/ext/compat", Row(vm, "CompatdataPath").Value);
+            Assert.Equal("/ext/proton", Row(vm, "ProtonBinaryPath").Value);
+        }
+        Assert.False(vm.CheckOnStartup);
+        // Zero saves: rehydrating from config must not write back.
+        Assert.Equal(0, loader.SaveCalls);
+    }
+
+    [Fact]
+    public void RefreshFromConfig_preserves_the_same_row_object_instances()
+    {
+        // Rehydrating must update the existing rows' values in place rather than
+        // replacing the collection (which would re-bind + lose any per-row view
+        // state on a hosted page).
+        var (vm, loader, _) = Build();
+        var before = vm.DiscoveryRows.ToArray();
+
+        var external = CuratorConfig.CreateDefault();
+        external.Discovery = new DiscoveryConfig { UserSteamInstallPath = "/new/steam" };
+        loader.Config = external;
+
+        vm.RefreshFromConfig();
+
+        // Same instances, same order (reference equality).
+        Assert.True(before.SequenceEqual(vm.DiscoveryRows));
+        Assert.Equal("/new/steam", Row(vm, "SteamInstallPath").Value);
+        Assert.Equal(0, loader.SaveCalls);
+    }
+
+    [Fact]
+    public void RefreshFromConfig_is_safe_and_repeatable()
+    {
+        // Idempotent + repeatable: calling it multiple times writes nothing.
+        var (vm, loader, _) = Build();
+
+        vm.RefreshFromConfig();
+        vm.RefreshFromConfig();
+        vm.RefreshFromConfig();
+
+        Assert.Equal(0, loader.SaveCalls);
+    }
+
+    [Fact]
+    public void RefreshFromConfig_does_not_save_when_clearing_an_override()
+    {
+        // Restoring an empty value (a cleared override) must not save either:
+        // the suppress guard covers the row callback regardless of direction.
+        var (vm, loader, _) = Build(new DiscoveryConfig { UserSteamInstallPath = "/old" });
+        Assert.Equal("/old", Row(vm, "SteamInstallPath").Value);
+
+        loader.Config = CuratorConfig.CreateDefault(); // all overrides cleared
+
+        vm.RefreshFromConfig();
+
+        Assert.Equal(string.Empty, Row(vm, "SteamInstallPath").Value);
+        Assert.Equal(0, loader.SaveCalls);
+    }
+
     // ---- Storage: Open Data Folder ---------------------------------------
     //
     // OpenDataFolder targets a static path (AppPaths.AppDataDir, the Curator

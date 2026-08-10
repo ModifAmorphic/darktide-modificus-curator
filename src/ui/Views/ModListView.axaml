@@ -69,24 +69,16 @@
 
   <Grid RowDefinitions="Auto,*" Margin="20,12,20,12">
 
-    <!-- Header: title + check-now refresh + rate-limit notice + auto-sort
-         toggle + Add split button (hidden until a profile is active). The title
-         reads the plain "Mods" label (no count; the row list itself is the
-         count). The rate-limit notice sits after the refresh button it
-         describes. -->
+    <!-- Header: check-now refresh + rate-limit notice + auto-sort toggle +
+         Add split button (hidden until a profile is active). The destination
+         title lives in the global shell header; this toolbar shows only the
+         Mods-specific actions. The rate-limit notice sits after the refresh
+         button it describes. -->
     <Grid Grid.Row="0"
-          ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto"
+          ColumnDefinitions="Auto,Auto,*,Auto,Auto"
           IsVisible="{Binding HasActiveProfile}"
           Margin="0,0,0,8">
-      <!-- Title: the plain localized "Mods" label (no count; the row list itself
-           is the count). Bound to HeaderCountText so it live-refreshes on a
-           culture change (the VM re-fires the property). Sits in column 0,
-           immediately before the refresh button + the rate-limit notice. -->
-      <TextBlock Grid.Column="0"
-                 Text="{Binding HeaderCountText}"
-                 FontSize="16" FontWeight="SemiBold"
-                 VerticalAlignment="Center" />
-      <Border Grid.Column="2"
+      <Border Grid.Column="1"
               Classes="rateLimitedNotice"
               IsVisible="{Binding IsRateLimitActive}"
               Background="{DynamicResource CuratorCautionBackgroundBrush}"
@@ -121,8 +113,8 @@
         live m:ss countdown ("Rate limiting protection enabled. Manual refresh
         will be available again in {time}.") while the manual throttle is active.
       -->
-      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
-                  Margin="8,0,0,0" VerticalAlignment="Center">
+      <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6"
+                  VerticalAlignment="Center">
         <Button Classes="icon"
                 Click="RefreshUpdates_Click"
                 IsEnabled="{Binding IsRefreshEnabled}"
@@ -151,7 +143,7 @@
         IdentityModOrderResolver registration) stays intact so the seam drops in
         without a UI change; only the control is collapsed out of layout.
       -->
-      <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Margin="16,0,0,0"
+      <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Margin="16,0,0,0"
                   IsVisible="False">
         <CheckBox IsChecked="{Binding AutoSortEnabled, Mode=TwoWay}"
                   Click="AutoSort_Click"
@@ -168,7 +160,7 @@
         (separate because a native picker cannot mix files + folders), and "Link
         external folder". The arrow is built-in theme chrome (no authored glyph).
       -->
-      <SplitButton Grid.Column="5"
+      <SplitButton Grid.Column="4"
                    Click="Add_Click"
                    ToolTip.Tip="{ReflectionBinding [ModList_AddButtonTooltip], Source={StaticResource Loc}}"
                    Margin="16,0,0,0"

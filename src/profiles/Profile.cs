@@ -11,11 +11,27 @@ namespace Modificus.Curator.Profiles;
 /// </remarks>
 public sealed class Profile
 {
+    /// <summary>
+    /// The maximum length of <see cref="Description"/>, in characters, after
+    /// trimming. Enforced at the service boundary (<see cref="IProfileService"/>).
+    /// </summary>
+    public const int DescriptionMaxLength = 120;
+
     /// <summary>Stable identity; also the on-disk directory name.</summary>
     public Guid Id { get; init; }
 
-    /// <summary>Display name. Renamable via <see cref="IProfileService.RenameProfile"/>.</summary>
+    /// <summary>Display name. Editable via <see cref="IProfileService.UpdateProfile"/>.</summary>
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// A short, single-line description shown in the profile banner + picker.
+    /// Defaults to empty; trimmed at the service boundary. Mutable setter for
+    /// STJ deserialization (like <see cref="Name"/>); changes go through
+    /// <see cref="IProfileService"/>. Coerced from JSON <c>null</c> / missing
+    /// property to empty on read (mirrors <see cref="LaunchSettings"/>'s
+    /// normalization).
+    /// </summary>
+    public string Description { get; set; } = string.Empty;
 
     /// <summary>When the profile was first created (UTC).</summary>
     public DateTimeOffset CreatedAt { get; init; }
@@ -34,7 +50,7 @@ public sealed class Profile
     /// command-line arguments). Defaults to a non-null empty instance so a
     /// freshly-created profile serializes it. Mutable setter for STJ
     /// deserialization (like <see cref="Mods"/>); changes go through
-    /// <see cref="IProfileService.SetLaunchSettings"/>, which validates +
+    /// <see cref="IProfileService.UpdateProfile"/>, which validates +
     /// rebuilds + persists. Coerced from JSON <c>null</c> / missing property to
     /// an empty instance on read (mirrors <see cref="Mods"/>'s normalization).
     /// </summary>

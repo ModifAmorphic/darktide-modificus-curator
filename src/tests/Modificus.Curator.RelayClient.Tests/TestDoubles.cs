@@ -68,12 +68,6 @@ internal sealed class FakeProfileService : IProfileService
     /// </summary>
     public LaunchSettings LaunchSettingsResult { get; set; } = new();
 
-    /// <summary>The (profileId, settings) pairs passed to
-    /// <see cref="SetLaunchSettings"/>, in call order. The launch path never
-    /// calls the setter; the launch-settings UI does.</summary>
-    public IReadOnlyList<(Guid Id, LaunchSettings Settings)> SetLaunchSettingsCalls { get; }
-        = new List<(Guid, LaunchSettings)>();
-
     public Guid LastPrepareModRootId { get; private set; }
     public int PrepareModRootCalls { get; private set; }
 
@@ -96,8 +90,8 @@ internal sealed class FakeProfileService : IProfileService
     // The remainder of the surface is unused by the launch path.
     public IReadOnlyList<ProfileSummary> ListProfiles() => throw new NotSupportedException();
     public Profile GetProfile(Guid id) => throw new NotSupportedException();
-    public Profile CreateProfile(string name) => throw new NotSupportedException();
-    public void RenameProfile(Guid id, string newName) => throw new NotSupportedException();
+    public Profile CreateProfile(string name, string description, LaunchSettings launchSettings) => throw new NotSupportedException();
+    public void UpdateProfile(Guid id, string name, string description, LaunchSettings launchSettings) => throw new NotSupportedException();
     public void DeleteProfile(Guid id) => throw new NotSupportedException();
     public IReadOnlyList<ModListEntry> GetModList(Guid id) => throw new NotSupportedException();
     public void SetModOrder(Guid id, IReadOnlyList<Guid> containerIdsInOrder) => throw new NotSupportedException();
@@ -108,9 +102,6 @@ internal sealed class FakeProfileService : IProfileService
     public ModListEntry? GetBaseNameCollision(Guid id, string baseName, Guid? excludeContainerId) => throw new NotSupportedException();
 
     public LaunchSettings GetLaunchSettings(Guid id) => LaunchSettingsResult;
-
-    public void SetLaunchSettings(Guid id, LaunchSettings settings) =>
-        ((List<(Guid, LaunchSettings)>)SetLaunchSettingsCalls).Add((id, settings));
 }
 
 /// <summary>Hand-rolled test double for <see cref="ISteamService"/>.</summary>

@@ -110,7 +110,7 @@ internal sealed class ProfileService : IProfileService
             try
             {
                 var profile = ReadProfileFile(dir);
-                summaries.Add(new ProfileSummary(id, profile.Name));
+                summaries.Add(new ProfileSummary(id, profile.Name, profile.Description));
             }
             catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
             {
@@ -132,20 +132,23 @@ internal sealed class ProfileService : IProfileService
     }
 
     /// <inheritdoc />
-    public Profile CreateProfile(string name)
+    public Profile CreateProfile(string name, string description, LaunchSettings launchSettings)
     {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            throw new ArgumentException("Profile name must not be null or whitespace.", nameof(name));
-        }
+        // Validate + normalize every input before any filesystem touch, so an
+        // invalid input writes nothing (no partial profile directory or json).
+        ArgumentNullException.ThrowIfNull(launchSettings);
+        var (normalizedName, normalizedDescription) = ValidateAndNormalizeProfileMetadata(name, description);
+        ValidateLaunchSettings(launchSettings);
 
         var baseFolder = EnsureBaseFolder();
         var profile = new Profile
         {
             Id = Guid.NewGuid(),
-            Name = name,
+            Name = normalizedName,
+            Description = normalizedDescription,
             CreatedAt = DateTimeOffset.UtcNow,
             Mods = Array.Empty<ModListEntry>(),
+            LaunchSettings = launchSettings,
         };
 
         // Scaffold the profile dir + staged/ before persisting so a crash between
@@ -159,29 +162,37 @@ internal sealed class ProfileService : IProfileService
 
         // Notify subscribers (the DMF new-profile prompt coordinator). Raised
         // AFTER the persist committed so a subscriber that reads the profile
-        // back sees it. Raised synchronously; subscribers are expected to defer
-        // any UI work (the coordinator records the signal + processes it once
-        // the owning dialog closes, to avoid a dialog-on-dialog).
-        ProfileCreated?.Invoke(this, new ProfileSummary(profile.Id, profile.Name));
+        // back sees it. Raised synchronously; the hosted Profiles page, which
+        // drives the create, resolves the coordinator before any create can run
+        // and awaits its processing immediately after the create + activation.
+        ProfileCreated?.Invoke(this, new ProfileSummary(profile.Id, profile.Name, profile.Description));
 
         return profile;
     }
 
     /// <inheritdoc />
-    public void RenameProfile(Guid id, string newName)
+    public void UpdateProfile(Guid id, string name, string description, LaunchSettings launchSettings)
     {
-        if (string.IsNullOrWhiteSpace(newName))
-        {
-            throw new ArgumentException("Profile name must not be null or whitespace.", nameof(newName));
-        }
+        // Validate + normalize every input before reading or writing, so an
+        // invalid input leaves the existing profile file unchanged. One read +
+        // one write: Id/CreatedAt/Mods/order/enabled/policies are preserved by
+        // mutating only Name/Description/LaunchSettings on the loaded aggregate.
+        ArgumentNullException.ThrowIfNull(launchSettings);
+        var (normalizedName, normalizedDescription) = ValidateAndNormalizeProfileMetadata(name, description);
+        ValidateLaunchSettings(launchSettings);
 
         var baseFolder = EnsureBaseFolder();
+        // ReadProfileFile throws KeyNotFoundException via EnsureReadable when the
+        // profile is unknown (the caller's contract).
         var profile = ReadProfileFile(ProfileDir(baseFolder, id));
-        var previous = profile.Name;
-        profile.Name = newName;
+        var previousName = profile.Name;
+        profile.Name = normalizedName;
+        profile.Description = normalizedDescription;
+        profile.LaunchSettings = launchSettings;
         WriteProfileFile(profile, baseFolder);
 
-        _logger.LogInformation("Renamed profile {Id} '{Previous}' -> '{Name}'", id, previous, newName);
+        _logger.LogInformation(
+            "Updated profile {Id} ('{Previous}' -> '{Name}')", id, previousName, profile.Name);
     }
 
     /// <inheritdoc />
@@ -536,26 +547,50 @@ internal sealed class ProfileService : IProfileService
         return ReadProfileFile(ProfileDir(baseFolder, id)).LaunchSettings;
     }
 
-    /// <inheritdoc />
-    public void SetLaunchSettings(Guid id, LaunchSettings settings)
+    /// <summary>
+    /// Validates and normalizes the name + description shared by
+    /// <see cref="CreateProfile(string, string, LaunchSettings)"/> and
+    /// <see cref="UpdateProfile"/>. Returns the trimmed values. Throws before any
+    /// filesystem touch on violation so callers can perform all validation up
+    /// front and leave nothing partially persisted.
+    /// </summary>
+    /// <remarks>
+    /// Name follows the existing service posture (reject null/empty/whitespace
+    /// as <see cref="ArgumentException"/>). Description is non-null at the
+    /// boundary (<see cref="ArgumentNullException"/>), rejects CR/LF anywhere
+    /// (single-line invariant), is trimmed, and is capped at
+    /// <see cref="Profile.DescriptionMaxLength"/> characters after trim; empty
+    /// after trim is allowed.
+    /// </remarks>
+    private static (string Name, string Description) ValidateAndNormalizeProfileMetadata(
+        string name, string description)
     {
-        ArgumentNullException.ThrowIfNull(settings);
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new ArgumentException("Profile name must not be null or whitespace.", nameof(name));
+        }
 
-        ValidateLaunchSettings(settings);
+        ArgumentNullException.ThrowIfNull(description);
 
-        var baseFolder = EnsureBaseFolder();
-        // Rebuild the aggregate preserving Name/Id/CreatedAt/Mods: only the
-        // LaunchSettings field changes. ReadProfileFile throws KeyNotFoundException
-        // when the profile is unknown (the caller's contract).
-        var profile = ReadProfileFile(ProfileDir(baseFolder, id));
-        profile.LaunchSettings = settings;
-        WriteProfileFile(profile, baseFolder);
+        // Single-line invariant: reject CR/LF anywhere in the raw value (not just
+        // after trim). A description that trims to empty but carried a newline is
+        // still rejected, since any embedded line break breaks the single-line UI.
+        if (description.IndexOf('\r') >= 0 || description.IndexOf('\n') >= 0)
+        {
+            throw new ArgumentException(
+                "Profile description must not contain carriage return or line feed characters.",
+                nameof(description));
+        }
 
-        // Log only counts (profile files are plaintext; values must never reach
-        // the logs). Names are not logged either to keep this conservative.
-        _logger.LogInformation(
-            "Set launch settings for profile {Id}: {EnvCount} env var(s), {ArgCount} game arg(s).",
-            id, settings.EnvironmentVariables.Count, settings.GameArguments.Count);
+        var trimmedDescription = description.Trim();
+        if (trimmedDescription.Length > Profile.DescriptionMaxLength)
+        {
+            throw new ArgumentException(
+                $"Profile description must be at most {Profile.DescriptionMaxLength} characters after trim.",
+                nameof(description));
+        }
+
+        return (name.Trim(), trimmedDescription);
     }
 
     /// <summary>
@@ -735,6 +770,12 @@ internal sealed class ProfileService : IProfileService
         // file explicitly carries null (e.g. a hand-edit). Coerce Mods so
         // downstream enumeration never NRE.
         profile.Mods ??= Array.Empty<ModListEntry>();
+
+        // Same coercion for Description (missing property or explicit JSON null
+        // both deserialize to null for the ref-type prop). Mirrors the
+        // LaunchSettings ??= new() normalization: a pre-description profile.json
+        // loads with an empty description, and a hand-edited null is healed.
+        profile.Description ??= string.Empty;
 
         // Same coercion for LaunchSettings (missing property or explicit JSON
         // null both deserialize to null for the ref-type prop). Mirrors the

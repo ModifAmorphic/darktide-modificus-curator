@@ -173,7 +173,7 @@ same source commit and version.
   The portable build is compiled without `-p:CuratorUseVelopack`, so it uses
   `NoopAppUpdateService` and does not support in-app self-update; download a
   newer ZIP manually to update. `nxm://` registration is handled at runtime
-  via the Integrations dialog, not automatically on first launch.
+  via the Nexus Integrations destination, not automatically on first launch.
 
 The Windows user-data root (profiles, mods, config, logs) is deliberately
 separate from the install root, at `%LOCALAPPDATA%\ModifAmorphic\Modificus Curator\`
@@ -428,8 +428,8 @@ install root, then:
 - Warns (non-fatal) if `dotnet --list-runtimes` does not list
   `Microsoft.NETCore.App 10.`.
 
-The Integrations dialog handles explicit `nxm://` registration; neither
-installer duplicates that system association.
+The Nexus Integrations destination handles explicit `nxm://` registration;
+neither installer duplicates that system association.
 
 The standalone installer supports testing overrides (`INSTALL_ROOT`, `BIN_LINK`,
 `CURATOR_REPO`, `CURATOR_ARCHIVE`, `CURATOR_PRERELEASE`) so extraction +

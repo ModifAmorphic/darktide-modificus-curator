@@ -94,8 +94,9 @@ public static class CuratorComposition
         // UI surface. MainWindow is a singleton: the desktop lifetime installs
         // the resolved instance as desktop.MainWindow, and DialogService resolves
         // the same one as the owner for modal dialogs. IProfileSession is the
-        // single active-profile + running-state authority shared by the shell and
-        // the manage-profiles dialog (its polling timer drives the live status).
+        // single active-profile + running-state authority shared by the shell,
+        // the Profiles destination, and the hosted page VMs (its polling timer
+        // drives the live status).
         // LocalizationService + IPreferencesService are the i18n + preference
         // authorities (singletons so the whole app shares one culture + theme).
         services.AddSingleton<IProfileSession>(sp => new ProfileSession(
@@ -170,14 +171,68 @@ public static class CuratorComposition
                 // launchExternalPath fall back to their production defaults.
                 nxmRegistrar: sp.GetService<INxmHandlerRegistrar>());
         });
+
+        // The hosted destination view models: singletons (one instance per page,
+        // kept alive + subscribed for the application lifetime). Each page VM is
+        // injected into ShellViewModel and bound in MainWindow to its hosted
+        // UserControl. Registered with the same production dependencies the
+        // DialogService previously wired for each Window-constructed VM
+        // (UI-thread marshal, typed logger, platform-resolved seams).
+        //
+        // ProfilesViewModel resolves DmfPromptService eagerly inside the factory
+        // body and captures that concrete instance in the processPendingDmf
+        // delegate. The coordinator constructor subscribes to the synchronous
+        // IProfileService.ProfileCreated event, so resolving ProfilesViewModel
+        // (which resolving ShellViewModel does at startup) establishes the
+        // subscription before any profile can be created: when ProfilesViewModel
+        // SaveAsync later calls CreateProfile, the event fires synchronously into
+        // the already-subscribed coordinator, which records it as pending, and
+        // ProfilesViewModel awaits processPendingDmf immediately after the
+        // create + activation. The delegate closures stay focused
+        // (ProcessPendingAsync + ModListViewModel.Reload); no navigation or
+        // mod-list interface is introduced for those two calls.
+        services.AddSingleton<ProfilesViewModel>(sp =>
+        {
+            var dmf = sp.GetRequiredService<DmfPromptService>();
+            return new ProfilesViewModel(
+                sp.GetRequiredService<IProfileService>(),
+                sp.GetRequiredService<IProfileSession>(),
+                sp.GetRequiredService<IDialogService>(),
+                sp.GetRequiredService<LocalizationService>(),
+                processPendingDmf: () => dmf.ProcessPendingAsync(),
+                reloadModList: () => sp.GetRequiredService<ModListViewModel>().Reload(),
+                sp.GetRequiredService<ILogger<ProfilesViewModel>>());
+        });
+        services.AddSingleton(sp => new IntegrationsViewModel(
+            sp.GetRequiredService<INexusAuthService>(),
+            sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<IConfigLoader>(),
+            sp.GetRequiredService<IDialogService>(),
+            sp.GetService<INxmHandlerRegistrar>(),
+            sp.GetRequiredService<ILogger<IntegrationsViewModel>>()));
+        services.AddSingleton(sp => new PreferencesViewModel(
+            sp.GetRequiredService<IPreferencesService>(),
+            sp.GetRequiredService<IConfigLoader>(),
+            sp.GetRequiredService<LocalizationService>(),
+            OperatingSystem.IsWindows()));
+        services.AddSingleton(sp => new SettingsViewModel(
+            sp.GetRequiredService<IConfigLoader>(),
+            sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<IAppUpdateService>(),
+            sp.GetRequiredService<IDialogService>(),
+            sp.GetRequiredService<Action<Action>>(),
+            sp.GetRequiredService<ILogger<SettingsViewModel>>()));
+
         services.AddSingleton(sp => new ShellViewModel(
-            sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IRelayLaunchService>(),
             sp.GetRequiredService<IDialogService>(),
-            sp.GetRequiredService<DmfPromptService>(),
             sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<ProfilesViewModel>(),
             sp.GetRequiredService<ModListViewModel>(),
+            sp.GetRequiredService<IntegrationsViewModel>(),
+            sp.GetRequiredService<PreferencesViewModel>(),
+            sp.GetRequiredService<SettingsViewModel>(),
             sp.GetRequiredService<IAppUpdateService>(),
             sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<ShellViewModel>>(),
@@ -189,16 +244,8 @@ public static class CuratorComposition
         services.AddSingleton<IDialogService>(sp =>
             new DialogService(
                 sp.GetRequiredService<MainWindow>(),
-                sp.GetRequiredService<IProfileService>(),
-                sp.GetRequiredService<IProfileSession>(),
-                sp.GetRequiredService<IPreferencesService>(),
                 sp.GetRequiredService<LocalizationService>(),
-                sp.GetRequiredService<IConfigLoader>(),
-                sp.GetRequiredService<INexusAuthService>(),
-                sp.GetRequiredService<IAppUpdateService>(),
-                sp.GetRequiredService<Action<Action>>(),
-                sp.GetService<INxmHandlerRegistrar>(),
-                sp.GetRequiredService<ILoggerFactory>()));
+                sp.GetRequiredService<IConfigLoader>()));
 
         // The UI-layer glue that fires an update check
         // (IUpdateCheckService, registered above via AddIntegrations) on the
@@ -261,14 +308,16 @@ public static class CuratorComposition
             sp.GetRequiredService<ILogger<AppUpdateCheckRunner>>()));
 
         // The DMF (Darktide Mod Framework) install-prompt coordinator.
-        // Subscribes to IProfileService.ProfileCreated (fires from inside the
-        // ManageProfiles dialog), records it as pending, and the shell calls
-        // ProcessPendingAsync after that dialog closes so the DMF prompt is the
-        // topmost modal at that point (no dialog-on-dialog). Singleton: owns the
-        // event subscription for the app lifetime. Takes the optional nxm
-        // registrar so the download confirm can tailor its message to whether
-        // Curator owns the nxm handler (manager-download vs. manual-import
-        // guidance).
+        // Subscribes to the synchronous IProfileService.ProfileCreated event at
+        // construction. When ProfilesViewModel.SaveAsync later calls
+        // CreateProfile (firing ProfileCreated), the already-subscribed
+        // coordinator records it as pending; ProfilesViewModel then awaits the
+        // captured processPendingDmf delegate immediately after the create +
+        // activation, so the DMF prompt runs as the topmost modal with no
+        // intermediate destination. Singleton: owns the event subscription for
+        // the app lifetime. Takes the optional nxm registrar so the download
+        // confirm can tailor its message to whether Curator owns the nxm handler
+        // (manager-download vs. manual-import guidance).
         services.AddSingleton(sp => new DmfPromptService(
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IProfileSession>(),
@@ -282,16 +331,16 @@ public static class CuratorComposition
 
         // The first-run Welcome onboarding coordinator. Shows the Welcome modal
         // once, the first time the app starts with onboarding not yet complete,
-        // persists completion, and on a "Set up Nexus" choice opens the shell's
-        // full Integrations flow (resolved lazily through ShellViewModel so the
-        // nxm handler status refresh applies after the Welcome-driven dialog
-        // too). Singleton: owns the in-process "already shown" guard. Started
-        // from App after the main window opens; best-effort, never blocks
-        // startup.
+        // persists completion, and on a "Set up Nexus" choice navigates the shell
+        // to Nexus Integrations (resolved lazily through ShellViewModel's
+        // navigation entry point, so the leave-Integrations nxm/mod-list refresh
+        // applies after the Welcome-driven visit too). Singleton: owns the
+        // in-process "already shown" guard. Started from App after the main
+        // window opens; best-effort, never blocks startup.
         services.AddSingleton(sp => new OnboardingService(
             sp.GetRequiredService<IAppStateStore>(),
             sp.GetRequiredService<IDialogService>(),
-            () => sp.GetRequiredService<ShellViewModel>().OpenIntegrationsAsync(),
+            () => sp.GetRequiredService<ShellViewModel>().NavigateToIntegrationsAsync(),
             sp.GetRequiredService<ILogger<OnboardingService>>()));
 
         var provider = services.BuildServiceProvider();

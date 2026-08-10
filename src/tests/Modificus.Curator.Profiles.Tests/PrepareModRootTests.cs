@@ -18,7 +18,7 @@ public sealed class PrepareModRootTests
     public void Returns_staged_path_and_writes_mods_lst()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
 
@@ -33,7 +33,7 @@ public sealed class PrepareModRootTests
     public void ModsLst_lists_staged_enabled_mods_in_order_one_per_line_with_trailing_newline()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var a = fx.AddContainerWithVersion("DMF");
         var b = fx.AddContainerWithVersion("ModB");
         var c = fx.AddContainerWithVersion("ModC");
@@ -52,7 +52,7 @@ public sealed class PrepareModRootTests
     public void ModsLst_omits_disabled_mods()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var a = fx.AddContainerWithVersion("DMF");
         var b = fx.AddContainerWithVersion("DisabledMod");
         fx.Service.AddMod(profile.Id, a.Id, ModVersionPolicy.Latest);
@@ -68,7 +68,7 @@ public sealed class PrepareModRootTests
     public void ModsLst_is_empty_file_when_no_enabled_mods()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P"); // no mods at all
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings()); // no mods at all
 
         fx.Service.PrepareModRoot(profile.Id);
 
@@ -80,7 +80,7 @@ public sealed class PrepareModRootTests
     public void ModsLst_is_empty_file_when_all_mods_disabled()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
         fx.Service.SetModEnabled(profile.Id, container.Id, enabled: false);
@@ -94,7 +94,7 @@ public sealed class PrepareModRootTests
     public void ModsLst_is_utf8_without_bom()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
 
@@ -110,7 +110,7 @@ public sealed class PrepareModRootTests
     public void PrepareModRoot_is_idempotent_on_repeat_calls()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var a = fx.AddContainerWithVersion("DMF");
         var b = fx.AddContainerWithVersion("ModB");
         fx.Service.AddMod(profile.Id, a.Id, ModVersionPolicy.Latest);
@@ -130,7 +130,7 @@ public sealed class PrepareModRootTests
     public void PrepareModRoot_reflects_latest_state_after_changes()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var a = fx.AddContainerWithVersion("DMF");
         var b = fx.AddContainerWithVersion("ModB");
         fx.Service.AddMod(profile.Id, a.Id, ModVersionPolicy.Latest);

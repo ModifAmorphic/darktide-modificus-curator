@@ -302,12 +302,12 @@ public sealed class IntegrationsViewModelTests
     }
 
     [Fact]
-    public async Task LoginWithOAuth_is_canceled_when_dialog_detaches()
+    public async Task LoginWithOAuth_is_canceled_when_VM_is_deactivated()
     {
-        // The Integrations dialog calls Detach from OnClosed. Detach cancels the
-        // in-flight login's token so the singleton LoopbackBrowser's listener
-        // is freed promptly instead of waiting out the 3-minute flow timeout
-        // (the retry-without-restart bug). The fake's login task completes as
+        // Navigation away calls Deactivate. Deactivate cancels the in-flight
+        // login's token so the singleton LoopbackBrowser's listener is freed
+        // promptly instead of waiting out the 3-minute flow timeout (the
+        // retry-without-restart bug). The fake's login task completes as
         // canceled when the token it was handed fires.
         var (vm, auth, _, _) = await BuildAndRefresh(state: null);
         auth.CancelOAuthOnToken = true;
@@ -315,7 +315,7 @@ public sealed class IntegrationsViewModelTests
         var commandTask = vm.LoginWithOAuthCommand.ExecuteAsync(null);
         Assert.NotNull(auth.LastOAuthTask);
 
-        vm.Detach();
+        vm.Deactivate();
 
         // The login task must cancel promptly (not hang for the 3-minute
         // timeout). Assert it finishes within 2s and lands in the canceled state.
@@ -457,17 +457,86 @@ public sealed class IntegrationsViewModelTests
         Assert.True(vm.LoginWithOAuthCommand.CanExecute(null));
     }
 
-    // ---- Detach -----------------------------------------------------------
+    // ---- Deactivate (navigation away) + Detach (final cleanup) -----------
 
     [Fact]
-    public async Task Detach_is_safe_to_call_after_construction()
+    public async Task Deactivate_is_safe_to_call_after_construction()
     {
-        // Detach drops the localization subscription so the short-lived dialog
-        // VM is collectable after its window closes. It must be a safe no-op
-        // that does not throw.
+        // Deactivate is the navigation-away operation. With nothing in flight it
+        // must be a safe no-op that does not throw.
         var (vm, _, _, _) = await BuildAndRefresh(state: null);
 
-        vm.Detach();
+        vm.Deactivate();
+    }
+
+    [Fact]
+    public async Task Deactivate_is_idempotent()
+    {
+        // Repeated navigation-away must not throw (e.g. deactivate -> deactivate
+        // on a confirm-cancel path).
+        var (vm, auth, _, _) = await BuildAndRefresh(state: null);
+        auth.CancelOAuthOnToken = true;
+
+        var commandTask = vm.LoginWithOAuthCommand.ExecuteAsync(null);
+        Assert.NotNull(auth.LastOAuthTask);
+
+        vm.Deactivate();
+        vm.Deactivate(); // second cancel on a null CTS must be a safe no-op
+
+        await commandTask;
+        Assert.True(auth.LastOAuthTask!.IsCanceled);
+    }
+
+    [Fact]
+    public async Task Deactivate_retains_localization_responsiveness()
+    {
+        // Deactivate cancels only the auth CTS; it must NOT unsubscribe the
+        // application-lifetime VM from localization. A culture flip after
+        // Deactivate still re-resolves the bound labels (OnCultureChanged fires
+        // OnPropertyChanged for each localized property).
+        var (vm, _, _, _) = await BuildAndRefresh(state: null);
+        vm.Deactivate();
+
+        string? fired = null;
+        ((INotifyPropertyChanged)vm).PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(IntegrationsViewModel.NexusHeader))
+            {
+                fired = e.PropertyName;
+            }
+        };
+
+        FireCultureChange(Localization);
+
+        Assert.Equal(nameof(IntegrationsViewModel.NexusHeader), fired);
+    }
+
+    [Fact]
+    public async Task VM_can_refresh_and_auth_again_after_Deactivate()
+    {
+        // After Deactivate cancels an in-flight attempt, the VM must remain
+        // usable: a later RefreshAsync (activation) + a fresh auth attempt must
+        // work, proving Deactivate did not permanently disable the VM.
+        var (vm, auth, _, _) = await BuildAndRefresh(state: null);
+        auth.CancelOAuthOnToken = true;
+
+        var firstAttempt = vm.LoginWithOAuthCommand.ExecuteAsync(null);
+        vm.Deactivate();
+        await firstAttempt; // command completes normally after cancellation
+
+        // A fresh activation resolves state again.
+        auth.CancelOAuthOnToken = false;
+        auth.NextOAuthResult = NexusAuthResult.Success("OAuthUser", isPremium: false);
+        auth.NextStateAfterOAuth = new NexusAuthState(NexusAuthMethod.OAuth, "OAuthUser", false);
+
+        await vm.RefreshAsync();
+        Assert.True(vm.LoginWithOAuthCommand.CanExecute(null));
+
+        await vm.LoginWithOAuthCommand.ExecuteAsync(null);
+
+        Assert.Equal(2, auth.OAuthLoginCalls); // first (canceled) + second (success)
+        Assert.True(vm.IsAuthenticated);
+        Assert.True(vm.IsOAuthActive);
     }
 
     // ---- auto-update settings (toggle + interval persistence) ------------
@@ -855,6 +924,19 @@ public sealed class IntegrationsViewModelTests
         var vm = new IntegrationsViewModel(auth, Localization, configLoader, dialogs, registrar, Logger);
         await vm.RefreshAsync(); // resolve the initial status line + nxm state
         return (vm, auth, dialogs, registrar);
+    }
+
+    /// <summary>
+    /// Forces the localization service to raise its culture-changed event by
+    /// switching to a culture different from the current one (a no-op culture
+    /// assignment raises nothing). Used to assert the VM's localization
+    /// subscription is still wired (or has been unsubscribed) after a lifetime
+    /// operation.
+    /// </summary>
+    private static void FireCultureChange(LocalizationService loc)
+    {
+        var next = loc.Culture.Name == "fr" ? "de" : "fr";
+        loc.SetCulture(next);
     }
 
     /// <summary>

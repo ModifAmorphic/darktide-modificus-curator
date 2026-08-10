@@ -66,7 +66,7 @@ public sealed class LinkedFolderSafetyTests
         var sentinel = Path.Combine(external, "sentinel.txt");
 
         var containerId = fx.Imports.LinkFolder(external);
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, containerId, ModVersionPolicy.Latest);
         fx.Service.PrepareModRoot(profile.Id);
         fx.Service.SetModEnabled(profile.Id, containerId, enabled: false);

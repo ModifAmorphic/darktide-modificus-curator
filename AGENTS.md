@@ -25,10 +25,12 @@ game-binary constraints now live with the runtime, in
 
 ## Repository state
 
-- **`main`** -- production. Modificus Curator includes the app shell + profile
-  management, global Preferences + i18n, the mod-list UI + local import, the
-  Launch flow + Settings window + discovery escape-hatch, the nxm:// scheme
-  handler, Nexus auth + Integrations dialog, mod acquisition, the update-check
+- **`main`** -- production. Modificus Curator includes the SplitView app shell
+  (a compact-inline navigation rail with five hosted destinations: Profiles,
+  Mods, Nexus Integrations, Preferences, Settings) + profile management, global
+  Preferences + i18n, the mod-list UI + local import, the
+  Launch flow + discovery escape-hatch, the nxm:// scheme
+  handler, Nexus auth + Integrations destination, mod acquisition, the update-check
   service, the mod-list update UI, the DMF new-profile install prompt, the
   first-run Welcome onboarding, and in-app self-update for the Windows
   installer plus Linux AppImage (Velopack).
@@ -61,52 +63,124 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
   modificus-curator.sln   solution root (classic .sln)
   Directory.Build.props  shared MSBuild props (net10.0, nullable, implicit usings)
   ui/                   Modificus.Curator.UI -- the Avalonia executable + DI composition root
-                          (shell + profile management: dropdown switch,
-                          persisted active profile, create/rename/delete dialog;
-                          global Preferences (theme + font scale + language +
-                          the show-Relay-console toggle, hidden by default;
-                          Windows-only, shown checked + disabled on Linux as a
-                          display-only reflection of the console that always
-                          shows under Proton until a Relay-side GUI-subsystem
-                          fix)
-                          via `IPreferencesService` + the i18n infrastructure: `Strings.resx`
-                          + `LocalizationService` for dynamic culture switching;
-                          the mod-list UI;
-                          per-profile launch settings (the
-                          `LaunchSettingsViewModel`/`LaunchSettingsWindow` modal
-                          opened from a per-row drawn tune action in Manage
-                          Profiles, env-var + game-arg rows with inline localized
-                          validation; `ShowLaunchSettingsAsync` over
-                          `IDialogService`; editing unlocked while Darktide runs);
-                          Launch wiring + Settings window +
-                          discovery escape-hatch over the shared `Settings/DiscoveryField`
-                          descriptor + `DiscoveryConfig`/`SteamService.Discover()` validate+heal+persist
-                          (the Settings Browse buttons seed the picker at the row's current
-                          value via `SuggestedStartLocation`; the Storage section has two
-                          buttons that open the OS file manager at the Curator data root +
-                          profiles root paths);
+                          (the SplitView shell: a CompactInline pane, 48px compact
+                          rail, 200px open, pane starts collapsed; five hosted
+                          destinations in nav-rail order: Profiles, Mods,
+                          NexusIntegrations, Preferences, Settings (the
+                          `ShellDestination` enum), Mods selected initially,
+                          hamburger toggles `IsPaneOpen`; the content area holds
+                          one persistent `UserControl` per destination,
+                          visibility-switched by `Is*Visible` projections; a
+                          global header shows the current destination title +
+                          Launch Darktide; the status strip carries the running /
+                          pending / nxm-handler / app-update indicators).
+                          `ShellViewModel` owns navigation (guarded
+                          `CurrentDestination`, the `NavigateCommand` taking the
+                          destination as its parameter, `NavigateAsync` lifecycle:
+                          same-destination is a strict no-op; a real change runs
+                          the current destination's leave effects first (leaving
+                          Profiles awaits the dirty-discard guard, rejection keeps
+                          the destination unchanged; leaving Nexus Integrations
+                          calls `IntegrationsViewModel.Deactivate` which cancels
+                          the in-flight auth + the shell re-reads nxm status +
+                          reloads the mod list; leaving Settings reloads the mod
+                          list + re-reads the startup-check toggle + refreshes the
+                          app-update notice), then switches the destination, then
+                          runs the target's enter effects (Settings calls
+                          `SettingsViewModel.RefreshFromConfig` synchronously;
+                          Nexus Integrations awaits `IntegrationsViewModel.RefreshAsync`
+                          so the page paints then resolves auth state)), the
+                          global Launch (resolves the active id from
+                          `IProfileSession.ActiveProfileId` at execution time, not a
+                          cached selection; branches on `LaunchResult.Status`), and
+                          the global status strip (running + pending + nxm-handler
+                          + app-update notice). The hosted page VMs are
+                          application-lifetime singletons; navigation never calls an
+                          old Window-close Detach path. The active profile is owned
+                          by `IProfileSession`; launch availability derives directly
+                          from `ActiveProfileId` + `IsGameRunning`;
+                          the Profiles destination (`ProfilesViewModel` +
+                          `ProfilesView`): edits the active profile only (name +
+                          120-char description + inline launch settings via the
+                          reusable `LaunchSettingsEditorView`/`LaunchSettingsEditorViewModel`);
+                          a flat banner button styled as a profile card hosts an
+                          Avalonia Flyout listing every persisted profile (first-
+                          letter box + name + description); selecting asks
+                          `IProfileSession.RequestActive` (disabled while Darktide
+                          runs) + reloads from the authoritative active id; a
+                          staged draft is edited in place (the persisted profile is
+                          not mutated until Save); Add Profile starts a blank draft;
+                          Save existing calls the atomic `UpdateProfile`, Save new
+                          calls `CreateProfile(name, description, launchSettings)` +
+                          requests it active; Save is disabled while metadata or
+                          launch-settings validation fails (inline localized
+                          reasons); Cancel reloads the persisted active profile;
+                          navigating away / switching / starting another draft while
+                          dirty asks for discard confirmation; running-state gates
+                          disable switching/Add/Delete while Darktide runs (active-
+                          profile metadata + launch-settings edits stay enabled);
+                          after a successful create + activation, `ProfilesViewModel`
+                          awaits the focused DMF delegate immediately (no modal to
+                          wait for) then invokes the mod-list reload delegate so an
+                          accepted DMF install shows;
+                          the Mods destination (`ModListViewModel` + `ModListView`):
+                          the active profile's mod list (the dominant content area),
+                          with its own toolbar (refresh, rate-limit notice, auto-
+                          sort, the Add split button) shown only on Mods;
+                          the Nexus Integrations destination
+                          (`IntegrationsViewModel` + `IntegrationsView`,
+                          Nexus-only): OAuth + developer-gated API-key + nxm handler
+                          registration + automatic-update setting; the OAuth block
+                          is a single dual-state button ("Sign in to Nexus" when not
+                          signed in via OAuth vs "Clear Nexus sign-in" when signed
+                          in via OAuth, so there is no re-login-over-existing); the
+                          API-key block is gated behind the `ApiKeyAuthEnabled`
+                          developer config flag, default off, so OAuth is the sole
+                          sign-in path unless a developer opts in; auth controls stay
+                          usable while Darktide runs (only launch + active-profile
+                          changes are blocked); the destination also owns the
+                          explicit `nxm://` handler registration (a "Nexus download
+                          links" section over `INxmHandlerRegistrar`: register
+                          confirms first since it is a system-wide change that can
+                          affect other mod managers; unregister only releases
+                          Curator's own registration); entering the destination
+                          refreshes auth state, leaving cancels in-flight auth via
+                          `Deactivate`;
+                          the Preferences destination (`PreferencesViewModel` +
+                          `PreferencesView`): theme + font scale + language + the
+                          show-Relay-console toggle (hidden by default; Windows-only,
+                          shown checked + disabled on Linux as a display-only
+                          reflection of the console that always shows under Proton
+                          until a Relay-side GUI-subsystem fix) via
+                          `IPreferencesService` + the i18n infrastructure
+                          (`Strings.resx` + `LocalizationService` for dynamic culture
+                          switching); each change applies + persists immediately;
+                          the Settings destination (`SettingsViewModel` +
+                          `SettingsView`): discovery write-through over the shared
+                          `Settings/DiscoveryField` descriptor +
+                          `DiscoveryConfig`/`SteamService.Discover()`
+                          validate+heal+persist (the Browse buttons seed the picker
+                          at the row's current value via `SuggestedStartLocation`;
+                          the Storage section has two buttons that open the OS file
+                          manager at the Curator data root + profiles root paths) +
+                          the app-update "Updates" section (current version + Check
+                          for Updates + startup-check toggle + inline result +
+                          Download and Restart); `RefreshFromConfig` is the enter
+                          operation (rehydrates discovery rows + the startup-check
+                          toggle from the live config so escape-hatch changes are
+                          visible on a later visit); leaving Settings reloads the mod
+                          list + re-reads the startup-check toggle + refreshes the
+                          app-update notice;
+                          `IDialogService` is narrowed to true modals only (the
+                          six methods: `ShowWelcomeAsync`, `ConfirmAsync`,
+                          `ShowImportModAsync`, `ShowDiscoveryEscapeHatchAsync`,
+                          `ShowAlertAsync`, `ShowProgressAsync<T>`); hosted
+                          destinations are not modals and never flow through it;
                           `AddNxm()` + `StartNxmServer` (single-instance via
                           `SingleInstanceGuard` process enumeration, separate from the `Modificus.Curator.Nxm`
                           pipe bind which degrades gracefully on IOException; a second Curator exits
                           via `NxmSingleInstanceException` -> `Environment.Exit(1)` before the
                           window shows);
-                          the Integrations dialog (Nexus-only) + its
-                          `OpenIntegrationsCommand` on the shell (left of the profiles button),
-                          wired through `IDialogService.ShowIntegrationsAsync` -> `IntegrationsViewModel`
-                          -> `INexusAuthService` (OAuth loopback + API-key validate + sign-out; the
-                          OAuth block is a single dual-state button, "Sign in to
-                          Nexus" when not signed in via OAuth (starts the loopback
-                          flow) vs "Clear Nexus sign-in" when signed in via OAuth
-                          (clears the tokens / signs out), with no separate Sign
-                          out so there is no re-login-over-existing; the API-key
-                          block is gated behind the `ApiKeyAuthEnabled` developer config flag,
-                          default off, so OAuth is the sole sign-in path unless a developer opts in); auth
-                          controls stay usable while Darktide runs (only launch + active-profile
-                          changes are blocked); the Integrations dialog also owns the explicit
-                          `nxm://` handler registration (a "Nexus download links" section over
-                          `INxmHandlerRegistrar`: register confirms first since it is a system-wide
-                          change that can affect other mod managers; unregister only releases
-                          Curator's own registration);
                           `IModAcquisitionService` (download + extract + place
                           orchestrator in Integrations) + the real `NxmModDownloadHandler` (in UI,
                           coordinating IDialogService + IProfileSession + Dispatcher.UIThread) that
@@ -157,7 +231,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           external-launcher seam (fallback alert on failure).
                           `CheckForUpdatesNowCommand` awaits the runner's
                           thorough check (driving an `IsCheckingNow` spinner on
-                          the header refresh button; the await now also covers the
+                          the Mods toolbar refresh button; the await now also covers the
                           chained automatic-update batch) and drives the manual
                           sliding-window throttle's countdown tooltip + disabled
                           button via the runner's `NextManualRefreshAllowedAt`,
@@ -173,7 +247,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           regardless of tier (disabled + neutral when no update,
                           enabled + accent-blue arrow when flagged); Pinned/
                           Untracked rows keep the reserved cell but no button. The
-                          rate-limit notice sits in the header. The Add split
+                          rate-limit notice sits in the Mods toolbar. The Add split
                           button has four flyout items, all modes that set
                           the default on click (the face label tracks the
                           mode): "Add Nexus Mods" (the default; opens the
@@ -212,7 +286,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           failures into one summary alert, acknowledges on success,
                           stops on profile switch, raises UpdatesApplied so the list
                           VM reloads, raises ModUpdateProgress per mod so the
-                          row-level spinner tracks the currently installing row).                           The check is split by trigger:
+                          row-level spinner tracks the currently installing row).
+                          The check is split by trigger:
                           `IUpdateCheckService.CheckAsync` (the v2 GraphQL
                           `modsByUid` batch query, 1 API call for all mods)
                           fires on profile load + the periodic timer, both
@@ -254,10 +329,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           dismiss button OR cancel-on-confirm, the notice-click
                           flow is confirm then download-under-ProgressDialog
                           then ApplyUpdatesAndRestart which exits the process
-                          + Velopack relaunches) + the Settings "Updates"
-                          section (current version + Check for Updates +
-                          startup-check toggle + inline result + Download and
-                          Restart); the
+                          + Velopack relaunches) + the Settings destination
+                          "Updates" section; the
                           `IAppUpdateService.UpdateStateChanged` event fires on a
                           threadpool thread and the shell/Settings handlers
                           marshal to the UI thread via the shared `Action<Action>`
@@ -267,12 +340,17 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           (ui/Session/) + the modal `ProgressDialog`
                           (ui/Views/) used for its in-flight download. The
                           coordinator subscribes to
-                          `IProfileService.ProfileCreated` (fires from inside
-                          the ManageProfiles dialog's create), records it as a
-                          pending trigger, and the shell calls
-                          `ProcessPendingAsync` after that dialog closes so the
-                          DMF prompt is the topmost modal at that point (no
-                          dialog-on-dialog). The prompt fires for one trigger
+                          `IProfileService.ProfileCreated` at construction (the
+                          `ProfilesViewModel` DI factory resolves
+                          `DmfPromptService` eagerly so the subscription exists
+                          before any profile can be created); when
+                          `ProfilesViewModel.SaveAsync` calls `CreateProfile`, the
+                          already-subscribed coordinator records it as pending,
+                          and `ProfilesViewModel` awaits the captured
+                          `processPendingDmf` delegate immediately after the
+                          create + activation (no intervening dialog to wait
+                          for), so the DMF prompt runs as the topmost modal.
+                          The prompt fires for one trigger
                           when DMF is not in the active profile: every new
                           profile that becomes active (no persisted flag: a
                           fresh ask per profile). Two cases: DMF in the repo
@@ -292,19 +370,20 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           browser-launch failure, a fallback alert carries the
                           files-page URL) (case 2).
                           Decline is respected; DMF can be added later via the
-                          normal add flow. The DMF flow never opens Integrations
-                          or stops at an informational dead-end. The first-run
-                          `OnboardingService` (ui/Session/) owns the one-time
-                          Nexus setup offer: it shows the `WelcomeWindow`
-                          (ui/Views/) once on first startup (persisted via
-                          `IAppStateStore.OnboardingCompleted`), and on a
-                          "Set up Nexus" choice opens the shell's full
-                          Integrations flow after Welcome closes (wired from
-                          `App` after the main window opens, exception-safe).
+                          normal add flow. The DMF flow never opens Nexus
+                          Integrations or stops at an informational dead-end.
+                          The first-run `OnboardingService` (ui/Session/) owns
+                          the one-time Nexus setup offer: it shows the
+                          `WelcomeWindow` (ui/Views/) once on first startup
+                          (persisted via `IAppStateStore.OnboardingCompleted`),
+                          and on a "Set up Nexus" choice persists completion
+                          first, then navigates the shell to Nexus Integrations
+                          (wired from `App` after the main window opens,
+                          exception-safe).
                           `IDialogService.ShowProgressAsync<T>`
                           runs the supplied work under a non-closeable spinner +
                           closes it on completion; `DialogTitleBar.ShowClose`
-                          (a new styled property) hides the spinner's close
+                          (a styled property) hides the spinner's close
                           button so the user cannot dismiss an in-flight
                           download). Modal dialogs close on ESC via the opt-in
                           attached behavior `EscapeClosesBehavior.IsEnabled`
@@ -312,23 +391,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `Window.Close()`, the same path as the title-bar X so
                           result/cancel contracts are unchanged): applied to
                           ConfirmDialog, ImportModDialog,
-                          DiscoveryEscapeHatchDialog, IntegrationsWindow,
-                          ManageProfilesWindow, PreferencesWindow, SettingsWindow,
-                          WelcomeWindow;
+                          DiscoveryEscapeHatchDialog, WelcomeWindow;
                           ProgressDialog (non-closeable) + the main window opt
-                          out, so ESC never dismisses a spinner or exits the app.
-                          The shell's `ManageProfiles` command
-                          brackets its `Profiles = ...` swap + `SelectedProfile
-                          = ResolveActive()` re-sync under `_syncing = true`:
-                          replacing the dropdown's `ItemsSource` causes the
-                          ComboBox to fire spurious `SelectedItem` events (null
-                          then a value match against the new collection for the
-                          previously-selected name) that would otherwise land in
-                          `OnSelectedProfileChanged` with the stale value +
-                          revert the session via `RequestActive` (undoing the
-                          active change `CommitCreate` just made inside the
-                          dialog). Bracketing the swap under `_syncing` makes
-                          those events no-ops)
+                          out, so ESC never dismisses a spinner or exits the app)
   general/              Modificus.Curator.General -- cross-cutting infra (logging bootstrap:
                         Serilog day-rolling log (RollingInterval.Day writes
                         curator-<yyyyMMdd>.log, appended across starts within a day,
@@ -361,8 +426,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         --log-lua flag, teeing Lua print output into the log
                         file) + the SkipSplash toggle (emits Relay's bare
                         --skip-splash flag, skipping Darktide's intro splash
-                        state); GetLaunchSettings/SetLaunchSettings validate at the
-                        setter via the shared LaunchSettingsValidator
+                        state); CreateProfile(name, description, launchSettings) +
+                        the atomic UpdateProfile(id, name, description, launchSettings)
+                        (the single editable-profile write) are the launch-settings
+                        persistence boundary + validate up front via the shared
+                        LaunchSettingsValidator
                         (LaunchSettingsValidationError: index + field + kind;
                         single source of truth consumed by both the service and
                         the UI) -- names non-empty/no =/no NUL, no NUL in values,
@@ -370,6 +438,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         of 14 Curator-owned OS/launch + Relay config env (adds
                         RELAY_LUA_LOGS + RELAY_SKIP_SPLASH); backward-
                         compat null/missing normalization to empty, mirroring Mods;
+                        GetLaunchSettings is the focused read the launch path uses;
                         apply at launch) + the auto-sort seam
                         (IModOrderResolver/IdentityModOrderResolver, identity stub now;
                         real dependency-driven resolver later) + ModCleanup (the startup
@@ -604,22 +673,26 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             UseShellExecute=false, arguments stay distinct with
                                             spaces + shell metacharacters), WinePathTests, + the
                                             AddRelayClient DI wiring
-    Modificus.Curator.UI.Tests/              xUnit tests for the shell + manage-profiles
-                                            view models (profile CRUD/switch, active-profile
-                                            persist, switch-blocked-while-running; dialog via
-                                            an injectable IDialogService seam; the per-row
-                                            launch-settings action (opens for the selected row,
-                                            not the active profile; unlocked while Darktide runs)
-                                            + the LaunchSettingsViewModel (existing-settings
-                                            load, add/remove rows, inline localized validation --
-                                            empty/`=`/NUL name, NUL value, case-insensitive
-                                            duplicate, reserved name -- + a Logging toggle
-                                            (EnableLuaLogs emits Relay's bare --log-lua flag) +
+    Modificus.Curator.UI.Tests/              xUnit tests for shell navigation (all five
+                                            destinations, default Mods selection, compact-pane
+                                            toggle, same-destination no-op, leave/enter lifecycle,
+                                            dirty-Profiles-draft navigation cancellation, entering
+                                            Settings rehydrates + leaving Settings runs the mod-list
+                                            + app-update refresh, entering Integrations refreshes +
+                                            leaving cancels auth + refreshes nxm/mod-list, Launch
+                                            CanExecute + execution following
+                                            IProfileSession.ActiveProfileId directly) + the
+                                            ProfilesViewModelTests (profile create/save/cancel/
+                                            delete/switch, no-active states, running-state gates,
+                                            dirty navigation, banner/picker, inline launch-settings
+                                            validation + atomic save, DMF prompt timing after create)
+                                            + the LaunchSettingsEditorViewModelTests (existing-
+                                            settings load, add/remove rows, inline localized
+                                            validation -- empty/`=`/NUL name, NUL value,
+                                            case-insensitive duplicate, reserved name -- + a Logging
+                                            toggle (EnableLuaLogs emits Relay's bare --log-lua flag) +
                                             a SkipSplash toggle (SkipSplash emits Relay's bare
-                                            --skip-splash flag);
-                                            Save persists once via
-                                            SetLaunchSettings + closes only on success, Cancel no
-                                            change) + the
+                                            --skip-splash flag)) + the
                                             NxmModDownloadHandler auth/profile gates + error
                                             wiring + the mod-list update flow: profile-scoped
                                             known-update persistence/hydration, the stable
@@ -642,11 +715,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             decline path, the premium in-app download,
                                             the non-premium/unknown/no-auth browser-open
                                             regardless of the nxm registrar state, and the
-                                            dialog-on-dialog avoidance)
+                                            prompt-timing-after-create)
                                             + the OnboardingService (already complete no-op,
                                             Continue persists + skips Integrations, Set up Nexus
-                                            persists before opening Integrations once, close ==
-                                            Continue, the in-process one-shot guard), against in-memory fakes)
+                                            persists before navigating to Integrations once, close
+                                            == Continue, the in-process one-shot guard), against in-memory fakes)
     Modificus.Curator.Nxm.Tests/             xUnit tests for the nxm library (parser, framing,
                                             IPC server resilience, SingleInstanceGuard, router,
                                             relay helper, standalone + AppImage Linux registrar,
@@ -771,7 +844,7 @@ dotnet run   --project src/ui --configuration Release   # app shell window
 - **Config** is `CuratorConfig` (`src/config/`) -- defaults under the
   OS local-app-data dir; loaded live from JSON by `general/ConfigLoader.cs`
   (consumers inject `IConfigLoader` and re-read per op, so runtime config
-  changes via the Settings window take effect immediately; #31). Missing
+  changes via the Settings destination take effect immediately; #31). Missing
   file/dir → defaults (first-run safe).
 - **Logging** is Serilog (console + file) bridged into
   `Microsoft.Extensions.Logging`; honors `Logging:Level` + `Logging:LogFile`.
@@ -792,8 +865,11 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   link + mods.lst name; no per-profile mod files) + the import-time base-name
   collision hard-block (`GetBaseNameCollision`; two same-folder mods can't
   coexist in a profile) + per-profile launch settings
-  (`GetLaunchSettings`/`SetLaunchSettings`: ordered env-var entries + game args;
-  validated at the setter, applied at launch),
+  (atomic `CreateProfile(name, description, launchSettings)` +
+  `UpdateProfile(id, name, description, launchSettings)`: the editable write
+  boundary; ordered env-var entries + game args; validated up front via the
+  shared `LaunchSettingsValidator`, applied at launch; `GetLaunchSettings` is the
+  focused read the launch path uses),
   **Steam** (Steam + Darktide + Proton discovery + `IsGameRunning`),
   **Integrations** (the Nexus v1 client/auth +
   `IModAcquisitionService` the download + extract + place orchestrator +
@@ -827,7 +903,7 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   successful stage re-staged the profile; `DiscoveryIncomplete` -> the focused discovery
   escape-hatch modal over the shared `DiscoveryField` descriptor; `StagingFailed`
   -> a localized modal alert whose body appends the raised staging exception's
-  message (a runtime/OS error) to the localized framing; `Error` -> modal alert) + a Settings window editing `CuratorConfig.Discovery` user
+  message (a runtime/OS error) to the localized framing; `Error` -> modal alert) + a Settings destination editing `CuratorConfig.Discovery` user
   overrides (per-field read-modify-save; the Browse buttons seed the picker at
                           the row's current value via `SuggestedStartLocation`) with a Storage section
                           of two buttons that open the OS file manager at the Curator data root +
@@ -835,13 +911,14 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   `SteamService.Discover()` validate+heal+persist pipeline). The DMF (Darktide
   Mod Framework) install-prompt coordinator `DmfPromptService` (ui/Session/)
   offers to add/download DMF every new profile that becomes active without DMF
-  in it; the prompt is a modal on the main window, fired by the shell after the
-  triggering ManageProfiles dialog closes so it never nests on top of one. The
+  in it; the prompt is a modal on the main window, fired by `ProfilesViewModel`
+  immediately after a successful create + activation (no intervening dialog to
+  wait for). The
   first-run `OnboardingService` (ui/Session/) owns the one-time Nexus setup
   offer: it shows the `WelcomeWindow` (ui/Views/) once on first startup
   (persisted via `IAppStateStore.OnboardingCompleted`), and on a "Set up Nexus"
-  choice opens the shell's full Integrations flow after Welcome closes (wired
-  from `App` after the main window opens, exception-safe). The **Launcher** is a stub. See
+  choice persists completion first, then navigates the shell to Nexus
+  Integrations (wired from `App` after the main window opens, exception-safe). The **Launcher** is a stub. See
   `docs/architecture/MODIFICUS-CURATOR.md`.
 
 ## Key docs

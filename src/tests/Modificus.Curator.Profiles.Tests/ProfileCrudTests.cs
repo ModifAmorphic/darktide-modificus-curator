@@ -15,7 +15,7 @@ public sealed class ProfileCrudTests
     {
         using var fx = new ProfileServiceFixture();
 
-        var profile = fx.Service.CreateProfile("Vanilla+");
+        var profile = fx.Service.CreateProfile("Vanilla+", string.Empty, new LaunchSettings());
 
         Assert.NotEqual(Guid.Empty, profile.Id);
         Assert.Equal("Vanilla+", profile.Name);
@@ -34,15 +34,15 @@ public sealed class ProfileCrudTests
     {
         using var fx = new ProfileServiceFixture();
 
-        Assert.Throws<ArgumentException>(() => fx.Service.CreateProfile(""));
-        Assert.Throws<ArgumentException>(() => fx.Service.CreateProfile("   "));
+        Assert.Throws<ArgumentException>(() => fx.Service.CreateProfile("", string.Empty, new LaunchSettings()));
+        Assert.Throws<ArgumentException>(() => fx.Service.CreateProfile("   ", string.Empty, new LaunchSettings()));
     }
 
     [Fact]
     public void GetProfile_returns_persisted_profile_across_instances()
     {
         using var fx = new ProfileServiceFixture();
-        var created = fx.Service.CreateProfile("My Profile");
+        var created = fx.Service.CreateProfile("My Profile", string.Empty, new LaunchSettings());
 
         // A second service instance reads the same disk state -- proves the
         // profile genuinely persists, not just in-memory.
@@ -70,7 +70,7 @@ public sealed class ProfileCrudTests
     public void GetProfile_coerces_a_hand_edited_null_mods_to_empty()
     {
         using var fx = new ProfileServiceFixture();
-        var created = fx.Service.CreateProfile("P");
+        var created = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
 
         // Simulate a hand-edit (or a future schema regression) writing Mods:null.
         var id = created.Id.ToString();
@@ -87,8 +87,8 @@ public sealed class ProfileCrudTests
     public void ListProfiles_returns_all_created_profiles_as_summaries()
     {
         using var fx = new ProfileServiceFixture();
-        var a = fx.Service.CreateProfile("A");
-        var b = fx.Service.CreateProfile("B");
+        var a = fx.Service.CreateProfile("A", string.Empty, new LaunchSettings());
+        var b = fx.Service.CreateProfile("B", string.Empty, new LaunchSettings());
 
         var summaries = fx.Service.ListProfiles();
 
@@ -101,9 +101,9 @@ public sealed class ProfileCrudTests
     public void ListProfiles_is_sorted_by_name_ordinal()
     {
         using var fx = new ProfileServiceFixture();
-        fx.Service.CreateProfile("Charlie");
-        fx.Service.CreateProfile("alpha");
-        fx.Service.CreateProfile("Bravo");
+        fx.Service.CreateProfile("Charlie", string.Empty, new LaunchSettings());
+        fx.Service.CreateProfile("alpha", string.Empty, new LaunchSettings());
+        fx.Service.CreateProfile("Bravo", string.Empty, new LaunchSettings());
 
         var names = fx.Service.ListProfiles().Select(s => s.Name).ToArray();
 
@@ -125,7 +125,7 @@ public sealed class ProfileCrudTests
     public void ListProfiles_skips_non_guid_and_corrupted_directories()
     {
         using var fx = new ProfileServiceFixture();
-        fx.Service.CreateProfile("Good");
+        fx.Service.CreateProfile("Good", string.Empty, new LaunchSettings());
 
         // A non-guid dir (ignored).
         Directory.CreateDirectory(Path.Combine(fx.BaseFolder, "not-a-guid"));
@@ -142,44 +142,10 @@ public sealed class ProfileCrudTests
     }
 
     [Fact]
-    public void RenameProfile_updates_name_on_disk()
-    {
-        using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("Old");
-
-        fx.Service.RenameProfile(profile.Id, "New");
-
-        // The directory name is unchanged (id-keyed); only the name changed.
-        Assert.True(Directory.Exists(fx.ProfileDir(profile.Id)));
-        var reloaded = fx.Service.GetProfile(profile.Id);
-        Assert.Equal("New", reloaded.Name);
-    }
-
-    [Fact]
-    public void RenameProfile_unknown_id_throws_KeyNotFoundException()
-    {
-        using var fx = new ProfileServiceFixture();
-
-        Assert.Throws<KeyNotFoundException>(() => fx.Service.RenameProfile(Guid.NewGuid(), "X"));
-    }
-
-    [Fact]
-    public void RenameProfile_rejects_null_or_whitespace_name()
-    {
-        using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("Old");
-
-        Assert.Throws<ArgumentException>(() => fx.Service.RenameProfile(profile.Id, ""));
-        Assert.Throws<ArgumentException>(() => fx.Service.RenameProfile(profile.Id, "   "));
-        // Name unchanged after the rejected renames.
-        Assert.Equal("Old", fx.Service.GetProfile(profile.Id).Name);
-    }
-
-    [Fact]
     public void DeleteProfile_removes_entry_and_directory_tree()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("Doomed");
+        var profile = fx.Service.CreateProfile("Doomed", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("SomeMod");
         fx.Service.AddMod(profile.Id, container.Id, Modificus.Curator.Mods.ModVersionPolicy.Latest);
         var modPath = fx.Service.PrepareModRoot(profile.Id); // writes mods.lst + populates staged/

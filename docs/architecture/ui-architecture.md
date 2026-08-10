@@ -1,9 +1,9 @@
 # UI layer: architecture
 
 The UI layer is the Avalonia 12 front end of Modificus Curator. It is the only
-part of the codebase that talks to the user: the shell window, profile
-management, the mod list, every dialog (Settings, Preferences, Integrations,
-Manage profiles, import, discovery escape-hatch, progress), global
+part of the codebase that talks to the user: the shell window (a SplitView with
+five hosted destinations), profile management, the mod list, every modal
+(Welcome, confirm, import, discovery escape-hatch, alert, progress), global
 preferences (theme, font scale, language), and the dynamic-language
 infrastructure. The UI never touches the filesystem, the network, or any OS
 API directly. Every data operation flows through a backend library service;
@@ -22,18 +22,23 @@ dialogs, preferences, and i18n fit together.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ MainWindow (shell)                                                       │
+│ MainWindow (shell: a SplitView, CompactInline)                           │
 │                                                                          │
-│  ┌─ Top bar ───────────────────────────────────────────────────────────┐ │
-│  │ Title · Profile dropdown · Manage… · Integrations… ·  Preferences · │ │
-│  │                                              Settings · Launch     │ │
+│  ┌─ Nav rail (48px compact icon tile; expands to 48px icon + label) ───┐ │
+│  │ hamburger toggle                                                    │ │
+│  │ [Profiles] [Mods] [Nexus Integrations] [Preferences] [Settings]     │ │
 │  └─────────────────────────────────────────────────────────────────────┘ │
-│  ┌─ Content area ──────────────────────────────────────────────────────┐ │
-│  │ ModListView (the active profile's mod list; drag-and-drop target)   │ │
-│  │   header: title · rate-limit notice · refresh ·                  │ │
-│  │           auto-sort · Add split button (Nexus Mods + 3 pickers)     │ │
+│  ┌─ Global header ─────────────────────────────────────────────────────┐ │
+│  │ Current destination title ·························· Launch Darktide│ │
+│  └─────────────────────────────────────────────────────────────────────┘ │
+│  ┌─ Content area (one persistent UserControl per destination,          ┐ │
+│  │  visibility-switched by Is*Visible projections)                      │ │
+│  │ ProfilesView | ModListView (drag-and-drop) | IntegrationsView |      │ │
+│  │   ModListView header: rate-limit notice · refresh ·                  │ │
+│  │     auto-sort · Add split button (Nexus Mods + 3 pickers)            │ │
 │  │   rows:   name · progress + source badge · enabled · policy ·        │ │
-│  │           update-action cell (button) · up · down · remove            │ │
+│  │     update-action cell (button) · up · down · remove                 │ │
+│  │ PreferencesView | SettingsView                                       │ │
 │  └─────────────────────────────────────────────────────────────────────┘ │
 │  ┌─ Status strip ──────────────────────────────────────────────────────┐ │
 │  │ Drawn Ellipse (running / stopped) · GameRunningText · NxmHandlerStatus│ │
@@ -47,18 +52,30 @@ a UI-layer singleton that the shell (and other view models) inject:
 
 ```
  IProfileSession ───────────── single authority for the active profile id,
- │                             the can-change gate, and the live running-state
- │                             (a DispatcherTimer polls ISteamService every 3s)
- │
- ├── ShellViewModel ────────── profile dropdown + Launch + the command set
- │   │                         (ManageProfiles, OpenIntegrations, OpenSettings,
- │   │                         OpenPreferences); mirrors session state
- │   │
- │   └── ModListViewModel ──── the active profile's mod list; enable/disable,
- │       │                     reorder, per-mod policy, remove, import, update
- │       │
- │       └── ModItemViewModel  one row; carries state only (no service calls)
- │
+  │                             the can-change gate, and the live running-state
+  │                             (a DispatcherTimer polls ISteamService every 3s)
+  │
+  ├── ShellViewModel ────────── navigation (ShellDestination, the guarded
+  │   │                         NavigateAsync lifecycle) + Launch + the status
+  │   │                         strip; mirrors session state
+  │   │
+  │   ├── ProfilesViewModel ─── the active profile editor (name + description
+  │   │   │                     + inline launch settings) + banner/picker
+  │   │   │
+  │   │   └── LaunchSettingsEditorViewModel  the reusable inline launch-settings
+  │   │                                       rows (env vars + args + toggles)
+  │   │
+  │   ├── ModListViewModel ──── the active profile's mod list; enable/disable,
+  │   │   │                     reorder, per-mod policy, remove, import, update
+  │   │   │
+  │   │   └── ModItemViewModel  one row; carries state only (no service calls)
+  │   │
+  │   ├── IntegrationsViewModel  the Nexus Integrations destination (RefreshAsync
+  │   │                            on enter, Deactivate on leave)
+  │   ├── PreferencesViewModel   the Preferences destination
+  │   └── SettingsViewModel ──── the Settings destination (RefreshFromConfig
+  │                              on enter)
+  │
   ├── UpdateCheckRunner ─────── fires IUpdateCheckService on profile load,
   │                             active-profile switch, a periodic timer, and
   │                             the manual "check now" affordance
@@ -74,14 +91,15 @@ a UI-layer singleton that the shell (and other view models) inject:
   │                              UpdateCheckRunner)
   │
   ├── OnboardingService ─────── shows the first-run Welcome modal once, then
-  │                             opens Integrations on a "Set up Nexus" choice
+  │                             navigates the shell to Nexus Integrations on a
+  │                             "Set up Nexus" choice
   │
   ├── DmfPromptService ──────── records the new-profile trigger from
-  │                             IProfileService; the shell calls
-  │                             ProcessPendingAsync after the triggering dialog
-  │                             closes so the DMF prompt is never dialog-on-dialog
+  │                             IProfileService; ProfilesViewModel awaits
+  │                             ProcessPendingAsync immediately after the
+  │                             create + activation (no intervening dialog)
 
- IDialogService ────────────── the testable dialog seam (every Show* is one method);
+ IDialogService ────────────── the testable dialog seam (six true-modal methods);
                              production DialogService owns the real Window wiring
  LocalizationService ───────── the i18n indexer + dynamic-culture INPC refresh
  IPreferencesService ───────── applies theme / font scale / language + persists
@@ -95,9 +113,9 @@ their interfaces; it never constructs a backend type directly.
 
 `IProfileSession` is the single authority for three things: which profile is
 active, whether the active profile may change right now, and whether Darktide
-is running. Both the shell dropdown switch and the Manage-profiles dialog
-create-sets-active route through the same gate (`RequestActive`), so the two
-paths can never diverge.
+is running. Both the Profiles destination's switch and its create-sets-active
+route through the same gate (`RequestActive`), so the two paths can never
+diverge.
 
 `RequestActive(id)` is applied and persisted only when the game is not
 running; otherwise it is a no-op (the active stays put). Delete-of-active is
@@ -126,38 +144,53 @@ dispatcher and drive `Refresh()` directly for deterministic state changes.
 ### How session changes cascade
 
 `OnSessionPropertyChanged` on the shell mirrors `IsRunning` into the shell's
-own `IsGameRunning` (which cascades through `CanSwitchProfile`,
-`LaunchCommand`'s can-execute, the status-strip label, and the dropdown's
-enabled state). The mod list's `OnSessionPropertyChanged` filters to
-`ActiveProfileId` only: a running-state change does not reload the list (the
-list stays put while the game runs; edits land on the profile the user will
-launch next). Active-id changes rebuild the list from the new profile.
+own `IsGameRunning` (which cascades through `LaunchCommand`'s can-execute, the
+status-strip label, and the navigation + Add/Delete/Switch gates). The mod
+list's `OnSessionPropertyChanged` filters to `ActiveProfileId` only: a
+running-state change does not reload the list (the list stays put while the
+game runs; edits land on the profile the user will launch next). Active-id
+changes rebuild the list from the new profile.
 
 ## The shell (`ShellViewModel` + `MainWindow`)
 
-The shell owns the profile-list snapshot and the dropdown selection binding.
-It does not own the active id, the gate, or the running-state; those are the
-session's. The shell mirrors the session's authoritative active id back into
-the dropdown, so a blocked change snaps the dropdown back to the real active.
+The shell owns navigation across five hosted destinations (the
+`ShellDestination` enum: Profiles, Mods, NexusIntegrations, Preferences,
+Settings), the global Launch action, and the global status strip. It does not
+own the active id, the gate, or the running-state; those are the session's.
+Launch availability derives directly from `IProfileSession.ActiveProfileId` +
+`IsGameRunning`, and Launch resolves the active id from the session at
+execution time rather than from a cached selection. Mods is selected
+initially; the pane starts collapsed (compact icon rail); the hamburger
+button toggles `IsPaneOpen`.
 
-### The `_syncing` guard
+### The `NavigateAsync` lifecycle
 
-`_syncing` brackets any operation that re-sets `Profiles` and then re-syncs
-`SelectedProfile` to the session. Replacing the dropdown's `ItemsSource`
-causes the `ComboBox` to fire spurious `SelectedItem` changes: first null
-(the old reference is gone), then a value match against the new collection
-for the previously-selected name. Without the guard those events land in
-`OnSelectedProfileChanged` with the stale value, which would call
-`RequestActive` and revert the session to the pre-dialog selection (undoing
-the active change a create just made inside the Manage-profiles dialog).
-Bracketing the swap and re-sync under `_syncing = true` makes those spurious
-events no-ops. `ManageProfiles`, `OpenIntegrations`, and `OpenSettings` all
-use this pattern.
+A same-destination call is a strict no-op (no guards, effects, or config
+reads). For a real destination change, `NavigateAsync` runs in order: (1) the
+current destination's leave effects; (2) switch `CurrentDestination`; (3) the
+target's enter effects. Leaving Profiles awaits the dirty-discard guard, and a
+rejection keeps `CurrentDestination` and all target state unchanged. Leaving
+Nexus Integrations calls `IntegrationsViewModel.Deactivate` (cancels the
+in-flight auth), then the shell re-reads the nxm handler status and reloads
+the mod list. Leaving Settings reloads the mod list, re-reads the
+`CheckOnStartup` toggle, and refreshes the app-update notice. Enter effects:
+Settings calls `SettingsViewModel.RefreshFromConfig` synchronously (so
+escape-hatch / config changes are visible without a transient stale page);
+Nexus Integrations awaits `IntegrationsViewModel.RefreshAsync` (paint-then-
+resolve). The destination is switched before any enter await so it stays
+active even if a refresh reports an error through its own behavior.
+
+There is no shared `IPage` / `INavigationService` lifecycle interface:
+Profiles, Settings, and Nexus Integrations have deliberately different
+activation/deactivation capabilities, so the shell calls each concrete page
+VM directly. The hosted page VMs are application-lifetime singletons;
+navigation never calls an old Window-close final-cleanup (`Detach`) path.
 
 ### Launch + the result branches
 
-`LaunchCommand` calls `IRelayLaunchService.Launch(activeProfileId)` and
-branches on `LaunchResult.Status`:
+`LaunchCommand` resolves the active id from `IProfileSession.ActiveProfileId`
+at execution time and calls `IRelayLaunchService.Launch(activeProfileId)`,
+then branches on `LaunchResult.Status`:
 
 - **`Launched`**: an immediate `_session.Refresh()` so the indicator and
   launch-availability react at once, not on the next poll. Successful launch
@@ -173,20 +206,22 @@ branches on `LaunchResult.Status`:
   alerts).
 - **`Error`**: a modal alert with the result's message.
 
-### The post-dialog DMF prompt path
+### The DMF install-prompt timing
 
-`ManageProfiles` calls `_dmfPrompts.ProcessPendingAsync()` after its dialog
-closes. The `DmfPromptService` records the trigger from
-`IProfileService.ProfileCreated` (which fires from inside the Manage-profiles
-dialog's create) as pending; processing it after the dialog closes means the DMF
-prompt is the topmost modal at that point, never nested on top of the dialog
-that triggered it. After the prompt, the shell calls `ModList.Reload()` so a DMF
-add shows without a profile switch.
+The `DmfPromptService` subscribes to `IProfileService.ProfileCreated` at
+construction (the `ProfilesViewModel` DI factory resolves `DmfPromptService`
+eagerly so the subscription exists before any profile can be created). When
+`ProfilesViewModel.SaveAsync` calls `CreateProfile`, the already-subscribed
+coordinator records the trigger as pending; `ProfilesViewModel` then awaits
+the captured `processPendingDmf` delegate immediately after the create +
+activation. There is no intervening dialog to wait for, so the DMF prompt is
+the topmost modal at that point. After the prompt, `ProfilesViewModel`
+invokes the mod-list reload delegate so an accepted DMF install shows without
+a profile switch.
 
-`OpenIntegrations` no longer processes a DMF trigger: configuring Nexus auth
-does not surface a DMF prompt on its own (the one-time Nexus setup offer lives
-in the first-run Welcome flow). It still re-reads the nxm handler status after
-the dialog closes and reloads the mod list.
+`ProcessPendingAsync` snapshots and clears the pending trigger before
+processing it, so an exception in the prompt does not leave it stuck pending
+for the next call.
 
 ## The mod list (`ModListViewModel` + `ModItemViewModel`)
 
@@ -286,8 +321,8 @@ enabled, order, policy, and the per-row policy-edit state. The row never
 talks to `IProfileService` directly; the parent owns every service call, and
 the view routes row interactions (toggle, move, policy, remove, update)
 through code-behind handlers calling the parent's commands with the row as
-the `CommandParameter`. This mirrors the established
-`ManageProfilesWindow` pattern.
+the `CommandParameter`. This per-row code-behind pattern keeps each row a
+passive state holder while the parent owns the service boundary.
 
 ## The update UI
 
@@ -315,7 +350,7 @@ production) because `CheckCompleted` fires on the check's completing threadpool
 thread and the handler iterates the UI-bound `Mods` collection. The application
 is idempotent. One list-level flag still derives from the in-memory last result:
 
-- `IsRateLimited`: the last check was rate-limited. Drives the header
+- `IsRateLimited`: the last check was rate-limited. Drives the Mods toolbar
   "check incomplete" notice. (This is a transient session-only signal; it does
   not need to persist and it must not erase known flags.)
 
@@ -326,7 +361,7 @@ is idempotent. One list-level flag still derives from the in-memory last result:
 each row so the per-row tooltip and click behavior reflect it. The read hits
 the network, so blocking the UI-thread constructor on it would stall startup;
 the result lands sub-second and flips the flag. There is no mid-session
-refresh (re-checking on Integrations dialog close would burn an API call each
+refresh (re-checking on Integrations activation would burn an API call each
 time; a user signing in mid-session needs a restart for the click behavior to
 switch to in-app install).
 
@@ -418,7 +453,7 @@ re-hydrates from the store when the result lands.
 
 ## The app self-update UI
 
-The shell and the Settings window surface Curator's own self-update through
+The shell and the Settings destination surface Curator's own self-update through
 `IAppUpdateService` in Velopack-packaged builds (the Windows installer and Linux
 AppImage). The check is fired once on
 startup by `AppUpdateCheckRunner` and the result lands through the service's
@@ -468,12 +503,12 @@ close are all equivalent to Continue.
 
 `ShowWelcomeIfFirstRunAsync` is a one-shot: it reads the persisted flag (and an
 in-process guard) and no-ops when onboarding is already complete. On either
-choice it persists completion BEFORE any further UI, so closing or canceling the
-subsequent Integrations dialog can never cause Welcome to repeat. On a "Set up
-Nexus" choice it opens the shell's full Integrations flow
-(`ShellViewModel.OpenIntegrationsAsync`) after Welcome closes, so enabling the
-`nxm://` handler inside Integrations refreshes the shell status when the dialog
-closes.
+choice it persists completion BEFORE any further UI, so navigating away from
+Nexus Integrations (or the navigation failing) can never cause Welcome to
+repeat. On a "Set up Nexus" choice it navigates the shell to Nexus Integrations
+(`ShellViewModel.NavigateToIntegrationsAsync`) after Welcome closes, so the
+destination's auth refresh runs and leaving it later refreshes the shell's nxm
+status.
 
 The coordinator is wired after the main window is actually opened (Avalonia
 modal dialogs require a shown owner): `App` subscribes to the main window's
@@ -516,40 +551,37 @@ list:
 Decline is respected: nothing opens, no Integrations prompt. DMF can be added
 later via the normal add flow.
 
-### Why the prompt fires from the shell
+### Why the prompt is owned by ProfilesViewModel
 
-The trigger signal (`IProfileService.ProfileCreated`) fires from inside the
-Manage-profiles dialog. Showing a modal from inside that handler would be
-dialog-on-dialog (the triggering dialog is still open). The coordinator records
-the signal as pending; the shell calls `ProcessPendingAsync` after the
-triggering dialog closes, so the DMF prompt is the topmost modal at that point.
-
-`ProcessPendingAsync` snapshots and clears the pending trigger before
-processing it, so an exception in the prompt does not leave it stuck pending
-for the next call. The prompt is wrapped in a try/catch that logs and swallows
-non-cancellation exceptions, so a wiring failure never blocks the shell's
-post-dialog return.
+The trigger signal (`IProfileService.ProfileCreated`) fires synchronously from
+inside `ProfilesViewModel.SaveAsync`. The coordinator subscribes at construction
+(resolved eagerly by the `ProfilesViewModel` DI factory, so the subscription
+exists before any profile can be created) and records the signal as pending;
+`ProfilesViewModel` awaits `ProcessPendingAsync` immediately after the create +
+activation, so the DMF prompt runs as the topmost modal with no intervening
+destination. `ProcessPendingAsync` snapshots and clears the pending trigger
+before processing it, so an exception in the prompt does not leave it stuck
+pending for the next call. The prompt is wrapped in a try/catch that logs and
+swallows non-cancellation exceptions, so a wiring failure never blocks the
+return to the Profiles destination.
 
 ## Dialogs, preferences, and i18n
 
 ### `IDialogService`
 
-The testable dialog seam. View models depend on this interface, not on
+The testable true-modal seam. View models depend on this interface, not on
 Avalonia `Window` construction, so their logic stays unit-testable: a test
 injects a recording fake instead of a real window. The production
-`DialogService` owns every real `Window` and `ShowDialog` wiring.
+`DialogService` owns every real `Window` and `ShowDialog` wiring. Hosted
+destinations (Profiles, Mods, Nexus Integrations, Preferences, Settings) are
+not modals and live entirely on the shell's SplitView content region.
 
 ```csharp
 public interface IDialogService
 {
     Task<WelcomeChoice> ShowWelcomeAsync();
     Task<bool> ConfirmAsync(string title, string message);
-    Task ShowManageProfilesAsync();
-    Task ShowLaunchSettingsAsync(Guid profileId);
-    Task ShowPreferencesAsync();
     Task<ImportModResult?> ShowImportModAsync(ImportModRequest request);
-    Task ShowSettingsAsync();
-    Task ShowIntegrationsAsync();
     Task<bool> ShowDiscoveryEscapeHatchAsync(IReadOnlyList<string> missingFields);
     Task ShowAlertAsync(string title, string message);
     Task<T> ShowProgressAsync<T>(string title, string message, Func<Task<T>> work);
@@ -562,18 +594,12 @@ the progress dialog, so the user cannot dismiss an in-flight operation whose
 partial result would be useless). The spinner is closed in either case; the
 work's exception (if any) propagates to the caller.
 
-`ShowLaunchSettingsAsync(profileId)` opens the per-profile launch-settings modal
-over the Manage-profiles dialog (the first nested modal). The Manage-profiles
-row carries a drawn tune icon that opens it for that row's profile (not the
-active profile). It loads the profile's environment variables + game arguments,
-offers add/remove rows with inline localized validation (the reserved-name set
-and case-insensitive duplicate detection match `IProfileService.SetLaunchSettings`),
-and persists on Save (closing only on success). Editing is unlocked while
-Darktide runs (a `profile.json` write); changes apply next launch. Because this
-is the first nested modal, `DialogService`'s owner-disabling workaround is
-reference-counted: the owner window re-enables only when the outermost modal
-closes, so an inner modal closing does not prematurely re-enable it while the
-outer modal is still open (single-modal behavior is unchanged).
+Per-profile launch settings are edited inline in the Profiles destination (the
+reusable `LaunchSettingsEditorView`/`LaunchSettingsEditorViewModel`), not as a
+separate modal. `DialogService`'s owner-disabling workaround is
+reference-counted so the owner window re-enables only when the outermost modal
+closes (an inner modal closing does not prematurely re-enable it while an outer
+modal is still open); single-modal behavior is unchanged.
 
 ### `IPreferencesService`
 
@@ -581,9 +607,9 @@ The single authority for applying user-facing preferences (theme, font scale,
 language) to the running app and persisting them to `CuratorConfig`. The
 composition root applies the loaded config at startup (before the main window
 shows, so the first paint already reflects the user's choices); the
-Preferences dialog calls `ApplyAndPersist` on each change. All three concerns
-(theme variant, global font scale, UI culture) live behind one method so the
-values stay consistent: nothing else in the UI touches
+Preferences destination calls `ApplyAndPersist` on each change. All three
+concerns (theme variant, global font scale, UI culture) live behind one method
+so the values stay consistent: nothing else in the UI touches
 `RequestedThemeVariant`, the `AppFontSize` / `AppStatusFontSize` resources,
 or `LocalizationService.Culture` directly.
 
@@ -646,7 +672,7 @@ dismiss an in-flight operation.
   UI assembly) that coordinates the nxm download flow, and the
   `IModAcquisitionService` the per-mod Update button calls.
 - [Nexus authentication](nexus-authentication.md): the auth factory and
-  orchestrator the Integrations dialog drives, and the
+  orchestrator the Nexus Integrations destination drives, and the
   `AuthStateChanged` event the DMF prompt coordinator subscribes to.
 - [Nexus API rate limiting](nexus-rate-limiting.md): how the update check's
   rate-limit signal becomes the mod-list "check incomplete" notice.

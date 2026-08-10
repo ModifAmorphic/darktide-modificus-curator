@@ -20,7 +20,7 @@ public sealed class LocalizationServiceTests
         svc.SetCulture("en");
 
         Assert.Equal("Modificus Curator", svc["App_Title"]);
-        Assert.Equal("Manage profiles", svc["ManageProfiles_Title"]);
+        Assert.Equal("Profiles", svc["Profiles_Title"]);
     }
 
     [Fact]
@@ -116,7 +116,7 @@ public sealed class LocalizationServiceTests
         var svc = new LocalizationService();
         svc.SetCulture("en");
 
-        var formatted = svc.Format("ManageProfiles_DeleteMessage", "Alpha");
+        var formatted = svc.Format("Profiles_DeleteMessage", "Alpha");
 
         Assert.Contains("Alpha", formatted);
         Assert.Contains("mod list", formatted);

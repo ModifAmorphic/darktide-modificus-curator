@@ -23,12 +23,18 @@ version-folder resolution) stay behind the interface.
 ```csharp
 public interface IProfileService
 {
-    event EventHandler<ProfileSummary>? ProfileCreated;
+    event EventHandler<ProfileSummary>? ProfileCreated;  // carries id + name + description
 
     IReadOnlyList<ProfileSummary> ListProfiles();
     Profile GetProfile(Guid id);
-    Profile CreateProfile(string name);
-    void RenameProfile(Guid id, string newName);
+
+    // Atomic create: name + description + launch settings in a single write.
+    Profile CreateProfile(string name, string description, LaunchSettings launchSettings);
+
+    // Atomic update: name + description + launch settings in a single read-validate-write.
+    // The single editable-profile write (the hosted Profiles page routes every metadata +
+    // launch-settings edit through it).
+    void UpdateProfile(Guid id, string name, string description, LaunchSettings launchSettings);
     void DeleteProfile(Guid id);
 
     IReadOnlyList<ModListEntry> GetModList(Guid id);
@@ -40,35 +46,50 @@ public interface IProfileService
 
     ModListEntry? GetBaseNameCollision(Guid id, string baseName, Guid? excludeContainerId);  // import-time hard-block
 
-    LaunchSettings GetLaunchSettings(Guid id);                  // per-profile env vars + game args
-    void SetLaunchSettings(Guid id, LaunchSettings settings);   // validate + rebuild + persist
+    LaunchSettings GetLaunchSettings(Guid id);                  // focused read (launch path)
 
     string PrepareModRoot(Guid id);
 }
 ```
 
+`CreateProfile(name, description, launchSettings)` and `UpdateProfile` are the only
+editable-profile writes. Both validate and normalize every input before any
+persistence, so an invalid input writes nothing. There is no focused
+launch-settings or rename write: every metadata + launch-settings edit routes
+through the atomic `UpdateProfile`.
+
 Method behavior:
 
-- `ProfileCreated` -- raised whenever `CreateProfile` successfully persists a new
-  profile (carries the new profile's summary). The UI's `DmfPromptService`
+- `ProfileCreated` -- raised whenever a profile is created (carries the new
+  profile's summary, including description). The UI's `DmfPromptService`
   subscribes so it can surface the DMF install prompt when the new profile
   becomes active and is missing DMF; subscribers that need to react to "a
   profile was just created" use this rather than diffing `ListProfiles()`.
 - `ListProfiles()` -- every profile under `ProfilesBaseFolder`, as lightweight
-  summaries, sorted by `Name` (ordinal). Non-`Guid` directories and unreadable
-  profiles are skipped with a debug/warning log; one bad profile never breaks
-  listing.
+  summaries (id + name + description), sorted by `Name` (ordinal). Non-`Guid`
+  directories and unreadable profiles are skipped with a debug/warning log; one
+  bad profile never breaks listing.
 - `GetProfile(id)` -- loads the full profile (metadata + mod list). Throws
   `KeyNotFoundException` if the profile dir or `profile.json` is absent. Legacy
   mod entries lacking `ContainerId` are dropped on read +
   logged (fresh-start; the operator re-adds mods).
-- `CreateProfile(name)` -- generates the `Guid`, scaffolds the directory tree
-  (`staged/`) **before** persisting an empty `profile.json` (so a crash between
-  the two never leaves a `profile.json` without its tree), and returns the new
-  profile. `name` must be non-whitespace. There is no per-profile `mods/`
-  directory (mods live in the repository).
-- `RenameProfile(id, newName)` -- display label only; the id and on-disk dir are
-  unchanged.
+- `CreateProfile(name, description, launchSettings)` -- generates the `Guid`,
+  scaffolds the directory tree (`staged/`) **before** persisting, and writes
+  name, description, and launch settings in the initial `profile.json`. `name`
+  must be non-whitespace (trimmed); `description` must be non-null, single-line
+  (no CR/LF), and at most `Profile.DescriptionMaxLength` characters after trim
+  (trimmed, may be empty); `launchSettings` must be non-null and pass
+  `LaunchSettingsValidator`. Every input is validated and normalized before any
+  filesystem touch, so an invalid input throws and creates nothing.
+- `UpdateProfile(id, name, description, launchSettings)` -- atomically replaces
+  the profile's name, description, and launch settings in a single
+  read-validate-write. Preserves id, creation time, mods, mod order, enabled
+  state, and per-mod policies. Same validation as `CreateProfile`; an invalid
+  input leaves the existing profile file unchanged. Throws
+  `KeyNotFoundException` if the profile is unknown. This is the single
+  editable-profile trust boundary: the hosted Profiles page routes every
+  metadata + launch-settings edit through it (there is no focused
+  launch-settings or rename write).
 - `DeleteProfile(id)` -- removes the entry and its entire directory tree
   (recursive). Throws `KeyNotFoundException` if absent.
 - `GetModList(id)` -- the profile's mods in stored order, not load order.
@@ -111,13 +132,10 @@ Method behavior:
   body, and the UI surfaces it after the localized framing.
 - `GetLaunchSettings(id)` -- a focused read of the profile's launch settings
   (environment variables + Darktide command-line arguments), used by the launch
-  path (relay-client reads it on each launch) and the launch-settings modal. The
-  launch path applies the settings next launch; editing is unlocked while
-  Darktide runs (a `profile.json` write that does not touch the running process).
-- `SetLaunchSettings(id, settings)` -- validates, rebuilds the profile aggregate
-  preserving Name/Id/CreatedAt/Mods, and persists. Throws `ArgumentException` on
-  the first violation (see [Launch settings](#launch-settings)). Editing is
-  unlocked while Darktide runs; settings apply on the next launch.
+  path (relay-client reads it on each launch). The hosted Profiles destination
+  edits launch settings through `UpdateProfile`; the launch path applies the
+  settings next launch, and editing is unlocked while Darktide runs (a
+  `profile.json` write that does not touch the running process).
 
 ### Key types
 
@@ -130,12 +148,17 @@ Method behavior:
 - `Profile` -- the aggregate root persisted to
   `<ProfilesBaseFolder>/<Id>/profile.json`. Identity is `Id` (a `Guid`, stable
   across renames and the on-disk directory name); `Name` is a display label, not
-  unique, not a path. `CreatedAt` is UTC. `Mods` is exposed as an immutable
+  unique, not a path. `Description` is a short, single-line description (defaults
+  to empty; coerced from JSON `null` / missing property on read, mirroring
+  `Mods`). `CreatedAt` is UTC. `Mods` is exposed as an immutable
   `IReadOnlyList<ModListEntry>`. `LaunchSettings` defaults to a non-null empty
   instance (coerced from JSON `null` / missing property on read, mirroring
-  `Mods`); changes go through `SetLaunchSettings`.
-- `ProfileSummary(Guid Id, string Name)` -- a lightweight projection for profile
-  pickers (no mod list loaded).
+  `Mods`); metadata + launch-settings changes go through `UpdateProfile`
+  (the single atomic editable-profile write).
+  `Profile.DescriptionMaxLength` (`120`) is the description length cap enforced
+  at the service boundary.
+- `ProfileSummary(Guid Id, string Name, string Description)` -- a lightweight
+  projection for profile pickers (no mod list loaded).
 - `StagingLinkCreator` -- a `delegate` that creates a directory staging link.
   The default (registered by `AddProfiles`) is platform-selective: an NTFS
   junction on Windows (privilege-free; no Developer Mode / admin required) and a
@@ -173,7 +196,7 @@ public sealed record LaunchSettings
 
 - Ordered lists (not dictionaries) so JSON order is explicit and game-argument
   order + duplicates survive persistence; duplicate-name detection happens in
-  `SetLaunchSettings` validation (the shared `LaunchSettingsValidator`), not
+  `UpdateProfile` validation (the shared `LaunchSettingsValidator`), not
   silent storage collapse.
 - Backward compatible: an existing `profile.json` without `LaunchSettings`, and
   an explicit JSON `null`, both deserialize to an empty (non-null) instance
@@ -195,10 +218,11 @@ public sealed record LaunchSettings
 ### Launch-settings validation (`LaunchSettingsValidator`)
 
 The single source of truth for launch-settings validation, shared by the
-authoritative `SetLaunchSettings` (the trust boundary) and the launch-settings UI
-(inline per-field feedback). Pure: no localization, no I/O, no side effects. It
-returns **structured, machine-readable errors**, not localized strings (the
-Profiles library is backend-only; each consumer localizes the kinds its own way).
+authoritative `UpdateProfile` (the trust boundary) and the launch-settings
+editor (inline per-field feedback). Pure: no localization, no I/O, no side
+effects. It returns **structured, machine-readable errors**, not localized
+strings (the Profiles library is backend-only; each consumer localizes the
+kinds its own way).
 
 ```csharp
 public enum LaunchSettingsValidationErrorKind
@@ -233,12 +257,12 @@ one error per entry). **Duplicates are reported on every colliding entry** (a
 name that appears more than once case-insensitively), so the UI can flag every
 row involved; the service throws on the first error in entry order.
 
-`SetLaunchSettings` delegates to `Validate`, then throws `ArgumentException` on
+`UpdateProfile` delegates to `Validate`, then throws `ArgumentException` on
 the first error with a clear, developer-facing (English) message that echoes the
 offending name. The structured errors carry no localization; the per-kind
 exception messages here are developer-facing only. A parameterized agreement
 test (`LaunchSettingsValidatorTests`) feeds the same inputs through both
-verdicts (does the validator report errors? does `SetLaunchSettings` throw?) and
+verdicts (does the validator report errors? does `UpdateProfile` throw?) and
 asserts they agree, guarding against drift. Profile files are plaintext, so this
 is not secret storage; logs never print environment values (only the profile id
 + counts).
@@ -393,18 +417,25 @@ only), file reparse points use `File.Delete` -- so it stays data-safe on both OS
 
 ## Testing
 
-`Modificus.Curator.Profiles.Tests` covers profile CRUD (`ProfileCrudTests`), mod
+`Modificus.Curator.Profiles.Tests` covers profile CRUD (`ProfileCrudTests`),
+profile description + the atomic create/update contract (`ProfileMetadataTests`:
+create round-trip with description + launch settings, missing/null `Description`
+read normalization, `UpdateProfile` preserving
+identity/mods/order/enabled/policies, name + description normalization and
+rejection, launch-settings validation through the shared validator, no-partial-write
+atomicity, and `ListProfiles`/`ProfileCreated` projecting description), mod
 list ordering/enable/policy + the base-name collision hard-block
 (`ModListTests`, including the legacy-Name-entry drop + null-Policy coercion +
 `GetBaseNameCollision` over all/none/disabled/excluded/corrupted cases), the
 launch-settings model + service (`LaunchSettingsTests`: round-trip across a
 fresh instance, old-JSON-loads-empty + explicit-null normalization, order +
 duplicate preservation, the full validation surface -- empty / `=` / NUL name,
-NUL value, case-insensitive duplicate, reserved names -- + the guarantee that an
-update preserves Name/Id/CreatedAt/Mods) + the shared validator
+NUL value, case-insensitive duplicate, reserved names -- routed through
+`UpdateProfile`, + the guarantee that an update preserves
+Id/CreatedAt/Mods) + the shared validator
 (`LaunchSettingsValidatorTests`: the structured result's index/kind/field shape,
 per-kind verdicts, and a parameterized agreement test that feeds the same
-inputs through both `SetLaunchSettings`'s verdict and the validator's verdict
+inputs through both `UpdateProfile`'s verdict and the validator's verdict
 across valid + every invalid case), `PrepareModRoot` + staging-link
 staging (junction on Windows, symlink on Linux) + the data-safe `ClearStagedDir`
 (`PrepareModRootTests`, `StagingTests`), the **linked-mod staging + safety**

@@ -26,8 +26,10 @@ src/
   Directory.Build.props           shared MSBuild properties (net10.0, nullable)
   config.example.json             sample global config (schema reference)
   ui/                             Modificus.Curator.UI       Avalonia executable + DI composition root
-                                                            (shell + profiles, Preferences, mod-list UI,
-                                                            Launch + Settings)
+                                                             (the SplitView shell with five hosted destinations:
+                                                             Profiles, Mods, Nexus Integrations, Preferences,
+                                                             Settings; profile management + inline launch-settings
+                                                             editor; the mod-list UI; the Launch flow)
   general/                        Modificus.Curator.General  cross-cutting infra: logging, config loader,
                                                             app-state store, DI
   config/                         Modificus.Curator.Config   the CuratorConfig schema + defaults (POCO)
@@ -44,7 +46,7 @@ src/
     Modificus.Curator.Integrations.Tests/    xUnit tests for the Nexus client + auth + acquisition + update check
     Modificus.Curator.Steam.Tests/           xUnit tests for discovery + IsGameRunning
     Modificus.Curator.RelayClient.Tests/     xUnit tests for the launch façade (dual-purpose: dotnet test / dotnet run smoke harness)
-    Modificus.Curator.UI.Tests/              xUnit tests for the shell + manage-profiles + mod-list view models
+    Modificus.Curator.UI.Tests/              xUnit tests for shell navigation + profiles + mod-list view models
 ```
 
 Each library exposes an `Add<Library>()` extension method on
@@ -65,12 +67,14 @@ dotnet build src/modificus-curator.sln --configuration Release
 dotnet run --project src/ui --configuration Release
 ```
 
-The window shows the top bar (app title, profile dropdown + "Manage profiles…"
-gear, Launch Darktide) and the status strip (Darktide running indicator). The
-profile dropdown switches the active profile (persisted across restarts via
-`IAppStateStore`); "Manage profiles…" opens the create / rename / delete dialog.
-The startup log lines (`Modificus Curator starting`, `Config loaded …`) go to the
-console and to the configured log file.
+The window shows the SplitView shell: a left navigation rail (compact icon
+tiles by default; expand it with the hamburger toggle to show icon + label for
+the five destinations: Profiles, Mods, Nexus Integrations, Preferences,
+Settings), a global header with the current destination title and the Launch
+Darktide button, and a status strip (Darktide running indicator, the nxm
+handler status, and the dismissible app-update notice). Mods is selected
+initially. The startup log lines (`Modificus Curator starting`, `Config
+loaded …`) go to the console and to the configured log file.
 
 ## Test
 
@@ -252,5 +256,5 @@ for the schema.
 
 Per-profile settings live with the profile, not in the global config. This
 includes the launch settings (environment variables + Darktide command-line
-arguments, edited from a per-row action in Manage Profiles and applied at
+arguments, edited inline in the Profiles destination and applied at
 launch).

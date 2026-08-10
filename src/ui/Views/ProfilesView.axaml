@@ -1,0 +1,332 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Modificus.Curator.UI.ViewModels"
+             xmlns:views="using:Modificus.Curator.UI.Views"
+             x:Class="Modificus.Curator.UI.Views.ProfilesView"
+             x:DataType="vm:ProfilesViewModel">
+
+  <UserControl.Resources>
+    <!--
+      The shared picker-row card (first-letter box + name + single-line
+      description). Factored into one DataTemplate so the banner flyout + the
+      Select-a-profile flyout render identical rows from a single definition
+      (the row markup is the bulk of each flyout; only the host button differs).
+      The Click handler resolves to this view's code-behind.
+    -->
+    <DataTemplate x:Key="PickerRowTemplate" DataType="vm:ProfileChoice">
+      <Button Classes="pickerRow"
+              Click="PickerRow_Click"
+              CommandParameter="{Binding}"
+              HorizontalAlignment="Stretch"
+              HorizontalContentAlignment="Stretch"
+              Padding="8"
+              MinHeight="48">
+        <Grid ColumnDefinitions="36,*">
+          <!-- First-letter box (avatar surrogate) -->
+          <Border Grid.Column="0"
+                  Width="32" Height="32"
+                  CornerRadius="16"
+                  Background="{DynamicResource SystemControlBackgroundAccentBrush}"
+                  VerticalAlignment="Center">
+            <TextBlock Text="{Binding FirstLetter}"
+                       Foreground="{DynamicResource SystemControlForegroundAltHighBrush}"
+                       FontWeight="SemiBold"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center" />
+          </Border>
+          <StackPanel Grid.Column="1" Spacing="2" Margin="10,0,0,0" VerticalAlignment="Center">
+            <TextBlock Text="{Binding Name}"
+                       FontSize="14"
+                       TextTrimming="CharacterEllipsis" />
+            <TextBlock Text="{Binding Description}"
+                       IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                       FontSize="11"
+                       TextTrimming="CharacterEllipsis" />
+          </StackPanel>
+        </Grid>
+      </Button>
+    </DataTemplate>
+  </UserControl.Resources>
+
+  <UserControl.Styles>
+    <!--
+      The persisted profile banner + the Select-a-profile affordance read as
+      flat cards, not chunky accent buttons. Fluent's default Button chrome is
+      toned down: a subtle border + transparent background that lifts on
+      pointer-over + pressed so the card still reads as clickable. Themed via
+      DynamicResource so Light/Dark + font scaling work without custom brushes.
+    -->
+    <Style Selector="Button.bannerCard">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseMediumLowBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
+    </Style>
+    <Style Selector="Button.affordanceCard">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseMediumLowBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="12,8" />
+    </Style>
+    <!--
+      Picker rows: flat, borderless, stretch-to-fill rows so the flyout reads as
+      a list of switch targets. The first-letter box + name + description carry
+      the visual structure; the row itself is just a click surface.
+    -->
+    <Style Selector="Button.pickerRow">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="CornerRadius" Value="4" />
+    </Style>
+  </UserControl.Styles>
+
+  <!--
+    The Profiles destination content. Three regions: the top profile banner /
+    affordance (banner button hosts an Avalonia Flyout with the switch targets),
+    the scrollable editor (Name + single-line Description + the reusable
+    LaunchSettingsEditorView), and a fixed footer (Save + Cancel + top-level
+    save error). The page owns the ScrollViewer so the editor view stays
+    scroll-free (no nested ScrollViewer). Fluent theme resources, font scaling,
+    and compiled bindings are preserved.
+
+    Icons + markers are drawn <Path> geometry (Material 24x24 source) and
+    Ellipse, never Unicode glyphs, per AGENTS.md. The first-letter box is a
+    TextBlock over a themed background (an avatar surrogate, not a glyph).
+  -->
+
+  <Grid RowDefinitions="Auto,*,Auto" Margin="20,12,20,12">
+
+    <!-- ================================================================ -->
+    <!-- Region 1: persisted banner / Select+Add affordances / no-profiles CTA -->
+    <!-- ================================================================ -->
+
+    <StackPanel Grid.Row="0" Spacing="8" Margin="0,0,0,8">
+
+      <!-- Persisted active profile banner: a flat card button hosting the
+           picker flyout (Button.Flyout opens it on click automatically). Shown
+           only when an active profile exists and no draft is open. Disabled
+           while Darktide runs (switching is blocked). -->
+      <Button x:Name="BannerButton"
+              IsVisible="{Binding IsBannerVisible}"
+              IsEnabled="{Binding !IsRunning}"
+              Classes="bannerCard"
+              ToolTip.Tip="{ReflectionBinding [Profiles_PickerTooltip], Source={StaticResource Loc}}"
+              HorizontalAlignment="Stretch"
+              HorizontalContentAlignment="Stretch"
+              Padding="0"
+              MinHeight="56">
+        <Button.Flyout>
+          <Flyout Placement="BottomEdgeAlignedLeft" ShowMode="Standard">
+            <Border Padding="0" MinWidth="260" MaxWidth="360">
+              <StackPanel Spacing="2">
+                <ItemsControl ItemsSource="{Binding ProfileChoices}"
+                              ItemTemplate="{StaticResource PickerRowTemplate}" />
+                <TextBlock Text="{ReflectionBinding [Profiles_PickerEmpty], Source={StaticResource Loc}}"
+                           IsVisible="{Binding !HasPickerChoices}"
+                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                           FontSize="12"
+                           Margin="8" />
+              </StackPanel>
+            </Border>
+          </Flyout>
+        </Button.Flyout>
+
+        <!-- Banner card content: first-letter box + name + description -->
+        <Grid ColumnDefinitions="48,*" Margin="12,8">
+          <Border Grid.Column="0"
+                  Width="40" Height="40"
+                  CornerRadius="20"
+                  Background="{DynamicResource SystemControlBackgroundAccentBrush}"
+                  VerticalAlignment="Center">
+            <TextBlock Text="{Binding ActiveProfileBanner.FirstLetter}"
+                       Foreground="{DynamicResource SystemControlForegroundAltHighBrush}"
+                       FontWeight="SemiBold"
+                       FontSize="18"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center" />
+          </Border>
+          <StackPanel Grid.Column="1" Spacing="2" Margin="12,0,0,0" VerticalAlignment="Center">
+            <TextBlock Text="{Binding ActiveProfileBanner.Name}"
+                       FontSize="16"
+                       FontWeight="SemiBold"
+                       TextTrimming="CharacterEllipsis" />
+            <TextBlock Text="{Binding ActiveProfileBanner.Description}"
+                       IsVisible="{Binding ActiveProfileBanner.Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                       FontSize="12"
+                       TextTrimming="CharacterEllipsis" />
+          </StackPanel>
+        </Grid>
+      </Button>
+
+      <!-- No-active-but-profiles-exist: Select affordance + Add, side by side.
+           Select hosts the same picker flyout (disabled while running); Add
+           stays directly accessible so the user never has to pick an existing
+           profile first. Add disables while running (the command's CanExecute). -->
+      <Grid IsVisible="{Binding ShowSelectAffordance}"
+            ColumnDefinitions="*,Auto" Margin="0,0,0,0">
+        <Button x:Name="SelectAffordanceButton"
+                Grid.Column="0"
+                IsEnabled="{Binding !IsRunning}"
+                Classes="affordanceCard"
+                ToolTip.Tip="{ReflectionBinding [Profiles_SelectProfileTooltip], Source={StaticResource Loc}}"
+                HorizontalAlignment="Stretch"
+                HorizontalContentAlignment="Left"
+                MinHeight="44">
+          <Button.Flyout>
+            <Flyout Placement="BottomEdgeAlignedLeft" ShowMode="Standard">
+              <Border Padding="0" MinWidth="260" MaxWidth="360">
+                <StackPanel Spacing="2">
+                  <ItemsControl ItemsSource="{Binding ProfileChoices}"
+                                ItemTemplate="{StaticResource PickerRowTemplate}" />
+                  <TextBlock Text="{ReflectionBinding [Profiles_PickerEmpty], Source={StaticResource Loc}}"
+                             IsVisible="{Binding !HasPickerChoices}"
+                             Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                             FontSize="12"
+                             Margin="8" />
+                </StackPanel>
+              </Border>
+            </Flyout>
+          </Button.Flyout>
+          <TextBlock Text="{ReflectionBinding [Profiles_SelectProfile], Source={StaticResource Loc}}"
+                     VerticalAlignment="Center" />
+        </Button>
+        <!-- Compact Add-profile icon button (drawn Path + label) so Add is a
+             single click from the no-active state. -->
+        <Button Grid.Column="1"
+                Command="{Binding AddProfileCommand}"
+                ToolTip.Tip="{Binding AddTooltip}"
+                Classes="affordanceCard"
+                Margin="8,0,0,0"
+                MinHeight="44">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <!-- Material "add" plus (24x24 source): drawn geometry. -->
+            <Path Width="16" Height="16" Stretch="Uniform"
+                  VerticalAlignment="Center"
+                  Fill="{Binding $parent[Button].Foreground}"
+                  Data="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
+            <TextBlock Text="{ReflectionBinding [Profiles_AddButton], Source={StaticResource Loc}}"
+                       VerticalAlignment="Center" />
+          </StackPanel>
+        </Button>
+      </Grid>
+
+      <!-- No-profiles call to action: clicking starts a draft (same Add flow). -->
+      <Button IsVisible="{Binding ShowNoProfilesCta}"
+              Command="{Binding AddProfileCommand}"
+              ToolTip.Tip="{Binding AddTooltip}"
+              Classes="accent"
+              Content="{ReflectionBinding [Profiles_NoProfilesCta], Source={StaticResource Loc}}"
+              HorizontalAlignment="Stretch"
+              HorizontalContentAlignment="Left"
+              MinHeight="44" />
+
+      <!-- New draft heading (replaces the banner while a draft is open). -->
+      <TextBlock IsVisible="{Binding IsDraft}"
+                 Text="{ReflectionBinding [Profiles_NewDraftHeading], Source={StaticResource Loc}}"
+                 FontSize="16"
+                 FontWeight="SemiBold"
+                 Margin="0,4" />
+    </StackPanel>
+
+    <!-- ================================================================ -->
+    <!-- Region 2: scrollable editor content                              -->
+    <!-- ================================================================ -->
+
+    <ScrollViewer Grid.Row="1" Padding="4">
+      <StackPanel Spacing="16" IsVisible="{Binding IsEditorVisible}">
+
+        <!-- Action row: prominent Add profile + Delete profile buttons.
+             Delete hides for a draft; Add disables while running (the command's
+             CanExecute reflects the running + saving gates). Tooltips bind to
+             the VM's running-aware tooltip properties so the lock reason shows. -->
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <Button Command="{Binding AddProfileCommand}"
+                  ToolTip.Tip="{Binding AddTooltip}"
+                  MinHeight="36">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <!-- Material "add" plus (24x24 source): drawn geometry. -->
+              <Path Width="16" Height="16" Stretch="Uniform"
+                    VerticalAlignment="Center"
+                    Fill="{Binding $parent[Button].Foreground}"
+                    Data="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
+              <TextBlock Text="{ReflectionBinding [Profiles_AddButton], Source={StaticResource Loc}}"
+                         VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <Button Command="{Binding DeleteProfileCommand}"
+                  IsVisible="{Binding DeleteIsVisible}"
+                  ToolTip.Tip="{Binding DeleteTooltip}"
+                  MinHeight="36">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <!-- Material "delete" trash can (24x24 source): drawn geometry. -->
+              <Path Width="16" Height="16" Stretch="Uniform"
+                    VerticalAlignment="Center"
+                    Fill="{Binding $parent[Button].Foreground}"
+                    Data="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+              <TextBlock Text="{ReflectionBinding [Profiles_DeleteButton], Source={StaticResource Loc}}"
+                         VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+        </StackPanel>
+
+        <!-- Name (with inline validation error matching the editor's pattern) -->
+        <StackPanel Spacing="6">
+          <TextBlock Text="{ReflectionBinding [Profiles_NameLabel], Source={StaticResource Loc}}"
+                     FontWeight="SemiBold" />
+          <TextBox Text="{Binding Name, Mode=TwoWay}"
+                   PlaceholderText="{ReflectionBinding [Profiles_NamePlaceholder], Source={StaticResource Loc}}" />
+          <TextBlock Text="{Binding NameError}"
+                     IsVisible="{Binding NameError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                     Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}"
+                     FontSize="11"
+                     Margin="0,2" />
+        </StackPanel>
+
+        <!-- Description (single-line, capped at 120 chars, inline validation) -->
+        <StackPanel Spacing="6">
+          <TextBlock Text="{ReflectionBinding [Profiles_DescriptionLabel], Source={StaticResource Loc}}"
+                     FontWeight="SemiBold" />
+          <TextBox Text="{Binding Description, Mode=TwoWay}"
+                   PlaceholderText="{ReflectionBinding [Profiles_DescriptionPlaceholder], Source={StaticResource Loc}}"
+                   MaxLength="120"
+                   AcceptsReturn="False"
+                   TextWrapping="NoWrap" />
+          <TextBlock Text="{Binding DescriptionError}"
+                     IsVisible="{Binding DescriptionError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                     Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}"
+                     FontSize="11"
+                     Margin="0,2" />
+        </StackPanel>
+
+        <!-- Reusable launch-settings editor (host owns scrolling; editor is
+             scroll-free). Bound to the composed Editor on the page VM. -->
+        <views:LaunchSettingsEditorView DataContext="{Binding Editor}" />
+
+      </StackPanel>
+    </ScrollViewer>
+
+    <!-- ================================================================ -->
+    <!-- Region 3: fixed footer (Save + Cancel + save error)              -->
+    <!-- ================================================================ -->
+
+    <StackPanel Grid.Row="2" Spacing="8" Margin="0,12,0,0" IsVisible="{Binding IsEditorVisible}">
+      <TextBlock Text="{Binding SaveError}"
+                 IsVisible="{Binding SaveError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                 Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}"
+                 FontSize="11" />
+      <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+        <Button Content="{ReflectionBinding [Profiles_CancelButton], Source={StaticResource Loc}}"
+                Command="{Binding CancelCommand}"
+                MinWidth="80" />
+        <Button Content="{ReflectionBinding [Profiles_SaveButton], Source={StaticResource Loc}}"
+                Command="{Binding SaveCommand}"
+                Classes="accent"
+                MinWidth="80" />
+      </StackPanel>
+    </StackPanel>
+
+  </Grid>
+</UserControl>

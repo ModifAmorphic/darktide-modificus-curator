@@ -37,7 +37,7 @@ public sealed class ModListViewModelTests
             dialogs: dialogs, localization: Localization);
     }
 
-    private static ProfileSummary Profile(string name) => new(Guid.NewGuid(), name);
+    private static ProfileSummary Profile(string name) => new(Guid.NewGuid(), name, "");
 
     /// <summary>
     /// Seeds the repository with a container that has one latest version, for the
@@ -1281,31 +1281,6 @@ public sealed class ModListViewModelTests
         Assert.Equal("https://www.nexusmods.com/warhammer40kdarktide/mods/8?tab=files",
             Row(vm, "DMF").UpdatePageUrl);
         Assert.Null(Row(vm, "Local").UpdatePageUrl);
-    }
-
-    [Fact]
-    public void HeaderCountText_returns_the_plain_title_with_no_count()
-    {
-        // The "Mods (N)" count was removed; the header reads the plain "Mods"
-        // label regardless of how many mods the profile has (the row list itself
-        // is the count). Verified across the no-profile + empty + populated
-        // states so a regression to a count branch is caught.
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var repo = new FakeModRepository();
-        var vmNoProfile = Build(TestDoubles.Profiles(), new FakeProfileSession { ActiveProfileId = null });
-        Assert.Equal("Mods", vmNoProfile.HeaderCountText);
-
-        var vmEmpty = Build(profiles, new FakeProfileSession { ActiveProfileId = a.Id });
-        Assert.Equal("Mods", vmEmpty.HeaderCountText);
-
-        profiles.WithMods(a.Id,
-            new ModListEntry { ContainerId = repo.Seed(new UntrackedSource(), "One").Id, Order = 0 },
-            new ModListEntry { ContainerId = repo.Seed(new UntrackedSource(), "Two").Id, Order = 1 },
-            new ModListEntry { ContainerId = repo.Seed(new UntrackedSource(), "Three").Id, Order = 2 },
-            new ModListEntry { ContainerId = repo.Seed(new UntrackedSource(), "Four").Id, Order = 3 });
-        var vmPopulated = Build(profiles, new FakeProfileSession { ActiveProfileId = a.Id }, repo);
-        Assert.Equal("Mods", vmPopulated.HeaderCountText);
     }
 
     [Fact]

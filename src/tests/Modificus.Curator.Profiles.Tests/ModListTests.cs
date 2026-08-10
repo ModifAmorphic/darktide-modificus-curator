@@ -17,7 +17,7 @@ public sealed class ModListTests
     public void AddMod_appends_enabled_entry_and_persists()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
 
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
@@ -33,7 +33,7 @@ public sealed class ModListTests
     public void AddMod_assigns_increasing_order_to_subsequent_adds()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var a = fx.AddContainerWithVersion("A");
         var b = fx.AddContainerWithVersion("B");
         var c = fx.AddContainerWithVersion("C");
@@ -51,7 +51,7 @@ public sealed class ModListTests
     public void AddMod_is_idempotent_for_existing_container()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
 
@@ -65,7 +65,7 @@ public sealed class ModListTests
     public void AddMod_rejects_empty_container_id()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
 
         Assert.Throws<ArgumentException>(() =>
             fx.Service.AddMod(profile.Id, Guid.Empty, ModVersionPolicy.Latest));
@@ -85,7 +85,7 @@ public sealed class ModListTests
     public void AddMod_with_explicit_Pinned_policy_persists()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
         var vId = container.Versions[0].Folder;
         var pinned = new PinnedPolicy(vId);
@@ -101,7 +101,7 @@ public sealed class ModListTests
     public void AddMod_is_idempotent_keeps_existing_policy()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
         var vId = container.Versions[0].Folder;
         fx.Service.AddMod(profile.Id, container.Id, new PinnedPolicy(vId));
@@ -118,7 +118,7 @@ public sealed class ModListTests
     public void SetModPolicy_unknown_mod_throws_KeyNotFoundException()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
 
         Assert.Throws<KeyNotFoundException>(() =>
             fx.Service.SetModPolicy(profile.Id, Guid.NewGuid(), ModVersionPolicy.Latest));
@@ -130,7 +130,7 @@ public sealed class ModListTests
         // The happy path: a PinnedPolicy whose VersionId references a version
         // present in the container is accepted, persisted, and round-trips.
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF", "1.0");
         fx.AddVersion(container.Id, "2.0"); // becomes isLatest
         var v1 = fx.Repo.Get(container.Id)!.Versions.Single(v => v.VersionString == "1.0");
@@ -152,7 +152,7 @@ public sealed class ModListTests
         // dropdown can't produce such an id, so this guards the programmatic
         // path only.
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF", "1.0");
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
 
@@ -167,7 +167,7 @@ public sealed class ModListTests
         // A container that no longer exists can't satisfy any Pinned policy; the
         // validation rejects it before persisting a phantom pin.
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF", "1.0");
         var vId = container.Versions[0].Folder;
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
@@ -187,7 +187,7 @@ public sealed class ModListTests
         // ContainerId == Guid.Empty and are dropped on read (logged). The profile
         // is otherwise intact (name + created-at preserved).
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         // Raw JSON hand-edit: an entry carrying the old Name-based shape (no
         // ContainerId), with a $kind-discriminated Policy. Written verbatim
         // because the C# anonymous-object route cannot express "$kind" as a
@@ -215,7 +215,7 @@ public sealed class ModListTests
         // A hand-edit (or future schema regression) could write a null Policy.
         // The service coerces it to Latest so downstream enumeration never NREs.
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
 
@@ -250,7 +250,7 @@ public sealed class ModListTests
         // otherwise intact. (Raw JSON because the anonymous-object route cannot
         // express "$kind" / "Version" as property names.)
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
         var rawJson = $$"""
 {
@@ -276,7 +276,7 @@ public sealed class ModListTests
     public void RemoveMod_drops_entry_and_leaves_repository_copy_intact()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
 
@@ -292,7 +292,7 @@ public sealed class ModListTests
     public void RemoveMod_unknown_mod_throws_KeyNotFoundException()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
 
@@ -304,7 +304,7 @@ public sealed class ModListTests
     public void SetModEnabled_toggles_state_and_persists()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
 
@@ -321,7 +321,7 @@ public sealed class ModListTests
     public void SetModEnabled_unknown_mod_throws_KeyNotFoundException()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
 
         Assert.Throws<KeyNotFoundException>(() =>
             fx.Service.SetModEnabled(profile.Id, Guid.NewGuid(), true));
@@ -331,7 +331,7 @@ public sealed class ModListTests
     public void SetModOrder_reorders_mods_by_container_id_sequence()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var a = fx.AddContainerWithVersion("A");
         var b = fx.AddContainerWithVersion("B");
         var c = fx.AddContainerWithVersion("C");
@@ -350,7 +350,7 @@ public sealed class ModListTests
     public void SetModOrder_appends_unmentioned_mods_in_their_relative_order()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var a = fx.AddContainerWithVersion("A");
         var b = fx.AddContainerWithVersion("B");
         var c = fx.AddContainerWithVersion("C");
@@ -370,7 +370,7 @@ public sealed class ModListTests
     public void SetModOrder_ignores_ids_not_in_the_profile()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var a = fx.AddContainerWithVersion("A");
         fx.Service.AddMod(profile.Id, a.Id, ModVersionPolicy.Latest);
 
@@ -401,7 +401,7 @@ public sealed class ModListTests
     public void GetBaseNameCollision_returns_null_when_no_mod_shares_the_base_name()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var dmf = fx.AddContainerWithVersion("DMF"); // base folder 'DMF'
         fx.Service.AddMod(profile.Id, dmf.Id, ModVersionPolicy.Latest);
 
@@ -414,7 +414,7 @@ public sealed class ModListTests
     public void GetBaseNameCollision_returns_the_colliding_entry_for_a_shared_base_name()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var existing = fx.AddContainerWithVersion("DMF"); // base folder 'DMF'
         fx.Service.AddMod(profile.Id, existing.Id, ModVersionPolicy.Latest);
 
@@ -430,7 +430,7 @@ public sealed class ModListTests
         // A re-add resolves to the same container; the add flow excludes it, so
         // the collision check returns null even though the base name matches.
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var dmf = fx.AddContainerWithVersion("DMF");
         fx.Service.AddMod(profile.Id, dmf.Id, ModVersionPolicy.Latest);
 
@@ -445,7 +445,7 @@ public sealed class ModListTests
         // A disabled colliding mod could be enabled later, so it counts: the
         // check considers ALL profile mods, not just enabled ones.
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var disabled = fx.AddContainerWithVersion("DMF");
         fx.Service.AddMod(profile.Id, disabled.Id, ModVersionPolicy.Latest);
         fx.Service.SetModEnabled(profile.Id, disabled.Id, enabled: false);
@@ -463,7 +463,7 @@ public sealed class ModListTests
         // yield a base name; it is skipped silently (can't collide). Only a
         // resolvable mod with the matching base name is returned.
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var real = fx.AddContainerWithVersion("RealMod"); // base folder 'RealMod'
         var bad = fx.Repo.CreateContainer(new UntrackedSource(), "BadMod");
         fx.Repo.AddVersion(bad.Id, "1.0", dir =>
@@ -489,7 +489,7 @@ public sealed class ModListTests
         // only; the import block forbids this in normal use): the first in
         // profile order is returned (either is enough to refuse the import).
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var first = fx.AddContainerWithVersion("DMF");
         var second = fx.AddContainerWithVersion("DMF");
         fx.Service.AddMod(profile.Id, first.Id, ModVersionPolicy.Latest);
@@ -516,7 +516,7 @@ public sealed class ModListTests
     public void GetBaseNameCollision_rejects_an_empty_or_whitespace_base_name(string baseName)
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
 
         Assert.Throws<ArgumentException>(() =>
             fx.Service.GetBaseNameCollision(profile.Id, baseName, excludeContainerId: null));

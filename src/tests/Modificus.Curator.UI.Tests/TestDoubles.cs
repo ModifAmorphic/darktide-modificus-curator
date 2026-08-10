@@ -194,6 +194,103 @@ internal static class TestDoubles
             launchExternalPath,
             nxmRegistrar);
     }
+
+    /// <summary>
+    /// The wired parts returned by <see cref="BuildShell"/>: the shell VM plus
+    /// every fake + concrete page VM a navigation test needs to drive the
+    /// lifecycle (Profiles dirty edits, Integrations auth, Settings rehydrate,
+    /// the mod-list reload observer, etc.).
+    /// </summary>
+    public sealed record ShellParts(
+        ShellViewModel Shell,
+        FakeProfileService Profiles,
+        FakeProfileSession Session,
+        FakeDialogService Dialogs,
+        FakeLaunchService Launch,
+        FakeAppUpdateService AppUpdate,
+        FakeConfigLoader Config,
+        FakeNexusAuthService Auth,
+        FakeNxmHandlerRegistrar? NxmRegistrar,
+        ProfilesViewModel ProfilesPage,
+        ModListViewModel ModsPage,
+        IntegrationsViewModel IntegrationsPage,
+        PreferencesViewModel PreferencesPage,
+        SettingsViewModel SettingsPage);
+
+    /// <summary>
+    /// Builds a <see cref="ShellViewModel"/> wired to concrete singleton page
+    /// VMs over in-memory fakes, mirroring production composition. The hosted
+    /// page VMs are real (not mocks), so navigation lifecycle effects
+    /// (Profiles dirty guard, Integrations auth refresh, Settings rehydrate,
+    /// mod-list reload) are exercised end-to-end. The shared fakes let a test
+    /// seed state + assert on call counts (RefreshAsync calls, IsRegistered
+    /// probes, reload side effects, launch calls).
+    /// </summary>
+    public static ShellParts BuildShell(
+        FakeProfileService? profiles = null,
+        FakeProfileSession? session = null,
+        FakeDialogService? dialogs = null,
+        FakeLaunchService? launch = null,
+        FakeAppUpdateService? appUpdate = null,
+        FakeConfigLoader? config = null,
+        FakeNexusAuthService? auth = null,
+        FakeNxmHandlerRegistrar? nxmRegistrar = null,
+        LocalizationService? localization = null,
+        FakeModRepository? repo = null)
+    {
+        profiles ??= Profiles();
+        session ??= new FakeProfileSession(() => profiles.ListProfiles());
+        dialogs ??= new FakeDialogService();
+        launch ??= new FakeLaunchService();
+        appUpdate ??= new FakeAppUpdateService();
+        config ??= new FakeConfigLoader();
+        auth ??= new FakeNexusAuthService();
+        localization ??= new LocalizationService();
+        repo ??= new FakeModRepository();
+
+        var modsPage = BuildModList(
+            profiles, session, repo,
+            dialogs: dialogs,
+            localization: localization,
+            auth: auth,
+            configLoader: config,
+            appState: new FakeAppStateStore(),
+            nxmRegistrar: nxmRegistrar);
+        var dmf = BuildDmfPromptService(
+            profiles, session, repo,
+            dialogs: dialogs,
+            localization: localization,
+            auth: auth,
+            nxmRegistrar: nxmRegistrar);
+        var profilesPage = new ProfilesViewModel(
+            profiles, session, dialogs, localization,
+            processPendingDmf: () => dmf.ProcessPendingAsync(),
+            reloadModList: () => modsPage.Reload(),
+            NullLogger<ProfilesViewModel>.Instance);
+        var integrationsPage = new IntegrationsViewModel(
+            auth, localization, config, dialogs, nxmRegistrar,
+            NullLogger<IntegrationsViewModel>.Instance);
+        var preferencesPage = new PreferencesViewModel(
+            new FakePreferencesService(), config, localization,
+            isRelayConsoleToggleSupported: true);
+        var settingsPage = new SettingsViewModel(
+            config, localization, appUpdate, dialogs,
+            invokeOnUi: static action => action(),
+            NullLogger<SettingsViewModel>.Instance);
+
+        var shell = new ShellViewModel(
+            session, launch, dialogs, localization,
+            profilesPage, modsPage, integrationsPage, preferencesPage, settingsPage,
+            appUpdate,
+            invokeOnUi: static action => action(),
+            NullLogger<ShellViewModel>.Instance,
+            config, nxmRegistrar);
+
+        return new ShellParts(
+            shell, profiles, session, dialogs, launch, appUpdate, config,
+            auth, nxmRegistrar, profilesPage, modsPage, integrationsPage,
+            preferencesPage, settingsPage);
+    }
 }
 
 /// <summary>
@@ -283,8 +380,8 @@ internal sealed class FakeProfileService : IProfileService
     private readonly List<ProfileSummary> _profiles;
     private readonly Dictionary<Guid, List<ModListEntry>> _modLists = new();
 
-    public FakeProfileService(IEnumerable<ProfileSummary> seed) =>
-        _profiles = new List<ProfileSummary>(seed);
+    public FakeProfileService(IEnumerable<ProfileSummary>? seed = null) =>
+        _profiles = seed is null ? new() : new(seed);
 
     /// <inheritdoc />
     /// <remarks>Raised from <see cref="CreateProfile"/>. The DMF prompt
@@ -293,8 +390,54 @@ internal sealed class FakeProfileService : IProfileService
     /// + a call to <c>DmfPromptService.ProcessPendingAsync</c>.</remarks>
     public event EventHandler<ProfileSummary>? ProfileCreated;
 
-    public IReadOnlyList<string> CreatedNames { get; } = new List<string>();
-    public IReadOnlyList<(Guid Id, string Name)> Renames { get; } = new List<(Guid, string)>();
+    /// <summary>
+    /// The (name, description, launchSettings) triples passed to the full
+    /// <see cref="CreateProfile(string, string, LaunchSettings)"/> overload, in
+    /// call order. Tests assert on the description + launch settings the Profiles
+    /// page passed through the atomic create.
+    /// </summary>
+    public IReadOnlyList<(string Name, string Description, LaunchSettings Settings)> CreateCalls { get; }
+        = new List<(string, string, LaunchSettings)>();
+
+    /// <summary>
+    /// The (id, name, description, launchSettings) quads passed to
+    /// <see cref="UpdateProfile"/>, in call order. Tests assert on the exact
+    /// atomic update the Profiles page issued.
+    /// </summary>
+    public IReadOnlyList<(Guid Id, string Name, string Description, LaunchSettings Settings)> UpdateCalls { get; }
+        = new List<(Guid, string, string, LaunchSettings)>();
+
+    /// <summary>
+    /// When set, <see cref="UpdateProfile"/> throws this exception AFTER recording
+    /// the call but BEFORE mutating any summaries or launch settings, mirroring
+    /// the production service's "validate everything before any write" contract.
+    /// Default <c>null</c> = no throw. Used by the Profiles-page save-error test
+    /// (the catch maps the throw to a localized generic error) + the
+    /// "rejected save then Cancel reloads original values" test (which relies on
+    /// the no-mutation guarantee).
+    /// </summary>
+    public Exception? UpdateProfileThrows { get; set; }
+
+    /// <summary>
+    /// When set, <see cref="CreateProfile(string, string, LaunchSettings)"/>
+    /// throws this exception AFTER recording the call but BEFORE mutating any
+    /// summaries or launch settings (no ProfileCreated raised). Default
+    /// <c>null</c> = no throw. Used by the Profiles-page new-draft save-error
+    /// test: the catch maps the throw to a localized generic error and must NOT
+    /// request active / DMF / reload.
+    /// </summary>
+    public Exception? CreateProfileThrows { get; set; }
+
+    /// <summary>
+    /// When set, <see cref="GetProfile"/> throws this exception, simulating an
+    /// unreadable/corrupt active profile (the production service surfaces this
+    /// as IOException / JsonException / UnauthorizedAccessException from the
+    /// disk read). Default <c>null</c> = no throw. Used by the Profiles-page
+    /// stale-active-recovery test to verify the page falls back to a genuine
+    /// no-active state with no Delete path on the stale id.
+    /// </summary>
+    public Exception? GetProfileThrows { get; set; }
+
     public IReadOnlyList<Guid> DeletedIds { get; } = new List<Guid>();
 
     // ---- per-profile mod-list recording -----------------------------------
@@ -322,6 +465,23 @@ internal sealed class FakeProfileService : IProfileService
         return this;
     }
 
+    /// <summary>
+    /// Test helper: seeds a profile summary + optional launch settings without
+    /// recording a create call (for setting up a scenario's persisted state
+    /// before the VM reads it). Returns the seeded summary so the test can
+    /// reference its id (e.g. to set as the session's active id).
+    /// </summary>
+    public ProfileSummary WithProfile(string name, string description = "", LaunchSettings? settings = null)
+    {
+        var summary = new ProfileSummary(Guid.NewGuid(), name, description);
+        _profiles.Add(summary);
+        if (settings is not null)
+        {
+            LaunchSettingsByProfile[summary.Id] = settings;
+        }
+        return summary;
+    }
+
     private List<ModListEntry> EnsureList(Guid id)
     {
         if (!_modLists.TryGetValue(id, out var list))
@@ -337,33 +497,81 @@ internal sealed class FakeProfileService : IProfileService
 
     public Profile GetProfile(Guid id)
     {
+        // Honor GetProfileThrows before any lookup, simulating an unreadable /
+        // corrupt active profile (the production service surfaces IOException /
+        // JsonException / UnauthorizedAccessException from the disk read). The
+        // Profiles VM catches those + falls back to a no-active state.
+        if (GetProfileThrows is not null)
+        {
+            throw GetProfileThrows;
+        }
+
         var summary = _profiles.FirstOrDefault(p => p.Id == id)
             ?? throw new KeyNotFoundException($"No profile {id}");
-        return new Profile { Id = summary.Id, Name = summary.Name };
+        // Round-trip the stored launch settings honestly (mirrors the production
+        // service, whose GetProfile returns the full aggregate incl.
+        // LaunchSettings). Falls back to a default when none was stored for the
+        // profile, matching the production null-normalization.
+        var settings = LaunchSettingsByProfile.TryGetValue(id, out var s)
+            ? s
+            : new LaunchSettings();
+        return new Profile
+        {
+            Id = summary.Id,
+            Name = summary.Name,
+            Description = summary.Description,
+            LaunchSettings = settings,
+        };
     }
 
-    public Profile CreateProfile(string name)
+    public Profile CreateProfile(string name, string description, LaunchSettings launchSettings)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
             throw new ArgumentException("name required", nameof(name));
         }
+        ArgumentNullException.ThrowIfNull(description);
+        ArgumentNullException.ThrowIfNull(launchSettings);
 
-        var created = new ProfileSummary(Guid.NewGuid(), name);
+        // Record the attempted call first so a test can assert the VM tried,
+        // then honor CreateProfileThrows BEFORE any mutation, mirroring the
+        // production service's "validate everything before any write" contract.
+        // No summary is added, no LaunchSettings stored, no ProfileCreated raised
+        // on the throw path, so a subsequent GetProfile/ListProfiles sees nothing.
+        ((List<(string, string, LaunchSettings)>)CreateCalls).Add((name, description, launchSettings));
+        if (CreateProfileThrows is not null)
+        {
+            throw CreateProfileThrows;
+        }
+
+        var created = new ProfileSummary(Guid.NewGuid(), name.Trim(), description.Trim());
         _profiles.Add(created);
-        ((List<string>)CreatedNames).Add(name);
+        // Store the launch settings so a subsequent GetProfile returns them
+        // (the production service round-trips the full aggregate through the
+        // disk file). This is the same dictionary GetLaunchSettings reads, so a
+        // profile created via the atomic create then read via GetLaunchSettings
+        // is consistent.
+        LaunchSettingsByProfile[created.Id] = launchSettings;
         // Mirror the production service: raise ProfileCreated AFTER the profile
         // is added to the list so a subscriber that re-lists sees it.
         ProfileCreated?.Invoke(this, created);
-        return new Profile { Id = created.Id, Name = created.Name };
+        return new Profile
+        {
+            Id = created.Id,
+            Name = created.Name,
+            Description = created.Description,
+            LaunchSettings = launchSettings,
+        };
     }
 
-    public void RenameProfile(Guid id, string newName)
+    public void UpdateProfile(Guid id, string name, string description, LaunchSettings launchSettings)
     {
-        if (string.IsNullOrWhiteSpace(newName))
+        if (string.IsNullOrWhiteSpace(name))
         {
-            throw new ArgumentException("name required", nameof(newName));
+            throw new ArgumentException("name required", nameof(name));
         }
+        ArgumentNullException.ThrowIfNull(description);
+        ArgumentNullException.ThrowIfNull(launchSettings);
 
         var idx = _profiles.FindIndex(p => p.Id == id);
         if (idx < 0)
@@ -371,8 +579,24 @@ internal sealed class FakeProfileService : IProfileService
             throw new KeyNotFoundException($"No profile {id}");
         }
 
-        _profiles[idx] = _profiles[idx] with { Name = newName };
-        ((List<(Guid, string)>)Renames).Add((id, newName));
+        // Record the attempted call first so a test can assert the VM tried,
+        // then honor UpdateProfileThrows BEFORE any mutation, mirroring the
+        // production service's "validate everything before any write" contract.
+        // No summary or launch settings are changed on the throw path, so a
+        // subsequent GetProfile/ListProfiles sees the original persisted values.
+        ((List<(Guid, string, string, LaunchSettings)>)UpdateCalls).Add(
+            (id, name, description, launchSettings));
+        if (UpdateProfileThrows is not null)
+        {
+            throw UpdateProfileThrows;
+        }
+
+        _profiles[idx] = _profiles[idx] with { Name = name.Trim(), Description = description.Trim() };
+        // Round-trip the launch settings through the same dictionary as
+        // CreateProfile/GetLaunchSettings, mirroring the production service's
+        // atomic single-write semantics (the real service persists all three
+        // fields in one profile.json write).
+        LaunchSettingsByProfile[id] = launchSettings;
     }
 
     public void DeleteProfile(Guid id)
@@ -507,21 +731,10 @@ internal sealed class FakeProfileService : IProfileService
     }
 
     /// <summary>Per-profile launch settings (read + written directly by tests).
-    /// Default empty, mirroring a fresh / no-settings profile.</summary>
+    /// Default empty, mirroring a fresh / no-settings profile. The atomic
+    /// <see cref="UpdateProfile"/> write + <see cref="CreateProfile"/> both
+    /// populate this; <see cref="GetLaunchSettings"/> reads it.</summary>
     public Dictionary<Guid, LaunchSettings> LaunchSettingsByProfile { get; } = new();
-
-    /// <summary>The (profileId, settings) pairs passed to
-    /// <see cref="SetLaunchSettings"/>, in call order.</summary>
-    public IReadOnlyList<(Guid Id, LaunchSettings Settings)> SetLaunchSettingsCalls { get; }
-        = new List<(Guid, LaunchSettings)>();
-
-    /// <summary>
-    /// When set, <see cref="SetLaunchSettings"/> throws this exception (after
-    /// recording the call), simulating the service rejecting the settings on a
-    /// path the inline validator did not cover. Default <c>null</c> = no throw.
-    /// Used by the defense-in-depth Save test.
-    /// </summary>
-    public Exception? SetLaunchSettingsThrows { get; set; }
 
     /// <summary>
     /// Returns the recorded launch settings for the profile (empty when none
@@ -529,22 +742,6 @@ internal sealed class FakeProfileService : IProfileService
     /// </summary>
     public LaunchSettings GetLaunchSettings(Guid id) =>
         LaunchSettingsByProfile.TryGetValue(id, out var s) ? s : new LaunchSettings();
-
-    /// <summary>
-    /// Records the call + stores the settings so a subsequent
-    /// <see cref="GetLaunchSettings"/> returns them (mirrors the real service's
-    /// round-trip through the disk file). Throws <see cref="SetLaunchSettingsThrows"/>
-    /// when set, after recording the call.
-    /// </summary>
-    public void SetLaunchSettings(Guid id, LaunchSettings settings)
-    {
-        ((List<(Guid, LaunchSettings)>)SetLaunchSettingsCalls).Add((id, settings));
-        if (SetLaunchSettingsThrows is not null)
-        {
-            throw SetLaunchSettingsThrows;
-        }
-        LaunchSettingsByProfile[id] = settings;
-    }
 
     public string PrepareModRoot(Guid id) => throw new NotImplementedException();
 }
@@ -738,29 +935,19 @@ internal sealed class FakeAutomaticUpdateService : IAutomaticUpdateService
 
 /// <summary>
 /// Configurable dialog fake. <see cref="ConfirmResult"/> drives
-/// <see cref="ConfirmAsync"/>; <see cref="OnManageProfiles"/> runs when the
-/// manage-profiles dialog is opened (lets a test simulate the dialog creating /
-/// deleting profiles and routing active changes through the session). For the
-/// import modal, either a single <see cref="ImportResult"/> is returned for every
-/// call, or a per-call <see cref="ImportResultQueue"/> is dequeued (so a test can
-/// cancel mid-batch by enqueuing a <c>null</c>). The Settings, escape-hatch, and
-/// alert calls are recorded for assertion; the escape-hatch also exposes its
-/// drive flag (<see cref="EscapeHatchResult"/>) so a test can simulate a submit
-/// vs. a cancel. Records the requests so tests can assert on the sequence.
+/// <see cref="ConfirmAsync"/>. For the import modal, either a single
+/// <see cref="ImportResult"/> is returned for every call, or a per-call
+/// <see cref="ImportResultQueue"/> is dequeued (so a test can cancel mid-batch
+/// by enqueuing a <c>null</c>). The escape-hatch and alert calls are recorded
+/// for assertion; the escape-hatch also exposes its drive flag
+/// (<see cref="EscapeHatchResult"/>) so a test can simulate a submit vs. a
+/// cancel. Records the requests so tests can assert on the sequence.
 /// </summary>
 internal sealed class FakeDialogService : IDialogService
 {
     public bool ConfirmResult { get; set; } = true;
-    public Action? OnManageProfiles { get; set; }
-    public Action? OnPreferences { get; set; }
-    public Action? OnSettings { get; set; }
-    public Action? OnIntegrations { get; set; }
     public int ConfirmCalls { get; private set; }
     public string? LastConfirmMessage { get; private set; }
-    public int ManageProfilesCalls { get; private set; }
-    public int PreferencesCalls { get; private set; }
-    public int SettingsCalls { get; private set; }
-    public int IntegrationsCalls { get; private set; }
 
     /// <summary>
     /// The result returned by the next <see cref="ShowWelcomeAsync"/> call.
@@ -814,51 +1001,6 @@ internal sealed class FakeDialogService : IDialogService
     {
         WelcomeCalls++;
         return Task.FromResult(WelcomeResult);
-    }
-
-    public Task ShowManageProfilesAsync()
-    {
-        ManageProfilesCalls++;
-        OnManageProfiles?.Invoke();
-        return Task.CompletedTask;
-    }
-
-    /// <summary>The profile ids passed to <see cref="ShowLaunchSettingsAsync"/>,
-    /// in call order. Tests assert on this to verify the modal opened for the
-    /// selected row, not the active profile.</summary>
-    public IReadOnlyList<Guid> LaunchSettingsCalls { get; } = new List<Guid>();
-
-    /// <summary>Optional callback invoked when the launch-settings modal opens;
-    /// lets a test simulate a save inside the dialog (mutating the wired
-    /// FakeProfileService) before the call returns.</summary>
-    public Action<Guid>? OnLaunchSettings { get; set; }
-
-    public Task ShowLaunchSettingsAsync(Guid profileId)
-    {
-        ((List<Guid>)LaunchSettingsCalls).Add(profileId);
-        OnLaunchSettings?.Invoke(profileId);
-        return Task.CompletedTask;
-    }
-
-    public Task ShowPreferencesAsync()
-    {
-        PreferencesCalls++;
-        OnPreferences?.Invoke();
-        return Task.CompletedTask;
-    }
-
-    public Task ShowSettingsAsync()
-    {
-        SettingsCalls++;
-        OnSettings?.Invoke();
-        return Task.CompletedTask;
-    }
-
-    public Task ShowIntegrationsAsync()
-    {
-        IntegrationsCalls++;
-        OnIntegrations?.Invoke();
-        return Task.CompletedTask;
     }
 
     public Task<bool> ShowDiscoveryEscapeHatchAsync(IReadOnlyList<string> missingFields)
@@ -1611,13 +1753,14 @@ internal sealed class FakeModAcquisitionService : IModAcquisitionService
 }
 
 /// <summary>
-/// Configurable <see cref="INexusAuthService"/> for the mod-list VM tests. The
-/// mod-list VM reads <see cref="GetCurrentStateAsync"/> once at construction
-/// for the premium flag; this fake returns the configured
+/// Configurable <see cref="INexusAuthService"/> for the mod-list VM + shell
+/// navigation tests. The mod-list VM reads <see cref="GetCurrentStateAsync"/>
+/// once at construction for the premium flag; this fake returns the configured
 /// <see cref="State"/> (default a premium user; set null / non-premium to test
-/// the gating). The login / sign-out methods are not exercised by the mod-list
-/// VM + throw NotImplemented. <see cref="AuthStateChanged"/> is wired for the
-/// DMF prompt coordinator tests.
+/// the gating). The OAuth login is optionally controllable via
+/// <see cref="CancelOAuthOnToken"/> so a navigation test can prove leaving
+/// Integrations cancels an in-flight login (Deactivate). <see cref="AuthStateChanged"/>
+/// is wired for the DMF prompt coordinator tests.
 /// </summary>
 internal sealed class FakeNexusAuthService : INexusAuthService
 {
@@ -1629,8 +1772,28 @@ internal sealed class FakeNexusAuthService : INexusAuthService
 
     /// <summary>The number of <see cref="GetCurrentStateAsync"/> calls, so tests
     /// can assert the automatic-update service verifies Premium only when
-    /// gated.</summary>
+    /// gated, or that entering Integrations ran its auth refresh.</summary>
     public int GetCurrentStateCallCount { get; private set; }
+
+    /// <summary>
+    /// When true, <see cref="LoginWithOAuthAsync"/> returns a task that completes
+    /// as canceled when the supplied <see cref="CancellationToken"/> fires, so a
+    /// test can prove a VM cancels an in-flight login on Deactivate. Records the
+    /// task so the test can await it and assert IsCanceled.
+    /// </summary>
+    public bool CancelOAuthOnToken { get; set; }
+
+    /// <summary>The task returned by the last <see cref="LoginWithOAuthAsync"/>
+    /// call when <see cref="CancelOAuthOnToken"/> is set, so a test can await it
+    /// and assert cancellation.</summary>
+    public Task<NexusAuthResult>? LastOAuthTask { get; private set; }
+
+    /// <summary>The CancellationToken passed into the last
+    /// <see cref="LoginWithOAuthAsync"/> call.</summary>
+    public CancellationToken LastOAuthCancellationToken { get; private set; }
+
+    /// <summary>The number of <see cref="LoginWithOAuthAsync"/> calls.</summary>
+    public int OAuthLoginCalls { get; private set; }
 
     /// <inheritdoc />
     public event EventHandler? AuthStateChanged;
@@ -1639,7 +1802,7 @@ internal sealed class FakeNexusAuthService : INexusAuthService
     /// Raises <see cref="AuthStateChanged"/> with this sender. Simulates the
     /// signal the production service raises from its login / sign-out methods
     /// (the DMF prompt no longer subscribes; the shell's Integrations flow
-    /// refreshes the nxm handler status on close instead).
+    /// refreshes the nxm handler status on leave instead).
     /// </summary>
     public void RaiseAuthStateChanged() => AuthStateChanged?.Invoke(this, EventArgs.Empty);
 
@@ -1649,8 +1812,23 @@ internal sealed class FakeNexusAuthService : INexusAuthService
         return Task.FromResult(State);
     }
 
-    public Task<NexusAuthResult> LoginWithOAuthAsync(CancellationToken ct = default) =>
-        throw new NotImplementedException();
+    public Task<NexusAuthResult> LoginWithOAuthAsync(CancellationToken ct = default)
+    {
+        OAuthLoginCalls++;
+        LastOAuthCancellationToken = ct;
+        if (CancelOAuthOnToken)
+        {
+            // Return a task that only completes when the VM cancels the token it
+            // handed us (Deactivate flips it). Records the task so the test can
+            // await it and assert IsCanceled.
+            var tcs = new TaskCompletionSource<NexusAuthResult>();
+            ct.Register(() => tcs.TrySetCanceled(ct));
+            LastOAuthTask = tcs.Task;
+            return tcs.Task;
+        }
+        return Task.FromResult(NexusAuthResult.Success("OAuthUser", isPremium: false));
+    }
+
     public Task<NexusAuthResult> LoginWithApiKeyAsync(string apiKey, CancellationToken ct = default) =>
         throw new NotImplementedException();
     public Task SignOutAsync(CancellationToken ct = default) =>

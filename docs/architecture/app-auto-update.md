@@ -116,7 +116,7 @@ and `new UpdateManager(IUpdateSource source, UpdateOptions? options = null, IVel
 ## `IAppUpdateService`: an engine-neutral interface
 
 `IAppUpdateService` exposes the check, download, and apply flow without leaking
-a single Velopack type. The UI layer (the shell, the Settings window) depends
+a single Velopack type. The UI layer (the shell, the Settings destination) depends
 on this interface and on the small `AppUpdateInfo` record, never on Velopack
 directly. This keeps the update engine swappable and lets every consumer gate
 its affordances on `IsUpdateSupported` rather than scattering Velopack
@@ -279,8 +279,8 @@ not have dismissed it this session. The notice is gated on `CheckOnStartup`:
 when automatic checks are disabled the notice is suppressed entirely, even if a
 manual check populated `LastCheckResult` (the manual Settings check is the only
 remaining path and is self-contained, with its own inline result plus a
-Download-and-Restart button). The shell re-reads the toggle when the Settings
-dialog closes, so turning the toggle off dismisses a showing notice immediately
+Download-and-Restart button). The shell re-reads the toggle when leaving the Settings
+destination, so turning the toggle off dismisses a showing notice immediately
 and turning it back on re-enables it, without a restart. Clicking the pill is
 the notice flow:
 
@@ -301,7 +301,7 @@ notice re-shows next startup if an update is still available.
 
 ### The Settings "Updates" section
 
-The Settings window adds an "Updates" section that always renders (so
+The Settings destination adds an "Updates" section that always renders (so
 standalone, portable, and dev builds still see their version) with: the current version (or a
 localized "unknown" when it cannot be resolved), a "Check for Updates" button
 with an inline indeterminate spinner while a check runs, an inline status line

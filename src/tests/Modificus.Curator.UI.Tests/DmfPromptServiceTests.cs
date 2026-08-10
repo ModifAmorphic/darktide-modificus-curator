@@ -12,9 +12,10 @@ namespace Modificus.Curator.UI.Tests;
 /// <summary>
 /// Behaviors of the <see cref="DmfPromptService"/>: the two DMF cases (add
 /// existing / download + add or browser-open), the new-profile trigger, the
-/// decline path, and the dialog-on-dialog avoidance (the prompt does not fire
-/// from inside the event handler; it waits for the shell to call
-/// <see cref="DmfPromptService.ProcessPendingAsync"/>).
+/// decline path, and the deferred-prompt guarantee (the prompt does not fire
+/// from inside the event handler; it waits for the Profiles page to await
+/// <see cref="DmfPromptService.ProcessPendingAsync"/> after the create +
+/// activation).
 /// </summary>
 /// <remarks>
 /// All against the hand-rolled fakes in <see cref="TestDoubles"/>: the
@@ -102,7 +103,7 @@ public sealed class DmfPromptServiceTests
         var (service, _, _, _, _, _, _) =
             Build(profiles, session, repo, dialogs: dialogs);
 
-        var created = profiles.CreateProfile("New");
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
 
         await service.ProcessPendingAsync();
@@ -125,7 +126,7 @@ public sealed class DmfPromptServiceTests
 
         var (service, _, _, _, _, _, _) = Build(profiles, session, repo, dialogs: dialogs);
 
-        var created = profiles.CreateProfile("New");
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
 
         await service.ProcessPendingAsync();
@@ -155,7 +156,7 @@ public sealed class DmfPromptServiceTests
             Build(profiles, session, repo, acquisition, auth, dialogs,
                 launchExternal: NewRecordingSpy(launchedUris));
 
-        var created = profiles.CreateProfile("New");
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
 
         await service.ProcessPendingAsync();
@@ -192,7 +193,7 @@ public sealed class DmfPromptServiceTests
         var (service, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs);
 
-        var created = profiles.CreateProfile("New");
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
 
         await service.ProcessPendingAsync();
@@ -225,7 +226,7 @@ public sealed class DmfPromptServiceTests
             Build(profiles, session, repo, acquisition, auth, dialogs,
                 launchExternal: NewRecordingSpy(launchedUris));
 
-        var created = profiles.CreateProfile("New");
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
 
         await service.ProcessPendingAsync();
@@ -264,7 +265,7 @@ public sealed class DmfPromptServiceTests
             Build(profiles, session, repo, acquisition, auth, dialogs, registrar,
                 launchExternal: NewRecordingSpy(launchedUris));
 
-        var created = profiles.CreateProfile("New");
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
 
         await service.ProcessPendingAsync();
@@ -304,7 +305,7 @@ public sealed class DmfPromptServiceTests
             Build(profiles, session, repo, acquisition, auth, dialogs, registrar,
                 launchExternal: NewRecordingSpy(launchedUris));
 
-        var created = profiles.CreateProfile("New");
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
 
         await service.ProcessPendingAsync();
@@ -336,7 +337,7 @@ public sealed class DmfPromptServiceTests
             Build(profiles, session, repo, acquisition, auth, dialogs, registrar,
                 launchExternal: NewRecordingSpy(launchedUris));
 
-        var created = profiles.CreateProfile("New");
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
 
         await service.ProcessPendingAsync();
@@ -368,7 +369,7 @@ public sealed class DmfPromptServiceTests
             Build(profiles, session, repo, acquisition, auth, dialogs,
                 launchExternal: NewRecordingSpy(launchedUris));
 
-        var created = profiles.CreateProfile("New");
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
 
         await service.ProcessPendingAsync();
@@ -396,7 +397,7 @@ public sealed class DmfPromptServiceTests
             Build(profiles, session, repo, acquisition, auth, dialogs,
                 launchExternal: NewRecordingSpy(launchedUris));
 
-        var created = profiles.CreateProfile("New");
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
 
         await service.ProcessPendingAsync();
@@ -429,7 +430,7 @@ public sealed class DmfPromptServiceTests
         var (service, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs, registrar, failingLauncher);
 
-        var created = profiles.CreateProfile("New");
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
 
         await service.ProcessPendingAsync();
@@ -458,7 +459,7 @@ public sealed class DmfPromptServiceTests
         var (service, _, _, _, _, _, _) =
             Build(profiles, session, repo, dialogs: dialogs);
 
-        var created = profiles.CreateProfile("New");
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
         // Seed DMF into the new profile (already added).
         profiles.WithMods(created.Id,
@@ -480,7 +481,7 @@ public sealed class DmfPromptServiceTests
     {
         // A profile created while the game is running does NOT become active
         // (the session gates it); the new-profile trigger should not fire.
-        var existing = new ProfileSummary(Guid.NewGuid(), "Existing");
+        var existing = new ProfileSummary(Guid.NewGuid(), "Existing", "");
         var profiles = TestDoubles.Profiles(existing);
         var session = new FakeProfileSession(() => profiles.ListProfiles())
         {
@@ -494,7 +495,7 @@ public sealed class DmfPromptServiceTests
             Build(profiles, session, repo, dialogs: dialogs);
 
         // Create a new profile while running; the active id stays on `existing`.
-        profiles.CreateProfile("New");
+        profiles.CreateProfile("New", string.Empty, new LaunchSettings());
 
         await service.ProcessPendingAsync();
 
@@ -502,14 +503,14 @@ public sealed class DmfPromptServiceTests
         Assert.Empty(dialogs.AlertCalls);
     }
 
-    // ---- dialog-on-dialog avoidance ---------------------------------------
+    // ---- prompt does not fire synchronously inside CreateProfile -----------
 
     [Fact]
     public async Task ProfileCreated_does_not_synchronously_show_a_dialog()
     {
-        // The signal fires from inside the ManageProfiles dialog; the prompt
-        // must NOT fire synchronously (dialog-on-dialog). It must wait for
-        // ProcessPendingAsync.
+        // The signal fires synchronously from inside CreateProfile; the prompt
+        // must NOT fire synchronously (that would nest a modal inside the
+        // create call). It must wait for ProcessPendingAsync.
         var profiles = TestDoubles.Profiles();
         var session = new FakeProfileSession(() => profiles.ListProfiles());
         var repo = new FakeModRepository();
@@ -517,8 +518,8 @@ public sealed class DmfPromptServiceTests
         var (service, _, _, _, _, _, _) =
             Build(profiles, session, repo, dialogs: dialogs);
 
-        // Simulate the create inside the ManageProfiles dialog.
-        profiles.CreateProfile("New");
+        // Simulate the create the Profiles page drives on Save.
+        profiles.CreateProfile("New", string.Empty, new LaunchSettings());
 
         // No prompt fired yet (signal is pending).
         Assert.Equal(0, dialogs.ConfirmCalls);
@@ -548,7 +549,7 @@ public sealed class DmfPromptServiceTests
         var (service, _, _, _, _, _, _) =
             Build(profiles, session, repo, dialogs: dialogs);
 
-        var created = profiles.CreateProfile("New");
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
 
         await service.ProcessPendingAsync();

@@ -19,13 +19,13 @@ namespace Modificus.Curator.UI.Session;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>The trigger fires from the backend; the prompt fires from the shell, on
-/// the main window.</b> <see cref="IProfileService.ProfileCreated"/> fires from
-/// inside the ManageProfiles dialog's create call. Showing a modal prompt from
-/// inside that handler would be a dialog-on-dialog (manage-profiles is still
-/// open). This coordinator records the signal as pending; the shell calls
-/// <see cref="ProcessPendingAsync"/> after the triggering dialog closes, so the
-/// DMF prompt is the topmost modal at that point.</para>
+/// <b>The trigger fires from the backend; the prompt fires from the Profiles
+/// page.</b> <see cref="IProfileService.ProfileCreated"/> fires synchronously
+/// from inside the create call. This coordinator subscribes at construction
+/// (resolved eagerly when the Profiles page VM is built), records the signal as
+/// pending, and the Profiles page awaits <see cref="ProcessPendingAsync"/>
+/// immediately after the create + activation, so the DMF prompt runs as the
+/// topmost modal with no intermediate destination.</para>
 /// <para>
 /// <b>The two DMF cases.</b> On a trigger, the coordinator looks up DMF by
 /// source (<c>new NexusSource { ModId = <see cref="DmfModId"/> }</c>) and checks
@@ -39,16 +39,16 @@ namespace Modificus.Curator.UI.Session;
 /// <para>
 /// <b>No auth trigger.</b> Configuring Nexus auth no longer surfaces a DMF
 /// prompt on its own; the one-time Nexus setup offer lives in the first-run
-/// Welcome flow instead. The coordinator never opens the Integrations dialog
-/// and never stops at an informational dead-end: on a confirmed download it
-/// either downloads in-app (premium) or opens the browser (everyone else).</para>
+/// Welcome flow instead. The coordinator never opens the Nexus Integrations
+/// destination and never stops at an informational dead-end: on a confirmed
+/// download it either downloads in-app (premium) or opens the browser (everyone
+/// else).</para>
 /// <para>
 /// <b>Lives in the UI assembly.</b> Mirrors <see cref="UpdateCheckRunner"/>:
 /// the coordinator observes UI-layer singletons (<see cref="IProfileSession"/>,
 /// <see cref="IDialogService"/>) and orchestrates Integrations + Profiles +
-/// Mods services. Registered as a singleton; the shell resolves it + calls
-/// <see cref="ProcessPendingAsync"/> after the ManageProfiles dialog
-/// closes.</para>
+/// Mods services. Registered as a singleton; the Profiles page resolves it +
+/// awaits <see cref="ProcessPendingAsync"/> after each create + activation.</para>
 /// </remarks>
 public sealed class DmfPromptService
 {
@@ -89,10 +89,9 @@ public sealed class DmfPromptService
     private readonly Func<Uri, bool> _launchExternal;
 
     // The pending new-profile trigger, set by the event handler (which fires
-    // from inside the ManageProfiles dialog) and consumed by
-    // ProcessPendingAsync (called by the shell after the triggering dialog
-    // closes). Single-entry: the newest create wins (a second create during one
-    // dialog open is the relevant one). Read + written on the UI thread only
+    // synchronously from CreateProfile) and consumed by ProcessPendingAsync
+    // (awaited by the Profiles page immediately after the create + activation).
+    // Single-entry: the newest create wins. Read + written on the UI thread only
     // (ProfileCreated fires from ProfileService on the UI thread).
     private Guid? _pendingNewProfileId;
 
@@ -123,15 +122,14 @@ public sealed class DmfPromptService
     }
 
     /// <summary>
-    /// Records a new-profile-created signal. The shell will call
-    /// <see cref="ProcessPendingAsync"/> after the ManageProfiles dialog
-    /// closes; this method only records the pending trigger so the prompt does
-    /// not fire dialog-on-dialog.
+    /// Records a new-profile-created signal. The Profiles page will await
+    /// <see cref="ProcessPendingAsync"/> immediately after the create +
+    /// activation; this method only records the pending trigger.
     /// </summary>
     /// <remarks>
-    /// A second create during one ManageProfiles session overwrites the first
-    /// (the newest created id is the relevant one). A profile created + then
-    /// deleted in the same dialog session is handled by
+    /// A second create before the first is processed overwrites it (the newest
+    /// created id is the relevant one). A profile created + then deleted before
+    /// the page processes the trigger is handled by
     /// <see cref="PromptForNewProfileAsync"/>: it checks the active id, which
     /// no longer points at the deleted profile, so no prompt fires.
     /// </remarks>
@@ -142,15 +140,15 @@ public sealed class DmfPromptService
     }
 
     /// <summary>
-    /// Processes any pending new-profile trigger. Called by the shell after the
-    /// ManageProfiles dialog closes so the DMF prompt is the topmost modal at
-    /// that point. Safe to call when nothing is pending (a no-op).
+    /// Processes any pending new-profile trigger. Awaited by the Profiles page
+    /// immediately after a create + activation so the DMF prompt runs as the
+    /// topmost modal. Safe to call when nothing is pending (a no-op).
     /// </summary>
     /// <remarks>
     /// The trigger is consumed (cleared) before it is processed so a thrown
     /// exception in the prompt does not leave it stuck pending for the next
     /// call. A failure inside the prompt is caught + logged so a wiring issue
-    /// never blocks the shell's post-dialog return.</remarks>
+    /// never blocks the page's post-create return.</remarks>
     public async Task ProcessPendingAsync()
     {
         // Snapshot + clear before processing so an exception in the prompt

@@ -1,0 +1,117 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Modificus.Curator.UI.ViewModels"
+             xmlns:settings="using:Modificus.Curator.UI.Settings"
+             x:Class="Modificus.Curator.UI.Views.SettingsView"
+             x:DataType="vm:SettingsViewModel">
+
+  <!--
+    Host-neutral Settings content (Discovery + Storage + Updates sections). No
+    window chrome, no Done button, no ESC behavior: the host owns those. Owns
+    the page-level vertical ScrollViewer so the three sections stay usable at the
+    main window's minimum size and supported font-scale range; the host sizes
+    this control into its content region. Discovery row Browse buttons are wired
+    through the view code-behind (the picker is a view concern needing the live
+    TopLevel); the Storage buttons + Updates controls bind directly to the VM.
+  -->
+  <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                VerticalScrollBarVisibility="Auto">
+    <StackPanel Spacing="20" Margin="24,16">
+
+      <!-- ============== Discovery section ============== -->
+      <StackPanel Spacing="8">
+        <TextBlock Text="{Binding DiscoverySectionHeader}"
+                   FontWeight="SemiBold" />
+        <ItemsControl ItemsSource="{Binding DiscoveryRows}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:DiscoveryFieldRowViewModel">
+              <Grid ColumnDefinitions="160,*,Auto" Margin="0,4">
+                <TextBlock Grid.Column="0"
+                           Text="{Binding Label}"
+                           VerticalAlignment="Center" />
+                <TextBox Grid.Column="1"
+                         Text="{Binding Value, Mode=TwoWay}"
+                         Margin="8,0,0,0"
+                         VerticalAlignment="Center" />
+                <Button Grid.Column="2"
+                        Content="{ReflectionBinding [Discovery_BrowseButton], Source={StaticResource Loc}}"
+                        Click="BrowseDiscovery_Click"
+                        CommandParameter="{Binding Field.BrowseKind}"
+                        MinWidth="80" Margin="8,0,0,0"
+                        VerticalAlignment="Center" />
+              </Grid>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </StackPanel>
+
+      <!-- ============== Storage section ============== -->
+      <!--
+        Two buttons that open the OS file manager at the Curator data root +
+        profiles root. The profiles path is read live from config in the VM
+        command; the data-root path is the static AppPaths.AppDataDir. Nothing
+        here is editable.
+      -->
+      <StackPanel Spacing="8">
+        <TextBlock Text="{Binding StorageSectionHeader}"
+                   FontWeight="SemiBold" />
+        <StackPanel Orientation="Horizontal"
+                    Spacing="8"
+                    Margin="0,4">
+          <Button Content="{ReflectionBinding [Settings_OpenDataFolderButton], Source={StaticResource Loc}}"
+                  Command="{Binding OpenDataFolderCommand}" />
+          <Button Content="{ReflectionBinding [Settings_OpenProfilesFolderButton], Source={StaticResource Loc}}"
+                  Command="{Binding OpenProfilesFolderCommand}" />
+        </StackPanel>
+      </StackPanel>
+
+      <!-- ============== Updates section ============== -->
+      <!--
+        Always shown (current version + Check for Updates), so Linux / dev
+        builds (IsUpdateSupported=false) still see the version with a disabled
+        Check button. The Check button's enabled state follows its command's
+        CanExecute (gated on IsAppUpdateSupported && !IsCheckingAppUpdate);
+        an indeterminate spinner replaces the press affordance while a check
+        runs. The Download and Restart button is visible only when an update
+        is available.
+      -->
+      <StackPanel Spacing="8">
+        <TextBlock Text="{Binding UpdatesSectionHeader}"
+                   FontWeight="SemiBold" />
+        <Grid ColumnDefinitions="160,*" Margin="0,4">
+          <TextBlock Grid.Column="0"
+                     Text="{Binding CurrentVersionLabel}"
+                     VerticalAlignment="Center" />
+          <TextBlock Grid.Column="1"
+                     Text="{Binding CurrentVersionDisplay}"
+                     Margin="8,0,0,0"
+                     VerticalAlignment="Center" />
+        </Grid>
+        <CheckBox IsChecked="{Binding CheckOnStartup, Mode=TwoWay}"
+                  Content="{ReflectionBinding [Settings_CheckOnStartup], Source={StaticResource Loc}}"
+                  ToolTip.Tip="{ReflectionBinding [Settings_CheckOnStartupTooltip], Source={StaticResource Loc}}"
+                  Margin="0,4" />
+        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4">
+          <Button Content="{ReflectionBinding [Settings_CheckForUpdatesButton], Source={StaticResource Loc}}"
+                  Command="{Binding CheckAppUpdateCommand}"
+                  VerticalAlignment="Center" />
+          <ProgressBar Width="18" Height="18"
+                       IsIndeterminate="True"
+                       IsVisible="{Binding IsCheckingAppUpdate}"
+                       VerticalAlignment="Center" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4">
+          <TextBlock Text="{Binding AppUpdateStatusMessage}"
+                     IsVisible="{Binding AppUpdateStatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                     VerticalAlignment="Center"
+                     TextWrapping="Wrap" />
+          <Button Content="{ReflectionBinding [Settings_DownloadAndRestartButton], Source={StaticResource Loc}}"
+                  Command="{Binding DownloadAndRestartAppUpdateCommand}"
+                  IsVisible="{Binding IsAppUpdateAvailable}"
+                  VerticalAlignment="Center" />
+        </StackPanel>
+      </StackPanel>
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

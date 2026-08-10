@@ -22,7 +22,7 @@ public sealed class ModCleanupTests
         var external = fx.MakeExternalModFolder("LinkedMod");
         var sentinel = Path.Combine(external, "sentinel.txt");
         var containerId = fx.Imports.LinkFolder(external);
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, containerId, ModVersionPolicy.Latest);
 
         ModCleanup.PruneUnreferenced(fx.Service, fx.Repo);
@@ -44,7 +44,7 @@ public sealed class ModCleanupTests
         using var fx = new ProfileServiceFixture();
         var external = fx.MakeExternalModFolder("LinkedMod");
         var containerId = fx.Imports.LinkFolder(external);
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, containerId, ModVersionPolicy.Latest);
         fx.Service.SetModEnabled(profile.Id, containerId, enabled: false);
 
@@ -79,7 +79,7 @@ public sealed class ModCleanupTests
         using var fx = new ProfileServiceFixture();
         var external = fx.MakeExternalModFolder("LinkedMod");
         var containerId = fx.Imports.LinkFolder(external);
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, containerId, ModVersionPolicy.Latest);
 
         fx.Service.RemoveMod(profile.Id, containerId);
@@ -96,8 +96,8 @@ public sealed class ModCleanupTests
         using var fx = new ProfileServiceFixture();
         var external = fx.MakeExternalModFolder("LinkedMod");
         var containerId = fx.Imports.LinkFolder(external);
-        var profileA = fx.Service.CreateProfile("A");
-        var profileB = fx.Service.CreateProfile("B");
+        var profileA = fx.Service.CreateProfile("A", string.Empty, new LaunchSettings());
+        var profileB = fx.Service.CreateProfile("B", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profileA.Id, containerId, ModVersionPolicy.Latest);
         fx.Service.AddMod(profileB.Id, containerId, ModVersionPolicy.Latest);
 
@@ -115,7 +115,7 @@ public sealed class ModCleanupTests
         using var fx = new ProfileServiceFixture();
         var external = fx.MakeExternalModFolder("LinkedMod");
         var containerId = fx.Imports.LinkFolder(external);
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, containerId, ModVersionPolicy.Latest);
 
         fx.Service.DeleteProfile(profile.Id);

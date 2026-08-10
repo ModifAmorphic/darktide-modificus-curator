@@ -168,7 +168,7 @@ public interface INexusAuthService
     Task<NexusAuthState?> GetCurrentStateAsync(CancellationToken ct = default);
 }
 
-public sealed record NexusAuthResult       // Integrations-dialog auth action result
+public sealed record NexusAuthResult       // Nexus Integrations auth action result
 {
     public bool IsSuccess { get; init; }
     public string? Name { get; init; }
@@ -184,8 +184,8 @@ public sealed class NexusOAuthTokenStore : INexusTokenStore;   // OidcClient + t
 - `AuthStateChanged` -- raised whenever an auth action changes the persisted
   `NexusAuthMethod` (OAuth login, API-key validate, or sign-out). Carries no
   payload; subscribers re-read what they need from the live config or
-  `GetCurrentStateAsync`. The shell's Integrations flow refreshes the nxm
-  handler status after the dialog closes; the DMF prompt is profile-creation-only
+  `GetCurrentStateAsync`. The shell's Nexus Integrations flow refreshes the nxm
+  handler status when leaving the destination; the DMF prompt is profile-creation-only
   and does not subscribe.
 - `LoginWithOAuthAsync` -- runs the OAuth loopback flow (browser + token exchange
   + persist), flips `AuthMethod = OAuth` (clearing any API key), reads the
@@ -194,7 +194,7 @@ public sealed class NexusOAuthTokenStore : INexusTokenStore;   // OidcClient + t
   `AuthMethod = ApiKey` (clearing any OAuth tokens).
 - `SignOutAsync` -- clears OAuth tokens + API key + resets to `None`.
 - `GetCurrentStateAsync` -- returns the verified auth state (name + premium) for
-  the Integrations dialog's status line; null when `None`. For OAuth, reads the
+  the Nexus Integrations destination's status line; null when `None`. For OAuth, reads the
   access token's JWT payload (no API call); for API key, hits the v1 validate
   endpoint. Returns an unverified state on a failure rather than throwing.
 
@@ -576,7 +576,7 @@ Registers:
 - `IBrowser` → `LoopbackBrowser` (the production loopback impl).
 - `NexusOAuthTokenStore` (singleton; the OAuth token + login orchestrator),
   exposed both directly and as `INexusTokenStore`.
-- `NexusAuthService` (singleton; the Integrations-dialog auth orchestrator),
+- `NexusAuthService` (singleton; the Nexus Integrations auth orchestrator),
   exposed both directly and as `INexusAuthService`.
 - `IModAcquisitionService` -> `ModAcquisitionService` (singleton; the download +
   extract + place orchestrator over `INexusClient` + `IModImportService` + a

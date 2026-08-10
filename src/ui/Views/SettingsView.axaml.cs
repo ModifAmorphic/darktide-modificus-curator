@@ -1,5 +1,4 @@
 using System.IO;
-using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
@@ -10,43 +9,24 @@ using Modificus.Curator.UI.ViewModels;
 namespace Modificus.Curator.UI.Views;
 
 /// <summary>
-/// The Settings modal window. Its <c>DataContext</c> is a
-/// <see cref="SettingsViewModel"/> (set by <see cref="Dialogs.DialogService"/>).
-/// Discovery field rows are an <c>ItemsControl</c> bound to the VM's
-/// <see cref="SettingsViewModel.DiscoveryRows"/>; each row's Browse button is
-/// wired through here (the picker is a view concern, needing the live
-/// <c>TopLevel</c>). After a pick, the row's <c>Value</c> is set directly, which
-/// triggers the VM's write-through. The Storage section's two buttons bind
-/// directly to <see cref="SettingsViewModel.OpenDataFolderCommand"/> +
-/// <see cref="SettingsViewModel.OpenProfilesFolderCommand"/> (no view
-/// code-behind: the commands take no parameter and open no picker).
+/// The Settings destination content (a <see cref="UserControl"/>). Its
+/// <c>DataContext</c> is a <see cref="SettingsViewModel"/> (bound from the
+/// shell). Owns the discovery-row Browse picker mechanics (the picker is a view
+/// concern, needing the live <c>TopLevel</c>); the Storage buttons + the
+/// Updates controls bind directly to the VM.
 /// </summary>
 /// <remarks>
 /// All persistence logic lives in the (unit-tested) VM; this is pure view
-/// mechanics. See <see cref="SettingsViewModel"/> for the discovery write-through
-/// + the open-folder flows.
+/// mechanics. The <see cref="BrowseDiscovery_Click"/> path resolves the
+/// <c>TopLevel</c> from this <see cref="UserControl"/> (a valid Avalonia visual
+/// in the main shell).
 /// </remarks>
-public partial class SettingsWindow : Window
+public partial class SettingsView : UserControl
 {
-    public SettingsWindow()
+    public SettingsView()
     {
         InitializeComponent();
     }
-
-    private SettingsViewModel? ViewModel => DataContext as SettingsViewModel;
-
-    /// <summary>
-    /// Detaches the VM's subscriptions on close so the short-lived dialog VM is
-    /// collectable (the localization service is a singleton that outlives the
-    /// dialog).
-    /// </summary>
-    protected override void OnClosed(EventArgs e)
-    {
-        ViewModel?.Detach();
-        base.OnClosed(e);
-    }
-
-    private void Done_Click(object? sender, RoutedEventArgs e) => Close();
 
     /// <summary>
     /// A discovery row's Browse button. The button carries the field's

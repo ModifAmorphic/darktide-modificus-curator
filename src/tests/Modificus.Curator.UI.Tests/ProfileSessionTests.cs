@@ -26,7 +26,7 @@ public sealed class ProfileSessionTests
         return new ProfileSession(steam, profiles, appState, startTimer: null);
     }
 
-    private static ProfileSummary Profile(string name) => new(Guid.NewGuid(), name);
+    private static ProfileSummary Profile(string name) => new(Guid.NewGuid(), name, "");
 
     // ---- construction / restore -------------------------------------------
 

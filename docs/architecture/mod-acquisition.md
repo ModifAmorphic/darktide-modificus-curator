@@ -181,7 +181,7 @@ supersedes the no-op default (the no-op default is registered with plain
 ## OS registration
 
 Registration as the OS `nxm://` handler is an explicit user action from the
-Integrations dialog ("Nexus download links" section), not a startup
+Integrations destination ("Nexus download links" section), not a startup
 auto-registration. The register path confirms first because it is a
 system-wide change that can take `nxm://` clicks from Vortex, Mod Organizer 2,
 Nexus Mod Manager, or other mod managers; the unregister path only releases

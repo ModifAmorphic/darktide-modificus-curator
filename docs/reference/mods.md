@@ -350,7 +350,7 @@ production behavior is unchanged, but a caller may pre-register an
 `ILogger<>` from the container. Registered as singletons: the repository holds
 the in-memory index (cheap to rebuild), and `ModsFolder` is read live from
 `IConfigLoader` on each operation (one snapshot per op) so a runtime folder
-change via the Settings window takes effect immediately.
+change via the Settings destination takes effect immediately.
 
 ## On-disk layout
 
