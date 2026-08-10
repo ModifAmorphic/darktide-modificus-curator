@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.23.0...v0.24.0) (2026-08-10)
+
+
+### Features
+
+* **ui:** replace import modal with inline workflow ([#169](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/169)) ([0963b8e](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/0963b8e56fcbb3f387a4938fa4c6d489849db765))
+
 ## [0.23.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.22.1...v0.23.0) (2026-08-10)
 
 
