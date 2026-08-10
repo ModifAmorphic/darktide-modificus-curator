@@ -110,6 +110,7 @@ internal static class TestDoubles
         FakeUpdateStateStore? updateState = null,
         UpdateCoordinator? coordinator = null,
         FakeAutomaticUpdateService? automaticUpdates = null,
+        ImportWorkflowViewModel? importWorkflow = null,
         Action<Action>? invokeOnUi = null,
         Func<DateTimeOffset>? getNow = null,
         Action<Action>? startCountdownTimer = null,
@@ -133,6 +134,19 @@ internal static class TestDoubles
         updateState ??= new FakeUpdateStateStore(profiles, repo);
         coordinator ??= new UpdateCoordinator();
         automaticUpdates ??= new FakeAutomaticUpdateService();
+        // The inline import-workflow child VM: constructed over the SAME
+        // profile/session/repo/import/localization fakes so a test that drives
+        // StartBatch sees the imported mod land in the profile the mod-list VM
+        // reads (mirrors production DI: one shared workflow singleton injected
+        // into the mod-list VM). A test that wants to assert on the workflow
+        // directly passes its own pre-constructed instance.
+        importWorkflow ??= new ImportWorkflowViewModel(
+            profiles,
+            session,
+            repo,
+            importService,
+            localization,
+            NullLogger<ImportWorkflowViewModel>.Instance);
         invokeOnUi ??= static action => action();
         // SAFETY: an omitted launcher seam defaults to the harmless no-op
         // recorder (never the production Process.Start fallback). This is the
@@ -185,6 +199,7 @@ internal static class TestDoubles
             runner,
             coordinator,
             automaticUpdates,
+            importWorkflow,
             invokeOnUi,
             NullLogger<ModListViewModel>.Instance,
             startCountdownTimer,
@@ -937,13 +952,10 @@ internal sealed class FakeAutomaticUpdateService : IAutomaticUpdateService
 
 /// <summary>
 /// Configurable dialog fake. <see cref="ConfirmResult"/> drives
-/// <see cref="ConfirmAsync"/>. For the import modal, either a single
-/// <see cref="ImportResult"/> is returned for every call, or a per-call
-/// <see cref="ImportResultQueue"/> is dequeued (so a test can cancel mid-batch
-/// by enqueuing a <c>null</c>). The escape-hatch and alert calls are recorded
+/// <see cref="ConfirmAsync"/>. The escape-hatch and alert calls are recorded
 /// for assertion; the escape-hatch also exposes its drive flag
 /// (<see cref="EscapeHatchResult"/>) so a test can simulate a submit vs. a
-/// cancel. Records the requests so tests can assert on the sequence.
+/// cancel.
 /// </summary>
 internal sealed class FakeDialogService : IDialogService
 {
@@ -974,23 +986,6 @@ internal sealed class FakeDialogService : IDialogService
     /// <summary>The (title, message) pairs passed to <see cref="ShowAlertAsync"/>,
     /// in call order.</summary>
     public IReadOnlyList<(string Title, string Message)> AlertCalls { get; } = new List<(string, string)>();
-
-    /// <summary>
-    /// The result returned for every import modal call when
-    /// <see cref="ImportResultQueue"/> is empty / unset. <c>null</c> by default
-    /// (simulates the user cancelling).
-    /// </summary>
-    public ImportModResult? ImportResult { get; set; }
-
-    /// <summary>
-    /// Optional per-call queue: each import modal call dequeues one result
-    /// (a <c>null</c> cancels that modal + the remaining batch). When empty /
-    /// unset, <see cref="ImportResult"/> is returned.
-    /// </summary>
-    public Queue<ImportModResult?>? ImportResultQueue { get; set; }
-
-    public IReadOnlyList<ImportModRequest> ImportRequests { get; } = new List<ImportModRequest>();
-    public int ImportCalls { get; private set; }
 
     public Task<bool> ConfirmAsync(string title, string message)
     {
@@ -1059,17 +1054,6 @@ internal sealed class FakeDialogService : IDialogService
         // Drive the work so the caller sees its result / exception as in
         // production. No real spinner in tests; just await the work.
         return await work();
-    }
-
-    public Task<ImportModResult?> ShowImportModAsync(ImportModRequest request)
-    {
-        ImportCalls++;
-        ((List<ImportModRequest>)ImportRequests).Add(request);
-
-        var result = ImportResultQueue is { Count: > 0 }
-            ? ImportResultQueue.Dequeue()
-            : ImportResult;
-        return Task.FromResult(result);
     }
 }
 
@@ -1418,9 +1402,28 @@ internal sealed class FakeModImportService : IModImportService
     /// </summary>
     public Queue<Exception?>? ImportExceptionQueue { get; set; }
 
+    /// <summary>
+    /// Optional gate that each <see cref="Import"/> call awaits (blocking the
+    /// calling thread, which is expected to be a thread-pool thread inside a
+    /// Task.Run) before recording and proceeding. The inline-workflow VM tests
+    /// use this to observe the processing state mid-import deterministically
+    /// (no sleeps) and to drive the active-profile-change-during-processing
+    /// edge. Default null = no blocking (the existing add-flow tests are
+    /// unaffected).
+    /// </summary>
+    public TaskCompletionSource<bool>? ImportGate { get; set; }
+
     public (Guid ContainerId, string VersionId) Import(
         string sourcePath, string modName, ModSource source, string version, DateTimeOffset? remoteUploadedAt = null)
     {
+        // Gate first, before recording, so a test can observe IsProcessing
+        // while the worker is still blocked inside Import. Safe: Import runs on
+        // a thread-pool thread (the VM's Task.Run), never the UI/test thread.
+        if (ImportGate is not null)
+        {
+            ImportGate.Task.GetAwaiter().GetResult();
+        }
+
         ((List<(string, string, ModSource, string)>)Imports).Add((sourcePath, modName, source, version));
 
         if (ImportExceptionQueue is { Count: > 0 })
@@ -1461,6 +1464,16 @@ internal sealed class FakeModImportService : IModImportService
     public IReadOnlyList<string> GetBaseNameCalls { get; } = new List<string>();
 
     /// <summary>
+    /// Optional gate that each <see cref="GetBaseName"/> call awaits (blocking
+    /// the calling thread, which is a thread-pool thread inside the VM's
+    /// Task.Run) before recording and proceeding. The inline-workflow VM tests
+    /// use this to create a deterministic window between SetState(Processing)
+    /// and the collision check, so the active-profile-change-during-processing
+    /// edge can be driven for the collision path. Default null = no blocking.
+    /// </summary>
+    public TaskCompletionSource<bool>? GetBaseNameGate { get; set; }
+
+    /// <summary>
     /// Optional override for <see cref="GetBaseName"/>: receives the source path
     /// and returns the base name (or throws, to simulate an invalid source).
     /// When unset, the base name is derived from the path (folder name or
@@ -1475,6 +1488,13 @@ internal sealed class FakeModImportService : IModImportService
     /// </summary>
     public string GetBaseName(string sourcePath)
     {
+        // Gate first, before recording, so a test can hold the worker inside
+        // GetBaseName (the first Task.Run call) and drive a profile change.
+        if (GetBaseNameGate is not null)
+        {
+            GetBaseNameGate.Task.GetAwaiter().GetResult();
+        }
+
         ((List<string>)GetBaseNameCalls).Add(sourcePath);
         if (GetBaseNameFunc is not null)
         {

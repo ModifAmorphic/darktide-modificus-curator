@@ -41,10 +41,11 @@ public enum ModAddMode
 /// shell. Loads the profile's mods (joined with source + version from the mod
 /// repository for the badge), and applies every edit through
 /// <see cref="IProfileService"/>: enable/disable, reorder (up/down), per-mod
-/// policy (Latest / Pinned), remove (confirmed), auto-sort (identity stub), the
-/// add flow (file picker + drag-and-drop) via <see cref="IModImportService"/>
-/// + the per-mod import modal, and the link-external-folder flow (folder picker
-/// only, no copy, no modal) via <see cref="IModImportService.LinkFolder"/>.
+/// policy (Latest / Pinned), remove (confirmed), auto-sort (identity stub),
+/// the add flow (file picker + drag-and-drop) forwarded to the injected
+/// <see cref="ImportWorkflowViewModel"/> (the inline import card), and the
+/// link-external-folder flow (folder picker only, no copy, no card) via
+/// <see cref="IModImportService.LinkFolder"/>.
 /// </summary>
 /// <remarks>
 /// <para><b>Active profile is the session's:</b> the list never decides the active
@@ -79,15 +80,19 @@ public enum ModAddMode
 /// re-resolve from <see cref="LocalizationService"/> on a culture change, and each
 /// row's badge + policy text refresh too (via <see cref="ModItemViewModel.Refresh"/>).</para>
 /// <para><b>Add flow:</b> the Add split button's four flyout items are all modes
-/// that set themselves as the default on click (the face label tracks the mode):
-/// "Add Nexus Mods" (the default; opens the Darktide Nexus Mods games page in
-/// the browser via <see cref="AddNexusModsCommand"/>), "Add Mod (archive)",
-/// "Add Mod (folder)", and "Link external folder". The archive + folder modes
-/// open their pickers and share an entry point with drag-and-drop; all reduce to
-/// <see cref="AddModsCommand"/>, which processes paths sequentially: one import
-/// modal per path, then <c>IModImportService.Import</c> (extract/copy into the
-/// repository, returning the container id) + <c>IProfileService.AddMod</c> (the
-/// profile reference). A cancelled modal cancels the whole remaining batch.</para>
+/// that set themselves as the default on click (the face label tracks the
+/// mode): "Add Nexus Mods" (the default; opens the Darktide Nexus Mods games
+/// page in the browser via <see cref="AddNexusModsCommand"/>), "Add Mod
+/// (archive)", "Add Mod (folder)", and "Link external folder". The archive +
+/// folder modes open their pickers and share an entry point with
+/// drag-and-drop; all forward the selected paths to
+/// <see cref="ImportWorkflow"/>'s <c>StartBatchCommand</c>, which owns the
+/// inline card, the per-item editing form, the batch state machine, and the
+/// per-item import orchestration (GetBaseName, collision check, Import,
+/// AddMod). The workflow emits a narrow <c>ItemImported</c> event carrying
+/// the captured profile id; this VM reloads when it matches the active
+/// profile. While the workflow is active (editing, processing, or failure),
+/// the Add split button disables and drag-and-drop is rejected.</para>
 /// <para><b>Link flow:</b> the Add split button's "Link external folder" flyout
 /// item reduces to <see cref="LinkModsCommand"/>, which peeks the base name
 /// (validates the mod-folder shape), checks the base-name collision (excluding a
@@ -176,6 +181,7 @@ public partial class ModListViewModel : ObservableObject
         UpdateCheckRunner updateCheckRunner,
         UpdateCoordinator updateCoordinator,
         IAutomaticUpdateService automaticUpdates,
+        ImportWorkflowViewModel importWorkflow,
         Action<Action> invokeOnUi,
         ILogger<ModListViewModel> logger,
         Action<Action>? startCountdownTimer = null,
@@ -199,6 +205,7 @@ public partial class ModListViewModel : ObservableObject
         _updateCheckRunner = updateCheckRunner;
         _updateCoordinator = updateCoordinator ?? throw new ArgumentNullException(nameof(updateCoordinator));
         _automaticUpdates = automaticUpdates ?? throw new ArgumentNullException(nameof(automaticUpdates));
+        ImportWorkflow = importWorkflow ?? throw new ArgumentNullException(nameof(importWorkflow));
         _logger = logger;
         _invokeOnUi = invokeOnUi ?? throw new ArgumentNullException(nameof(invokeOnUi));
         _startCountdownTimer = startCountdownTimer;
@@ -214,6 +221,7 @@ public partial class ModListViewModel : ObservableObject
         _updateCoordinator.BusyChanged += OnCoordinatorBusyChanged;
         _automaticUpdates.UpdatesApplied += OnAutomaticUpdatesApplied;
         _automaticUpdates.ModUpdateProgress += OnAutomaticUpdateProgress;
+        ImportWorkflow.ItemImported += OnItemImported;
 
         // The refresh button's tooltip defaults to the normal "check now"
         // string. ReevaluateRefreshGate owns the tooltip once a rate limit or
@@ -290,6 +298,19 @@ public partial class ModListViewModel : ObservableObject
 
     /// <summary>The active profile's mod rows, in load order (lower first).</summary>
     public ObservableCollection<ModItemViewModel> Mods { get; } = new();
+
+    /// <summary>
+    /// The inline import-workflow child VM (application-lifetime singleton,
+    /// injected before this VM in composition). The view hosts its card below the
+    /// toolbar; it owns the batch state machine, the editing form, and the per-item
+    /// import orchestration. Exposed read-only so the view binds to
+    /// <c>ImportWorkflow.IsActive</c> (gating the Add split button and drag-and-drop)
+    /// and the workflow's own commands (<c>StartBatch</c>, <c>ImportCurrent</c>,
+    /// <c>CancelBatch</c>, <c>CloseFailure</c>) directly. This VM subscribes to its
+    /// narrow <see cref="ImportWorkflowViewModel.ItemImported"/> event to reload
+    /// the active list when a successful import lands on the active profile.
+    /// </summary>
+    public ImportWorkflowViewModel ImportWorkflow { get; }
 
     /// <summary>
     /// Whether a profile is active. Drives the header + the "no profile" empty
@@ -532,6 +553,22 @@ public partial class ModListViewModel : ObservableObject
         RateLimitResetsAt ?? (_rateLimitCheckedAt is { } checkedAt
             ? checkedAt + RateLimitFallbackCooldown
             : null);
+
+    /// <summary>
+    /// The inline import workflow finished a successful per-item import on the
+    /// captured profile id. Reload the list only when that profile is the active
+    /// one (the user is looking at it); an import that landed on a now-inactive
+    /// profile (the profile changed mid-processing) does not misdirect, because
+    /// this list always shows the active profile. The workflow owns pending-changes
+    /// marking; this handler is a narrow reload trigger.
+    /// </summary>
+    private void OnItemImported(object? sender, Guid profileId)
+    {
+        if (_session.ActiveProfileId == profileId)
+        {
+            Reload();
+        }
+    }
 
     /// <summary>
     /// Session-driven reload: the active id changed (dropdown switch, create,
@@ -1479,152 +1516,15 @@ public partial class ModListViewModel : ObservableObject
         _logger.LogDebug("Auto-sorted via {Resolver}", _orderResolver.GetType().Name);
     }
 
-    // ---- add (picker + drag-and-drop) --------------------------------------
+    // ---- link-external-folder helper -------------------------------------
 
     /// <summary>
-    /// Processes a list of local paths (folders or archives) from the
-    /// add flow: one import modal per path, sequentially. Per path the flow is:
-    /// <b>(1)</b> peek the base folder name from the source (validates structure,
-    /// throws on an invalid source); <b>(2)</b> hard-block a base-name collision
-    /// against the active profile (refuse, create nothing, alert); <b>(3)</b>
-    /// <see cref="IModImportService.Import"/> (extract / copy into the repository)
-    /// + <see cref="IProfileService.AddMod"/> (the profile reference). A cancelled
-    /// modal, a failed peek/import, OR a collision cancels the whole remaining
-    /// batch (mods imported earlier in the batch stay imported). Used by the Add
-    /// split button (the archive file picker + the folder picker) + the drop handler.
-    /// </summary>
-    /// <remarks>
-    /// The name is derived from each path (folder name or archive stem, no
-    /// extension) and pre-filled in the modal; the user may rename at import (the
-    /// edited name becomes the container's display name + the untracked dedup
-    /// key). The import happens before the profile reference is added (order
-    /// matters: import the repository copy, then reference it). A re-add of a mod
-    /// already in the profile is NOT a collision: the would-be container is
-    /// peeked (<see cref="IModImportService.FindExistingContainer"/>) and excluded
-    /// from the collision check, so the idempotent <see cref="IProfileService.AddMod"/>
-    /// stays a no-op. The new profile entry adopts the modal's chosen policy:
-    /// Latest (the default) or Pinned to the version being imported.
-    /// </remarks>
-    [RelayCommand]
-    private async Task AddMods(IReadOnlyList<string>? paths)
-    {
-        if (paths is null || paths.Count == 0)
-        {
-            return;
-        }
-
-        if (_session.ActiveProfileId is not Guid id)
-        {
-            _logger.LogWarning("Add flow ignored: no active profile");
-            return;
-        }
-
-        // Tracks whether any path actually landed a mod in the profile. A
-        // cancelled-first-modal or all-failing batch imports nothing, so it must
-        // not set the pending-changes flag (no structural change occurred).
-        var changed = false;
-        foreach (var path in paths)
-        {
-            var modName = DeriveModName(path);
-            var request = new ImportModRequest(modName, path);
-            var result = await _dialogs.ShowImportModAsync(request);
-            if (result is null)
-            {
-                _logger.LogInformation("Add batch cancelled at {Path} (user cancelled the modal)", path);
-                break;
-            }
-
-            var canonicalName = string.IsNullOrWhiteSpace(request.ModName) ? modName : request.ModName.Trim();
-
-            // (1) Peek the base folder name. This validates the source structure
-            // (exactly one base dir with a matching <base>.mod) BEFORE any
-            // container/version is created. An invalid source throws here; catch
-            // it per mod, surface an alert naming the failing source, and abort
-            // the remaining batch (the cancel-aborts-batch posture).
-            string baseName;
-            try
-            {
-                baseName = _importService.GetBaseName(path);
-            }
-            catch (Exception ex) when (
-                ex is InvalidOperationException or ArgumentException
-                    or IOException or UnauthorizedAccessException
-                    or System.IO.InvalidDataException)
-            {
-                await AlertImportFailed(path, ex);
-                break;
-            }
-
-            // (2) Base-name collision hard-block. Two mods with the same base
-            // folder name can't coexist in one profile (the loader can't tell
-            // them apart). Exclude the container a re-add would dedup to: a
-            // re-add resolves to the same container, and AddMod is idempotent on
-            // it, so it must NOT be treated as a collision. On a collision, name
-            // the conflicting mod + the base folder, then abort the batch
-            // (nothing is created: no Import, no AddMod).
-            var existing = _importService.FindExistingContainer(result.Source, canonicalName);
-            var collision = _profiles.GetBaseNameCollision(id, baseName, existing?.Id);
-            if (collision is not null)
-            {
-                var conflictingName = _repo.Get(collision.ContainerId)?.Name ?? baseName;
-                _logger.LogWarning(
-                    "Add blocked at {Path}: base folder '{Base}' collides with existing mod '{Conflicting}' (container {Container}) on profile {Id}",
-                    path, baseName, conflictingName, collision.ContainerId, id);
-                await _dialogs.ShowAlertAsync(
-                    _localization["Import_CollisionTitle"],
-                    _localization.Format("Import_CollisionMessage", path, baseName, conflictingName));
-                break;
-            }
-
-            // (3) Import the repository copy (extract/copy + container/version
-            // upsert), then add the profile reference. The canonical name comes
-            // from the request (the modal wrote the user's edited + trimmed name
-            // back), so a rename at import establishes the container's name. A
-            // late I/O failure (copy/extract) is caught per mod.
-            //
-            // Policy: the modal's chosen Latest/Pinned drives the profile entry's
-            // initial version policy. Latest tracks the container's newest
-            // release (auto-update on re-import); Pinned freezes the entry to
-            // exactly the version being imported (constructed from the
-            // VersionId the import just minted, not from the modal's empty
-            // placeholder).
-            Guid containerId;
-            string versionId;
-            try
-            {
-                var (importedId, importedVersionId) = _importService.Import(path, canonicalName, result.Source, result.Version);
-                containerId = importedId;
-                versionId = importedVersionId;
-            }
-            catch (Exception ex) when (
-                ex is InvalidOperationException or ArgumentException
-                    or IOException or UnauthorizedAccessException
-                    or System.IO.InvalidDataException)
-            {
-                await AlertImportFailed(path, ex);
-                break;
-            }
-
-            var policy = result.Policy is PinnedPolicy
-                ? new PinnedPolicy(versionId)
-                : ModVersionPolicy.Latest;
-            _profiles.AddMod(id, containerId, policy);
-            changed = true;
-            _logger.LogInformation("Imported {Mod} from {Path} (source={Source}, version={Version}, policy={Policy}) onto container {Container}",
-                canonicalName, path, result.Source, result.Version, policy, containerId);
-        }
-
-        if (changed)
-        {
-            _session.HasPendingChanges = true;
-        }
-        Reload();
-    }
-
-    /// <summary>
-    /// Surfaces an import-failure alert for a source path + the underlying
-    /// exception, using the localized <c>Import_Failed</c> strings. Logs the
-    /// exception with its stack + shows the message text to the user.
+    /// Surfaces a link-external-folder failure alert for a source path + the
+    /// underlying exception, using the localized <c>Import_Failed</c> strings.
+    /// Logs the exception with its stack + shows the message text to the user.
+    /// (The copied local-import flow now surfaces its failures inline via
+    /// <see cref="ImportWorkflowViewModel.FailureMessage"/>; this helper is used
+    /// only by the linked-folder flow, which remains modal-alert-based.)
     /// </summary>
     private async Task AlertImportFailed(string path, Exception ex)
     {
@@ -1634,26 +1534,12 @@ public partial class ModListViewModel : ObservableObject
             _localization.Format("Import_FailedMessage", path) + " " + ex.Message);
     }
 
-    /// <summary>
-    /// Derives the default mod name from a path: the folder name, or the archive
-    /// stem (any extension stripped: <c>.zip</c>, <c>.7z</c>, <c>.rar</c>, etc.).
-    /// Falls back to the raw path when the stem is empty (a defensive edge
-    /// case).
-    /// </summary>
-    private static string DeriveModName(string path)
-    {
-        var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var name = Path.GetFileNameWithoutExtension(trimmed);
-
-        return string.IsNullOrWhiteSpace(name) ? path : name;
-    }
-
     // ---- link external folder (picker only, no modal, no copy) --------------
 
     /// <summary>
     /// Processes a list of external folder paths from the link flow (the "Link
-    /// external folder" picker), sequentially. Per path the flow mirrors
-    /// <see cref="AddMods"/> minus the import modal (the folder is linked, not
+    /// external folder" picker), sequentially. Per path the flow mirrors the
+    /// copied-import flow minus the inline workflow (the folder is linked, not
     /// copied): <b>(1)</b> peek the base folder name via
     /// <see cref="IModImportService.GetBaseName"/> (validates the mod-folder
     /// shape, throws on an invalid source); <b>(2)</b> hard-block a base-name
@@ -1711,7 +1597,8 @@ public partial class ModListViewModel : ObservableObject
                 break;
             }
 
-            // (2) Base-name collision hard-block (same rule as AddMods). The
+            // (2) Base-name collision hard-block (same rule as the inline
+            // import workflow's collision check). The
             // container a re-link would dedup to is excluded: a re-link resolves
             // to the same linked container (Linked identity is the normalized
             // external path), and AddMod is idempotent on it, so it must NOT be

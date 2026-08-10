@@ -27,18 +27,23 @@ namespace Modificus.Curator.UI.Views;
 /// is mirrored via <see cref="SetAddMode"/> so the face label updates through
 /// <see cref="ModListViewModel.AddModeLabel"/>) and runs its action: NexusMods
 /// opens the Darktide Nexus Mods games page, Archive + Folder open their import
-/// pickers, and LinkExternal opens the link-external-folder picker. NexusMods is
-/// the default, so the face first reads "+ Add Nexus Mods"; clicking the face
-/// runs the current default's action. Archive + Folder are separate modes
-/// because a native picker cannot mix files + folders.</para>
+/// pickers and forward paths to <see cref="ImportWorkflowViewModel.StartBatchCommand"/>,
+/// and LinkExternal opens the link-external-folder picker. NexusMods is the
+/// default, so the face first reads "+ Add Nexus Mods"; clicking the face runs
+/// the current default's action. Archive + Folder are separate modes because a
+/// native picker cannot mix files + folders.</para>
+/// <para><b>Workflow gating:</b> while the inline import card is active
+/// (editing, processing, or failure), the Add split button is disabled and the
+/// archive/folder pickers + drag-and-drop are gated defensively so a second
+/// batch cannot start. The VM's <c>StartBatch</c> gate is the final defense.</para>
 /// <para><b>Drag-and-drop:</b> the content area has
 /// <c>DragDrop.AllowDrop="True"</c> + <c>Drop</c>/<c>DragOver</c> handlers. The
 /// drop reads the files (folders AND archives, multi) via the sync
 /// <c>TryGetFiles</c> extension on <see cref="DragEventArgs.DataTransfer"/> (an
 /// <c>IDataTransfer</c> in Avalonia 12.x, so the async variant is unavailable
-/// here), maps each to its local path, and forwards the list to the VM's add
-/// command. <c>DragOver</c> advertises the Copy effect only when files are
-/// present.</para>
+/// here), maps each to its local path, and forwards the list to the workflow's
+/// start command. <c>DragOver</c> advertises the Copy effect only when files are
+/// present AND the workflow is not active.</para>
 /// <para><b>Policy ComboBox guard:</b> <see cref="Policy_Changed"/> skips when the
 /// selection already agrees with the row's effective policy, so the binding-init
 /// (and post-Reload) <c>SelectionChanged</c> fires do not re-apply + loop. Only a
@@ -68,10 +73,18 @@ public partial class ModListView : UserControl
     /// NexusMods opens the Darktide Nexus Mods games page; Archive + Folder open
     /// their import pickers; LinkExternal opens the link-external-folder picker.
     /// Archive + Folder are separate modes because a native picker cannot mix
-    /// files + folders.
+    /// files + folders. A top-level <see cref="ImportWorkflowViewModel.IsActive"/>
+    /// guard skips the action entirely while the inline card is active (the
+    /// SplitButton is also disabled, but this covers a flyout click that opened
+    /// before the state changed).
     /// </summary>
     private async void Add_Click(object? sender, RoutedEventArgs e)
     {
+        if (ViewModel is { } vm && vm.ImportWorkflow.IsActive)
+        {
+            return;
+        }
+
         switch (_addMode)
         {
             case ModAddMode.NexusMods:
@@ -142,11 +155,16 @@ public partial class ModListView : UserControl
     /// to the VM's link command. The picker call mirrors
     /// <see cref="OpenFolderPickerAsync"/> exactly (the same
     /// <c>StorageProvider.OpenFolderPickerAsync</c> path); only the target
-    /// command differs.
+    /// command differs. Gated on <see cref="ImportWorkflowViewModel.IsActive"/>
+    /// at entry (flyout item handlers call this directly, so a pre-open
+    /// MenuFlyout click should not open the link picker once the workflow is
+    /// active) AND rechecked after the picker returns so a linked-folder
+    /// mutation does not proceed if an import workflow became active while the
+    /// picker was open (e.g. a drag-and-drop landed in the meantime).
     /// </summary>
     private async Task OpenLinkFolderPickerAsync()
     {
-        if (ViewModel is not { } vm)
+        if (ViewModel is not { } vm || vm.ImportWorkflow.IsActive)
         {
             return;
         }
@@ -164,6 +182,14 @@ public partial class ModListView : UserControl
 
         var result = await topLevel.StorageProvider.OpenFolderPickerAsync(options);
         if (result is null || result.Count == 0)
+        {
+            return;
+        }
+
+        // Recheck after the picker returns: a native picker is async, so the
+        // import workflow could have become active while it was open. A
+        // linked-folder mutation must not proceed in that window.
+        if (vm.ImportWorkflow.IsActive)
         {
             return;
         }
@@ -191,15 +217,19 @@ public partial class ModListView : UserControl
 
     /// <summary>
     /// Opens a multi-select archive file picker and forwards the selected paths
-    /// to the VM's add command. The filter offers a curated "Archives" entry
-    /// (zip/7z/rar) plus the built-in "All files" entry, so unsupported-but-real
-    /// archives (and edge cases) are still reachable. The import backend detects
-    /// the format from the file contents, so the filter is a convenience, not a
-    /// gate.
+    /// to the inline import workflow's start command. Skipped defensively when
+    /// the workflow is already active at entry AND rechecked after the picker
+    /// returns (a native picker is async; the workflow could have become active
+    /// while it was open). The SplitButton is also disabled, but a late-returning
+    /// picker or a programmatic call could race; StartBatch's VM gate is the
+    /// final defense. The filter offers a curated "Archives" entry (zip/7z/rar)
+    /// plus the built-in "All files" entry, so unsupported-but-real archives (and
+    /// edge cases) are still reachable. The import backend detects the format
+    /// from the file contents, so the filter is a convenience, not a gate.
     /// </summary>
     private async Task OpenArchivePickerAsync()
     {
-        if (ViewModel is not { } vm)
+        if (ViewModel is not { } vm || vm.ImportWorkflow.IsActive)
         {
             return;
         }
@@ -226,21 +256,31 @@ public partial class ModListView : UserControl
             return;
         }
 
+        // Recheck after the picker returns: a native picker is async, so the
+        // import workflow could have become active while it was open.
+        if (vm.ImportWorkflow.IsActive)
+        {
+            return;
+        }
+
         var paths = result.Select(f => f.Path.LocalPath).ToArray();
         if (paths.Length > 0)
         {
-            await vm.AddModsCommand.ExecuteAsync(paths);
+            vm.ImportWorkflow.StartBatchCommand.Execute(paths);
         }
     }
 
     /// <summary>
     /// Opens a multi-select folder picker and forwards the selected folder paths
-    /// to the VM's add command. The cross-platform path for folder import via
-    /// picker (a native picker cannot mix files + folders).
+    /// to the inline import workflow's start command. Skipped defensively when
+    /// the workflow is already active at entry AND rechecked after the picker
+    /// returns (same late-return contract as the archive picker). The
+    /// cross-platform path for folder import via picker (a native picker cannot
+    /// mix files + folders).
     /// </summary>
     private async Task OpenFolderPickerAsync()
     {
-        if (ViewModel is not { } vm)
+        if (ViewModel is not { } vm || vm.ImportWorkflow.IsActive)
         {
             return;
         }
@@ -262,10 +302,17 @@ public partial class ModListView : UserControl
             return;
         }
 
+        // Recheck after the picker returns: a native picker is async, so the
+        // import workflow could have become active while it was open.
+        if (vm.ImportWorkflow.IsActive)
+        {
+            return;
+        }
+
         var paths = result.Select(f => f.Path.LocalPath).ToArray();
         if (paths.Length > 0)
         {
-            await vm.AddModsCommand.ExecuteAsync(paths);
+            vm.ImportWorkflow.StartBatchCommand.Execute(paths);
         }
     }
 
@@ -273,15 +320,16 @@ public partial class ModListView : UserControl
 
     /// <summary>
     /// Advertises the Copy effect when the dragged payload carries files (folders
-    /// or archives); otherwise None, so non-file drops are not accepted.
+    /// or archives) AND the import workflow is not active; otherwise None, so
+    /// non-file drops and drops while a batch is in progress are not accepted.
+    /// Gate on the actual file retrieval (the same call OnDrop uses), not on
+    /// Contains(DataFormat.File): that format-name check can be unreliable for
+    /// external file-manager drags.
     /// </summary>
     private void OnDragOver(object? sender, DragEventArgs e)
     {
-        // Gate on the actual file retrieval (the same call OnDrop uses), not on
-        // Contains(DataFormat.File): that format-name check can be unreliable for
-        // external file-manager drags. TryGetFiles is consistent with OnDrop and
-        // grants Copy only when files are genuinely present.
-        e.DragEffects = e.DataTransfer.TryGetFiles() is { Length: > 0 }
+        var workflowActive = ViewModel?.ImportWorkflow.IsActive is true;
+        e.DragEffects = !workflowActive && e.DataTransfer.TryGetFiles() is { Length: > 0 }
             ? DragDropEffects.Copy
             : DragDropEffects.None;
     }
@@ -289,10 +337,17 @@ public partial class ModListView : UserControl
     /// <summary>
     /// Collects the dropped files' local paths (folders or archives, multi) via
     /// the sync <c>TryGetFiles</c> extension on <see cref="DragEventArgs.DataTransfer"/>
-    /// and forwards them to the VM's add command.
+    /// and forwards them to the import workflow's start command. Ignored when the
+    /// workflow is already active (the drag-over advertised None, but a defensive
+    /// check here is the final gate before the VM's own StartBatch defense).
     /// </summary>
-    private async void OnDrop(object? sender, DragEventArgs e)
+    private void OnDrop(object? sender, DragEventArgs e)
     {
+        if (ViewModel is not { } vm || vm.ImportWorkflow.IsActive)
+        {
+            return;
+        }
+
         var files = e.DataTransfer.TryGetFiles();
         if (files is null || files.Length == 0)
         {
@@ -302,9 +357,9 @@ public partial class ModListView : UserControl
         var paths = files.Select(f => f.Path.LocalPath).ToArray();
         e.Handled = true;
 
-        if (paths.Length > 0 && ViewModel is { } vm)
+        if (paths.Length > 0)
         {
-            await vm.AddModsCommand.ExecuteAsync(paths);
+            vm.ImportWorkflow.StartBatchCommand.Execute(paths);
         }
     }
 

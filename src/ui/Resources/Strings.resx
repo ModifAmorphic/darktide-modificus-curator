@@ -513,20 +513,18 @@
   </data>
 
   <!-- ============================================================ -->
-  <!-- Import mod dialog (ImportModDialog / ImportModViewModel)     -->
+  <!-- Inline import workflow (ImportWorkflowViewModel / View)      -->
+  <!-- Field labels, validation, and failure framing shared between -->
+  <!-- the inline card and the linked-folder alert path.            -->
   <!-- ============================================================ -->
 
-  <data name="Import_Title" xml:space="preserve">
-    <value>Import mod</value>
-    <comment>Title of the per-mod import modal.</comment>
-  </data>
   <data name="Import_NameLabel" xml:space="preserve">
     <value>Mod name</value>
-    <comment>Label over the mod name field in the import modal.</comment>
+    <comment>Label over the mod name field in the inline import card.</comment>
   </data>
   <data name="Import_SourceLabel" xml:space="preserve">
     <value>Source</value>
-    <comment>Label over the source chooser in the import modal.</comment>
+    <comment>Label over the source chooser in the inline import card.</comment>
   </data>
   <data name="Import_SourceUntracked" xml:space="preserve">
     <value>Untracked</value>
@@ -538,7 +536,7 @@
   </data>
   <data name="Import_VersionLabel" xml:space="preserve">
     <value>Version</value>
-    <comment>Label over the version field in the import modal.</comment>
+    <comment>Label over the version field in the inline import card.</comment>
   </data>
   <data name="Import_VersionRequired" xml:space="preserve">
     <value>Version is required.</value>
@@ -552,14 +550,6 @@
     <value>### or https://www.nexusmods.com/warhammer40kdarktide/mods/###</value>
     <comment>Watermark / placeholder for the Nexus URL field. Shows BOTH accepted forms (a bare mod id, or the full Nexus URL), separated by 'or'.</comment>
   </data>
-  <data name="Import_OkButton" xml:space="preserve">
-    <value>OK</value>
-    <comment>The OK / confirm button in the import modal.</comment>
-  </data>
-  <data name="Import_CancelButton" xml:space="preserve">
-    <value>Cancel</value>
-    <comment>The Cancel button in the import modal.</comment>
-  </data>
   <data name="Import_UrlRequired" xml:space="preserve">
     <value>A URL or mod ID is required for this source.</value>
     <comment>Validation message when the URL field is empty for a remote source. Matches the field accepting either a Nexus URL or a bare mod id.</comment>
@@ -570,15 +560,27 @@
   </data>
   <data name="Import_PolicyLabel" xml:space="preserve">
     <value>Version policy</value>
-    <comment>Label for the Latest / Pinned version-policy chooser in the import modal.</comment>
+    <comment>Label for the Latest / Pinned version-policy chooser in the inline import card.</comment>
   </data>
   <data name="Import_PolicyLatest" xml:space="preserve">
     <value>Latest</value>
-    <comment>The Latest policy option in the import modal: track the mod's newest release.</comment>
+    <comment>The Latest policy option in the inline import card: track the mod's newest release.</comment>
   </data>
   <data name="Import_PolicyPinned" xml:space="preserve">
     <value>Pinned to this version</value>
-    <comment>The Pinned policy option in the import modal: freeze the mod at the version being imported.</comment>
+    <comment>The Pinned policy option in the inline import card: freeze the mod at the version being imported.</comment>
+  </data>
+  <data name="ImportWorkflow_CancelBatch" xml:space="preserve">
+    <value>Cancel batch</value>
+    <comment>The Cancel batch button in the inline import card. Aborts the current and remaining paths. Available only while editing.</comment>
+  </data>
+  <data name="ImportWorkflow_Import" xml:space="preserve">
+    <value>Import</value>
+    <comment>The accent Import button in the inline import card. Confirms the current item's metadata and starts the per-item import.</comment>
+  </data>
+  <data name="ImportWorkflow_Close" xml:space="preserve">
+    <value>Close</value>
+    <comment>The Close button on the inline import card's terminal failure. Resets the workflow so a new batch may start.</comment>
   </data>
 
   <!-- ============================================================ -->
@@ -1196,5 +1198,25 @@ Set up Nexus to check your installed mods for updates and enable download links 
   <data name="Unsaved_SaveUnavailable" xml:space="preserve">
     <value>Save is unavailable until the highlighted errors are fixed.</value>
     <comment>Concise explanation shown beneath the buttons in the unsaved-changes prompt when Save is disabled, so the disabled action is not mysterious.</comment>
+  </data>
+
+  <!-- ============================================================ -->
+  <!-- Inline import workflow (ImportWorkflowViewModel)             -->
+  <!-- The per-item field labels, validation, and the failure        -->
+  <!-- framing reuse the Import_* keys above; only the workflow-     -->
+  <!-- level header + processing status are workflow-specific.       -->
+  <!-- ============================================================ -->
+
+  <data name="ImportWorkflow_Header" xml:space="preserve">
+    <value>Import mod {0} of {1}</value>
+    <comment>Header of the inline import card. {0} is the one-based current position; {1} is the total number of paths in the batch.</comment>
+  </data>
+  <data name="ImportWorkflow_Processing" xml:space="preserve">
+    <value>Importing mod...</value>
+    <comment>Status text shown beside the indeterminate progress bar while a mod is being imported.</comment>
+  </data>
+  <data name="ImportWorkflow_UnexpectedFailure" xml:space="preserve">
+    <value>Something went wrong while importing this mod. Try again, and if the problem persists, check the log.</value>
+    <comment>Generic inline message for an unexpected error during import. Technical details are logged but not shown to the user.</comment>
   </data>
 </root>

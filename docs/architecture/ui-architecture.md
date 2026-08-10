@@ -99,7 +99,7 @@ a UI-layer singleton that the shell (and other view models) inject:
   │                             next real navigation into Mods (after setting
   │                             CurrentDestination = Mods first)
 
-  IDialogService ────────────── the testable dialog seam (seven true-modal methods);
+  IDialogService ────────────── the testable dialog seam (six true-modal methods);
                              production DialogService owns the real Window wiring
  LocalizationService ───────── the i18n indexer + dynamic-culture INPC refresh
  IPreferencesService ───────── applies theme / font scale / language + persists
@@ -286,49 +286,76 @@ The command set:
   The current resolver is the identity stub (a no-op); a real
   dependency-driven resolver is out of v1. The seam is DI-swappable, so the
   UI wires against the abstraction now.
-- **Add** (`AddMods`): the Add split button's four flyout items are all modes
-  that set themselves as the default on click (the face label tracks the mode):
-  "Add Nexus Mods" (the default; opens the Darktide Nexus Mods games page in the
-  browser via `AddNexusMods`), "Add Mod (archive)", "Add Mod (folder)", and
-  "Link external folder". The archive + folder modes open their pickers and
-  share an entry point with drag-and-drop; all reduce to `AddMods`, which
-  processes paths sequentially. The "Link external folder" mode reduces to
-  `LinkMods` instead (folder picker, no modal).
+- **Add** (inline import workflow): the Add split button's four flyout items are
+  all modes that set themselves as the default on click (the face label tracks
+  the mode): "Add Nexus Mods" (the default; opens the Darktide Nexus Mods games
+  page in the browser via `AddNexusMods`), "Add Mod (archive)", "Add Mod
+  (folder)", and "Link external folder". The archive + folder modes open their
+  pickers and share an entry point with drag-and-drop; all forward the selected
+  paths to `ImportWorkflowViewModel.StartBatchCommand`, which owns the inline
+  card (the batch state machine, the per-item editing form, and the per-item
+  import orchestration). The "Link external folder" mode reduces to `LinkMods`
+  instead (folder picker, no inline card).
 
-### The import flow
+### The inline import workflow (`ImportWorkflowViewModel`)
 
-`AddMods` runs one import modal per path. For each path:
+The inline import card (a hosted `UserControl` directly below the Mods toolbar)
+is an application-lifetime singleton
+child VM exposed read-only on `ModListViewModel` and registered before it in
+`CuratorComposition`. The card processes one path at a time through three
+states: editing (the per-item metadata form), processing (filesystem work in
+flight), and terminal failure (an inline error with a Close action).
 
-1. Peek the base folder name via `IModImportService.GetBaseName`. This
-   validates the source structure (exactly one base dir with a matching
-   `<base>.mod` descriptor) before any container or version is created. An
-   invalid source throws here and aborts the remaining batch.
-2. Hard-block a base-name collision via
-   `IProfileService.GetBaseNameCollision`. Two mods with the same base
-   folder name cannot coexist in one profile (the loader cannot tell them
-   apart). The would-be container is excluded (a re-add of a mod already in
-   the profile is not a collision). On a hit, the import is refused and the
-   batch aborts; nothing is created.
-3. `IModImportService.Import` (extract or copy into the repository), then
-   `IProfileService.AddMod` (the profile reference). The modal's chosen
-   policy drives the new entry: `LatestPolicy` (the default) tracks the
-   container's newest release; `PinnedPolicy` freezes the entry to the
-   version being imported (constructed from the version id the import just
-   minted).
+`StartBatchCommand` captures an ordered copy of the selected/dropped paths and
+the active profile id. Each item defaults to Nexus source, empty Version/URL,
+and Latest policy. `ImportCurrentCommand` runs the per-item import:
 
-A cancelled modal, a failed peek or import, or a collision cancels the whole
-remaining batch. Mods imported earlier in the batch stay imported.
+1. Peek the base folder name via `IModImportService.GetBaseName` on a worker
+   (`Task.Run`). This validates the source structure (exactly one base dir with
+   a matching `<base>.mod` descriptor) before any container or version is
+   created. An invalid source becomes a terminal inline failure that aborts the
+   remaining batch.
+2. Resolve the would-be container via `FindExistingContainer` and check the
+   captured profile for a base-name collision via
+   `IProfileService.GetBaseNameCollision` on the captured UI context (between
+   the two worker awaits). Two mods with the same base folder name cannot
+   coexist in one profile. The would-be container is excluded (a re-add of a
+   mod already in the profile is not a collision). On a hit, the collision
+   explanation shows inline and the batch aborts; nothing is created.
+3. `IModImportService.Import` (extract or copy into the repository) on a worker
+   (`Task.Run`). The chosen policy drives the new entry: `LatestPolicy` (the
+   default) tracks the container's newest release; `PinnedPolicy` freezes the
+   entry to the version being imported (constructed from the opaque version id
+   the import just minted). `AddMod` runs on the captured UI context.
+4. On success, raise the narrow `ItemImported` event carrying the captured
+   profile id (the mod list reloads when it matches the active profile), mark
+   pending changes when the profile is still active, and advance to the next
+   path. After the last item the card hides.
 
-The mod name is derived from each path (folder name or archive stem) and
-pre-filled in the modal; the user may rename at import (the edited name
-becomes the container's display name and the untracked dedup key).
+Only `GetBaseName` and `Import` run on `Task.Run`; the continuation resumes the
+captured UI context between them so the single-UI-thread profile/repository
+queries never run on a worker. No `ConfigureAwait(false)`.
+
+A Cancel (editing only), a terminal failure, or a collision clears the
+remaining batch. Mods imported earlier in the batch stay imported. The failure
+message is derived from a durable descriptor through the live
+`LocalizationService` on every access, so a culture change re-resolves it.
+Copied local-import failures never call `ShowAlertAsync`; the linked-folder
+flow continues using modal alerts.
+
+If the active profile changes while editing or showing a failure, the workflow
+resets immediately. If it changes while an item is processing, the confirmed
+item finishes against the captured profile, the remaining queue is aborted, and
+the workflow resets; the new active profile's pending indicator is never set
+for the old profile's success. A failure (expected or unexpected) that lands
+after the profile changed also resets rather than showing a failure card.
 
 ### The link flow (`LinkMods`)
 
 The "Link external folder" flyout adds an external mod directory to the
 active profile **without copying it** (the folder is the user's; Curator
-controls only load order and enabled/disabled). No import modal; the folder
-picker hands the path straight to `LinkMods`, which processes each path
+controls only load order and enabled/disabled). No inline workflow card; the
+folder picker hands the path straight to `LinkMods`, which processes each path
 sequentially:
 
 1. Peek the base folder name via `IModImportService.GetBaseName` (the picked
@@ -612,21 +639,27 @@ The testable true-modal seam. View models depend on this interface, not on
 Avalonia `Window` construction, so their logic stays unit-testable: a test
 injects a recording fake instead of a real window. The production
 `DialogService` owns every real `Window` and `ShowDialog` wiring. Hosted
-destinations (Profiles, Mods, Nexus, Preferences, Settings) are
-not modals and live entirely on the shell's SplitView content region.
+destinations (Profiles, Mods, Nexus, Preferences, Settings) are not modals and
+live entirely on the shell's SplitView content region; the inline import card is
+a hosted `UserControl`, not a modal.
 
 ```csharp
 public interface IDialogService
 {
     Task<WelcomeChoice> ShowWelcomeAsync();
     Task<bool> ConfirmAsync(string title, string message);
-    Task<ImportModResult?> ShowImportModAsync(ImportModRequest request);
     Task<bool> ShowDiscoveryEscapeHatchAsync(IReadOnlyList<string> missingFields);
     Task ShowAlertAsync(string title, string message);
     Task<UnsavedChangesChoice> ShowUnsavedChangesAsync(string title, string message, bool canSave);
     Task<T> ShowProgressAsync<T>(string title, string message, Func<Task<T>> work);
 }
 ```
+
+Six true-modal methods: the first-run Welcome, a binary confirm, the launch
+discovery escape hatch, a single-button alert, an unsaved-changes three-choice
+prompt, and a non-dismissable progress spinner. Copied local-import failures
+(no longer modal) surface inline in the `ImportWorkflowView` card; the
+linked-folder flow continues using `ShowAlertAsync` for its failures.
 
 `ShowUnsavedChangesAsync` is the dedicated three-choice unsaved-changes prompt
 (left to right: Cancel, Don't save, Save; Save is the accent button; the

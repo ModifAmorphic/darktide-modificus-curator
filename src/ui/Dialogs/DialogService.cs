@@ -10,10 +10,10 @@ namespace Modificus.Curator.UI.Dialogs;
 /// Production <see cref="IDialogService"/>. Owns all real Avalonia
 /// <c>Window</c>/<c>ShowDialog</c> wiring so view models never construct windows
 /// directly. Each method shows exactly one true modal over the owning main
-/// window (Welcome, confirm, import, discovery escape hatch, alert, progress).
-/// This is the only place the app brings up a dialog window; everything else
-/// flows through the <see cref="IDialogService"/> seam, which tests replace with
-/// a fake.
+/// window (Welcome, confirm, discovery escape hatch, alert, unsaved changes,
+/// progress). This is the only place the app brings up a dialog window;
+/// everything else flows through the <see cref="IDialogService"/> seam, which
+/// tests replace with a fake.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -148,20 +148,6 @@ public sealed class DialogService : IDialogService
         using var _ = DisableOwnerForModal();
         await dialog.ShowDialog(_owner);
         return dialog.Result;
-    }
-
-    /// <inheritdoc />
-    public async Task<ImportModResult?> ShowImportModAsync(ImportModRequest request)
-    {
-        var viewModel = new ImportModViewModel(request, _localization);
-        var window = new ImportModDialog
-        {
-            DataContext = viewModel,
-        };
-
-        using var _ = DisableOwnerForModal();
-        await window.ShowDialog(_owner);
-        return viewModel.Result;
     }
 
     /// <inheritdoc />

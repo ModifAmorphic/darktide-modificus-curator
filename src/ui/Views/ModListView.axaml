@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Modificus.Curator.UI.ViewModels"
+             xmlns:views="using:Modificus.Curator.UI.Views"
              x:Class="Modificus.Curator.UI.Views.ModListView"
              x:DataType="vm:ModListViewModel">
 
@@ -76,7 +77,7 @@
     built-in theme chrome, not an authored glyph.
   -->
 
-  <Grid RowDefinitions="Auto,*">
+  <Grid RowDefinitions="Auto,Auto,*">
 
     <!-- Header: check-now refresh + rate-limit notice + auto-sort toggle +
          Add split button (hidden until a profile is active). The destination
@@ -170,10 +171,14 @@
         Mods games page in the browser), "Add Mod (archive)", "Add Mod (folder)"
         (separate because a native picker cannot mix files + folders), and "Link
         external folder". The arrow is built-in theme chrome (no authored glyph).
+        Disabled while the inline import workflow is active (editing, processing,
+        or failure): the VM's StartBatch gate is the final defense, but the
+        disabled button communicates the state visually.
       -->
       <SplitButton Grid.Column="4"
                    Click="Add_Click"
                    ToolTip.Tip="{ReflectionBinding [ModList_AddButtonTooltip], Source={StaticResource Loc}}"
+                   IsEnabled="{Binding !ImportWorkflow.IsActive}"
                    Margin="16,0,0,0"
                    VerticalAlignment="Center">
         <SplitButton.Content>
@@ -201,6 +206,20 @@
     </Grid>
 
     <!--
+      Inline import card (ImportWorkflowView). Visible only while the workflow
+      is active (editing, processing, or failure). Hosted directly below the
+      toolbar with the same 20px left/right inset. DataContext is the workflow
+      child VM (reached through ModListViewModel.ImportWorkflow); the visibility
+      binding stays on the wrapper Panel so it resolves against the mod-list VM's
+      context, not the workflow VM's.
+    -->
+    <Panel Grid.Row="1"
+           IsVisible="{Binding ImportWorkflow.IsActive}"
+           Margin="20,0,20,4">
+      <views:ImportWorkflowView DataContext="{Binding ImportWorkflow}" />
+    </Panel>
+
+    <!--
       Content area: the drag-and-drop target (AllowDrop/Drop/DragOver stay here
       so drag-and-drop behavior is unchanged). Background="Transparent" is set
       explicitly so the empty area is hit-testable for drops (a Panel/Grid with
@@ -216,7 +235,7 @@
       left + right margins inside the ItemsControl so the action controls have
       a clear right inset without moving the scrollbar off the edge.
     -->
-    <Grid Grid.Row="1"
+    <Grid Grid.Row="2"
           Background="Transparent"
           DragDrop.AllowDrop="True"
           DragDrop.Drop="OnDrop"

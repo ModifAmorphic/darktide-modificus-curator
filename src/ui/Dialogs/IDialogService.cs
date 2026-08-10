@@ -52,12 +52,12 @@ public enum UnsavedChangesChoice
 /// The application's true-modal dialog abstraction. Keeps view models free of
 /// direct Avalonia <c>Window</c> construction so their logic stays unit-testable
 /// against a fake of this seam. Each member shows exactly one modal over the
-/// owning main window: the first-run Welcome, a yes/no confirm, the per-mod
-/// import chooser, the launch discovery escape hatch, a single-button alert, an
-/// unsaved-changes three-choice prompt, or a non-dismissable progress spinner.
-/// Hosted destinations (Profiles, Mods, Nexus, Preferences,
-/// Settings) are not modals and live entirely on the shell's SplitView content
-/// region.
+/// owning main window: the first-run Welcome, a yes/no confirm, the launch
+/// discovery escape hatch, a single-button alert, an unsaved-changes three-
+/// choice prompt, or a non-dismissable progress spinner. Hosted destinations
+/// (Profiles, Mods, Nexus, Preferences, Settings) are not modals and live
+/// entirely on the shell's SplitView content region; the inline import card is
+/// a hosted UserControl, not a modal.
 /// </summary>
 public interface IDialogService
 {
@@ -76,15 +76,6 @@ public interface IDialogService
     /// unsaved-changes flow uses <see cref="ShowUnsavedChangesAsync"/> instead.
     /// </summary>
     Task<bool> ConfirmAsync(string title, string message);
-
-    /// <summary>
-    /// Shows the per-mod import modal (source chooser + conditional Version +
-    /// URL), pre-filled from <paramref name="request"/>. Returns the confirmed
-    /// <see cref="ImportModResult"/> (URL parsed to canonical source) when the
-    /// user confirms, or <c>null</c> when they cancel / dismiss. A <c>null</c>
-    /// cancels a remaining batch.
-    /// </summary>
-    Task<ImportModResult?> ShowImportModAsync(ImportModRequest request);
 
     /// <summary>
     /// Shows the discovery escape-hatch modal, focused on the missing discovery

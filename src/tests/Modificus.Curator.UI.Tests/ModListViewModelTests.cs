@@ -565,332 +565,114 @@ public sealed class ModListViewModelTests
         Assert.Equal(latestId, row.SelectedVersion!.VersionId);
     }
 
-    // ---- add flow (split button picker / drag-and-drop) --------------------
+    // ---- inline import workflow integration -------------------------------
 
     [Fact]
-    public async Task AddMods_processes_each_path_with_a_modal_then_Import_then_AddMod()
+    public void ImportWorkflow_is_exposed_as_a_read_only_child()
     {
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var repo = new FakeModRepository();
-        var import = new FakeModImportService(repo);
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        // Untracked source + distinct modNames (DMF / SoundPack) → distinct
-        // containers (untracked dedups by name; the names differ here).
-        var dialogs = new FakeDialogService
-        {
-            ImportResult = new ImportModResult(new UntrackedSource(), "", ModVersionPolicy.Latest),
-        };
-        var vm = Build(profiles, session, repo, import, dialogs);
+        var vm = Build();
 
-        await vm.AddModsCommand.ExecuteAsync(
-            new[] { "/mods/DMF", "/mods/SoundPack.zip" });
-
-        // One modal per path, in order.
-        Assert.Equal(2, dialogs.ImportCalls);
-        Assert.Equal("DMF", dialogs.ImportRequests[0].ModName);
-        Assert.Equal("SoundPack", dialogs.ImportRequests[1].ModName); // .zip stem
-        // Import then AddMod, per path.
-        Assert.Equal(2, import.Imports.Count);
-        Assert.Equal("DMF", import.Imports[0].ModName);
-        Assert.Equal("SoundPack", import.Imports[1].ModName);
-        // AddMod was called per path, with distinct container ids (distinct names).
-        Assert.Equal(2, profiles.AddModCalls.Count);
-        Assert.Equal(2, profiles.AddModCalls.Select(c => c.ContainerId).Distinct().Count());
-        Assert.All(profiles.AddModCalls, c => Assert.Equal(a.Id, c.Id));
-        // The modal's Latest policy is propagated to AddMod.
-        Assert.All(profiles.AddModCalls, c => Assert.IsType<LatestPolicy>(c.Policy));
-        // Both mods now appear, joined from the repo.
-        Assert.Equal(2, vm.Mods.Count);
+        Assert.NotNull(vm.ImportWorkflow);
+        Assert.False(vm.ImportWorkflow.IsActive);
     }
 
     [Fact]
-    public async Task AddMods_derives_default_name_from_any_archive_extension()
+    public async Task ItemImported_for_the_active_profile_reloads_the_list()
     {
-        // DeriveModName strips any archive extension (.7z, .rar, etc.), not just
-        // .zip: Path.GetFileNameWithoutExtension on the picked path's tail. A
-        // folder like DMF (no extension) returns unchanged.
+        // A successful workflow import on the active profile must surface in the
+        // mod list (the narrow event triggers a reload).
         var a = Profile("Alpha");
         var profiles = TestDoubles.Profiles(a);
         var repo = new FakeModRepository();
         var import = new FakeModImportService(repo);
         var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService
-        {
-            ImportResult = new ImportModResult(new UntrackedSource(), "", ModVersionPolicy.Latest),
-        };
-        var vm = Build(profiles, session, repo, import, dialogs);
+        var vm = TestDoubles.BuildModList(profiles, session, repo, import,
+            localization: Localization);
+        var workflow = vm.ImportWorkflow;
 
-        await vm.AddModsCommand.ExecuteAsync(
-            new[] { "/mods/Foo.7z", "/mods/Bar.rar" });
+        // Start a batch + confirm with Untracked (simplest valid metadata).
+        workflow.StartBatchCommand.Execute(new[] { "/mods/DMF" });
+        workflow.SourceChoice = ImportWorkflowViewModel.ImportSource.Untracked;
+        await workflow.ImportCurrentCommand.ExecuteAsync(null);
 
-        Assert.Equal(2, dialogs.ImportCalls);
-        Assert.Equal("Foo", dialogs.ImportRequests[0].ModName);   // .7z stem
-        Assert.Equal("Bar", dialogs.ImportRequests[1].ModName);   // .rar stem
-    }
-
-    [Fact]
-    public async Task AddMods_with_Pinned_choice_pins_to_the_imported_version_id()
-    {
-        // The modal returns a Pinned policy (placeholder VersionId=""); the add
-        // flow substitutes the actual VersionId the Import just minted (the
-        // version's opaque folder id) + feeds a real PinnedPolicy(id) to AddMod.
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var repo = new FakeModRepository();
-        var import = new FakeModImportService(repo);
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService
-        {
-            ImportResult = new ImportModResult(
-                new UntrackedSource(),
-                "",
-                new PinnedPolicy()), // placeholder VersionId
-        };
-        var vm = Build(profiles, session, repo, import, dialogs);
-
-        await vm.AddModsCommand.ExecuteAsync(new[] { "/mods/DMF" });
-
-        var addCall = Assert.Single(profiles.AddModCalls);
-        // The policy actually persisted is a PinnedPolicy whose VersionId is the
-        // one Import returned (NOT the placeholder empty string from the modal).
-        var pinned = Assert.IsType<PinnedPolicy>(addCall.Policy);
-        var importedContainer = repo.Get(addCall.ContainerId);
-        Assert.NotNull(importedContainer);
-        var importedVersion = Assert.Single(importedContainer!.Versions);
-        Assert.Equal(importedVersion.Folder, pinned.VersionId);
-        Assert.NotEmpty(pinned.VersionId); // not the placeholder
-    }
-
-    [Fact]
-    public async Task AddMods_cancel_mid_batch_cancels_the_remaining_paths()
-    {
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var repo = new FakeModRepository();
-        var import = new FakeModImportService(repo);
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService
-        {
-            // First path confirmed, second cancelled, third never reached.
-            ImportResultQueue = new Queue<ImportModResult?>(new ImportModResult?[]
-            {
-                new(new UntrackedSource(), "", ModVersionPolicy.Latest),
-                null,
-                new(new UntrackedSource(), "", ModVersionPolicy.Latest),
-            }),
-        };
-        var vm = Build(profiles, session, repo, import, dialogs);
-
-        await vm.AddModsCommand.ExecuteAsync(
-            new[] { "/mods/One", "/mods/Two", "/mods/Three" });
-
-        Assert.Equal(2, dialogs.ImportCalls); // third modal never shown
-        Assert.Single(import.Imports);        // only One imported
-        Assert.Single(profiles.AddModCalls);
+        // The workflow's ItemImported event reloaded the list; the row shows.
         Assert.Single(vm.Mods);
+        Assert.Contains(vm.Mods, m => m.Name == "DMF");
     }
 
     [Fact]
-    public async Task AddMods_surfaces_and_aborts_on_a_failed_import()
+    public async Task ItemImported_for_an_inactive_profile_does_not_misdirect_the_list()
     {
-        // A late failure during Import (after the source structure validated at the
-        // peek, e.g. an I/O error during extraction) is caught per mod: the add
-        // flow shows an alert naming the failing source + aborts the remaining
-        // batch. Mods imported earlier in the batch stay imported.
+        // An import that lands on a now-inactive profile (the profile changed
+        // mid-processing) must NOT reload the list: the list always shows the
+        // active profile, and reloading would be a no-op that masks the event's
+        // irrelevance.
         var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
+        var b = Profile("Beta");
+        var profiles = TestDoubles.Profiles(a, b);
         var repo = new FakeModRepository();
         var import = new FakeModImportService(repo)
         {
-            // First path imports fine; second fails inside Import (the structure
-            // validated at the peek, then Import throws); third is never reached.
-            ImportExceptionQueue = new Queue<Exception?>(new Exception?[]
-            {
-                null,
-                new InvalidOperationException("Invalid mod archive '/mods/Bad.zip': ..."),
-                null,
-            }),
+            ImportGate = new TaskCompletionSource<bool>(),
         };
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService
+        var session = new FakeProfileSession(() => profiles.ListProfiles())
         {
-            ImportResult = new ImportModResult(new UntrackedSource(), "", ModVersionPolicy.Latest),
+            ActiveProfileId = a.Id,
         };
-        var vm = Build(profiles, session, repo, import, dialogs);
+        var vm = TestDoubles.BuildModList(profiles, session, repo, import,
+            localization: Localization);
+        var workflow = vm.ImportWorkflow;
+        workflow.StartBatchCommand.Execute(new[] { "/mods/DMF" });
+        workflow.SourceChoice = ImportWorkflowViewModel.ImportSource.Untracked;
+        var task = workflow.ImportCurrentCommand.ExecuteAsync(null);
 
-        await vm.AddModsCommand.ExecuteAsync(
-            new[] { "/mods/One", "/mods/Bad.zip", "/mods/Three" });
+        // Switch the active profile mid-processing.
+        session.ActiveProfileId = b.Id;
+        import.ImportGate!.SetResult(true);
+        await task;
 
-        // The third modal was never shown (batch aborted on the failed import).
-        Assert.Equal(2, dialogs.ImportCalls);
-        // Both paths peeked fine (GetBaseName ran for both); only One reached +
-        // completed Import (Bad.zip threw inside Import).
-        Assert.Equal(2, import.GetBaseNameCalls.Count);
-        Assert.Equal(2, import.Imports.Count);
-        Assert.Single(profiles.AddModCalls);
-        Assert.Single(vm.Mods);
-        // Exactly one alert surfaced, naming the failing source path.
-        var alert = Assert.Single(dialogs.AlertCalls);
-        Assert.Contains("/mods/Bad.zip", alert.Message);
-        Assert.Contains("Invalid mod archive", alert.Message);
-    }
-
-    [Fact]
-    public async Task AddMods_surfaces_and_aborts_when_the_source_structure_is_invalid()
-    {
-        // An invalid source (bad zip/folder structure) is caught at the base-name
-        // PEEK (GetBaseName, before any container/version is created): the add
-        // flow shows an alert naming the failing source + aborts the remaining
-        // batch. Nothing is created for the bad source (no Import, no AddMod);
-        // mods imported earlier in the batch stay imported.
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var repo = new FakeModRepository();
-        var import = new FakeModImportService(repo)
-        {
-            // First path peeks fine; second throws at the peek (invalid
-            // structure); third is never reached (batch aborted on the failure).
-            GetBaseNameFunc = path => path.EndsWith("Bad.zip")
-                ? throw new InvalidOperationException("Invalid mod archive '/mods/Bad.zip': ...")
-                : "ok",
-        };
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService
-        {
-            ImportResult = new ImportModResult(new UntrackedSource(), "", ModVersionPolicy.Latest),
-        };
-        var vm = Build(profiles, session, repo, import, dialogs);
-
-        await vm.AddModsCommand.ExecuteAsync(
-            new[] { "/mods/One", "/mods/Bad.zip", "/mods/Three" });
-
-        // The third modal was never shown (batch aborted at the bad peek).
-        Assert.Equal(2, dialogs.ImportCalls);
-        // Two peeks ran (One ok, Bad.zip threw); only One reached Import.
-        Assert.Equal(2, import.GetBaseNameCalls.Count);
-        Assert.Single(import.Imports);
-        Assert.Single(profiles.AddModCalls);
-        Assert.Single(vm.Mods);
-        // Exactly one alert surfaced, naming the failing source path + the detail.
-        var alert = Assert.Single(dialogs.AlertCalls);
-        Assert.Contains("/mods/Bad.zip", alert.Message);
-        Assert.Contains("Invalid mod archive", alert.Message);
-    }
-
-    [Fact]
-    public async Task AddMods_refuses_a_base_name_collision_and_aborts_the_batch()
-    {
-        // A mod whose base folder name matches an existing profile mod is REFUSED
-        // before anything is created: the add flow peeks the base name, asks the
-        // profile for a collision (passing the would-be container to exclude a
-        // re-add), and on a hit shows an alert naming the conflicting mod + the
-        // base folder, then aborts the batch. No Import / no AddMod runs.
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var repo = new FakeModRepository();
-        // The conflicting profile mod: seeded in the repo so the VM can resolve
-        // its display name for the alert.
-        var conflicting = repo.Seed(new UntrackedSource(), "Existing DMF");
-        profiles.GetBaseNameCollisionResult =
-            new ModListEntry { ContainerId = conflicting.Id, Enabled = true, Order = 0 };
-        var import = new FakeModImportService(repo);
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService
-        {
-            ImportResult = new ImportModResult(new UntrackedSource(), "", ModVersionPolicy.Latest),
-        };
-        var vm = Build(profiles, session, repo, import, dialogs);
-
-        await vm.AddModsCommand.ExecuteAsync(new[] { "/mods/dmf.zip" });
-
-        // The peek + the collision check both ran; FindExistingContainer fed the
-        // exclusion (null here, a brand-new container).
-        Assert.Single(import.GetBaseNameCalls);
-        Assert.Single(import.FindExistingContainerCalls);
-        var collisionCall = Assert.Single(profiles.GetBaseNameCollisionCalls);
-        Assert.Null(collisionCall.ExcludeContainerId);
-        Assert.Equal("dmf", collisionCall.BaseName); // peeked from the zip stem
-        // Refused BEFORE Import: no repository write, no profile entry.
-        Assert.Empty(import.Imports);
-        Assert.Empty(profiles.AddModCalls);
+        // The list shows profile b (empty); the import landed on a but did not
+        // reload this list.
         Assert.Empty(vm.Mods);
-        // A collision alert surfaced, naming the conflicting mod + the base folder.
-        var alert = Assert.Single(dialogs.AlertCalls);
-        Assert.Contains("Existing DMF", alert.Message);
-        Assert.Contains("'dmf'", alert.Message); // the quoted base folder name
+        Assert.Single(profiles.GetModList(a.Id)); // landed on a
     }
 
     [Fact]
-    public async Task AddMods_re_add_of_a_mod_already_in_the_profile_is_not_a_collision()
+    public void Add_mode_labels_remain_stable_when_no_workflow_is_active()
     {
-        // Re-importing a mod already in the profile resolves to the SAME container
-        // (dedup). The add flow peeks that container (FindExistingContainer) +
-        // passes its id as the collision-check exclusion, so the re-add is NOT
-        // flagged: Import refreshes the version + AddMod is its idempotent no-op.
-        // No collision alert.
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
+        var vm = Build();
+
+        Assert.Equal(ModAddMode.NexusMods, vm.AddMode);
+        Assert.Equal("Add Nexus Mods", vm.AddModeLabel);
+
+        vm.AddMode = ModAddMode.Archive;
+        Assert.Equal("Add Mod (archive)", vm.AddModeLabel);
+    }
+
+    [Fact]
+    public async Task End_to_end_workflow_import_lands_a_mod_in_the_profile_and_list()
+    {
+        // Production-shape fakes: create + activate a profile, begin a local
+        // import through the workflow, confirm it, and assert the mod appears in
+        // the profile's list via the mod-list VM's reload.
+        var profiles = TestDoubles.Profiles();
         var repo = new FakeModRepository();
         var import = new FakeModImportService(repo);
-        // An existing untracked "DMF" container, already in the profile.
-        var existing = repo.Seed(new UntrackedSource(), "DMF");
-        profiles.WithMods(a.Id,
-            new ModListEntry { ContainerId = existing.Id, Enabled = true, Order = 0 });
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService
-        {
-            ImportResult = new ImportModResult(new UntrackedSource(), "", ModVersionPolicy.Latest),
-        };
-        var vm = Build(profiles, session, repo, import, dialogs);
+        var session = new FakeProfileSession(() => profiles.ListProfiles());
+        var created = profiles.CreateProfile("Main", "", new LaunchSettings());
+        session.ActiveProfileId = created.Id;
+        var vm = TestDoubles.BuildModList(profiles, session, repo, import,
+            localization: Localization);
+        var workflow = vm.ImportWorkflow;
+        workflow.StartBatchCommand.Execute(new[] { "/mods/DMF" });
+        workflow.SourceChoice = ImportWorkflowViewModel.ImportSource.Untracked;
 
-        await vm.AddModsCommand.ExecuteAsync(new[] { "/mods/DMF" });
+        await workflow.ImportCurrentCommand.ExecuteAsync(null);
 
-        // FindExistingContainer resolved the existing "DMF" container (untracked
-        // dedup by name); its id was passed as the collision-check exclusion.
-        var findCall = Assert.Single(import.FindExistingContainerCalls);
-        Assert.Equal("DMF", findCall.ModName);
-        var collisionCall = Assert.Single(profiles.GetBaseNameCollisionCalls);
-        Assert.Equal(existing.Id, collisionCall.ExcludeContainerId);
-        // No collision alert (the re-add is excluded, not refused).
-        Assert.Empty(dialogs.AlertCalls);
-        // Import ran (refresh) + AddMod ran (idempotent for the existing entry).
-        Assert.Single(import.Imports);
-        Assert.Single(profiles.AddModCalls);
-        Assert.Single(vm.Mods);
-    }
-
-    [Fact]
-    public async Task AddMods_with_no_active_profile_logs_and_does_nothing()
-    {
-        var profiles = TestDoubles.Profiles();
-        var dialogs = new FakeDialogService
-        {
-            ImportResult = new ImportModResult(new UntrackedSource(), "", ModVersionPolicy.Latest),
-        };
-        var vm = Build(profiles, new FakeProfileSession { ActiveProfileId = null }, dialogs: dialogs);
-
-        await vm.AddModsCommand.ExecuteAsync(new[] { "/mods/One" });
-
-        Assert.Equal(0, dialogs.ImportCalls);
-        Assert.Empty(profiles.AddModCalls);
-    }
-
-    [Fact]
-    public async Task AddMods_empty_path_list_is_a_noop()
-    {
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService
-        {
-            ImportResult = new ImportModResult(new UntrackedSource(), "", ModVersionPolicy.Latest),
-        };
-        var vm = Build(profiles, session, dialogs: dialogs);
-
-        await vm.AddModsCommand.ExecuteAsync(Array.Empty<string>());
-
-        Assert.Equal(0, dialogs.ImportCalls);
+        var mods = profiles.GetModList(created.Id);
+        Assert.Single(mods);
+        Assert.True(repo.Get(mods[0].ContainerId) is not null);
+        Assert.Single(vm.Mods); // the reload surfaced it
     }
 
     // ---- add split-button view state ---------------------------------------
@@ -2595,42 +2377,6 @@ public sealed class ModListViewModelTests
         vm.AutoSortCommand.Execute(null);
 
         Assert.True(session.HasPendingChanges);
-    }
-
-    [Fact]
-    public async Task AddMods_sets_HasPendingChanges_after_a_successful_import()
-    {
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var repo = new FakeModRepository();
-        var import = new FakeModImportService(repo);
-        var dialogs = new FakeDialogService
-        {
-            ImportResult = new ImportModResult(new UntrackedSource(), "", ModVersionPolicy.Latest),
-        };
-        var (vm, session) = BuildWithSession(profiles, repo, import, dialogs);
-        Assert.False(session.HasPendingChanges);
-
-        await vm.AddModsCommand.ExecuteAsync(new[] { "/mods/DMF" });
-
-        Assert.True(session.HasPendingChanges);
-    }
-
-    [Fact]
-    public async Task AddMods_does_not_set_HasPendingChanges_when_nothing_is_imported()
-    {
-        // A cancelled modal (or an all-failing batch) imports nothing, so the
-        // pending flag must stay clear (no structural change landed).
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var repo = new FakeModRepository();
-        var import = new FakeModImportService(repo);
-        var dialogs = new FakeDialogService { ImportResult = null }; // user cancels
-        var (vm, session) = BuildWithSession(profiles, repo, import, dialogs);
-
-        await vm.AddModsCommand.ExecuteAsync(new[] { "/mods/DMF" });
-
-        Assert.False(session.HasPendingChanges);
     }
 
     [Fact]

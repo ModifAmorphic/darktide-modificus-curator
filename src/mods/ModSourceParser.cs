@@ -4,7 +4,7 @@ namespace Modificus.Curator.Mods;
 
 /// <summary>
 /// Pure URL → canonical <see cref="ModSource"/> parsers. UI-agnostic + unit-
-/// tested: the import modal collects URLs (typed or pasted) and the parser
+/// tested: the inline import card collects URLs (typed or pasted) and the parser
 /// turns them into the canonical identity the model stores (Nexus mod id).
 /// Never throws: malformed input returns <c>false</c> and the caller shows a
 /// validation message.
