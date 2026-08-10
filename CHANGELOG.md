@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.22.1...v0.23.0) (2026-08-10)
+
+
+### Features
+
+* **ui:** add hosted navigation shell ([#166](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/166)) ([3d43a4d](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/3d43a4db1fad170848222766118cca33f5d13b2e))
+
 ## [0.22.1](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.22.0...v0.22.1) (2026-08-08)
 
 
