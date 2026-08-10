@@ -2,7 +2,7 @@ namespace Modificus.Curator.Mods.Tests;
 
 /// <summary>
 /// <see cref="ModSourceParser"/>: URL → canonical <see cref="ModSource"/>
-/// parsing for the import modal. Covers the accepted shapes (Nexus URL/id) +
+/// parsing for the inline import card. Covers the accepted shapes (Nexus URL/id) +
 /// the malformed rejections (wrong host, too few segments, non-numeric id).
 /// Never throws: every malformed case is <c>false</c>.
 /// </summary>

@@ -92,8 +92,8 @@ internal sealed class ModImportService : IModImportService
 
         // Confine modName to a single direct child of the mods root before any
         // filesystem op, even though the import target is an opaque UUID folder
-        // (not modName-derived). modName is user-editable (the import modal lets
-        // the user rename), so the same confinement guards against names
+        // (not modName-derived). modName is user-editable (the inline import
+        // card lets the user rename), so the same confinement guards against names
         // carrying path separators, ".." or an absolute path, which would
         // confuse the untracked-by-name index (the dedup key). The explicit
         // separator check is cross-platform; GetFullPath then normalizes so the

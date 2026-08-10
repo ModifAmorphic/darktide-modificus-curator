@@ -232,20 +232,27 @@ direct Avalonia `Window` construction so their logic stays unit-testable: a
 view model depends on this seam, and tests inject a recording fake instead of a
 real window. The production `DialogService` owns every real `Window` and
 `ShowDialog` wiring. Hosted destinations (Profiles, Mods, Nexus,
-Preferences, Settings) are not modals and never flow through this seam.
+Preferences, Settings) are not modals and never flow through this seam; the
+inline import card is a hosted `UserControl` (the `ImportWorkflowViewModel`),
+not a modal.
 
 ```csharp
 public interface IDialogService
 {
     Task<WelcomeChoice> ShowWelcomeAsync();
     Task<bool> ConfirmAsync(string title, string message);
-    Task<ImportModResult?> ShowImportModAsync(ImportModRequest request);
     Task<bool> ShowDiscoveryEscapeHatchAsync(IReadOnlyList<string> missingFields);
     Task ShowAlertAsync(string title, string message);
     Task<UnsavedChangesChoice> ShowUnsavedChangesAsync(string title, string message, bool canSave);
     Task<T> ShowProgressAsync<T>(string title, string message, Func<Task<T>> work);
 }
 ```
+
+Six true-modal methods: the first-run Welcome, a binary confirm, the launch
+discovery escape hatch, a single-button alert, an unsaved-changes three-choice
+prompt, and a non-dismissable progress spinner. Copied local-import failures
+surface inline in the `ImportWorkflowView` card (not through this seam); the
+linked-folder flow continues using `ShowAlertAsync` for its failures.
 
 - `ShowWelcomeAsync()`: the first-run Welcome modal. Returns the user's typed
   `WelcomeChoice` (`Continue` or `SetUpNexus`). ESC, title-bar close, and
@@ -254,12 +261,6 @@ public interface IDialogService
   the user confirms, false otherwise (cancel / dismiss). Gates destructive
   actions (profile delete, mod remove, the DMF download prompt). The
   three-choice unsaved-changes flow uses `ShowUnsavedChangesAsync` instead.
-- `ShowImportModAsync(request)`: the per-mod import modal (source chooser,
-  conditional Version and URL), pre-filled from `request`. Returns the
-  confirmed `ImportModResult` (URL parsed to canonical source) when the user
-  confirms, or null when they cancel / dismiss. The mod-list add flow calls
-  this once per imported path (sequentially); a null cancels the remaining
-  batch.
 - `ShowDiscoveryEscapeHatchAsync(missingFields)`: the discovery escape-hatch
   modal, focused on the missing discovery fields the launch reported. Inputs
   are shown only for the fields in `missingFields`. Returns true when the
@@ -268,8 +269,8 @@ public interface IDialogService
   true return; the user clicks Launch again.
 - `ShowAlertAsync(title, message)`: a simple modal alert (a single OK
   button, no cancel). Used to surface a launch `Error`, a download failure,
-  or the DMF informational case where there is nothing for the user to
-  decide, only acknowledge.
+  a linked-folder failure, or the DMF informational case where there is
+  nothing for the user to decide, only acknowledge.
 - `ShowUnsavedChangesAsync(title, message, canSave)`: the dedicated three-
   choice unsaved-changes prompt (left to right: Cancel, Don't save, Save;
   Save is the accent button). The `UnsavedChangesChoice` enum defaults to
@@ -298,34 +299,11 @@ public sealed class DialogService : IDialogService
 
 The concrete implementation. `owner` is the main window (a singleton; resolved
 by the desktop lifetime and by `DialogService` for modal parenting).
-`localization` is handed to the Welcome title, the import VM, and the
-escape-hatch VM (header + per-row labels). `configLoader` is handed to the
-escape-hatch VM (one read-modify-save on submit). `DisableOwnerForModal` is the
-nesting-safe owner-disable workaround (a reference count tracks overlapping
-modals; the owner re-enables only when the outermost modal closes).
-
-### Import-modal payload types
-
-```csharp
-public sealed record ImportModRequest
-{
-    public string ModName { get; set; }    // pre-filled; two-way bound so the
-                                           // user's rename-at-import flows back
-    public string SourcePath { get; set; } // absolute path to a folder OR archive
-
-    public ImportModRequest(string modName, string sourcePath);
-}
-
-public sealed record ImportModResult(
-    ModSource Source,           // parsed canonical source (URL resolved to identity)
-    string Version,             // raw release tag; string.Empty for untracked
-    ModVersionPolicy Policy);   // Latest (default) or Pinned (carries an empty
-                                // VersionId here; the add flow substitutes the
-                                // id returned by IModImportService.Import)
-```
-
-`ModSource`, `ModVersionPolicy`, and `LatestPolicy` / `PinnedPolicy` live in
-the [mods](mods.md) library; the UI consumes them.
+`localization` is handed to the Welcome title and the escape-hatch VM (header +
+per-row labels). `configLoader` is handed to the escape-hatch VM (one read-
+modify-save on submit). `DisableOwnerForModal` is the nesting-safe owner-
+disable workaround (a reference count tracks overlapping modals; the owner
+re-enables only when the outermost modal closes).
 
 ## Preferences service
 
@@ -938,7 +916,7 @@ public static class EscapeClosesBehavior
 }
 ```
 
-Applied to the closeable modal dialogs: `ConfirmDialog`, `ImportModDialog`,
+Applied to the closeable modal dialogs: `ConfirmDialog`,
 `DiscoveryEscapeHatchDialog`, `WelcomeWindow`. `ProgressDialog`
 (non-closeable by design, `DialogTitleBar.ShowClose="False"`) and the main
 window do not opt in, so ESC never dismisses a spinner or exits the app. ESC
@@ -1012,7 +990,8 @@ services.AddSingleton<MainWindow>();
 services.AddSingleton<Action<Action>>(_ => action => Dispatcher.UIThread.Post(action));
 services.AddSingleton<UpdateCoordinator>();                 // one-install-at-a-time gate
 services.AddSingleton<IAutomaticUpdateService, AutomaticUpdateService>(); // Premium auto-installer
-services.AddSingleton<ModListViewModel>();
+services.AddSingleton<ImportWorkflowViewModel>();            // inline import card (before ModListViewModel)
+services.AddSingleton<ModListViewModel>();                   // injects ImportWorkflowViewModel as a child
 services.AddSingleton<ProfilesViewModel>(sp => { /* resolves DmfPromptService eagerly */ });
 services.AddSingleton<IntegrationsViewModel>();
 services.AddSingleton<PreferencesViewModel>();
@@ -1174,8 +1153,10 @@ No backend library references the UI (the dependency direction is one-way).
   Profiles library -- plus the `EnableLuaLogs` Logging toggle + the `SkipSplash`
   skip-splash toggle).
 - **`ModListViewModelTests`**: enable / disable, reorder, per-mod policy,
-  remove (with confirm), auto-sort (identity stub), the add flow (peek,
-  collision hard-block, import, add-mod), the linked-folder flow
+  remove (with confirm), auto-sort (identity stub), the inline import workflow
+  integration (child VM exposure, `ItemImported` reload for the active profile,
+  no-misdirect for an inactive profile, add-mode stability, end-to-end
+  create/activate/import), the linked-folder flow
   (`LinkMods`: peek, collision-refusal, re-link refresh, `LatestPolicy` add;
   `OpenFolder`: launches the file manager at the normalized external path,
   failure alert, no-op for non-linked/broken rows; the linked badge two-state
@@ -1197,8 +1178,13 @@ No backend library references the UI (the dependency direction is one-way).
   plus the Updates section (current version, manual check + inline status, the
   `UpdateStateChanged` marshal, Download and Restart, the unsupported-build
   disabled controls, and the startup-check toggle persist + pre-fill).
-- **`ImportModViewModelTests`**: the per-mod import modal (URL parsing,
-  version field, name edit).
+- **`ImportWorkflowViewModelTests`**: the inline import workflow state machine
+  (editing, processing, terminal failure), per-item import orchestration with
+  the split Task.Run thread boundary, batch advance/close/reset, base-name
+  collision and expected/unexpected failure handling, the controllably-blocked
+  fake import proving processing state is observable, and the active-profile-
+  change-during-processing edge cases (finish-current/abort-rest and
+  reset-on-failure).
 - **`DiscoveryEscapeHatchViewModelTests`**: the focused escape-hatch form
   (only the missing fields shown).
 - **`IntegrationsViewModelTests`**: the Nexus destination (OAuth

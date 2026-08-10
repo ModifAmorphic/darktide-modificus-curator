@@ -144,7 +144,22 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           the Mods destination (`ModListViewModel` + `ModListView`):
                           the active profile's mod list (the dominant content area),
                           with its own toolbar (refresh, rate-limit notice, auto-
-                          sort, the Add split button) shown only on Mods;
+                          sort, the Add split button) shown only on Mods, and the
+                          inline import card (`ImportWorkflowViewModel` +
+                          `ImportWorkflowView`, an application-lifetime singleton
+                          child VM registered before `ModListViewModel`) directly
+                          below the toolbar: the card owns the batch state machine
+                          (editing, processing, terminal failure), the per-item
+                          editing form (name + source + conditional Nexus version/
+                          URL/policy + live validation), and the per-item import
+                          orchestration (only `GetBaseName` + `Import` run on
+                          `Task.Run`; `FindExistingContainer` + the collision check
+                          + `AddMod` run on the captured UI context). The Add split
+                          button + drag-and-drop forward paths to the workflow's
+                          `StartBatchCommand`; while the workflow is active the Add
+                          button disables and drops are rejected. Copied
+                          local-import failures surface inline (not via modal
+                          alert); the linked-folder flow keeps its modal alerts.
                           the Nexus destination
                           (`IntegrationsViewModel` + `IntegrationsView`,
                           Nexus-only): OAuth + developer-gated API-key + nxm handler
@@ -190,11 +205,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           list + re-reads the startup-check toggle + refreshes the
                           app-update notice;
                           `IDialogService` is narrowed to true modals only (the
-                          seven methods: `ShowWelcomeAsync`, `ConfirmAsync`,
-                          `ShowImportModAsync`, `ShowDiscoveryEscapeHatchAsync`,
-                          `ShowAlertAsync`, `ShowUnsavedChangesAsync`,
-                          `ShowProgressAsync<T>`); hosted
+                          six methods: `ShowWelcomeAsync`, `ConfirmAsync`,
+                          `ShowDiscoveryEscapeHatchAsync`, `ShowAlertAsync`,
+                          `ShowUnsavedChangesAsync`, `ShowProgressAsync<T>`);
+                          hosted
                           destinations are not modals and never flow through it;
+                          the inline import card is a hosted `UserControl`
+                          (`ImportWorkflowViewModel`), not a modal;
                           `AddNxm()` + `StartNxmServer` (single-instance via
                           `SingleInstanceGuard` process enumeration, separate from the `Modificus.Curator.Nxm`
                           pipe bind which degrades gracefully on IOException; a second Curator exits
@@ -415,7 +432,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           (ui/Behaviors/, applied per-dialog; ESC calls
                           `Window.Close()`, the same path as the title-bar X so
                           result/cancel contracts are unchanged): applied to
-                          ConfirmDialog, ImportModDialog,
+                          ConfirmDialog,
                           DiscoveryEscapeHatchDialog, WelcomeWindow;
                           ProgressDialog (non-closeable) + the main window opt
                           out, so ESC never dismisses a spinner or exits the app)

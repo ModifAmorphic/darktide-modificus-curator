@@ -124,6 +124,19 @@ public static class CuratorComposition
         // circular) but raises UpdatesApplied so the list VM reloads after a
         // batch.
         services.AddSingleton<IAutomaticUpdateService, AutomaticUpdateService>();
+        // The inline local-import workflow VM: an application-lifetime singleton
+        // registered BEFORE ModListViewModel (which takes it as a child + listens
+        // to its narrow ItemImported event). Owns the batch state machine, the
+        // per-item editing form, and the per-item import orchestration. The view
+        // hosts its card below the Mods toolbar; the mod-list Add split button +
+        // drag-and-drop forward paths to its StartBatchCommand.
+        services.AddSingleton(sp => new ImportWorkflowViewModel(
+            sp.GetRequiredService<IProfileService>(),
+            sp.GetRequiredService<IProfileSession>(),
+            sp.GetRequiredService<IModRepository>(),
+            sp.GetRequiredService<IModImportService>(),
+            sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<ILogger<ImportWorkflowViewModel>>()));
         // The manual-refresh countdown timer seams (the throttle's live m:ss
         // tooltip). Production manages a single 1-second DispatcherTimer, created
         // lazily on first start, with Tick wired once; Start/Stop control whether
@@ -160,6 +173,7 @@ public static class CuratorComposition
                 sp.GetRequiredService<UpdateCheckRunner>(),
                 sp.GetRequiredService<UpdateCoordinator>(),
                 sp.GetRequiredService<IAutomaticUpdateService>(),
+                sp.GetRequiredService<ImportWorkflowViewModel>(),
                 sp.GetRequiredService<Action<Action>>(),
                 sp.GetRequiredService<ILogger<ModListViewModel>>(),
                 startCountdownTimer,
