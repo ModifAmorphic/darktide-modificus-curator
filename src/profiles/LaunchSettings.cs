@@ -12,9 +12,9 @@ namespace Modificus.Curator.Profiles;
 /// Immutable value type, matching the existing <see cref="ModListEntry"/>
 /// pattern: the collections are <see cref="IReadOnlyList{T}"/> so JSON order is
 /// explicit and game-argument order and duplicates survive persistence. Changes
-/// go through <see cref="IProfileService.SetLaunchSettings"/>, which validates,
-/// rebuilds the profile aggregate preserving Name/Id/CreatedAt/Mods, and
-/// persists; callers cannot mutate persisted state in place.</para>
+/// go through <see cref="IProfileService.UpdateProfile"/>, which validates,
+/// rebuilds the profile aggregate preserving Id/CreatedAt/Mods, and persists;
+/// callers cannot mutate persisted state in place.</para>
 /// <para>
 /// <b>Backward compatibility:</b> an existing <c>profile.json</c> without the
 /// property, and an explicit JSON <c>null</c>, both deserialize to an empty
@@ -51,9 +51,9 @@ public sealed record LaunchSettings
     /// reason, so a profile value can't double-control or silently bypass that
     /// toggle).</description></item>
     /// </list>
-    /// Exposed publicly so the launch-settings UI can pre-validate and show a
-    /// localized inline error before the authoritative check at
-    /// <see cref="IProfileService.SetLaunchSettings"/>.
+    /// Exposed publicly so the launch-settings editor can pre-validate and show
+    /// a localized inline error before the authoritative check at
+    /// <see cref="IProfileService.UpdateProfile"/>.
     /// </summary>
     public static readonly IReadOnlyCollection<string> ReservedEnvironmentNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -78,7 +78,7 @@ public sealed record LaunchSettings
     /// <summary>
     /// The profile's environment-variable entries, in storage order. Validated
     /// (names + values + duplicates + reserved names) at
-    /// <see cref="IProfileService.SetLaunchSettings"/>. Defaults to an empty
+    /// <see cref="IProfileService.UpdateProfile"/>. Defaults to an empty
     /// array.
     /// </summary>
     public IReadOnlyList<EnvVar> EnvironmentVariables { get; init; } = Array.Empty<EnvVar>();

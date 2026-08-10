@@ -28,7 +28,7 @@ public sealed class AutomaticUpdateServiceTests
     private static (AutomaticUpdateService Service, FakeProfileSession Session, FakeProfileService Profiles, FakeModRepository Repo, FakeModAcquisitionService Acquisition, FakeNexusAuthService Auth, FakeConfigLoader Config, FakeUpdateStateStore State, UpdateCoordinator Coordinator, FakeDialogService Dialogs)
         Build(bool premium = true, bool enabled = true)
     {
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var a = new ProfileSummary(Guid.NewGuid(), "Alpha", "");
         var profiles = TestDoubles.Profiles(a);
         var repo = new FakeModRepository();
         var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");

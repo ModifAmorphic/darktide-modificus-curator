@@ -49,14 +49,18 @@ public enum ModAddMode
 /// <remarks>
 /// <para><b>Active profile is the session's:</b> the list never decides the active
 /// id; it reads <see cref="IProfileSession.ActiveProfileId"/> and reloads when it
-/// changes. No active profile yields an empty list + the "no profile" empty state
-/// (owned here, not the shell).</para>
+/// changes. No active profile yields an empty list + <see cref="HasActiveProfile"/>
+/// = false. The "select or create a profile" handoff (a HyperlinkButton to the
+/// Profiles destination) is owned by the shell, not here: it binds shell-level
+/// navigation + <c>ModList.HasActiveProfile</c> from the shell context, keeping
+/// navigation out of this VM. This VM owns only the active-profile row + add-mod
+/// states (the no-mods hint, drag-and-drop target, Add split button).</para>
 /// <para><b>Rows carry state only:</b> each row is a <see cref="ModItemViewModel"/>
 /// (container id + name + source badge + enabled + order + policy + policy-edit
 /// state). All service calls live here; the view routes row interactions (toggle,
 /// move, policy, remove, open external folder) through code-behind handlers
 /// calling these commands with the row as the parameter (the established
-/// <c>ManageProfilesWindow</c> pattern).</para>
+/// per-row code-behind pattern).</para>
 /// <para><b>The join key is <see cref="ModContainer.Id"/></b> (the profile entry's
 /// identity): on reload, each entry's container is looked up via
 /// <see cref="IModRepository.Get"/> for the display name, source badge, and
@@ -471,16 +475,6 @@ public partial class ModListViewModel : ObservableObject
     };
 
     /// <summary>
-    /// The localized header label: "Mods". Shown for both the active-profile +
-    /// no-profile states (the per-profile mod count was removed; the row list
-    /// itself is the count). Re-fires on a culture change.
-    /// </summary>
-    public string HeaderCountText => _localization["ModList_Header"];
-
-    /// <summary>The localized empty-state message for the no-profile case.</summary>
-    public string EmptyNoProfileText => _localization["ModList_EmptyNoProfile"];
-
-    /// <summary>
     /// The localized primary hint shown in the no-mods / DMF-only empty state.
     /// Re-fires on a culture change.
     /// </summary>
@@ -565,8 +559,6 @@ public partial class ModListViewModel : ObservableObject
             return;
         }
 
-        OnPropertyChanged(nameof(HeaderCountText));
-        OnPropertyChanged(nameof(EmptyNoProfileText));
         OnPropertyChanged(nameof(AddModsHintText));
         OnPropertyChanged(nameof(NxmDownloadHintText));
         OnPropertyChanged(nameof(AddModeLabel));

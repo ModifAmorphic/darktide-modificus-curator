@@ -153,7 +153,7 @@ per call (all platform logic lives in the discoverer + the shared
 - [relay-client](relay-client.md)'s `RelayLaunchService.Launch()`
   calls `Discover()` at launch (blocking). A missing-fields result yields
   `LaunchResult.Status = DiscoveryIncomplete`, surfacing the escape-hatch modal.
-- The Settings window reads `DiscoveryConfig` directly (now populated by the
+- The Settings destination reads `DiscoveryConfig` directly (now populated by the
   startup `Discover()`), so the discovery fields show the current paths rather
   than blanks.
 

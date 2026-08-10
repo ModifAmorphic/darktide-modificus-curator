@@ -20,8 +20,9 @@ unmodified).
 - **Modificus Curator** (this repo): the mod manager app (UI, staging, load order,
   profiles, dependency resolution, mod-source integrations). The backend
   libraries (Profiles, Mods, Steam, Integrations, Relay-client, General) and
-  the UI (the app shell + profile management, global Preferences, the mod-list
-  UI, the Launch flow + Settings window) are in place. The app is user-usable.
+  the UI (a left navigation rail with five destinations: Profiles, Mods, Nexus
+  Integrations, Preferences, Settings; plus profile management and the Launch
+  flow) are in place. The app is user-usable.
   On first startup a one-time Welcome window introduces Curator and offers to
   set up the Nexus integration. The Launcher is a stub. See
   [`src/README.md`](src/README.md) for developer/build
@@ -65,8 +66,8 @@ installed separately from <https://dotnet.microsoft.com/download/dotnet/10.0>.
 Curator does not auto-update the portable build; download a newer ZIP manually
 to update.
 
-To enable Nexus "Download with manager" links, open **Integrations** (gear icon
-next to the profiles button) and enable "Nexus download links". This registers
+To enable Nexus "Download with manager" links, open **Nexus** in
+the left navigation and enable "Nexus download links". This registers
 the `nxm://` handler so clicking a download link on the Nexus Mods website
 opens Curator directly.
 
@@ -75,10 +76,10 @@ opens Curator directly.
 
 Velopack-installed builds check for new versions on startup and can update
 themselves in place. When one is available, a notice appears in the bottom
-status strip and the **Settings** window's **Updates** section lets you download
-and restart into the new version. This applies to the Windows installer and the
-Linux AppImage. The portable Windows and standalone Linux builds do not support
-in-app self-update.
+status strip and the **Settings** destination's **Updates** section lets you
+download and restart into the new version. This applies to the Windows installer
+and the Linux AppImage. The portable Windows and standalone Linux builds do not
+support in-app self-update.
 
 ### Linux (AppImage)
 
@@ -104,8 +105,9 @@ the GitHub API. It installs a stable file at
 It uses no root privileges and leaves profiles, mods, logs, config, app state,
 and any standalone installation untouched.
 
-To enable Nexus "Download with manager" links, open **Integrations** and enable
-"Nexus download links". Curator copies its AppImage-packaged handler to a
+To enable Nexus "Download with manager" links, navigate to **Nexus
+Integrations** and enable "Nexus download links". Curator copies its
+AppImage-packaged handler to a
 durable per-user path so the registration survives AppImage unmounts and
 updates.
 

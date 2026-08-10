@@ -37,7 +37,7 @@ public sealed class ModListViewModelTests
             dialogs: dialogs, localization: Localization);
     }
 
-    private static ProfileSummary Profile(string name) => new(Guid.NewGuid(), name);
+    private static ProfileSummary Profile(string name) => new(Guid.NewGuid(), name, "");
 
     /// <summary>
     /// Seeds the repository with a container that has one latest version, for the
@@ -80,15 +80,19 @@ public sealed class ModListViewModelTests
     }
 
     [Fact]
-    public void Load_with_no_active_profile_clears_and_shows_the_no_profile_empty_state()
+    public void Load_with_no_active_profile_clears_and_reports_no_active_profile()
     {
+        // The no-profile handoff (a HyperlinkButton to Profiles) is owned by the
+        // shell in MainWindow.axaml, so this VM no longer exposes a
+        // no-profile text. It only reports HasActiveProfile=false + an empty
+        // list; the shell link overlays the page when there is no active
+        // profile.
         var profiles = TestDoubles.Profiles();
         var vm = Build(profiles, new FakeProfileSession { ActiveProfileId = null });
 
         Assert.False(vm.HasActiveProfile);
         Assert.False(vm.HasMods);
         Assert.Empty(vm.Mods);
-        Assert.NotEmpty(vm.EmptyNoProfileText);
     }
 
     [Fact]
@@ -144,8 +148,8 @@ public sealed class ModListViewModelTests
     [Fact]
     public void ShowAddModsHint_is_false_without_an_active_profile_regardless_of_mod_count()
     {
-        // No active profile: the no-profile empty state shows instead, so the
-        // add-mods hint must stay hidden even if Mods somehow had rows.
+        // No active profile: the shell-owned no-profile handoff shows instead,
+        // so the add-mods hint must stay hidden even if Mods somehow had rows.
         var profiles = TestDoubles.Profiles();
         var vm = Build(profiles, new FakeProfileSession { ActiveProfileId = null });
 
@@ -1281,31 +1285,6 @@ public sealed class ModListViewModelTests
         Assert.Equal("https://www.nexusmods.com/warhammer40kdarktide/mods/8?tab=files",
             Row(vm, "DMF").UpdatePageUrl);
         Assert.Null(Row(vm, "Local").UpdatePageUrl);
-    }
-
-    [Fact]
-    public void HeaderCountText_returns_the_plain_title_with_no_count()
-    {
-        // The "Mods (N)" count was removed; the header reads the plain "Mods"
-        // label regardless of how many mods the profile has (the row list itself
-        // is the count). Verified across the no-profile + empty + populated
-        // states so a regression to a count branch is caught.
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var repo = new FakeModRepository();
-        var vmNoProfile = Build(TestDoubles.Profiles(), new FakeProfileSession { ActiveProfileId = null });
-        Assert.Equal("Mods", vmNoProfile.HeaderCountText);
-
-        var vmEmpty = Build(profiles, new FakeProfileSession { ActiveProfileId = a.Id });
-        Assert.Equal("Mods", vmEmpty.HeaderCountText);
-
-        profiles.WithMods(a.Id,
-            new ModListEntry { ContainerId = repo.Seed(new UntrackedSource(), "One").Id, Order = 0 },
-            new ModListEntry { ContainerId = repo.Seed(new UntrackedSource(), "Two").Id, Order = 1 },
-            new ModListEntry { ContainerId = repo.Seed(new UntrackedSource(), "Three").Id, Order = 2 },
-            new ModListEntry { ContainerId = repo.Seed(new UntrackedSource(), "Four").Id, Order = 3 });
-        var vmPopulated = Build(profiles, new FakeProfileSession { ActiveProfileId = a.Id }, repo);
-        Assert.Equal("Mods", vmPopulated.HeaderCountText);
     }
 
     [Fact]

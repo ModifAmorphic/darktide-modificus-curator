@@ -9,8 +9,7 @@ namespace Modificus.Curator.UI.ViewModels;
 /// (container id + name + source + version + enabled + order + policy) and the
 /// per-row policy edit state (Latest / Pinned). The parent <see cref="ModListViewModel"/>
 /// owns all service calls; this row carries state only and never talks to
-/// <see cref="Profiles.IProfileService"/> directly (mirrors
-/// <see cref="ProfileItemViewModel"/>).
+/// <see cref="Profiles.IProfileService"/> directly.
 /// </summary>
 /// <remarks>
 /// <para><b>Identity:</b> <see cref="ContainerId"/> is immutable (the join key

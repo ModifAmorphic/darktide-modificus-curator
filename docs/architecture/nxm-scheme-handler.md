@@ -159,7 +159,7 @@ selected by runtime OS at DI time (mirroring `IPlatformLaunchStrategy`,
   AppImage without recording a temporary mount path.
 
 **Explicit registration, not startup auto-registration.** Registration is a
-user action from the Integrations dialog (a "Nexus download links" section with
+user action from the Nexus destination (a "Nexus download links" section with
 a status line + a toggle button), not something the app does on startup. The
 register path shows a confirmation dialog first: it is a system-wide change
 that can take `nxm://` clicks away from Vortex, Mod Organizer 2, Nexus Mod
@@ -174,8 +174,8 @@ still reports Curator. It never calls `xdg-mime default` or takes ownership from
 another manager. `INxmHandlerRegistrar` is resolved lazily by the Integrations
 view model + the shell status strip. The
 main-window status strip surfaces the current state ("Nexus links: enabled" /
-"Nexus links: disabled" / "Nexus links: unavailable") and refreshes after the
-Integrations dialog closes. No polling: the OS registration rarely changes
+"Nexus links: disabled" / "Nexus links: unavailable") and refreshes when leaving the
+Nexus destination. No polling: the OS registration rarely changes
 out-of-band.
 
 The packaged handler-exe path is derived from `AppContext.BaseDirectory` plus

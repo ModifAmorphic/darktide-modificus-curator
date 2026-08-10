@@ -18,7 +18,7 @@ namespace Modificus.Curator.UI.Views;
 /// content-area drag-and-drop target) and routes every per-row interaction
 /// (toggle / move / policy / remove / open external folder) through code-behind
 /// handlers calling the parent VM's commands with the row as the parameter (the
-/// established <c>ManageProfilesWindow</c> pattern). All state + service calls
+/// established per-row code-behind pattern). All state + service calls
 /// stay in the (unit-tested) VM; this is pure view mechanics.
 /// </summary>
 /// <remarks>

@@ -1,0 +1,91 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Modificus.Curator.UI.ViewModels"
+             x:Class="Modificus.Curator.UI.Views.PreferencesView"
+             x:DataType="vm:PreferencesViewModel">
+
+  <!--
+    Host-neutral Preferences content (theme picker, font-scale slider, language
+    dropdown, show-Relay-console checkbox). No window chrome, no Done button, no
+    ESC behavior: the host owns those. Owns the page-level vertical ScrollViewer
+    so font scaling cannot clip the content; the host sizes this control into its
+    content region. Every change applies + persists immediately through the VM
+    (no commit step), so there is no Cancel concept here.
+  -->
+  <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                VerticalScrollBarVisibility="Auto">
+    <StackPanel Spacing="16" Margin="20">
+
+      <!-- Theme picker -->
+      <StackPanel Spacing="6">
+        <TextBlock Text="{ReflectionBinding [Preferences_ThemeHeader], Source={StaticResource Loc}}"
+                   FontWeight="SemiBold" />
+        <ComboBox ItemsSource="{Binding ThemeOptions}"
+                  SelectedItem="{Binding SelectedTheme}"
+                  MinWidth="200"
+                  HorizontalAlignment="Stretch">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:ThemeOption">
+              <TextBlock Text="{Binding Label}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+      </StackPanel>
+
+      <!-- Font scale slider -->
+      <StackPanel Spacing="6">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0"
+                     Text="{ReflectionBinding [Preferences_FontScaleHeader], Source={StaticResource Loc}}"
+                     FontWeight="SemiBold" />
+          <TextBlock Grid.Column="1"
+                     Text="{Binding FontScalePercent, StringFormat='{}{0}%'}"
+                     VerticalAlignment="Center" />
+        </Grid>
+        <Slider Minimum="80"
+                Maximum="150"
+                Value="{Binding FontScalePercent}"
+                TickFrequency="5"
+                IsSnapToTickEnabled="True"
+                MinWidth="240" />
+        <StackPanel Orientation="Horizontal"
+                    HorizontalAlignment="Center"
+                    Spacing="0">
+          <TextBlock Text="80%  "
+                     FontSize="11" Opacity="0.6" />
+          <TextBlock Text="150%"
+                     FontSize="11" Opacity="0.6" />
+        </StackPanel>
+      </StackPanel>
+
+      <!-- Language picker -->
+      <StackPanel Spacing="6">
+        <TextBlock Text="{ReflectionBinding [Preferences_LanguageHeader], Source={StaticResource Loc}}"
+                   FontWeight="SemiBold" />
+        <ComboBox ItemsSource="{Binding LanguageOptions}"
+                  SelectedItem="{Binding SelectedLanguage}"
+                  MinWidth="200"
+                  HorizontalAlignment="Stretch">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:LanguageOption">
+              <TextBlock Text="{Binding Label}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+      </StackPanel>
+
+      <!-- Relay console window -->
+      <StackPanel Orientation="Horizontal"
+                  Spacing="8"
+                  VerticalAlignment="Center"
+                  ToolTip.Tip="{Binding RelayConsoleTooltip}">
+        <CheckBox IsChecked="{Binding EffectiveRelayConsoleChecked, Mode=TwoWay}"
+                  IsEnabled="{Binding IsRelayConsoleToggleSupported}"
+                  VerticalAlignment="Center" />
+        <TextBlock Text="{ReflectionBinding [Preferences_ShowRelayConsole], Source={StaticResource Loc}}"
+                   VerticalAlignment="Center" />
+      </StackPanel>
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

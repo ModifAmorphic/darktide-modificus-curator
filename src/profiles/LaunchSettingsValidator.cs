@@ -72,9 +72,9 @@ public sealed record LaunchSettingsValidationError(
 
 /// <summary>
 /// The single source of truth for launch-settings validation, shared by the
-/// authoritative <see cref="IProfileService.SetLaunchSettings"/> (the trust
-/// boundary) and the launch-settings UI (inline per-field feedback). Pure: no
-/// localization, no I/O, no side effects. Returns structured errors, not
+/// authoritative <see cref="IProfileService.UpdateProfile"/> (the trust
+/// boundary) and the launch-settings editor (inline per-field feedback). Pure:
+/// no localization, no I/O, no side effects. Returns structured errors, not
 /// localized strings.
 /// </summary>
 /// <remarks>

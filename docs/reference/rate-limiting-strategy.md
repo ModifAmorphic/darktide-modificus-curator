@@ -35,11 +35,11 @@ the single source of truth for the button's enable state and the tooltip.
 The minimum user-configurable periodic-check interval is 5 minutes. This is a
 named policy bound, `NexusConfig.MinAutoUpdateCheckIntervalMinutes = 5`; the
 default is 10, the maximum 1440 (`MaxAutoUpdateCheckIntervalMinutes`). The floor
-is enforced on save (the Integrations dialog) and at tick time (the runner, via
+is enforced on save (the Nexus destination) and at tick time (the runner, via
 `Math.Max`), so a value below the floor is raised before it can drive an API
 call. At the 5-minute floor the periodic check tops out at 288 calls/day.
 
-Owned by `NexusConfig` (the bounds) and applied by the Integrations dialog and
+Owned by `NexusConfig` (the bounds) and applied by the Nexus destination and
 `UpdateCheckRunner`.
 
 ## The persisted last-check interval gate

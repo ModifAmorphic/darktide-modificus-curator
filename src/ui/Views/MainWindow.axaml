@@ -2,7 +2,6 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Modificus.Curator.UI.ViewModels"
         xmlns:views="using:Modificus.Curator.UI.Views"
-        xmlns:profiles="using:Modificus.Curator.Profiles"
         x:Class="Modificus.Curator.UI.Views.MainWindow"
         x:DataType="vm:ShellViewModel"
         Title="{ReflectionBinding [App_Title], Source={StaticResource Loc}}"
@@ -19,213 +18,378 @@
       <Setter Property="MinWidth" Value="0" />
       <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
+
+    <!--
+      Navigation-rail buttons. Flat at rest; a subtle themed background marks the
+      selected destination. The selected state is driven by a conditional
+      `selected` class bound in XAML to each destination's Is*Selected projection
+      (Avalonia 12.1 conditional-class binding; no WPF triggers). All brushes are
+      Fluent dynamic resources so light/dark + accent follow the active theme;
+      no hard-coded colors. The 48px height matches the compact rail width so the
+      icon button reads as a square tile in compact mode. HorizontalAlignment is
+      Stretch (overriding Fluent's Button theme default of Left) so the hover +
+      selected backgrounds fill the full pane cross-axis in both compact and
+      open mode. The open pane width grows to fit the widest localized label
+      (see MainWindow.axaml.cs); the per-label TextTrimming is only an extreme-
+      label fallback and the full label remains available via the tooltip and
+      automation name.
+    -->
+    <Style Selector="Button.navItem">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="MinWidth" Value="0" />
+      <Setter Property="Height" Value="48" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="VerticalContentAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="Button.navItem /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="CornerRadius" Value="0" />
+      <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="Button.navItem.selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListLowBrush}" />
+    </Style>
+    <Style Selector="Button.navItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListMediumBrush}" />
+    </Style>
+    <!-- Hamburger toggle uses the same navItem tile shape but is never
+         selected; it lives above the destination buttons. HorizontalAlignment
+         is Stretch so the hover background fills the pane cross-axis in both
+         compact and open mode, matching the destination buttons. -->
+    <Style Selector="Button.hamburger">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="MinWidth" Value="0" />
+      <Setter Property="Height" Value="48" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="VerticalContentAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="Button.hamburger /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="CornerRadius" Value="0" />
+      <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="Button.hamburger:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListMediumBrush}" />
+    </Style>
   </Window.Styles>
 
-  <Grid RowDefinitions="Auto,*,Auto">
+  <!--
+    The shell: a SplitView in CompactInline mode. The compact 48px icon rail is
+    always visible; expanding the pane reveals the labels and reduces the content
+    width (never overlays it). The pane starts collapsed (IsPaneOpen=False). The
+    XAML OpenPaneLength=200 is the design-time/startup fallback; once the window
+    is open, MainWindow.axaml.cs measures the live localized labels at the
+    current font scale and grows the open pane length (clamped to [200, 360]) so
+    future translations do not clip at the fixed width. The content is a Grid:
+    global header (destination title + Launch), the hosted destination content
+    (one persistent UserControl per destination, visibility-switched), and the
+    global status strip.
+  -->
+  <SplitView x:Name="NavSplitView"
+             IsPaneOpen="{Binding IsNavigationPaneOpen}"
+             DisplayMode="CompactInline"
+             CompactPaneLength="48"
+             OpenPaneLength="200"
+             PaneBackground="{DynamicResource SystemControlBackgroundChromeMediumBrush}">
 
-    <!-- Top bar: app title · profile dropdown · Manage… · Integrations… · Preferences… · Settings · Launch Darktide -->
-    <Border Grid.Row="0"
-            BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
-            BorderThickness="0,0,0,1"
-            Padding="20,12">
-      <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto,Auto">
-
-        <!-- App title (left) -->
-        <TextBlock Grid.Column="0"
-                   Text="{ReflectionBinding [Shell_ProfileLabel], Source={StaticResource Loc}}"
-                   FontSize="18" FontWeight="SemiBold"
-                   VerticalAlignment="Center"
-                   Margin="0,0,24,0" />
-
-        <!-- Profile controls: dropdown + Manage… (compact, infrequent UX) -->
-        <StackPanel Grid.Column="1"
-                    Orientation="Horizontal" Spacing="8"
-                    VerticalAlignment="Center">
-          <ComboBox ItemsSource="{Binding Profiles}"
-                    SelectedItem="{Binding SelectedProfile}"
-                    IsEnabled="{Binding CanSwitchProfile}"
-                    ToolTip.Tip="{Binding ProfileSwitchTooltip}"
-                    PlaceholderText="{ReflectionBinding [Profile_DropdownPlaceholder], Source={StaticResource Loc}}"
-                    MinWidth="180">
-            <ComboBox.ItemTemplate>
-              <DataTemplate x:DataType="profiles:ProfileSummary">
-                <TextBlock Text="{Binding Name}" />
-              </DataTemplate>
-            </ComboBox.ItemTemplate>
-          </ComboBox>
-          <Button Command="{Binding ManageProfilesCommand}"
-                  ToolTip.Tip="{ReflectionBinding [ManageProfiles_ButtonTooltip], Source={StaticResource Loc}}"
-                  MinWidth="36">
-            <!--
-              Material "layers" (24x24 source). Pulled from the canonical
-              Google Fonts Material Icons SVG
-              (https://fonts.gstatic.com/s/i/materialicons/layers/v1/24px.svg),
-              the authoritative source materialicons.github.io points at.
-              Chosen for Manage Profiles: stacked layers = multiple mod
-              profiles for one user (the "people" alternative was rejected as
-              it implies a personal/account profile). Replaces the gear that
-              moved to the new Settings button.
-            -->
-            <Path Width="16" Height="16" Stretch="Uniform"
+    <SplitView.Pane>
+      <Grid RowDefinitions="Auto,*,Auto">
+        <!-- Hamburger toggle: always visible (compact + expanded). The
+             localized tooltip + automation name cover the compact mode (no
+             label is visible there). -->
+        <Button Grid.Row="0"
+                Classes="hamburger"
+                Command="{Binding ToggleNavigationPaneCommand}"
+                ToolTip.Tip="{ReflectionBinding [Nav_HamburgerTooltip], Source={StaticResource Loc}}"
+                AutomationProperties.Name="{ReflectionBinding [Nav_HamburgerTooltip], Source={StaticResource Loc}}">
+          <Grid ColumnDefinitions="48">
+            <!-- Material "menu" hamburger (24x24 source): drawn geometry, themed
+                 via the button foreground. -->
+            <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
                   HorizontalAlignment="Center" VerticalAlignment="Center"
                   Fill="{Binding $parent[Button].Foreground}"
-                  Data="M11.99 18.54l-7.37-5.73L3 14.07l9 7 9-7-1.63-1.27-7.38 5.74zM12 16l7.36-5.73L21 9l-9-7-9 7 1.63 1.27L12 16z" />
-          </Button>
-        </StackPanel>
-
-        <!-- Integrations… (Nexus auth; left, after profiles) -->
-        <Button Grid.Column="2"
-                Command="{Binding OpenIntegrationsCommand}"
-                ToolTip.Tip="{ReflectionBinding [Integrations_ButtonTooltip], Source={StaticResource Loc}}"
-                MinWidth="36"
-                VerticalAlignment="Center"
-                Margin="8,0,0,0">
-          <!-- Material "extension" puzzle-piece icon (24x24 source): drawn
-               geometry, inherits the button foreground. Chosen for Integrations:
-               the canonical "plug things in" symbol (Nexus is the only
-               integration). -->
-          <Path Width="16" Height="16" Stretch="Uniform"
-                HorizontalAlignment="Center" VerticalAlignment="Center"
-                Fill="{Binding $parent[Button].Foreground}"
-                Data="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7s2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 2-2v-4h1.5c1.38 0 2.5-1.12 2.5-2.5S21.88 11 20.5 11z" />
+                  Data="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z" />
+          </Grid>
         </Button>
 
-        <!-- Preferences… (right, next to Settings + Launch) -->
-        <Button Grid.Column="4"
-                Command="{Binding OpenPreferencesCommand}"
-                ToolTip.Tip="{ReflectionBinding [Preferences_ButtonTooltip], Source={StaticResource Loc}}"
-                MinWidth="36"
-                VerticalAlignment="Center"
-                Margin="0,0,8,0">
-          <!-- Material "tune"/"sliders" icon (24x24 source): drawn geometry,
-               inherits the button foreground. Chosen to distinguish Preferences
-               (sliders) from the gear (Settings) and the layers (profiles)
-               next to it. -->
-          <Path Width="16" Height="16" Stretch="Uniform"
-                HorizontalAlignment="Center" VerticalAlignment="Center"
-                Fill="{Binding $parent[Button].Foreground}"
-                Data="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z" />
-        </Button>
-
-        <!-- Settings (gear; moved here from Manage Profiles) -->
-        <Button Grid.Column="5"
-                Command="{Binding OpenSettingsCommand}"
-                ToolTip.Tip="{ReflectionBinding [Settings_ButtonTooltip], Source={StaticResource Loc}}"
-                MinWidth="36"
-                VerticalAlignment="Center"
-                Margin="0,0,8,0">
-          <!-- Material "settings" gear (24x24 source): drawn geometry, so it
-               renders identically everywhere and inherits the button foreground
-               (theme + pressed states). The same gear Manage Profiles used to
-               carry; moved here so Manage Profiles could take the "layers"
-               icon. -->
-          <Path Width="16" Height="16" Stretch="Uniform"
-                HorizontalAlignment="Center" VerticalAlignment="Center"
-                Fill="{Binding $parent[Button].Foreground}"
-                Data="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.21.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
-        </Button>
-
-        <!-- Launch Darktide (right) -->
-        <Button Grid.Column="6"
-                Content="{ReflectionBinding [Launch_Button], Source={StaticResource Loc}}"
-                Command="{Binding LaunchCommand}"
-                VerticalAlignment="Center" />
-      </Grid>
-    </Border>
-
-    <!-- Main area: the active profile's mod list (Track B). The view owns all
-         content-area empty states (no active profile / no mods); the shell no
-         longer carries an inline empty-state message. DataContext bound to the
-         shell's ModList VM so the view's x:DataType resolves. -->
-    <views:ModListView Grid.Row="1" DataContext="{Binding ModList}" />
-
-    <!-- Status strip: game-running indicator + the nxm handler status
-         (enabled / disabled / unavailable) + the dismissible app-update
-         notice. -->
-    <Border Grid.Row="2"
-            BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
-            BorderThickness="0,1,0,0"
-            Padding="20,6">
-      <StackPanel Orientation="Horizontal" Spacing="6">
-        <!-- Game-running indicator: three mutually-exclusive dots driven by the
-             shell's Show*Dot states. Grey = not running; green = running, in
-             sync; yellow = running with changes that apply at the next launch
-             (Curator does not re-stage the mod tree while Darktide runs). The
-             yellow fill reuses the caution brush the rate-limit pill dot uses. -->
-        <Ellipse Width="11" Height="11" VerticalAlignment="Center"
-                 Fill="{DynamicResource SystemControlForegroundBaseMediumBrush}"
-                 IsVisible="{Binding ShowNotRunningDot}" />
-        <Ellipse Width="11" Height="11" VerticalAlignment="Center"
-                 Fill="#22A06B"
-                 IsVisible="{Binding ShowRunningCleanDot}" />
-        <Ellipse Width="11" Height="11" VerticalAlignment="Center"
-                 Fill="{DynamicResource CuratorCautionBrush}"
-                 IsVisible="{Binding ShowRunningDirtyDot}" />
-        <TextBlock Text="{Binding GameRunningText}"
-                   FontSize="{DynamicResource AppStatusFontSize}" Opacity="0.8"
-                   VerticalAlignment="Center" />
-        <!-- nxm handler indicator: green when Curator is the registered handler
-             (IsNxmEnabled), grey otherwise (covers not registered + no platform
-             registrar). Mirrors the game-running Ellipse pair directly above. -->
-        <Ellipse Width="11" Height="11" VerticalAlignment="Center"
-                 Margin="12,0,0,0"
-                 Fill="#22A06B"
-                 IsVisible="{Binding IsNxmEnabled}" />
-        <Ellipse Width="11" Height="11" VerticalAlignment="Center"
-                 Margin="12,0,0,0"
-                 Fill="{DynamicResource SystemControlForegroundBaseMediumBrush}"
-                 IsVisible="{Binding !IsNxmEnabled}" />
-        <TextBlock Text="{Binding NxmHandlerStatusText}"
-                   FontSize="{DynamicResource AppStatusFontSize}" Opacity="0.8"
-                   VerticalAlignment="Center"
-                   ToolTip.Tip="{Binding NxmHandlerStatusTooltip}" />
-        <!--
-          App self-update notice: a dismissible pill in the status strip. Shown
-          only when an update is available (ShowAppUpdateNotice) and not yet
-          dismissed this session. Rendered as a thick accent-bordered pill with
-          a transparent fill; the accent outline carries the emphasis, no
-          separate accent dot. The link is a HyperlinkButton kept at its native
-          accent foreground: the Fluent ControlTheme re-applies accent on
-          :pointerover and :pressed, so a native accent foreground stays
-          readable in every state against the neutral background (an overridden
-          light foreground would turn unreadable on hover), and the underline +
-          hand cursor stay. Clicking the link confirms + downloads + restarts.
-          The close button (a drawn Material "close" Path, not a glyph; default
-          button foreground) hides the notice for this session. All icons are
-          drawn geometry per AGENTS.md.
-        -->
-        <Border IsVisible="{Binding ShowAppUpdateNotice}"
-                Background="Transparent"
-                BorderBrush="{DynamicResource SystemControlForegroundAccentBrush}"
-                BorderThickness="2"
-                CornerRadius="8"
-                Padding="6,1"
-                Margin="12,0,0,0"
-                VerticalAlignment="Center"
-                ToolTip.Tip="{Binding AppUpdateNoticeTooltip}">
-          <StackPanel Orientation="Horizontal" Spacing="4">
-            <HyperlinkButton Command="{Binding CheckAppUpdateNowCommand}"
-                             Padding="2,0" Margin="0" MinWidth="0"
-                             VerticalAlignment="Center"
-                             ToolTip.Tip="{Binding AppUpdateNoticeTooltip}">
-              <TextBlock Text="{Binding AppUpdateNoticeText}"
-                         FontSize="{DynamicResource AppStatusFontSize}"
-                         VerticalAlignment="Center" />
-            </HyperlinkButton>
-            <Button Classes="icon"
-                    Command="{Binding DismissAppUpdateCommand}"
-                    VerticalAlignment="Center"
-                    ToolTip.Tip="{Binding AppUpdateDismissTooltip}">
-              <!-- Material "close" (24x24 source): drawn geometry, themed via the
-                   button foreground. Mirrors the DialogTitleBar close Path. -->
-              <Path Width="10" Height="10" Stretch="Uniform"
+        <!-- Destination buttons, in nav-rail order. Each tile carries its icon
+             (always visible) + its label (visible only when the pane is
+             expanded). The localized tooltip + accessibility name cover the
+             compact mode. The `selected` class is bound to the destination's
+             Is*Selected projection. -->
+        <StackPanel Grid.Row="1" Orientation="Vertical">
+          <!-- Profiles -->
+          <Button Classes="navItem"
+                  Classes.selected="{Binding IsProfilesSelected}"
+                  Command="{Binding NavigateCommand}"
+                  CommandParameter="{x:Static vm:ShellDestination.Profiles}"
+                  ToolTip.Tip="{ReflectionBinding [Profiles_Title], Source={StaticResource Loc}}"
+                  AutomationProperties.Name="{ReflectionBinding [Profiles_Title], Source={StaticResource Loc}}">
+            <Grid ColumnDefinitions="48,*">
+              <!-- Material "layers" (24x24 source): stacked layers = multiple
+                   profiles. -->
+              <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
                     HorizontalAlignment="Center" VerticalAlignment="Center"
                     Fill="{Binding $parent[Button].Foreground}"
-                    Data="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-            </Button>
-          </StackPanel>
-        </Border>
-      </StackPanel>
-    </Border>
-  </Grid>
+                    Data="M11.99 18.54l-7.37-5.73L3 14.07l9 7 9-7-1.63-1.27-7.38 5.74zM12 16l7.36-5.73L21 9l-9-7-9 7 1.63 1.27L12 16z" />
+              <TextBlock x:Name="NavMeasureLabel"
+                         Grid.Column="1"
+                         Text="{ReflectionBinding [Profiles_Title], Source={StaticResource Loc}}"
+                         IsVisible="{Binding IsNavigationPaneOpen}"
+                         VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis"
+                         Margin="12,0,0,0" />
+            </Grid>
+          </Button>
+
+          <!-- Mods -->
+          <Button Classes="navItem"
+                  Classes.selected="{Binding IsModsSelected}"
+                  Command="{Binding NavigateCommand}"
+                  CommandParameter="{x:Static vm:ShellDestination.Mods}"
+                  ToolTip.Tip="{ReflectionBinding [ModList_Header], Source={StaticResource Loc}}"
+                  AutomationProperties.Name="{ReflectionBinding [ModList_Header], Source={StaticResource Loc}}">
+            <Grid ColumnDefinitions="48,*">
+              <!-- Material "view_list" (24x24 source): a mod list. -->
+              <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
+                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Fill="{Binding $parent[Button].Foreground}"
+                    Data="M4 14h4v-4H4v4zm0 5h4v-4H4v4zM4 9h4V5H4v4zm5 5h12v-4H9v4zm0 5h12v-4H9v4zM9 5v4h12V5H9z" />
+              <TextBlock Grid.Column="1"
+                         Text="{ReflectionBinding [ModList_Header], Source={StaticResource Loc}}"
+                         IsVisible="{Binding IsNavigationPaneOpen}"
+                         VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis"
+                         Margin="12,0,0,0" />
+            </Grid>
+          </Button>
+
+          <!-- Nexus -->
+          <Button Classes="navItem"
+                  Classes.selected="{Binding IsNexusIntegrationsSelected}"
+                  Command="{Binding NavigateCommand}"
+                  CommandParameter="{x:Static vm:ShellDestination.NexusIntegrations}"
+                  ToolTip.Tip="{ReflectionBinding [Integrations_Title], Source={StaticResource Loc}}"
+                  AutomationProperties.Name="{ReflectionBinding [Integrations_Title], Source={StaticResource Loc}}">
+            <Grid ColumnDefinitions="48,*">
+              <!-- Material "extension" puzzle-piece (24x24 source): the canonical
+                   "plug things in" symbol (Nexus is the only integration). -->
+              <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
+                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Fill="{Binding $parent[Button].Foreground}"
+                    Data="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7s2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 2-2v-4h1.5c1.38 0 2.5-1.12 2.5-2.5S21.88 11 20.5 11z" />
+              <TextBlock Grid.Column="1"
+                         Text="{ReflectionBinding [Integrations_Title], Source={StaticResource Loc}}"
+                         IsVisible="{Binding IsNavigationPaneOpen}"
+                         VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis"
+                         Margin="12,0,0,0" />
+            </Grid>
+          </Button>
+
+          <!-- Preferences -->
+          <Button Classes="navItem"
+                  Classes.selected="{Binding IsPreferencesSelected}"
+                  Command="{Binding NavigateCommand}"
+                  CommandParameter="{x:Static vm:ShellDestination.Preferences}"
+                  ToolTip.Tip="{ReflectionBinding [Preferences_Title], Source={StaticResource Loc}}"
+                  AutomationProperties.Name="{ReflectionBinding [Preferences_Title], Source={StaticResource Loc}}">
+            <Grid ColumnDefinitions="48,*">
+              <!-- Material "tune"/"sliders" (24x24 source): sliders, distinct
+                   from the gear (Settings) next to it. -->
+              <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
+                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Fill="{Binding $parent[Button].Foreground}"
+                    Data="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z" />
+              <TextBlock Grid.Column="1"
+                         Text="{ReflectionBinding [Preferences_Title], Source={StaticResource Loc}}"
+                         IsVisible="{Binding IsNavigationPaneOpen}"
+                         VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis"
+                         Margin="12,0,0,0" />
+            </Grid>
+          </Button>
+
+          <!-- Settings -->
+          <Button Classes="navItem"
+                  Classes.selected="{Binding IsSettingsSelected}"
+                  Command="{Binding NavigateCommand}"
+                  CommandParameter="{x:Static vm:ShellDestination.Settings}"
+                  ToolTip.Tip="{ReflectionBinding [Settings_Title], Source={StaticResource Loc}}"
+                  AutomationProperties.Name="{ReflectionBinding [Settings_Title], Source={StaticResource Loc}}">
+            <Grid ColumnDefinitions="48,*">
+              <!-- Material "settings" gear (24x24 source). -->
+              <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
+                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Fill="{Binding $parent[Button].Foreground}"
+                    Data="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.21.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
+              <TextBlock Grid.Column="1"
+                         Text="{ReflectionBinding [Settings_Title], Source={StaticResource Loc}}"
+                         IsVisible="{Binding IsNavigationPaneOpen}"
+                         VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis"
+                         Margin="12,0,0,0" />
+            </Grid>
+          </Button>
+        </StackPanel>
+      </Grid>
+    </SplitView.Pane>
+
+    <Grid RowDefinitions="Auto,*,Auto">
+
+      <!-- Global header: current destination title (left) + Launch Darktide (right). -->
+      <Border Grid.Row="0"
+              BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+              BorderThickness="0,0,0,1"
+              Padding="20,12">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Grid.Column="0"
+                     Text="{Binding CurrentDestinationTitle}"
+                     FontSize="18" FontWeight="SemiBold"
+                     VerticalAlignment="Center" />
+          <Button Grid.Column="1"
+                  Content="{ReflectionBinding [Launch_Button], Source={StaticResource Loc}}"
+                  Command="{Binding LaunchCommand}"
+                  VerticalAlignment="Center" />
+        </Grid>
+      </Border>
+
+      <!-- Hosted destination content. One persistent instance of each page,
+           overlapping in the same cell; visibility selects which shows. Each
+           page is wrapped in a Panel that inherits the ShellViewModel context
+           (so IsVisible compiles against the shell's Is*Visible projection);
+           the inner page sets its own DataContext to its concrete singleton
+           page VM. The Mods panel additionally hosts the no-profile handoff
+           link (a HyperlinkButton whose DataContext stays ShellViewModel so it
+           can bind NavigateCommand + ModList.HasActiveProfile); it sits above
+           the page only when no profile is active, falling behind it the moment
+           one is. -->
+      <Grid Grid.Row="1">
+        <Panel IsVisible="{Binding IsProfilesVisible}">
+          <views:ProfilesView DataContext="{Binding Profiles}" />
+        </Panel>
+        <Panel IsVisible="{Binding IsModsVisible}">
+          <views:ModListView DataContext="{Binding ModList}" />
+          <!--
+            The Mods no-profile handoff. The shell owns this: when no profile is
+            active the entire sentence is a HyperlinkButton bound to the shell's
+            NavigateCommand with ShellDestination.Profiles as its parameter, so a
+            click navigates to Profiles. DataContext is ShellViewModel (the
+            panel's inherited context), so ModList.HasActiveProfile is reached
+            through the ModList page VM exposed on the shell. No code-behind
+            ancestor lookup; no child-to-shell navigation service.
+          -->
+          <HyperlinkButton IsVisible="{Binding !ModList.HasActiveProfile}"
+                           Command="{Binding NavigateCommand}"
+                           CommandParameter="{x:Static vm:ShellDestination.Profiles}"
+                           Content="{ReflectionBinding [ModList_EmptyNoProfile], Source={StaticResource Loc}}"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Padding="0" />
+        </Panel>
+        <Panel IsVisible="{Binding IsNexusIntegrationsVisible}">
+          <views:IntegrationsView DataContext="{Binding Integrations}" />
+        </Panel>
+        <Panel IsVisible="{Binding IsPreferencesVisible}">
+          <views:PreferencesView DataContext="{Binding Preferences}" />
+        </Panel>
+        <Panel IsVisible="{Binding IsSettingsVisible}">
+          <views:SettingsView DataContext="{Binding Settings}" />
+        </Panel>
+      </Grid>
+
+      <!-- Status strip: game-running indicator + the nxm handler status
+           (enabled / disabled / unavailable) + the dismissible app-update
+           notice. -->
+      <Border Grid.Row="2"
+              BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+              BorderThickness="0,1,0,0"
+              Padding="20,6">
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <!-- Game-running indicator: three mutually-exclusive dots driven by the
+               shell's Show*Dot states. Grey = not running; green = running, in
+               sync; yellow = running with changes that apply at the next launch
+               (Curator does not re-stage the mod tree while Darktide runs). The
+               yellow fill reuses the caution brush the rate-limit pill dot uses. -->
+          <Ellipse Width="11" Height="11" VerticalAlignment="Center"
+                   Fill="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                   IsVisible="{Binding ShowNotRunningDot}" />
+          <Ellipse Width="11" Height="11" VerticalAlignment="Center"
+                   Fill="#22A06B"
+                   IsVisible="{Binding ShowRunningCleanDot}" />
+          <Ellipse Width="11" Height="11" VerticalAlignment="Center"
+                   Fill="{DynamicResource CuratorCautionBrush}"
+                   IsVisible="{Binding ShowRunningDirtyDot}" />
+          <TextBlock Text="{Binding GameRunningText}"
+                     FontSize="{DynamicResource AppStatusFontSize}" Opacity="0.8"
+                     VerticalAlignment="Center" />
+          <!-- nxm handler indicator: green when Curator is the registered handler
+               (IsNxmEnabled), grey otherwise (covers not registered + no platform
+               registrar). Mirrors the game-running Ellipse pair directly above. -->
+          <Ellipse Width="11" Height="11" VerticalAlignment="Center"
+                   Margin="12,0,0,0"
+                   Fill="#22A06B"
+                   IsVisible="{Binding IsNxmEnabled}" />
+          <Ellipse Width="11" Height="11" VerticalAlignment="Center"
+                   Margin="12,0,0,0"
+                   Fill="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                   IsVisible="{Binding !IsNxmEnabled}" />
+          <TextBlock Text="{Binding NxmHandlerStatusText}"
+                     FontSize="{DynamicResource AppStatusFontSize}" Opacity="0.8"
+                     VerticalAlignment="Center"
+                     ToolTip.Tip="{Binding NxmHandlerStatusTooltip}" />
+          <!--
+            App self-update notice: a dismissible pill in the status strip. Shown
+            only when an update is available (ShowAppUpdateNotice) and not yet
+            dismissed this session. Rendered as a thick accent-bordered pill with
+            a transparent fill; the accent outline carries the emphasis, no
+            separate accent dot. The link is a HyperlinkButton kept at its native
+            accent foreground: the Fluent ControlTheme re-applies accent on
+            :pointerover and :pressed, so a native accent foreground stays
+            readable in every state against the neutral background, and the
+            underline + hand cursor stay. Clicking the link confirms + downloads
+            + restarts. The close button (a drawn Material "close" Path, not a
+            glyph; default button foreground) hides the notice for this session.
+          -->
+          <Border IsVisible="{Binding ShowAppUpdateNotice}"
+                  Background="Transparent"
+                  BorderBrush="{DynamicResource SystemControlForegroundAccentBrush}"
+                  BorderThickness="2"
+                  CornerRadius="8"
+                  Padding="6,1"
+                  Margin="12,0,0,0"
+                  VerticalAlignment="Center"
+                  ToolTip.Tip="{Binding AppUpdateNoticeTooltip}">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+              <HyperlinkButton Command="{Binding CheckAppUpdateNowCommand}"
+                               Padding="2,0" Margin="0" MinWidth="0"
+                               VerticalAlignment="Center"
+                               ToolTip.Tip="{Binding AppUpdateNoticeTooltip}">
+                <TextBlock Text="{Binding AppUpdateNoticeText}"
+                           FontSize="{DynamicResource AppStatusFontSize}"
+                           VerticalAlignment="Center" />
+              </HyperlinkButton>
+              <Button Classes="icon"
+                      Command="{Binding DismissAppUpdateCommand}"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="{Binding AppUpdateDismissTooltip}">
+                <!-- Material "close" (24x24 source): drawn geometry, themed via the
+                     button foreground. Mirrors the DialogTitleBar close Path. -->
+                <Path Width="10" Height="10" Stretch="Uniform"
+                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                      Fill="{Binding $parent[Button].Foreground}"
+                      Data="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+              </Button>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </Border>
+    </Grid>
+  </SplitView>
 </Window>

@@ -24,7 +24,7 @@ public sealed class LinkedModStagingTests
         using var fx = new ProfileServiceFixture();
         var external = fx.MakeExternalModFolder("LinkedMod");
         var containerId = fx.Imports.LinkFolder(external);
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, containerId, ModVersionPolicy.Latest);
 
         fx.Service.PrepareModRoot(profile.Id);
@@ -51,7 +51,7 @@ public sealed class LinkedModStagingTests
         var external = fx.MakeExternalModFolder("LinkedMod");
         var sentinel = Path.Combine(external, "sentinel.txt");
         var containerId = fx.Imports.LinkFolder(external);
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, containerId, ModVersionPolicy.Latest);
 
         fx.Service.PrepareModRoot(profile.Id);
@@ -68,7 +68,7 @@ public sealed class LinkedModStagingTests
         using var fx = new ProfileServiceFixture();
         var external = fx.MakeExternalModFolder("Gone");
         var containerId = fx.Imports.LinkFolder(external);
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, containerId, ModVersionPolicy.Latest);
 
         // Remove the external target before staging.
@@ -100,7 +100,7 @@ public sealed class LinkedModStagingTests
         var okId = fx.Imports.LinkFolder(okExternal);
         Directory.Delete(goneExternal, recursive: true);
 
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, goneId, ModVersionPolicy.Latest);
         fx.Service.AddMod(profile.Id, okId, ModVersionPolicy.Latest);
 
@@ -121,7 +121,7 @@ public sealed class LinkedModStagingTests
         var external = fx.MakeExternalModFolder("LinkedMod");
         var sentinel = Path.Combine(external, "sentinel.txt");
         var containerId = fx.Imports.LinkFolder(external);
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, containerId, ModVersionPolicy.Latest);
 
         // Disable: not staged.
@@ -144,7 +144,7 @@ public sealed class LinkedModStagingTests
         var extB = fx.MakeExternalModFolder("LinkedB");
         var idA = fx.Imports.LinkFolder(extA);
         var idB = fx.Imports.LinkFolder(extB);
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, idA, ModVersionPolicy.Latest);
         fx.Service.AddMod(profile.Id, idB, ModVersionPolicy.Latest);
 
@@ -166,7 +166,7 @@ public sealed class LinkedModStagingTests
         var external = fx.MakeExternalModFolder("LinkedMod");
         var sentinel = Path.Combine(external, "sentinel.txt");
         var containerId = fx.Imports.LinkFolder(external);
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, containerId, ModVersionPolicy.Latest);
 
         fx.Service.RemoveMod(profile.Id, containerId);
@@ -189,7 +189,7 @@ public sealed class LinkedModStagingTests
         var external = fx.MakeExternalModFolder("LinkedMod");
         var sentinel = Path.Combine(external, "sentinel.txt");
         var containerId = fx.Imports.LinkFolder(external);
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, containerId, ModVersionPolicy.Latest);
         fx.Service.PrepareModRoot(profile.Id);
 
@@ -212,7 +212,7 @@ public sealed class LinkedModStagingTests
         using var fx = new ProfileServiceFixture();
         // Managed mod with base name "Shared" (the fixture sanitizes the name).
         var managed = fx.AddContainerWithVersion("Shared");
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, managed.Id, ModVersionPolicy.Latest);
 
         // A linked external folder with the SAME base name "Shared".
@@ -236,7 +236,7 @@ public sealed class LinkedModStagingTests
         using var fx = new ProfileServiceFixture();
         // Managed mod with base name "Shared" (the fixture sanitizes the name).
         var managed = fx.AddContainerWithVersion("Shared");
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, managed.Id, ModVersionPolicy.Latest);
 
         // A linked external folder with the SAME base name "Shared".
@@ -263,7 +263,7 @@ public sealed class LinkedModStagingTests
         using var fx = new ProfileServiceFixture();
         var external = fx.MakeExternalModFolder("LinkedMod");
         var linkedId = fx.Imports.LinkFolder(external);
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         fx.Service.AddMod(profile.Id, linkedId, ModVersionPolicy.Latest);
 
         var collision = fx.Service.GetBaseNameCollision(

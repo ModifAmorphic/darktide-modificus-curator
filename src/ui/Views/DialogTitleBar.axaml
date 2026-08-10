@@ -4,8 +4,8 @@
              x:Class="Modificus.Curator.UI.Views.DialogTitleBar">
 
   <!--
-    Shared custom title bar reused by the three modal dialogs
-    (PreferencesWindow / ManageProfilesWindow / ConfirmDialog).
+    Shared custom title bar reused by every modal dialog (Welcome, confirm,
+    import, discovery escape hatch, progress).
 
     The outer Border carries WindowDecorationProperties.ElementRole="TitleBar",
     so the OS handles native drag + double-click-to-maximize over this region

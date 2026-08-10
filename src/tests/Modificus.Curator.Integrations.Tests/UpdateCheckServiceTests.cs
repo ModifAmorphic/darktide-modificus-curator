@@ -1654,8 +1654,8 @@ public sealed class UpdateCheckServiceTests
         public IReadOnlyList<ProfileSummary> ListProfiles()
             => throw new NotImplementedException();
         public Profile GetProfile(Guid id) => throw new NotImplementedException();
-        public Profile CreateProfile(string name) => throw new NotImplementedException();
-        public void RenameProfile(Guid id, string newName) => throw new NotImplementedException();
+        public Profile CreateProfile(string name, string description, LaunchSettings launchSettings) => throw new NotImplementedException();
+        public void UpdateProfile(Guid id, string name, string description, LaunchSettings launchSettings) => throw new NotImplementedException();
         public void DeleteProfile(Guid id) => throw new NotImplementedException();
         public void SetModOrder(Guid id, IReadOnlyList<Guid> containerIdsInOrder)
             => throw new NotImplementedException();
@@ -1670,8 +1670,6 @@ public sealed class UpdateCheckServiceTests
         public ModListEntry? GetBaseNameCollision(Guid id, string baseName, Guid? excludeContainerId)
             => throw new NotImplementedException();
         public LaunchSettings GetLaunchSettings(Guid id) => throw new NotImplementedException();
-        public void SetLaunchSettings(Guid id, LaunchSettings settings)
-            => throw new NotImplementedException();
         public string PrepareModRoot(Guid id) => throw new NotImplementedException();
     }
 

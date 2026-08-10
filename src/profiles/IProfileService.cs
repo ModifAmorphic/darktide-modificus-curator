@@ -20,18 +20,23 @@ namespace Modificus.Curator.Profiles;
 public interface IProfileService
 {
     /// <summary>
-    /// Raised whenever <see cref="CreateProfile"/> successfully persists a new
-    /// profile. Carries the new profile's summary (id + name).
+    /// Raised whenever <see cref="CreateProfile(string, string, LaunchSettings)"/>
+    /// successfully persists a new profile. Carries the new profile's summary
+    /// (id + name + description).
     /// </summary>
     /// <remarks>
     /// Fires from inside the create call, so a subscriber still in the call
-    /// chain sees it synchronously. A subscriber that must defer work until a
-    /// modal it owns has closed should treat this as a pending signal rather than
-    /// acting inline (to avoid a dialog-on-dialog).
+    /// chain sees it synchronously. The hosted Profiles page awaits its DMF
+    /// processing immediately after the create + activation, so the subscriber
+    /// is guaranteed to exist before any create (the coordinator is resolved
+    /// eagerly when the page VM is constructed).
     /// </remarks>
     event EventHandler<ProfileSummary>? ProfileCreated;
 
-    /// <summary>All known profiles, as lightweight summaries.</summary>
+    /// <summary>
+    /// Every known profile as a lightweight summary (id + name + description),
+    /// sorted by name (ordinal). One unreadable profile never breaks listing.
+    /// </summary>
     IReadOnlyList<ProfileSummary> ListProfiles();
 
     /// <summary>Loads the full profile (metadata + mod list).</summary>
@@ -39,15 +44,61 @@ public interface IProfileService
     Profile GetProfile(Guid id);
 
     /// <summary>
-    /// Creates a new profile: generates the id, scaffolds its directory tree
-    /// (<c>staged/</c>) + persists an empty <c>profile.json</c>.
+    /// Creates a new profile: generates the id, scaffolds its directory tree,
+    /// and persists name, description, and launch settings in a single write.
     /// </summary>
+    /// <param name="name">Display name. Required (non-whitespace after trim);
+    /// trimmed before persistence.</param>
+    /// <param name="description">Short description. Non-null; may be empty after
+    /// trim; must contain no CR or LF; at most
+    /// <see cref="Profile.DescriptionMaxLength"/> characters after trim. Trimmed
+    /// before persistence.</param>
+    /// <param name="launchSettings">Launch settings. Non-null; validated through
+    /// <see cref="LaunchSettingsValidator"/> (the single source of truth).</param>
     /// <returns>The newly-created profile.</returns>
-    Profile CreateProfile(string name);
+    /// <remarks>
+    /// Every input is validated and normalized before any persistence. An
+    /// invalid input throws and writes nothing.
+    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is null, empty,
+    /// or whitespace.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="description"/> or
+    /// <paramref name="launchSettings"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="description"/> contains
+    /// CR or LF, or exceeds <see cref="Profile.DescriptionMaxLength"/> after trim;
+    /// or <paramref name="launchSettings"/> fails validation.</exception>
+    Profile CreateProfile(string name, string description, LaunchSettings launchSettings);
 
-    /// <summary>Renames the profile (display label only; id and dir are unchanged).</summary>
+    /// <summary>
+    /// Atomically updates a profile's editable metadata: name, description, and
+    /// launch settings in a single read-validate-write. Preserves id, creation
+    /// time, mods, mod order, enabled state, and per-mod policies. This is the
+    /// single editable-profile write: the hosted Profiles page routes every
+    /// metadata + launch-settings edit through it.
+    /// </summary>
+    /// <param name="id">The profile to update.</param>
+    /// <param name="name">Display name. Required (non-whitespace after trim);
+    /// trimmed before persistence.</param>
+    /// <param name="description">Short description. Non-null; may be empty after
+    /// trim; must contain no CR or LF; at most
+    /// <see cref="Profile.DescriptionMaxLength"/> characters after trim. Trimmed
+    /// before persistence.</param>
+    /// <param name="launchSettings">Launch settings. Non-null; validated through
+    /// <see cref="LaunchSettingsValidator"/> (the single source of truth).</param>
+    /// <remarks>
+    /// Every input is validated and normalized before the profile is read or
+    /// written, so an invalid input leaves the existing profile unchanged. The
+    /// update is one write, not separate metadata + settings writes.
+    /// </remarks>
     /// <exception cref="KeyNotFoundException"><paramref name="id"/> is unknown.</exception>
-    void RenameProfile(Guid id, string newName);
+    /// <exception cref="ArgumentException"><paramref name="name"/> is null, empty,
+    /// or whitespace.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="description"/> or
+    /// <paramref name="launchSettings"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="description"/> contains
+    /// CR or LF, or exceeds <see cref="Profile.DescriptionMaxLength"/> after trim;
+    /// or <paramref name="launchSettings"/> fails validation.</exception>
+    void UpdateProfile(Guid id, string name, string description, LaunchSettings launchSettings);
 
     /// <summary>Removes the profile entry and its entire on-disk directory tree.</summary>
     /// <exception cref="KeyNotFoundException"><paramref name="id"/> is unknown.</exception>
@@ -147,37 +198,12 @@ public interface IProfileService
 
     /// <summary>
     /// The profile's launch settings (environment variables + game arguments).
-    /// A focused read (no full profile + mod-list load) used by the launch path
-    /// and the launch-settings modal.
+    /// A focused read (no full profile + mod-list load) used by the launch path;
+    /// the hosted Profiles page edits launch settings through the atomic
+    /// <see cref="UpdateProfile"/>.
     /// </summary>
     /// <exception cref="KeyNotFoundException"><paramref name="id"/> is unknown.</exception>
     LaunchSettings GetLaunchSettings(Guid id);
-
-    /// <summary>
-    /// Replaces the profile's launch settings. Validates the
-    /// <paramref name="settings"/> (names non-empty + no <c>=</c>/NUL, no NUL in
-    /// values, case-insensitive duplicate rejection, reserved-name block),
-    /// rebuilds the profile aggregate preserving Name/Id/CreatedAt/Mods, and
-    /// persists. Callers cannot mutate persisted state in place.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Profile files are plaintext, so this is not secret storage. The values
-    /// are stored exactly (spaces + empty values preserved); validation never
-    /// normalizes or rejects on value content other than NUL.</para>
-    /// <para>
-    /// Editing launch settings is unlocked while Darktide runs: this is a
-    /// <c>profile.json</c> write that does not touch the running process, and
-    /// the launch path reads the settings fresh at <c>Launch()</c> time.</para>
-    /// </remarks>
-    /// <exception cref="KeyNotFoundException"><paramref name="id"/> is unknown.</exception>
-    /// <exception cref="ArgumentNullException"><paramref name="settings"/> is
-    /// null.</exception>
-    /// <exception cref="ArgumentException">A name is empty after trim, contains
-    /// <c>=</c> or NUL; a value contains NUL; two names collide
-    /// case-insensitively; or a name is in the reserved set
-    /// (Curator-owned OS/launch + Relay config env, case-insensitive).</exception>
-    void SetLaunchSettings(Guid id, LaunchSettings settings);
 
     /// <summary>
     /// Regenerates the profile's staged mod root (the <c>--mod-path</c>) from the

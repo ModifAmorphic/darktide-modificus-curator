@@ -87,8 +87,8 @@ through a registered library interface. The UI registers only its own surface
    `IConfigLoader` singleton (one shared instance). The startup snapshot is a
    one-off `Load()` to build the logger; every consumer thereafter re-reads the
    current disk state per op via `IConfigLoader.Load()` (config is tiny; a
-   startup cache would only create staleness for the Settings window, which
-   writes config at runtime; #31).
+   startup cache would only create staleness for the Settings destination,
+   which writes config at runtime; #31).
 2. **Build the logger**: `LoggingBootstrap.CreateLoggerFactory(config)`
    (Serilog console + file, level-honored; day-rolling log file via
    `RollingInterval.Day`, `curator-<yyyyMMdd>.log` appended across starts within
@@ -120,9 +120,9 @@ through a registered library interface. The UI registers only its own surface
    references + empty containers.
 6. **Startup discovery**: `ISteamService.Discover()` runs once (best-effort +
    non-blocking, logged + swallowed on failure) to validate + heal + persist the
-   discovery overrides up front, so the Settings window shows resolved paths
-   rather than blanks. Missing fields block launch (re-checked at launch), not
-   app startup.
+   discovery overrides up front, so the Settings destination shows resolved
+   paths rather than blanks. Missing fields block launch (re-checked at
+   launch), not app startup.
 
 **The DI contract:** each library exposes one `Add<Library>()` extension and
 accepts only interfaces or primitives (never concrete UI models). Supporting
@@ -388,7 +388,7 @@ named pipe to the running app (or cold-starts Curator and retries), where the UR
 is parsed, classified, and dispatched to a pluggable handler. Single-instance is
 enforced by process enumeration before the pipe bind, and the pipe bind is a
 separate, non-fatal check that degrades gracefully; the OS handler registration
-is an explicit user action from the Integrations dialog (Curator only handles
+is an explicit user action from the Nexus destination (Curator only handles
 Darktide `nxm://` downloads). Full detail (the two-process model, the cold-start
 path, single-instance enforcement, pipe-bind behavior, OS registration, and URL
 routing) is in [nxm:// scheme handler architecture](nxm-scheme-handler.md); the
@@ -396,15 +396,15 @@ public surface is in [nxm reference](../reference/nxm.md).
 
 ## Nexus authentication
 
-Nexus Mods auth has two user-facing paths, both surfaced in a separate
-Integrations dialog: **OAuth** (the primary, a loopback OIDC flow via
+Nexus Mods auth has two user-facing paths, both surfaced in the Nexus
+Integrations destination: **OAuth** (the primary, a loopback OIDC flow via
 `Duende.IdentityModel.OidcClient`, RFC 8252) and **API key** (the alternative,
 validated against `GET /v1/users/validate.json`). The user's explicit choice is
 stored in `NexusConfig.AuthMethod` (`None` / `OAuth` / `ApiKey`); the v1 client's
 auth factory is selected by that flag with no fallback, and switching methods
 clears the other method's credentials. OAuth tokens are persisted in `CuratorConfig`
-with 401-reactive refresh. Full detail (the loopback flow, the Integrations
-dialog, auth-factory selection, token persistence, the OAuth client_id, rate
+with 401-reactive refresh. Full detail (the loopback flow, the Nexus
+destination, auth-factory selection, token persistence, the OAuth client_id, rate
 limits, and the v1 endpoints) is in
 [Nexus authentication architecture](nexus-authentication.md); the public surface
 is in [integrations reference](../reference/integrations.md).
@@ -623,7 +623,7 @@ branches on `LaunchResult.Status`:
   framing (the body is a runtime/OS error, not a string Curator invented).
 - **`Error`**: a modal alert surfacing `LaunchResult.Message`.
 
-A new top-bar **Settings** button (gear) opens the **Settings window** with two
+The **Settings** destination in the shell's navigation rail hosts two
 sections, both persisting through `IConfigLoader` (read live, so the next
 `Discover()` / launch picks them up):
 

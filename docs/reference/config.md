@@ -127,8 +127,9 @@ Nexus fields:
 - `AuthMethod`: the user's explicit auth-method choice, read live by the auth
   message factory selector on every request. `None` is the default
   (unauthenticated; API calls fail with a clear error, callers gate on it).
-  Set by the Integrations dialog: OAuth login sets `OAuth`, API-key validate
-  sets `ApiKey`, sign-out resets to `None`. There is **no fallback**: if the
+  Set by the Nexus destination: OAuth login sets `OAuth`, API-key
+  validate sets `ApiKey`, sign-out resets to `None`. There is **no fallback**:
+  if the
   selected method's credentials are missing or expired, the client surfaces an
   auth error for that method rather than silently using the other. Switching
   methods clears the other method's credentials (no stale leftovers).
@@ -139,21 +140,23 @@ Nexus fields:
   sign-out or when switching to API key. `null` is treated as "not
   authenticated". See `NexusOAuthTokens` below.
 - `ApiKeyAuthEnabled`: developer-only toggle (no UI control) gating the
-  Integrations dialog's API-key auth block visibility. `false` by default: the
-  API-key block is hidden and OAuth is the sole sign-in path. `true` shows the
-  API-key block. Read live when the dialog opens, so editing `config.json` takes
-  effect on the next dialog open; no UI control writes it.
+  Nexus destination's API-key auth block visibility. `false` by
+  default: the API-key block is hidden and OAuth is the sole sign-in path.
+  `true` shows the API-key block. Read live when the destination is entered, so
+  editing `config.json` takes effect on the next visit; no UI control writes
+  it.
 - `AutoUpdateCheckEnabled`: whether the periodic background update check runs
   while a profile is active. `true` by default. Gates ONLY the periodic timer;
   the profile-load check (startup + active-profile switch) and the manual "check
-  now" button always run regardless. Read live on each timer tick, so a dialog
-  change takes effect without a restart.
+  now" button always run regardless. Read live on each timer tick, so a
+  destination change takes effect without a restart.
 - `AutoUpdateCheckIntervalMinutes`: the periodic update-check interval, in
   minutes. `10` by default. Honored to a 1-minute granularity; values below 5
   are clamped.
 - `MinAutoUpdateCheckIntervalMinutes` / `MaxAutoUpdateCheckIntervalMinutes`:
   named policy bounds (5 / 1440 minutes) for `AutoUpdateCheckIntervalMinutes`,
-  applied on save (the Integrations dialog) + at tick time (the runner). The
+  applied on save (the Nexus destination) + at tick time (the
+  runner). The
   5-minute floor is a Nexus API acceptable-use compliance measure (at 5 minutes
   the periodic check tops out at 288 calls/day).
 - `AutomaticUpdatesEnabled`: whether Premium accounts have flagged mod updates
@@ -163,7 +166,8 @@ Nexus fields:
   drive it), and changing the periodic-check toggle never clears a configured
   `true` here. Runtime execution additionally requires a fresh verified Premium
   account, so a configured `true` is preserved (stays checked + visible but
-  disabled in the Integrations dialog) if Premium later becomes unavailable,
+  disabled in the Nexus destination) if Premium later becomes
+  unavailable,
   while no automatic install runs. Surfaced as a checkbox in the Integrations
   "Update checks" section, enabled only for a verified Premium account.
 
@@ -192,9 +196,10 @@ sign-out.
 
 ### `PreferencesConfig` / `ThemeMode`
 
-User-facing global preferences, exposed through the Preferences dialog. The
-dialog applies each change immediately (theme + font scale + language take
-effect live) and persists through `ConfigLoader.Save`; there is no commit step.
+User-facing global preferences, exposed through the Preferences destination.
+The destination applies each change immediately (theme + font scale + language
+take effect live) and persists through `ConfigLoader.Save`; there is no commit
+step.
 `ShowRelayConsole` has no live-apply step: it is read at launch time by the
 Relay launcher.
 
@@ -218,7 +223,8 @@ public enum ThemeMode
 - `Theme`: the UI theme variant. `System` follows the OS (Avalonia's
   `ThemeVariant.Default`); applied via `Application.Current.RequestedThemeVariant`.
 - `FontScale`: a continuous UI font-scale multiplier (1.0 = no scaling). The
-  Preferences dialog exposes this as a percent slider (80 to 150 in 5% steps);
+  Preferences destination exposes this as a percent slider (80 to 150 in 5%
+  steps);
   the persisted value is the raw double (e.g. 1.25 for 125%). Applied as an
   application-level `AppFontSize` resource that a Window style binds to
   (`DynamicResource`), cascading to all controls via inheritance.
@@ -234,12 +240,12 @@ public enum ThemeMode
   live from config at launch (one snapshot per launch); a Preferences change
   takes effect on the next launch. On Linux no console window appears regardless,
   so the flag has no observable effect there. Surfaced as a checkbox in the
-  Preferences dialog.
+  Preferences destination.
 
 ### `DiscoveryConfig`
 
 User-supplied overrides for Steam/Darktide/Proton discovery. The Settings
-window and the discovery escape-hatch dialog write these;
+destination and the discovery escape-hatch dialog write these;
 `SteamService.Discover()` reads them live (one `Load()` per call, via
 [IConfigLoader](general.md)), validates each platform-relevant field's path on
 disk, heals the missing/non-existent ones from the platform discoverer, and

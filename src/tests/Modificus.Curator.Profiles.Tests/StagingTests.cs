@@ -30,7 +30,7 @@ public sealed class StagingTests
     public void Latest_policy_symlinks_to_the_isLatest_version_folder()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF", "1.0");
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
 
@@ -48,7 +48,7 @@ public sealed class StagingTests
     public void Pinned_policy_symlinks_to_the_version_matching_the_pin()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         // Add v1.0 (becomes isLatest), then v2.0 (becomes isLatest). Pin to 1.0
         // by its version id (the ModVersion.Folder value).
         var container = fx.AddContainerWithVersion("DMF", "1.0");
@@ -73,7 +73,7 @@ public sealed class StagingTests
         // change. Two profiles, both Latest, share the same entry; the entry
         // never changes when the container's isLatest moves.
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF", "1.0");
         var v1Folder = container.Versions.Single(v => v.VersionString == "1.0").Folder;
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
@@ -102,7 +102,7 @@ public sealed class StagingTests
     public void Staged_mods_dir_contains_only_symlinks_and_mods_lst_no_copied_files()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
 
@@ -152,7 +152,7 @@ public sealed class StagingTests
         }
 
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
 
@@ -190,7 +190,7 @@ public sealed class StagingTests
     public void Regeneration_clears_and_rebuilds_staged_root()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var oldContainer = fx.AddContainerWithVersion("OldMod");
         fx.Service.AddMod(profile.Id, oldContainer.Id, ModVersionPolicy.Latest);
         fx.Service.PrepareModRoot(profile.Id);
@@ -216,7 +216,7 @@ public sealed class StagingTests
         // must be removed as a LINK (not followed), so the files survive a
         // regenerate. Guards ClearStagedDir's symlink-awareness.
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
         fx.Service.PrepareModRoot(profile.Id);
@@ -240,7 +240,7 @@ public sealed class StagingTests
         // A profile entry whose container is gone (a stale reference, or pruned)
         // is omitted from staged/ + mods.lst, with a warning. No exception.
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var realContainer = fx.AddContainerWithVersion("RealMod");
         // A ghost: add an entry pointing at a non-existent container.
         fx.Service.AddMod(profile.Id, realContainer.Id, ModVersionPolicy.Latest);
@@ -260,7 +260,7 @@ public sealed class StagingTests
         // The mod is omitted from staged/ + mods.lst. (The UI dropdown can't
         // produce such an id; this covers a programmatic / stale-id call.)
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF", "1.0");
         // AddMod does not validate the versionId (only SetModPolicy does); so a
         // phantom pin can be seeded here for the staging-skip assertion.
@@ -276,7 +276,7 @@ public sealed class StagingTests
     public void Latest_policy_on_a_container_with_no_versions_is_skipped()
     {
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var empty = fx.Repo.CreateContainer(new UntrackedSource(), "Empty");
         fx.Service.AddMod(profile.Id, empty.Id, ModVersionPolicy.Latest);
 
@@ -296,7 +296,7 @@ public sealed class StagingTests
         // their folder name into their code, so the link must carry the base
         // name. Here the display name differs from the on-disk base on purpose.
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.Repo.CreateContainer(new UntrackedSource(), "My Display Name");
         var withVersion = fx.Repo.AddVersion(container.Id, "1.0", dir =>
         {
@@ -332,7 +332,7 @@ public sealed class StagingTests
         // import validation) cannot yield a base name; it is skipped + warned,
         // not crashed.
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var real = fx.AddContainerWithVersion("RealMod");
         var bad = fx.Repo.CreateContainer(new UntrackedSource(), "BadMod");
         fx.Repo.AddVersion(bad.Id, "1.0", dir =>
@@ -355,7 +355,7 @@ public sealed class StagingTests
         // A version folder with more than one subdir is ambiguous (which is the
         // base?); it is skipped + warned rather than guessing.
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var bad = fx.Repo.CreateContainer(new UntrackedSource(), "AmbiguousMod");
         fx.Repo.AddVersion(bad.Id, "1.0", dir =>
         {
@@ -379,7 +379,7 @@ public sealed class StagingTests
             throw new IOException("simulated: staging link could not be created");
 
         using var fx = new ProfileServiceFixture(createLink: throwing);
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF");
         fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
 
@@ -398,7 +398,7 @@ public sealed class StagingTests
         // The new model has no diverged copy to reconcile. SetModPolicy just
         // records the policy; staging re-resolves on the next PrepareModRoot.
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var container = fx.AddContainerWithVersion("DMF", "1.0");
         fx.AddVersion(container.Id, "2.0"); // v2.0 is isLatest
         var v1Folder = container.Versions.Single(v => v.VersionString == "1.0").Folder;

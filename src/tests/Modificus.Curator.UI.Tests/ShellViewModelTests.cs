@@ -1,6 +1,8 @@
-using Modificus.Curator.RelayClient;
+using System.ComponentModel;
 using Modificus.Curator.Mods;
-using Modificus.Curator.Profiles;
+using Modificus.Curator.RelayClient;
+using Modificus.Curator.UI.AppUpdate;
+using Modificus.Curator.UI.Dialogs;
 using Modificus.Curator.UI.Localization;
 using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.ViewModels;
@@ -10,445 +12,496 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Modificus.Curator.UI.Tests;
 
 /// <summary>
-/// Shell-VM profile controls: mirroring the session's active id + running-state,
-/// dropdown switch (routed through the session gate), switch-blocked-while-running,
-/// and dialog-driven list refresh. Track C adds the launch wiring tests: the
-/// Launch command calls <see cref="IRelayLaunchService.Launch"/> + branches
-/// on the result. All against in-memory fakes; the session is behind the
-/// <see cref="UI.Session.IProfileSession"/> seam (a <see cref="FakeProfileSession"/>).
+/// Shell navigation + launch + status against the hosted-destination shell. The
+/// shell VM owns the SplitView navigation rail (five destinations), the global
+/// Launch action, and the global status strip; the hosted page VMs are real
+/// singletons wired to in-memory fakes (via <see cref="TestDoubles.BuildShell"/>),
+/// so navigation lifecycle effects are exercised end-to-end.
 /// </summary>
 public sealed class ShellViewModelTests
 {
-    private static readonly ILogger<ShellViewModel> Logger = NullLogger<ShellViewModel>.Instance;
     private static readonly LocalizationService Localization = new();
 
-    private static ShellViewModel Build(
-        FakeProfileService? profiles = null,
-        FakeProfileSession? session = null,
-        FakeDialogService? dialogs = null,
-        FakeLaunchService? launch = null,
-        DmfPromptService? dmfPrompts = null,
-        FakeNxmHandlerRegistrar? nxmRegistrar = null,
-        FakeAppUpdateService? appUpdate = null,
-        FakeConfigLoader? configLoader = null)
-    {
-        profiles ??= TestDoubles.Profiles();
-        session ??= new FakeProfileSession(() => profiles.ListProfiles());
-        // The DMF coordinator wires its event subscriptions to the supplied
-        // fakes; constructed lazily so a test can pass its own (with seeded
-        // state) for the DMF-prompt assertions.
-        dmfPrompts ??= TestDoubles.BuildDmfPromptService(profiles, session);
-        return new ShellViewModel(
-            profiles,
-            session,
-            launch ?? new FakeLaunchService(),
-            dialogs ?? new FakeDialogService(),
-            dmfPrompts,
-            Localization,
-            TestDoubles.BuildModList(profiles, session),
-            appUpdate ?? new FakeAppUpdateService(),
-            invokeOnUi: static action => action(),
-            Logger,
-            configLoader ?? new FakeConfigLoader(),
-            nxmRegistrar);
-    }
-
-    // ---- active-profile restore on construction ----------------------------
+    // ---- defaults + pane toggle -------------------------------------------
 
     [Fact]
-    public void Constructor_restores_the_persisted_active_profile()
+    public void Shell_defaults_to_Mods_with_the_pane_collapsed()
     {
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var b = new ProfileSummary(Guid.NewGuid(), "Bravo");
-        var profiles = TestDoubles.Profiles(a, b);
-        var session = new FakeProfileSession { ActiveProfileId = b.Id };
+        var shell = TestDoubles.BuildShell().Shell;
 
-        var vm = Build(profiles, session);
-
-        Assert.NotNull(vm.SelectedProfile);
-        Assert.Equal(b.Id, vm.SelectedProfile!.Id);
+        Assert.Equal(ShellDestination.Mods, shell.CurrentDestination);
+        Assert.False(shell.IsNavigationPaneOpen);
     }
 
     [Fact]
-    public void Constructor_leaves_selection_null_when_no_active_profile_recorded()
+    public void ToggleNavigationPane_flips_the_pane_state()
     {
-        var profiles = TestDoubles.Profiles(new ProfileSummary(Guid.NewGuid(), "Alpha"));
-        var session = new FakeProfileSession { ActiveProfileId = null };
+        var shell = TestDoubles.BuildShell().Shell;
+        Assert.False(shell.IsNavigationPaneOpen);
 
-        var vm = Build(profiles, session);
+        shell.ToggleNavigationPaneCommand.Execute(null);
 
-        Assert.Null(vm.SelectedProfile);
+        Assert.True(shell.IsNavigationPaneOpen);
+
+        shell.ToggleNavigationPaneCommand.Execute(null);
+
+        Assert.False(shell.IsNavigationPaneOpen);
+    }
+
+    // ---- navigation + title + projections --------------------------------
+
+    [Theory]
+    [InlineData(ShellDestination.Profiles)]
+    [InlineData(ShellDestination.Mods)]
+    [InlineData(ShellDestination.NexusIntegrations)]
+    [InlineData(ShellDestination.Preferences)]
+    [InlineData(ShellDestination.Settings)]
+    public async Task Navigate_reaches_every_destination_and_tracks_projections(ShellDestination target)
+    {
+        var shell = TestDoubles.BuildShell().Shell;
+
+        await shell.NavigateCommand.ExecuteAsync(target);
+
+        Assert.Equal(target, shell.CurrentDestination);
+        // Exactly one selected + one visible projection is true.
+        var selected = new[]
+        {
+            shell.IsProfilesSelected, shell.IsModsSelected,
+            shell.IsNexusIntegrationsSelected, shell.IsPreferencesSelected, shell.IsSettingsSelected,
+        };
+        var visible = new[]
+        {
+            shell.IsProfilesVisible, shell.IsModsVisible,
+            shell.IsNexusIntegrationsVisible, shell.IsPreferencesVisible, shell.IsSettingsVisible,
+        };
+        Assert.Single(selected, true);
+        Assert.Single(visible, true);
+        // The title resolves from the matching resx key.
+        var expectedTitle = target switch
+        {
+            ShellDestination.Profiles => Localization["Profiles_Title"],
+            ShellDestination.Mods => Localization["ModList_Header"],
+            ShellDestination.NexusIntegrations => Localization["Integrations_Title"],
+            ShellDestination.Preferences => Localization["Preferences_Title"],
+            ShellDestination.Settings => Localization["Settings_Title"],
+            _ => string.Empty,
+        };
+        Assert.Equal(expectedTitle, shell.CurrentDestinationTitle);
     }
 
     [Fact]
-    public void Constructor_does_not_request_an_active_change_during_restore()
+    public void Default_title_is_Mods()
     {
-        // Restoring the saved active reads it from the session; it never asks the
-        // session to change active (no voluntary gate invocation on startup).
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var shell = TestDoubles.BuildShell().Shell;
+
+        Assert.Equal(Localization["ModList_Header"], shell.CurrentDestinationTitle);
+    }
+
+    [Fact]
+    public async Task NexusIntegration_title_reads_Nexus()
+    {
+        // The user-facing title for the destination is exactly "Nexus" (the
+        // singular short name). Internal identifiers
+        // (ShellDestination.NexusIntegrations, IsNexusIntegrationsVisible) stay
+        // plural to avoid meaningless code churn; only the user-facing string
+        // is the short noun.
+        var shell = TestDoubles.BuildShell().Shell;
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.NexusIntegrations);
+
+        Assert.Equal("Nexus", shell.CurrentDestinationTitle);
+    }
+
+    // ---- same-destination is a strict no-op --------------------------------
+
+    [Fact]
+    public async Task Same_destination_navigation_runs_no_lifecycle_effects()
+    {
+        // Default is Mods. Navigating to Mods again must not run any leave/enter
+        // effects: no Integrations refresh, no mod-list reload, no config read,
+        // no Profiles guard. Verified by asserting call counts stay at their
+        // post-construction baseline.
+        var parts = TestDoubles.BuildShell();
+        var shell = parts.Shell;
+        var baselineStateCalls = parts.Auth.GetCurrentStateCallCount;
+        var baselineIsRegistered = parts.NxmRegistrar?.IsRegisteredCalls ?? 0;
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
+
+        Assert.Equal(ShellDestination.Mods, shell.CurrentDestination);
+        Assert.Equal(baselineStateCalls, parts.Auth.GetCurrentStateCallCount);
+        Assert.Equal(baselineIsRegistered, parts.NxmRegistrar?.IsRegisteredCalls ?? 0);
+    }
+
+    [Fact]
+    public async Task Same_destination_to_Integrations_does_not_refresh_again()
+    {
+        // Entering Integrations once refreshes auth; selecting it again must not.
+        var parts = TestDoubles.BuildShell();
+        var shell = parts.Shell;
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.NexusIntegrations);
+        var afterEnter = parts.Auth.GetCurrentStateCallCount;
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.NexusIntegrations);
+
+        Assert.Equal(afterEnter, parts.Auth.GetCurrentStateCallCount);
+    }
+
+    // ---- leaving Profiles: unsaved-changes guard ---------------------------
+
+    [Fact]
+    public async Task Leaving_dirty_Profiles_keeps_Profiles_selected_on_cancel()
+    {
+        // A dirty Profiles draft + an unsaved-changes Cancel keeps the
+        // destination on Profiles and runs no target lifecycle (no Integrations
+        // refresh, no destination change). Cancel is the enum default, so ESC,
+        // the title-bar X, and a window close all behave the same.
+        var parts = TestDoubles.BuildShell();
+        var shell = parts.Shell;
+        // First navigate to Profiles so a draft can be opened there.
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
+        // Open a new draft + dirty it (empty name baseline; typing dirties it).
+        parts.ProfilesPage.AddProfileCommand.Execute(null);
+        parts.ProfilesPage.Name = "Unsaved";
+
+        parts.Dialogs.UnsavedResult = UnsavedChangesChoice.Cancel;
+
+        var stateBefore = parts.Auth.GetCurrentStateCallCount;
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Settings);
+
+        Assert.Equal(ShellDestination.Profiles, shell.CurrentDestination); // unchanged
+        Assert.True(parts.ProfilesPage.IsDirty); // draft preserved
+        Assert.Equal(stateBefore, parts.Auth.GetCurrentStateCallCount); // no Settings/Integrations effects ran
+        Assert.Equal(1, parts.Dialogs.UnsavedCalls); // the unsaved prompt ran once
+        Assert.Equal(0, parts.Dialogs.ConfirmCalls); // binary confirm untouched
+    }
+
+    [Fact]
+    public async Task Leaving_dirty_Profiles_navigates_on_dont_save()
+    {
+        var parts = TestDoubles.BuildShell();
+        var shell = parts.Shell;
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
+        parts.ProfilesPage.AddProfileCommand.Execute(null);
+        parts.ProfilesPage.Name = "Unsaved";
+
+        parts.Dialogs.UnsavedResult = UnsavedChangesChoice.DontSave;
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Settings);
+
+        Assert.Equal(ShellDestination.Settings, shell.CurrentDestination);
+        // Don't save reloaded from authority: the draft is gone (no longer dirty
+        // because there is no active profile to reload into an unsaved state).
+        Assert.False(parts.ProfilesPage.IsDraft);
+    }
+
+    [Fact]
+    public async Task Leaving_clean_Profiles_does_not_prompt()
+    {
+        // A clean Profiles page navigates away without any prompt (no unsaved
+        // dialog, no binary confirm).
+        var parts = TestDoubles.BuildShell();
+        var shell = parts.Shell;
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
+
+        Assert.Equal(0, parts.Dialogs.UnsavedCalls);
+        Assert.Equal(0, parts.Dialogs.ConfirmCalls);
+        Assert.Equal(ShellDestination.Mods, shell.CurrentDestination);
+    }
+
+    // ---- entering Settings rehydrates from config -------------------------
+
+    [Fact]
+    public async Task Entering_Settings_rehydrates_external_config_changes()
+    {
+        // Escape-hatch / config changes made elsewhere are visible the moment
+        // Settings is entered (before any user interaction).
+        var parts = TestDoubles.BuildShell();
+        var shell = parts.Shell;
+        // Externally change a discovery override + the startup-check toggle.
+        parts.Config.Config.Discovery.UserSteamInstallPath = "/extern/steam";
+        parts.Config.Config.AppUpdates.CheckOnStartup = false;
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Settings);
+
+        var steamRow = parts.SettingsPage.DiscoveryRows.First(r => r.Field.FieldName == "SteamInstallPath");
+        Assert.Equal("/extern/steam", steamRow.Value);
+        Assert.False(parts.SettingsPage.CheckOnStartup);
+    }
+
+    [Fact]
+    public async Task Leaving_Settings_reloads_mod_list_and_re_reads_startup_toggle()
+    {
+        // The leave point owns the post-Settings effects: reload the mod list +
+        // re-read CheckOnStartup + refresh the app-update notice. A mod added to
+        // the profile after entering Settings appears in the mod list only after
+        // leaving Settings (the reload runs at the leave point, not on enter).
+        var a = new Modificus.Curator.Profiles.ProfileSummary(Guid.NewGuid(), "Alpha", "");
         var profiles = TestDoubles.Profiles(a);
         var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var repo = new FakeModRepository();
+        var parts = TestDoubles.BuildShell(
+            profiles: profiles, session: session, repo: repo);
+        var shell = parts.Shell;
+        Assert.Empty(parts.ModsPage.Mods);
 
-        var vm = Build(profiles, session);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Settings);
+        // While in Settings, a mod lands in the profile out-of-band (simulating
+        // an external change to what the join would produce).
+        var container = repo.CreateContainer(new UntrackedSource(), "NewMod");
+        profiles.AddMod(a.Id, container.Id, ModVersionPolicy.Latest);
+        Assert.Empty(parts.ModsPage.Mods); // not yet reloaded (enter is rehydrate, not reload)
 
-        Assert.Equal(0, session.RequestActiveCalls);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods); // leave Settings
+
+        Assert.Single(parts.ModsPage.Mods); // the leave reload picked it up
     }
 
     [Fact]
-    public void Constructor_falls_back_to_null_when_the_recorded_active_profile_is_absent()
+    public async Task Leaving_Settings_does_not_reload_on_other_transitions()
     {
-        // Stale state pointing at a deleted profile resolves to no selection.
-        var profiles = TestDoubles.Profiles(new ProfileSummary(Guid.NewGuid(), "Alpha"));
-        var session = new FakeProfileSession { ActiveProfileId = Guid.NewGuid() };
+        // Reload + toggle re-read fire ONLY when leaving Settings, not on other
+        // transitions (e.g. Profiles -> Mods). Smoke check: navigating Profiles
+        // -> Mods reads zero registrar probes beyond construction + runs no
+        // Settings leave effects.
+        var parts = TestDoubles.BuildShell();
+        var shell = parts.Shell;
+        var baselineIsRegistered = parts.NxmRegistrar?.IsRegisteredCalls ?? 0;
 
-        var vm = Build(profiles, session);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
 
-        Assert.Null(vm.SelectedProfile);
+        Assert.Equal(baselineIsRegistered, parts.NxmRegistrar?.IsRegisteredCalls ?? 0);
     }
 
-    // ---- dropdown switch routes through the session ------------------------
+    // ---- entering / leaving Nexus --------------------------------------------
 
     [Fact]
-    public void Setting_SelectedProfile_requests_the_id_active_through_the_session()
+    public async Task Entering_Integrations_runs_the_auth_refresh()
     {
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var b = new ProfileSummary(Guid.NewGuid(), "Bravo");
-        var profiles = TestDoubles.Profiles(a, b);
-        var session = new FakeProfileSession { ActiveProfileId = a.Id, IsRunning = false };
-        var vm = Build(profiles, session);
+        var parts = TestDoubles.BuildShell();
+        var shell = parts.Shell;
+        var baseline = parts.Auth.GetCurrentStateCallCount;
 
-        vm.SelectedProfile = b;
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.NexusIntegrations);
 
-        Assert.Equal(b.Id, session.ActiveProfileId); // session applied it
-        Assert.Equal(1, session.RequestActiveCalls);
-        Assert.Equal(b.Id, vm.SelectedProfile?.Id);  // selection follows the session
-    }
-
-    [Fact]
-    public void Setting_SelectedProfile_reverts_when_the_session_gate_rejects()
-    {
-        // The session is the authority: when it blocks the change (game running),
-        // the dropdown snaps back to the real active instead of lying.
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var b = new ProfileSummary(Guid.NewGuid(), "Bravo");
-        var profiles = TestDoubles.Profiles(a, b);
-        var session = new FakeProfileSession { ActiveProfileId = a.Id, IsRunning = true };
-        var vm = Build(profiles, session);
-
-        vm.SelectedProfile = b; // programmatically (the dropdown is disabled while running)
-
-        Assert.Equal(a.Id, vm.SelectedProfile?.Id); // reverted to the real active
-        Assert.Equal(a.Id, session.ActiveProfileId); // session never moved
-        Assert.Equal(1, session.RequestActiveCalls);  // but it was asked
-    }
-
-    // ---- switch-blocked-while-running --------------------------------------
-
-    [Fact]
-    public void CanSwitchProfile_is_true_when_not_running_and_profiles_exist()
-    {
-        var vm = Build(TestDoubles.Profiles(new ProfileSummary(Guid.NewGuid(), "Alpha")),
-            new FakeProfileSession { IsRunning = false });
-
-        Assert.True(vm.CanSwitchProfile);
+        Assert.True(parts.Auth.GetCurrentStateCallCount > baseline);
     }
 
     [Fact]
-    public void CanSwitchProfile_is_false_when_the_game_is_running()
+    public async Task Leaving_Integrations_cancels_auth_and_refreshes_nxm_and_mod_list()
     {
-        var session = new FakeProfileSession { IsRunning = true };
-        var vm = Build(TestDoubles.Profiles(new ProfileSummary(Guid.NewGuid(), "Alpha")), session);
+        // Start an in-flight OAuth on the Integrations page, then navigate away.
+        // Leaving Integrations calls Deactivate (cancels the in-flight login),
+        // refreshes nxm status (re-probes the registrar), and reloads the mod
+        // list.
+        var registrar = new FakeNxmHandlerRegistrar { Registered = true };
+        var parts = TestDoubles.BuildShell(nxmRegistrar: registrar);
+        var shell = parts.Shell;
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.NexusIntegrations);
+        parts.Auth.CancelOAuthOnToken = true;
 
-        Assert.False(vm.CanSwitchProfile);
-        Assert.Contains("Darktide is running", vm.ProfileSwitchTooltip);
+        var loginTask = parts.IntegrationsPage.LoginWithOAuthCommand.ExecuteAsync(null);
+        Assert.NotNull(parts.Auth.LastOAuthTask);
+        Assert.True(parts.Auth.OAuthLoginCalls > 0);
+        var isRegisteredBefore = registrar.IsRegisteredCalls;
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
+
+        // Deactivate canceled the in-flight login promptly.
+        Assert.NotNull(parts.Auth.LastOAuthTask);
+        var finished = await Task.WhenAny(parts.Auth.LastOAuthTask!, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.Same(parts.Auth.LastOAuthTask, finished);
+        Assert.True(parts.Auth.LastOAuthTask!.IsCanceled);
+        await loginTask; // command swallows OperationCanceledException + completes
+        // The nxm status was re-probed on leave.
+        Assert.True(registrar.IsRegisteredCalls > isRegisteredBefore);
     }
 
     [Fact]
-    public void CanSwitchProfile_is_false_when_no_profiles_exist()
+    public async Task Normal_navigation_does_not_unsubscribe_localization()
     {
-        var vm = Build(TestDoubles.Profiles());
+        // The hosted page VMs are application-lifetime; navigation must not
+        // detach their localization handlers. A culture flip after touring every
+        // destination still re-resolves a localized Integrations label. The same
+        // Localization instance is shared with BuildShell so the culture change
+        // reaches the page VM.
+        var loc = new LocalizationService();
+        var parts = TestDoubles.BuildShell(localization: loc);
+        var shell = parts.Shell;
 
-        Assert.False(vm.CanSwitchProfile);
-        Assert.NotEmpty(vm.ProfileSwitchTooltip);
-    }
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.NexusIntegrations);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Settings);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
 
-    [Fact]
-    public void Live_IsRunning_change_flips_CanSwitchProfile_and_the_tooltip()
-    {
-        // The status strip + dropdown-enable react to the session's live running-state
-        // (the polling timer drives this in production).
-        var session = new FakeProfileSession { IsRunning = false };
-        var vm = Build(TestDoubles.Profiles(new ProfileSummary(Guid.NewGuid(), "Alpha")), session);
-        Assert.True(vm.CanSwitchProfile);
-
-        session.IsRunning = true; // the timer flipped it
-
-        Assert.False(vm.CanSwitchProfile);
-        Assert.Contains("Darktide is running", vm.ProfileSwitchTooltip);
-    }
-
-    // ---- manage dialog coordination ----------------------------------------
-
-    [Fact]
-    public async Task ManageProfiles_opens_the_dialog_once()
-    {
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService();
-        var vm = Build(profiles, session, dialogs);
-
-        await vm.ManageProfilesCommand.ExecuteAsync(null);
-
-        Assert.Equal(1, dialogs.ManageProfilesCalls);
-    }
-
-    [Fact]
-    public async Task ManageProfiles_refreshes_the_profile_list_after_close()
-    {
-        // The dialog (simulated) creates a profile during its session; the shell
-        // reloads its list snapshot when the dialog closes.
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService
+        string? fired = null;
+        ((INotifyPropertyChanged)parts.IntegrationsPage).PropertyChanged += (_, e) =>
         {
-            OnManageProfiles = () => profiles.CreateProfile("Bravo"),
-        };
-        var vm = Build(profiles, session, dialogs);
-
-        await vm.ManageProfilesCommand.ExecuteAsync(null);
-
-        Assert.Contains(vm.Profiles, p => p.Name == "Bravo");
-    }
-
-    [Fact]
-    public async Task ManageProfiles_re_syncs_selection_to_the_session_active_after_close()
-    {
-        // The dialog applies active changes live through the session; on close the
-        // shell follows the session's authoritative active id.
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var b = new ProfileSummary(Guid.NewGuid(), "Bravo");
-        var profiles = TestDoubles.Profiles(a, b);
-        var session = new FakeProfileSession { ActiveProfileId = a.Id, IsRunning = false };
-        var dialogs = new FakeDialogService
-        {
-            OnManageProfiles = () => session.RequestActive(b.Id),
-        };
-        var vm = Build(profiles, session, dialogs);
-
-        await vm.ManageProfilesCommand.ExecuteAsync(null);
-
-        Assert.Equal(b.Id, session.ActiveProfileId);
-        Assert.Equal(b.Id, vm.SelectedProfile?.Id);
-    }
-
-    [Fact]
-    public async Task ManageProfiles_deleting_the_active_clears_selection_and_blocks_launch()
-    {
-        // Belt-and-suspenders: delete-of-active (not running) clears the active id;
-        // the shell's selection mirrors it to null, so CanLaunch (unchanged) keeps
-        // Launch blocked because no profile is selected.
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var session = new FakeProfileSession(() => profiles.ListProfiles())
-        {
-            ActiveProfileId = a.Id,
-            IsRunning = false,
-        };
-        var dialogs = new FakeDialogService
-        {
-            ConfirmResult = true,
-            OnManageProfiles = () =>
+            if (e.PropertyName == nameof(IntegrationsViewModel.NexusHeader))
             {
-                // Simulate the dialog deleting the active profile: profile gone,
-                // session reconciles (clears the active id, per the fix).
-                profiles.DeleteProfile(a.Id);
-                session.ReconcileActive();
-            },
+                fired = e.PropertyName;
+            }
         };
-        var vm = Build(profiles, session, dialogs);
-        Assert.NotNull(vm.SelectedProfile);
 
-        await vm.ManageProfilesCommand.ExecuteAsync(null);
+        FireCultureChange(loc);
 
-        Assert.Null(vm.SelectedProfile);                  // active cleared
-        Assert.False(vm.LaunchCommand.CanExecute(null)); // Launch blocked (no selection)
+        Assert.Equal(nameof(IntegrationsViewModel.NexusHeader), fired);
     }
 
-    // ---- CanLaunch positive case (long-deferred) --------------------------
+    // ---- launch derives from the live active id ---------------------------
 
     [Fact]
-    public void CanLaunch_is_true_when_a_profile_is_selected_and_the_game_is_not_running()
+    public void CanLaunch_is_false_when_no_active_profile()
     {
-        // The long-deferred CanLaunch positive-case test: Launch lights up
-        // once a profile is selected and the game is stopped.
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var shell = TestDoubles.BuildShell().Shell;
+
+        Assert.False(shell.LaunchCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void CanLaunch_is_true_when_an_active_profile_exists_and_not_running()
+    {
+        var a = new Modificus.Curator.Profiles.ProfileSummary(Guid.NewGuid(), "Alpha", "");
+        var profiles = TestDoubles.Profiles(a);
         var session = new FakeProfileSession { ActiveProfileId = a.Id, IsRunning = false };
-        var vm = Build(TestDoubles.Profiles(a), session);
+        var shell = TestDoubles.BuildShell(profiles: profiles, session: session).Shell;
 
-        Assert.True(vm.LaunchCommand.CanExecute(null));
+        Assert.True(shell.LaunchCommand.CanExecute(null));
     }
 
     [Fact]
-    public void CanLaunch_is_false_when_no_profile_is_selected()
+    public void CanLaunch_is_false_when_running()
     {
-        var vm = Build(TestDoubles.Profiles());
-
-        Assert.False(vm.LaunchCommand.CanExecute(null));
-    }
-
-    [Fact]
-    public void CanLaunch_is_false_when_the_game_is_running()
-    {
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var a = new Modificus.Curator.Profiles.ProfileSummary(Guid.NewGuid(), "Alpha", "");
+        var profiles = TestDoubles.Profiles(a);
         var session = new FakeProfileSession { ActiveProfileId = a.Id, IsRunning = true };
-        var vm = Build(TestDoubles.Profiles(a), session);
+        var shell = TestDoubles.BuildShell(profiles: profiles, session: session).Shell;
 
-        Assert.False(vm.LaunchCommand.CanExecute(null));
+        Assert.False(shell.LaunchCommand.CanExecute(null));
     }
 
-    // ---- launch wiring (Track C) ------------------------------------------
-
     [Fact]
-    public async Task Launch_calls_the_launch_service_with_the_active_profile_id()
+    public async Task Launch_resolves_the_active_id_at_execution_time()
     {
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        // Launch reads IProfileSession.ActiveProfileId at execution time, never a
+        // cached snapshot. Switching the active id between two profiles routes
+        // the second Launch through the new id.
+        var a = new Modificus.Curator.Profiles.ProfileSummary(Guid.NewGuid(), "Alpha", "");
+        var b = new Modificus.Curator.Profiles.ProfileSummary(Guid.NewGuid(), "Bravo", "");
+        var profiles = TestDoubles.Profiles(a, b);
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
         var launch = new FakeLaunchService();
-        var vm = Build(TestDoubles.Profiles(a),
-            new FakeProfileSession { ActiveProfileId = a.Id }, launch: launch);
+        var shell = TestDoubles.BuildShell(profiles: profiles, session: session, launch: launch).Shell;
 
-        await vm.LaunchCommand.ExecuteAsync(null);
+        await shell.LaunchCommand.ExecuteAsync(null);
 
-        Assert.Equal(new[] { a.Id }, launch.LaunchCalls);
+        // The active id flips (e.g. a Profiles save + activate); Launch must
+        // pick up the new id without re-reading any shell-side snapshot.
+        session.ActiveProfileId = b.Id;
+        // The session fires ActiveProfileId PropertyChanged; the shell re-
+        // evaluates CanLaunch on that signal. Simulate it for the unit test.
+        ((INotifyPropertyChanged)session).PropertyChanged += (_, _) => { }; // ensure wired
+        shell.LaunchCommand.NotifyCanExecuteChanged();
+        await shell.LaunchCommand.ExecuteAsync(null);
+
+        Assert.Equal(new[] { a.Id, b.Id }, launch.LaunchCalls);
     }
 
     [Fact]
     public async Task Launch_Launched_refreshes_running_state_immediately()
     {
-        // On a successful launch: the session's Refresh is called so the
-        // running indicator + CanLaunch react immediately (not on the next
-        // poll). Successful launch surfaces no status note or other
-        // confirmation; the running indicator is the durable signal.
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var a = new Modificus.Curator.Profiles.ProfileSummary(Guid.NewGuid(), "Alpha", "");
         var session = new FakeProfileSession { ActiveProfileId = a.Id, IsRunning = false };
-        var launch = new FakeLaunchService(); // default: Launched
-        var vm = Build(TestDoubles.Profiles(a), session, launch: launch);
+        var shell = TestDoubles.BuildShell(
+            profiles: TestDoubles.Profiles(a), session: session).Shell;
 
-        await vm.LaunchCommand.ExecuteAsync(null);
+        await shell.LaunchCommand.ExecuteAsync(null);
 
-        Assert.Equal(1, session.RefreshCalls); // immediate refresh, not deferred to the poll
+        Assert.Equal(1, session.RefreshCalls);
     }
 
     [Fact]
-    public async Task Launch_Launched_running_state_refresh_triggers_CanLaunch_re_eval()
+    public async Task Launch_Launched_clears_pending_changes()
     {
-        // The session's Refresh flips IsRunning to true (the game just started).
-        // The shell mirrors it -> CanLaunch flips to false (the running indicator
-        // + launch-availability react at once).
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var a = new Modificus.Curator.Profiles.ProfileSummary(Guid.NewGuid(), "Alpha", "");
         var session = new FakeProfileSession
         {
             ActiveProfileId = a.Id,
             IsRunning = false,
+            HasPendingChanges = true,
         };
-        // Wire the callback AFTER construction so the lambda can reference the
-        // built session (the game-start simulation flips IsRunning on Refresh).
-        session.OnRefresh = () => session.IsRunning = true;
-        var launch = new FakeLaunchService(); // Launched
-        var vm = Build(TestDoubles.Profiles(a), session, launch: launch);
-        Assert.True(vm.LaunchCommand.CanExecute(null));
+        var shell = TestDoubles.BuildShell(
+            profiles: TestDoubles.Profiles(a), session: session).Shell;
 
-        await vm.LaunchCommand.ExecuteAsync(null);
+        await shell.LaunchCommand.ExecuteAsync(null);
 
-        Assert.True(vm.IsGameRunning);
-        Assert.False(vm.LaunchCommand.CanExecute(null)); // blocked now that it's running
+        Assert.False(session.HasPendingChanges);
+        Assert.False(shell.HasPendingStagedChanges);
     }
 
     [Fact]
-    public async Task Launch_DiscoveryIncomplete_opens_the_escape_hatch_with_the_missing_fields()
+    public async Task Launch_DiscoveryIncomplete_opens_the_escape_hatch()
     {
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var a = new Modificus.Curator.Profiles.ProfileSummary(Guid.NewGuid(), "Alpha", "");
         var dialogs = new FakeDialogService();
         var launch = new FakeLaunchService
         {
             NextResult = new LaunchResult(
-                LaunchStatus.DiscoveryIncomplete,
-                "missing",
+                LaunchStatus.DiscoveryIncomplete, "missing",
                 new[] { "ProtonBinaryPath", "CompatdataPath" }),
         };
-        var vm = Build(TestDoubles.Profiles(a),
-            new FakeProfileSession { ActiveProfileId = a.Id },
-            dialogs, launch);
+        var shell = TestDoubles.BuildShell(
+            profiles: TestDoubles.Profiles(a),
+            session: new FakeProfileSession { ActiveProfileId = a.Id },
+            dialogs: dialogs, launch: launch).Shell;
 
-        await vm.LaunchCommand.ExecuteAsync(null);
+        await shell.LaunchCommand.ExecuteAsync(null);
 
         Assert.Single(dialogs.EscapeHatchCalls);
-        Assert.Equal(
-            new[] { "ProtonBinaryPath", "CompatdataPath" },
-            dialogs.EscapeHatchCalls[0]);
-        // No auto-retry: the shell did not call Launch again.
-        Assert.Single(launch.LaunchCalls);
-    }
-
-    [Fact]
-    public async Task Launch_DiscoveryIncomplete_does_not_retry_when_the_user_submits()
-    {
-        // Even when the user submits (EscapeHatchResult=true), the shell does
-        // not re-launch; the user clicks Launch again. A loop here would trap
-        // the user if they could not get the paths right.
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var dialogs = new FakeDialogService { EscapeHatchResult = true };
-        var launch = new FakeLaunchService
-        {
-            NextResult = new LaunchResult(
-                LaunchStatus.DiscoveryIncomplete, "missing", new[] { "SteamInstallPath" }),
-        };
-        var vm = Build(TestDoubles.Profiles(a),
-            new FakeProfileSession { ActiveProfileId = a.Id },
-            dialogs, launch);
-
-        await vm.LaunchCommand.ExecuteAsync(null);
-
+        Assert.Equal(new[] { "ProtonBinaryPath", "CompatdataPath" }, dialogs.EscapeHatchCalls[0]);
         Assert.Single(launch.LaunchCalls); // no retry
     }
 
     [Fact]
     public async Task Launch_Error_opens_an_alert_with_the_result_message()
     {
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var a = new Modificus.Curator.Profiles.ProfileSummary(Guid.NewGuid(), "Alpha", "");
         var dialogs = new FakeDialogService();
         var launch = new FakeLaunchService
         {
             NextResult = new LaunchResult(LaunchStatus.Error, "boom", Array.Empty<string>()),
         };
-        var vm = Build(TestDoubles.Profiles(a),
-            new FakeProfileSession { ActiveProfileId = a.Id },
-            dialogs, launch);
+        var shell = TestDoubles.BuildShell(
+            profiles: TestDoubles.Profiles(a),
+            session: new FakeProfileSession { ActiveProfileId = a.Id },
+            dialogs: dialogs, launch: launch).Shell;
 
-        await vm.LaunchCommand.ExecuteAsync(null);
+        await shell.LaunchCommand.ExecuteAsync(null);
 
         Assert.Single(dialogs.AlertCalls);
         Assert.Equal("boom", dialogs.AlertCalls[0].Message);
     }
 
     [Fact]
-    public async Task Launch_StagingFailed_appends_the_exception_body_to_the_localized_framing()
+    public async Task Launch_StagingFailed_appends_the_exception_body()
     {
-        // StagingFailed carries the raised exception's body on Message; the shell
-        // composes the localized framing + hint (Strings.resx) followed by that
-        // body, mirroring the Update/Import failure alerts. Both the framing and
-        // the carried detail appear in the shown alert.
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var a = new Modificus.Curator.Profiles.ProfileSummary(Guid.NewGuid(), "Alpha", "");
         var dialogs = new FakeDialogService();
         var launch = new FakeLaunchService
         {
-            NextResult = new LaunchResult(LaunchStatus.StagingFailed, Message: "The parameter is incorrect", Array.Empty<string>()),
+            NextResult = new LaunchResult(
+                LaunchStatus.StagingFailed, Message: "The parameter is incorrect", Array.Empty<string>()),
         };
-        var vm = Build(TestDoubles.Profiles(a), session, dialogs, launch);
+        var shell = TestDoubles.BuildShell(
+            profiles: TestDoubles.Profiles(a),
+            session: new FakeProfileSession { ActiveProfileId = a.Id },
+            dialogs: dialogs, launch: launch).Shell;
 
-        await vm.LaunchCommand.ExecuteAsync(null);
+        await shell.LaunchCommand.ExecuteAsync(null);
 
         Assert.Single(dialogs.AlertCalls);
         Assert.Equal(Localization["Launch_StagingFailedTitle"], dialogs.AlertCalls[0].Title);
@@ -457,70 +510,14 @@ public sealed class ShellViewModelTests
     }
 
     [Fact]
-    public async Task Launch_with_no_selected_profile_is_a_no_op()
+    public async Task Launch_with_no_active_profile_is_a_no_op()
     {
-        // Defense: even though CanLaunch gates this, a programmatic call with
-        // no selection must not throw or call the service.
         var launch = new FakeLaunchService();
-        var vm = Build(TestDoubles.Profiles(), launch: launch);
+        var shell = TestDoubles.BuildShell(launch: launch).Shell;
 
-        await vm.LaunchCommand.ExecuteAsync(null);
+        await shell.LaunchCommand.ExecuteAsync(null);
 
         Assert.Empty(launch.LaunchCalls);
-    }
-
-    // ---- OpenSettings -----------------------------------------------------
-
-    [Fact]
-    public async Task OpenSettings_opens_the_settings_dialog_once()
-    {
-        var dialogs = new FakeDialogService();
-        var vm = Build(dialogs: dialogs);
-
-        await vm.OpenSettingsCommand.ExecuteAsync(null);
-
-        Assert.Equal(1, dialogs.SettingsCalls);
-    }
-
-    [Fact]
-    public async Task OpenSettings_reloads_the_mod_list_after_close()
-    {
-        // The shell reloads the mod list after the Settings dialog closes so the
-        // rows reflect any out-of-band change rather than a stale snapshot.
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var repo = new FakeModRepository();
-        var modList = TestDoubles.BuildModList(profiles, session, repo);
-        var dialogs = new FakeDialogService();
-        var vm = new ShellViewModel(
-            profiles,
-            session,
-            new FakeLaunchService(),
-            dialogs,
-            TestDoubles.BuildDmfPromptService(profiles, session),
-            Localization,
-            modList,
-            new FakeAppUpdateService(),
-            invokeOnUi: static action => action(),
-            Logger,
-            new FakeConfigLoader());
-
-        // Initially the active profile has no mods.
-        Assert.Empty(modList.Mods);
-
-        // During settings, a mod lands in the profile out-of-band (simulating
-        // the effect of an external change to what the join would produce).
-        dialogs.OnSettings = () =>
-        {
-            var container = repo.CreateContainer(new UntrackedSource(), "NewMod");
-            profiles.AddMod(a.Id, container.Id, ModVersionPolicy.Latest);
-        };
-
-        await vm.OpenSettingsCommand.ExecuteAsync(null);
-
-        // The shell reloaded the mod list after Settings closed.
-        Assert.Single(modList.Mods);
     }
 
     // ---- nxm handler status -----------------------------------------------
@@ -529,177 +526,221 @@ public sealed class ShellViewModelTests
     public void Constructor_reads_nxm_status_when_registrar_reports_registered()
     {
         var registrar = new FakeNxmHandlerRegistrar { Registered = true };
-        var vm = Build(nxmRegistrar: registrar);
+        var shell = TestDoubles.BuildShell(nxmRegistrar: registrar).Shell;
 
-        Assert.True(vm.IsNxmRegistered);
-        Assert.Equal(Localization["Status_NxmRegistered"], vm.NxmHandlerStatusText);
-        Assert.Equal(Localization["Status_NxmRegisteredTooltip"], vm.NxmHandlerStatusTooltip);
-        Assert.Equal(1, registrar.IsRegisteredCalls);
-    }
-
-    [Fact]
-    public void Constructor_reads_nxm_status_when_registrar_reports_not_registered()
-    {
-        var registrar = new FakeNxmHandlerRegistrar { Registered = false };
-        var vm = Build(nxmRegistrar: registrar);
-
-        Assert.False(vm.IsNxmRegistered);
-        Assert.Equal(Localization["Status_NxmNotRegistered"], vm.NxmHandlerStatusText);
+        Assert.True(shell.IsNxmRegistered);
+        Assert.Equal(Localization["Status_NxmRegistered"], shell.NxmHandlerStatusText);
     }
 
     [Fact]
     public void Constructor_shows_unavailable_when_no_registrar()
     {
-        // No registrar (unsupported platform): the status is unavailable.
-        var vm = Build(nxmRegistrar: null);
+        var shell = TestDoubles.BuildShell(nxmRegistrar: null).Shell;
 
-        Assert.Null(vm.IsNxmRegistered);
-        Assert.Equal(Localization["Status_NxmUnavailable"], vm.NxmHandlerStatusText);
+        Assert.Null(shell.IsNxmRegistered);
+        Assert.Equal(Localization["Status_NxmUnavailable"], shell.NxmHandlerStatusText);
+    }
+
+    // ---- status strip -----------------------------------------------------
+
+    [Fact]
+    public void Status_dot_is_grey_when_the_game_is_stopped()
+    {
+        var session = new FakeProfileSession { IsRunning = false };
+        var shell = TestDoubles.BuildShell(session: session).Shell;
+
+        Assert.True(shell.ShowNotRunningDot);
+        Assert.False(shell.ShowRunningCleanDot);
+        Assert.False(shell.ShowRunningDirtyDot);
+        Assert.Equal(Localization["Status_GameNotRunning"], shell.GameRunningText);
     }
 
     [Fact]
-    public async Task OpenIntegrations_refreshes_nxm_status_after_close()
+    public void Status_dot_is_yellow_when_running_and_dirty()
     {
-        // The user may toggle the nxm handler inside the Integrations dialog;
-        // the shell re-reads the OS state on close so the status strip stays
-        // accurate. The registrar's state flips during the dialog (simulated via
-        // OnIntegrations) and the shell picks it up.
-        var registrar = new FakeNxmHandlerRegistrar { Registered = false };
-        var dialogs = new FakeDialogService
+        var a = new Modificus.Curator.Profiles.ProfileSummary(Guid.NewGuid(), "Alpha", "");
+        var session = new FakeProfileSession
         {
-            OnIntegrations = () => registrar.Registered = true,
+            ActiveProfileId = a.Id,
+            IsRunning = true,
+            HasPendingChanges = true,
         };
-        var vm = Build(dialogs: dialogs, nxmRegistrar: registrar);
-        Assert.False(vm.IsNxmRegistered!.Value);
+        var shell = TestDoubles.BuildShell(
+            profiles: TestDoubles.Profiles(a), session: session).Shell;
 
-        await vm.OpenIntegrationsCommand.ExecuteAsync(null);
-
-        Assert.Equal(1, dialogs.IntegrationsCalls);
-        Assert.True(vm.IsNxmRegistered);
-        Assert.Equal(Localization["Status_NxmRegistered"], vm.NxmHandlerStatusText);
-    }
-
-    // ---- "changes pending" status-strip signal ------------------------------
-
-    [Fact]
-    public void Status_dot_is_grey_and_text_says_not_running_when_the_game_is_stopped()
-    {
-        var vm = Build(TestDoubles.Profiles(new ProfileSummary(Guid.NewGuid(), "Alpha")),
-            new FakeProfileSession { IsRunning = false });
-
-        Assert.True(vm.ShowNotRunningDot);
-        Assert.False(vm.ShowRunningCleanDot);
-        Assert.False(vm.ShowRunningDirtyDot);
-        Assert.Equal(Localization["Status_GameNotRunning"], vm.GameRunningText);
+        Assert.True(shell.ShowRunningDirtyDot);
+        Assert.False(shell.ShowRunningCleanDot);
+        Assert.Equal(Localization["Status_GameRunningChangesPending"], shell.GameRunningText);
     }
 
     [Fact]
-    public void Status_dot_is_green_and_text_says_running_when_running_and_in_sync()
+    public void Status_dot_reacts_to_a_live_pending_flag_flip()
     {
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var vm = Build(TestDoubles.Profiles(a),
-            new FakeProfileSession { ActiveProfileId = a.Id, IsRunning = true, HasPendingChanges = false });
-
-        Assert.False(vm.ShowNotRunningDot);
-        Assert.True(vm.ShowRunningCleanDot);
-        Assert.False(vm.ShowRunningDirtyDot);
-        Assert.Equal(Localization["Status_GameRunning"], vm.GameRunningText);
-    }
-
-    [Fact]
-    public void Status_dot_is_yellow_and_text_says_changes_pending_when_running_and_dirty()
-    {
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var vm = Build(TestDoubles.Profiles(a),
-            new FakeProfileSession { ActiveProfileId = a.Id, IsRunning = true, HasPendingChanges = true });
-
-        Assert.False(vm.ShowNotRunningDot);
-        Assert.False(vm.ShowRunningCleanDot);
-        Assert.True(vm.ShowRunningDirtyDot);
-        Assert.Equal(Localization["Status_GameRunningChangesPending"], vm.GameRunningText);
-    }
-
-    [Fact]
-    public void Status_dot_reacts_when_the_session_pending_flag_flips_live()
-    {
-        // The shell mirrors the session's HasPendingChanges so a mod-list edit
-        // (which sets the session flag) flips the dot + text without a restart.
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
+        var a = new Modificus.Curator.Profiles.ProfileSummary(Guid.NewGuid(), "Alpha", "");
         var session = new FakeProfileSession { ActiveProfileId = a.Id, IsRunning = true };
-        var vm = Build(TestDoubles.Profiles(a), session);
-        Assert.True(vm.ShowRunningCleanDot);
+        var shell = TestDoubles.BuildShell(
+            profiles: TestDoubles.Profiles(a), session: session).Shell;
+        Assert.True(shell.ShowRunningCleanDot);
 
         session.HasPendingChanges = true;
 
-        Assert.True(vm.HasPendingStagedChanges);
-        Assert.True(vm.ShowRunningDirtyDot);
-        Assert.False(vm.ShowRunningCleanDot);
+        Assert.True(shell.HasPendingStagedChanges);
+        Assert.True(shell.ShowRunningDirtyDot);
+    }
+
+    // ---- DMF prompt deferred to Mods entry --------------------------------
+
+    [Fact]
+    public async Task Profile_save_does_not_show_dmf_prompt()
+    {
+        // The DMF trigger is recorded at CreateProfile but consumed only on the
+        // next real navigation into Mods. Saving a new profile on the Profiles
+        // destination does NOT prompt immediately (the old behavior awaited the
+        // DMF delegate inside SaveAsync; the shell now owns the prompt).
+        var repo = new FakeModRepository();
+        var dmf = repo.Seed(new NexusSource { ModId = DmfPromptService.DmfModId }, "DMF", "1.0");
+        var profiles = TestDoubles.Profiles();
+        var session = new FakeProfileSession(() => profiles.ListProfiles());
+        var parts = TestDoubles.BuildShell(profiles: profiles, session: session, repo: repo);
+        var shell = parts.Shell;
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
+
+        // Save a new profile (drives CreateProfile -> ProfileCreated ->
+        // DmfPromptService records the trigger, does not prompt).
+        parts.ProfilesPage.AddProfileCommand.Execute(null);
+        parts.ProfilesPage.Name = "New";
+        parts.ProfilesPage.SaveCommand.Execute(null);
+
+        Assert.Equal(0, parts.Dialogs.ConfirmCalls); // no DMF prompt yet
+        Assert.True(parts.Session.ActiveProfileId is not null); // save activated
     }
 
     [Fact]
-    public async Task Launch_Launched_clears_pending_changes_after_the_successful_stage()
+    public async Task Visiting_a_non_Mods_destination_does_not_consume_the_dmf_trigger()
     {
-        // A successful launch re-staged the active profile's mod tree, so any
-        // prior pending edits are now reflected: the flag clears (the dirty
-        // indicator drops).
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var session = new FakeProfileSession { ActiveProfileId = a.Id, IsRunning = false, HasPendingChanges = true };
-        var launch = new FakeLaunchService(); // default: Launched
-        var vm = Build(TestDoubles.Profiles(a), session, launch: launch);
+        // A pending DMF trigger survives visits to Preferences and Settings;
+        // only a real navigation into Mods consumes it.
+        var repo = new FakeModRepository();
+        repo.Seed(new NexusSource { ModId = DmfPromptService.DmfModId }, "DMF", "1.0");
+        var profiles = TestDoubles.Profiles();
+        var session = new FakeProfileSession(() => profiles.ListProfiles());
+        var parts = TestDoubles.BuildShell(profiles: profiles, session: session, repo: repo);
+        var shell = parts.Shell;
 
-        await vm.LaunchCommand.ExecuteAsync(null);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
+        parts.ProfilesPage.AddProfileCommand.Execute(null);
+        parts.ProfilesPage.Name = "New";
+        parts.ProfilesPage.SaveCommand.Execute(null);
 
-        Assert.False(session.HasPendingChanges);
-        Assert.False(vm.HasPendingStagedChanges);
+        // Tour non-Mods destinations; the trigger is still pending.
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Preferences);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Settings);
+        Assert.Equal(0, parts.Dialogs.ConfirmCalls);
+
+        // Navigating into Mods now consumes the trigger -> the DMF prompt fires.
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
+
+        Assert.Equal(1, parts.Dialogs.ConfirmCalls);
     }
 
     [Fact]
-    public async Task Launch_DiscoveryIncomplete_does_not_clear_pending_changes()
+    public async Task Entering_Mods_sets_destination_first_then_prompts_and_reloads()
     {
-        // Nothing was staged on a DiscoveryIncomplete launch, so the pending flag
-        // is preserved (the edits still apply at the next successful stage).
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var session = new FakeProfileSession { ActiveProfileId = a.Id, HasPendingChanges = true };
-        var launch = new FakeLaunchService
-        {
-            NextResult = new LaunchResult(LaunchStatus.DiscoveryIncomplete, "missing", new[] { "SteamInstallPath" }),
-        };
-        var vm = Build(TestDoubles.Profiles(a), session, launch: launch);
+        // CurrentDestination is Mods BEFORE the DMF prompt fires (so Mods is
+        // selected underneath the modal). The post-prompt reload runs only when
+        // a trigger was consumed; an accepted existing-DMF add is visible in
+        // the mod list immediately after.
+        var repo = new FakeModRepository();
+        var dmf = repo.Seed(new NexusSource { ModId = DmfPromptService.DmfModId }, "DMF", "1.0");
+        var profiles = TestDoubles.Profiles();
+        var session = new FakeProfileSession(() => profiles.ListProfiles());
+        var parts = TestDoubles.BuildShell(profiles: profiles, session: session, repo: repo);
+        var shell = parts.Shell;
 
-        await vm.LaunchCommand.ExecuteAsync(null);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
+        parts.ProfilesPage.AddProfileCommand.Execute(null);
+        parts.ProfilesPage.Name = "New";
+        parts.ProfilesPage.SaveCommand.Execute(null);
+        var createdId = session.ActiveProfileId!.Value;
 
-        Assert.True(session.HasPendingChanges);
+        // Accept the DMF add (ConfirmResult defaults to true).
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
+
+        // Destination is Mods + the prompt fired + DMF was added to the profile.
+        Assert.Equal(ShellDestination.Mods, shell.CurrentDestination);
+        Assert.Equal(1, parts.Dialogs.ConfirmCalls);
+        var add = Assert.Single(profiles.AddModCalls);
+        Assert.Equal(createdId, add.Id);
+        Assert.Equal(dmf.Id, add.ContainerId);
+        // The post-prompt reload surfaced the add: the Mods page now sees the
+        // newly added DMF row.
+        Assert.Single(parts.ModsPage.Mods);
     }
 
     [Fact]
-    public async Task Launch_StagingFailed_does_not_clear_pending_changes()
+    public async Task Declined_dmf_prompt_does_not_reload_the_mod_list()
     {
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var session = new FakeProfileSession { ActiveProfileId = a.Id, HasPendingChanges = true };
-        var launch = new FakeLaunchService
-        {
-            NextResult = new LaunchResult(LaunchStatus.StagingFailed, "staging blew up", Array.Empty<string>()),
-        };
-        var vm = Build(TestDoubles.Profiles(a), session, launch: launch);
+        // A declined prompt leaves the mod list alone (no AddMod, no extra reload
+        // beyond what the shell always does on a real Mods entry).
+        var repo = new FakeModRepository();
+        repo.Seed(new NexusSource { ModId = DmfPromptService.DmfModId }, "DMF", "1.0");
+        var profiles = TestDoubles.Profiles();
+        var session = new FakeProfileSession(() => profiles.ListProfiles());
+        var parts = TestDoubles.BuildShell(profiles: profiles, session: session, repo: repo);
+        var shell = parts.Shell;
+        parts.Dialogs.ConfirmResult = false; // user says No
 
-        await vm.LaunchCommand.ExecuteAsync(null);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
+        parts.ProfilesPage.AddProfileCommand.Execute(null);
+        parts.ProfilesPage.Name = "New";
+        parts.ProfilesPage.SaveCommand.Execute(null);
 
-        Assert.True(session.HasPendingChanges);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
+
+        Assert.Equal(1, parts.Dialogs.ConfirmCalls); // prompt did fire
+        Assert.Empty(profiles.AddModCalls);          // decline respected
     }
 
     [Fact]
-    public async Task Launch_Error_does_not_clear_pending_changes()
+    public async Task Second_Mods_entry_does_not_re_prompt_after_a_consumed_trigger()
     {
-        var a = new ProfileSummary(Guid.NewGuid(), "Alpha");
-        var session = new FakeProfileSession { ActiveProfileId = a.Id, HasPendingChanges = true };
-        var launch = new FakeLaunchService
-        {
-            NextResult = new LaunchResult(LaunchStatus.Error, "boom", Array.Empty<string>()),
-        };
-        var vm = Build(TestDoubles.Profiles(a), session, launch: launch);
+        // ProcessPendingAsync consumes the trigger; a subsequent Mods entry
+        // finds nothing pending and does not prompt again.
+        var repo = new FakeModRepository();
+        repo.Seed(new NexusSource { ModId = DmfPromptService.DmfModId }, "DMF", "1.0");
+        var profiles = TestDoubles.Profiles();
+        var session = new FakeProfileSession(() => profiles.ListProfiles());
+        var parts = TestDoubles.BuildShell(profiles: profiles, session: session, repo: repo);
+        var shell = parts.Shell;
 
-        await vm.LaunchCommand.ExecuteAsync(null);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
+        parts.ProfilesPage.AddProfileCommand.Execute(null);
+        parts.ProfilesPage.Name = "New";
+        parts.ProfilesPage.SaveCommand.Execute(null);
 
-        Assert.True(session.HasPendingChanges);
+        // Navigate away from Mods then back: first Mods entry consumes + prompts.
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Preferences);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
+        Assert.Equal(1, parts.Dialogs.ConfirmCalls);
+
+        // A second Mods entry (after a non-Mods hop) does not re-prompt.
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Preferences);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
+
+        Assert.Equal(1, parts.Dialogs.ConfirmCalls);
+    }
+
+    // ---- helpers -----------------------------------------------------------
+
+    /// <summary>
+    /// Forces the localization service to raise its culture-changed event by
+    /// switching to a culture different from the current one (a no-op culture
+    /// assignment raises nothing).
+    /// </summary>
+    private static void FireCultureChange(LocalizationService loc)
+    {
+        var next = loc.Culture.Name == "fr" ? "de" : "fr";
+        loc.SetCulture(next);
     }
 }

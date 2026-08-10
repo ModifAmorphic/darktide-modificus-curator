@@ -12,14 +12,13 @@ using Microsoft.Extensions.Logging;
 namespace Modificus.Curator.UI.ViewModels;
 
 /// <summary>
-/// The view model behind the Integrations modal
-/// (<see cref="Views.IntegrationsWindow"/>). Nexus-only: two clearly
-/// alternative, visually separated blocks, "Sign in to Nexus" (OAuth) and
-/// "Use an API key", only one of which is active at a time. The active method
-/// is shown by the method-aware status line ("Signed in as X (Premium) via
-/// Nexus login" vs "...via API key"). The OAuth block is a single dual-state
-/// button (the same two-button visibility-toggle pattern as the API-key
-/// field's eye toggle): "Sign in to Nexus" when not signed in via OAuth
+/// The view model behind the Nexus content (hosted by
+/// <see cref="Views.IntegrationsView"/>). Nexus-only: two clearly alternative, visually separated blocks, "Sign in to
+/// Nexus" (OAuth) and "Use an API key", only one of which is active at a time.
+/// The active method is shown by the method-aware status line ("Signed in as X
+/// (Premium) via Nexus login" vs "...via API key"). The OAuth block is a single
+/// dual-state button (the same two-button visibility-toggle pattern as the
+/// API-key field's eye toggle): "Sign in to Nexus" when not signed in via OAuth
 /// (starts the OAuth flow), "Clear Nexus sign-in" when signed in via OAuth
 /// (clears the stored tokens / signs out). There is no separate Sign out in
 /// the OAuth block: the signed-in state is the clear path, so there is no
@@ -37,6 +36,13 @@ namespace Modificus.Curator.UI.ViewModels;
 /// </summary>
 /// <remarks>
 /// <para>
+/// <b>Lifetime.</b> An application-lifetime singleton. <see cref="RefreshAsync"/>
+/// is the activation operation (entering Integrations);
+/// <see cref="Deactivate"/> is the navigation-away operation (cancels only the
+/// in-flight auth so the loopback listener releases promptly, without
+/// unsubscribing localization). There is no detach path: the VM stays
+/// subscribed for the application lifetime.</para>
+/// <para>
 /// <b>Auth method is the user's explicit choice.</b> Clicking "Sign in to
 /// Nexus" starts the OAuth loopback flow (<c>AuthMethod = OAuth</c>); pasting +
 /// validating an API key sets <c>AuthMethod = ApiKey</c>; Sign out (the OAuth
@@ -45,8 +51,8 @@ namespace Modificus.Curator.UI.ViewModels;
 /// credentials (handled in <see cref="NexusAuthService"/>). One active method at
 /// a time, no leftovers.</para>
 /// <para>
-/// <b>Status line is resolved server-side on open + after each action.</b>
-/// When the dialog opens, <see cref="RefreshAsync"/> calls
+/// <b>Status line is resolved server-side on activation + after each
+/// action.</b> <see cref="RefreshAsync"/> calls
 /// <see cref="NexusAuthService.GetCurrentStateAsync"/> to resolve the current
 /// display name + premium state (one network call). A failed verify (network or
 /// stale credentials) yields a method-aware "signed in (unverified)" status; the
@@ -62,8 +68,8 @@ namespace Modificus.Curator.UI.ViewModels;
 /// validates a freshly typed key otherwise.</para>
 /// <para>
 /// <b>Localization.</b> Every user-facing string resolves through
-/// <see cref="LocalizationService"/>; the dialog's bound properties re-resolve on
-/// a culture flip.</para>
+/// <see cref="LocalizationService"/>; the bound properties re-resolve on a
+/// culture flip.</para>
 /// </remarks>
 public partial class IntegrationsViewModel : ObservableObject
 {
@@ -75,9 +81,9 @@ public partial class IntegrationsViewModel : ObservableObject
     private readonly ILogger<IntegrationsViewModel> _logger;
 
     // Backs the in-flight OAuth login or API-key validate. Swapped per attempt
-    // via NewLoginToken + canceled on Detach (see Detach). Lets the two auth
-    // commands cancel each other's in-flight call, and frees the loopback
-    // listener promptly when the Integrations dialog closes mid-flight.
+    // via NewLoginToken + canceled on Deactivate (navigation away). Lets the two
+    // auth commands cancel each other's in-flight call, and frees the loopback
+    // listener promptly when the user leaves Integrations mid-flight.
     private CancellationTokenSource? _loginCts;
 
     public IntegrationsViewModel(
@@ -122,8 +128,8 @@ public partial class IntegrationsViewModel : ObservableObject
     public bool IsApiKeyActive => ActiveMethod == NexusAuthMethod.ApiKey;
 
     /// <summary>
-    /// Whether the Integrations dialog's API-key block is shown. Read live from
-    /// <c>NexusConfig.ApiKeyAuthEnabled</c> on dialog open (a developer-only
+    /// Whether the Integrations view's API-key block is shown. Read live from
+    /// <c>NexusConfig.ApiKeyAuthEnabled</c> on activation (a developer-only
     /// config.json toggle; there is no UI control for it). Default false: the
     /// API-key block is hidden and OAuth is the sole sign-in path unless the flag
     /// is set in config.json.
@@ -177,7 +183,7 @@ public partial class IntegrationsViewModel : ObservableObject
     /// Whether a Nexus auth method is currently configured (OAuth or ApiKey).
     /// Drives the Sign-out button availability (sign-out only enabled when
     /// authenticated). Notifies <see cref="SignOutCommand"/> so a refresh that
-    /// flips this without an <see cref="IsBusy"/> toggle (e.g. the dialog-open
+    /// flips this without an <see cref="IsBusy"/> toggle (e.g. the on-enter
     /// <see cref="RefreshAsync"/> resolving an authenticated state) still
     /// re-evaluates the Sign-out CanExecute.
     /// </summary>
@@ -199,7 +205,7 @@ public partial class IntegrationsViewModel : ObservableObject
     private bool _isPremiumVerified;
 
     /// <summary>
-    /// Whether the dialog is mid-flight on an OAuth login or API-key validate
+    /// Whether the VM is mid-flight on an OAuth login or API-key validate
     /// (both are async + hit the network). Disables the buttons + shows a
     /// "working" status while in flight so the user gets feedback that the click
     /// registered.
@@ -216,7 +222,7 @@ public partial class IntegrationsViewModel : ObservableObject
     /// <summary>
     /// Set while <see cref="LoadAutoUpdateSettings"/> populates the toggle +
     /// interval from the live config so the resulting property-change handlers
-    /// do not write back (which would be a no-op round-trip on every dialog
+    /// do not write back (which would be a no-op round-trip on every activation
     /// open). Cleared after the load completes; user-driven changes then persist
     /// through <see cref="OnAutoUpdateCheckEnabledChanged"/> /
     /// <see cref="OnAutoUpdateCheckIntervalMinutesChanged"/>.
@@ -226,7 +232,7 @@ public partial class IntegrationsViewModel : ObservableObject
     /// <summary>
     /// Whether the periodic background update check runs while a profile is
     /// active. Loaded live from <c>NexusConfig.AutoUpdateCheckEnabled</c> on
-    /// dialog open; persisted on each user change via read-modify-save. The
+    /// activation; persisted on each user change via read-modify-save. The
     /// toggle gates ONLY the periodic timer (profile-load + manual checks still
     /// run); the runner reads it live, so a change here takes effect without a
     /// restart.
@@ -240,7 +246,7 @@ public partial class IntegrationsViewModel : ObservableObject
     /// Two-way bound; persisted on each user change via read-modify-save,
     /// clamped to [<see cref="NexusConfig.MinAutoUpdateCheckIntervalMinutes"/>,
     /// <see cref="NexusConfig.MaxAutoUpdateCheckIntervalMinutes"/>] on write.
-    /// Loaded from <c>NexusConfig.AutoUpdateCheckIntervalMinutes</c> on dialog
+    /// Loaded from <c>NexusConfig.AutoUpdateCheckIntervalMinutes</c> on activation
     /// open.
     /// </summary>
     [ObservableProperty]
@@ -249,7 +255,7 @@ public partial class IntegrationsViewModel : ObservableObject
     /// <summary>
     /// Whether Premium accounts have flagged mod updates installed automatically
     /// after a check runs (opt-in, default false). Loaded live from
-    /// <c>NexusConfig.AutomaticUpdatesEnabled</c> on dialog open; persisted on
+    /// <c>NexusConfig.AutomaticUpdatesEnabled</c> on activation; persisted on
     /// each user change via read-modify-save. Independent of
     /// <see cref="AutoUpdateCheckEnabled"/>: turning this on never requires
     /// periodic checking, and changing the periodic-check toggle never clears a
@@ -260,7 +266,7 @@ public partial class IntegrationsViewModel : ObservableObject
 
     /// <summary>
     /// Persisted when the user flips <see cref="AutoUpdateCheckEnabled"/>.
-    /// Skipped during the dialog-open load (guarded by
+    /// Skipped during the activation load (guarded by
     /// <c>_isLoadingAutoUpdate</c>) so populating the field from config does not
     /// trigger a redundant write-back round-trip.
     /// </summary>
@@ -268,14 +274,14 @@ public partial class IntegrationsViewModel : ObservableObject
 
     /// <summary>
     /// Persisted when the user edits <see cref="AutoUpdateCheckIntervalMinutes"/>.
-    /// Skipped during the dialog-open load (guarded by
+    /// Skipped during the activation load (guarded by
     /// <c>_isLoadingAutoUpdate</c>).
     /// </summary>
     partial void OnAutoUpdateCheckIntervalMinutesChanged(decimal? value) => SaveAutoUpdateSettings();
 
     /// <summary>
     /// Persisted when the user flips <see cref="AutomaticUpdatesEnabled"/>.
-    /// Skipped during the dialog-open load (guarded by
+    /// Skipped during the activation load (guarded by
     /// <c>_isLoadingAutoUpdate</c>). Independent of
     /// <see cref="OnAutoUpdateCheckEnabledChanged"/>: toggling the periodic check
     /// never touches <c>AutomaticUpdatesEnabled</c>, so a configured true value
@@ -354,7 +360,6 @@ public partial class IntegrationsViewModel : ObservableObject
 
     // ---- localized labels -------------------------------------------------
 
-    public string WindowTitle => _localization["Integrations_Title"];
     public string NexusHeader => _localization["Integrations_NexusHeader"];
     public string LoginWithOAuthLabel => _localization["Integrations_LoginWithNexus"];
     public string ClearNexusSignInLabel => _localization["Integrations_ClearNexusSignIn"];
@@ -363,7 +368,6 @@ public partial class IntegrationsViewModel : ObservableObject
     public string ApiKeyHelpLink => _localization["Integrations_ApiKeyHelpUrl"];
     public string ApiKeyHelpLabel => _localization["Integrations_ApiKeyHelp"];
     public string SignOutLabel => _localization["Integrations_SignOutButton"];
-    public string DoneLabel => _localization["Integrations_DoneButton"];
     public string AutoUpdateHeader => _localization["Integrations_AutoUpdateHeader"];
     public string AutoUpdateEnabledLabel => _localization["Integrations_AutoUpdateEnabled"];
     public string AutoUpdateIntervalLabel => _localization["Integrations_AutoUpdateInterval"];
@@ -393,7 +397,8 @@ public partial class IntegrationsViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            // Expected when the dialog closes mid-login via Detach; not an error.
+            // Expected when the VM is deactivated mid-login (navigation away or
+            // navigation away); not an error.
         }
         catch (Exception ex)
         {
@@ -434,7 +439,8 @@ public partial class IntegrationsViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            // Expected when the dialog closes mid-login via Detach; not an error.
+            // Expected when the VM is deactivated mid-validate (navigation away
+            // or navigation away); not an error.
         }
         catch (Exception ex)
         {
@@ -503,8 +509,8 @@ public partial class IntegrationsViewModel : ObservableObject
     /// Cancels + disposes any prior login CTS and returns a fresh token for a
     /// new auth attempt. OAuth login and API-key validate share this so the two
     /// commands cancel each other's in-flight call (one auth attempt at a time),
-    /// and <see cref="Detach"/> cancels whichever is in flight when the dialog
-    /// closes.
+    /// and <see cref="Deactivate"/> cancels whichever is in flight when the user
+    /// navigates away from Integrations.
     /// </summary>
     private CancellationToken NewLoginToken()
     {
@@ -759,9 +765,9 @@ public partial class IntegrationsViewModel : ObservableObject
     // ---- live state -------------------------------------------------------
 
     /// <summary>
-    /// Re-resolves the localized strings (window title, labels, status line)
-    /// when the UI culture flips so the dialog refreshes in-step with the rest
-    /// of the UI on a language switch.
+    /// Re-resolves the localized strings (labels, status line) when the UI
+    /// culture flips so the destination refreshes in-step with the rest of the
+    /// UI on a language switch.
     /// </summary>
     private void OnCultureChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -770,7 +776,6 @@ public partial class IntegrationsViewModel : ObservableObject
             return;
         }
 
-        OnPropertyChanged(nameof(WindowTitle));
         OnPropertyChanged(nameof(NexusHeader));
         OnPropertyChanged(nameof(LoginWithOAuthLabel));
         OnPropertyChanged(nameof(ClearNexusSignInLabel));
@@ -779,7 +784,6 @@ public partial class IntegrationsViewModel : ObservableObject
         OnPropertyChanged(nameof(ApiKeyHelpLink));
         OnPropertyChanged(nameof(ApiKeyHelpLabel));
         OnPropertyChanged(nameof(SignOutLabel));
-        OnPropertyChanged(nameof(DoneLabel));
         OnPropertyChanged(nameof(AutoUpdateHeader));
         OnPropertyChanged(nameof(AutoUpdateEnabledLabel));
         OnPropertyChanged(nameof(AutoUpdateIntervalLabel));
@@ -798,22 +802,18 @@ public partial class IntegrationsViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Detaches the VM's subscriptions so the short-lived dialog VM is
-    /// collectable after its window closes (the localization service is a
-    /// singleton that outlives the dialog).
+    /// Navigation-away operation: cancels + disposes the current login/API-key
+    /// validation CTS so the OAuth loopback listener releases promptly instead
+    /// of waiting out the flow timeout. Idempotent and safe after construction
+    /// and on repeated cancellation paths. Does not unsubscribe localization:
+    /// this VM is an application-lifetime singleton that stays responsive to
+    /// culture changes across navigation, and a later <see cref="RefreshAsync"/>
+    /// + auth attempt works normally after this.
     /// </summary>
-    public void Detach()
+    public void Deactivate()
     {
-        // The Integrations dialog calls Detach() from OnClosed. Cancel any
-        // in-flight login first so the singleton LoopbackBrowser's HttpListener
-        // stops promptly instead of waiting out the 3-minute flow timeout: a
-        // failed authorize (no redirect returns) would otherwise strand the
-        // pre-grabbed port, and a reopen + retry could not rebind it (the
-        // retry-without-restart bug).
         _loginCts?.Cancel();
         _loginCts?.Dispose();
         _loginCts = null;
-
-        _localization.PropertyChanged -= OnCultureChanged;
     }
 }

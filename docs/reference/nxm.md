@@ -351,7 +351,7 @@ as a sibling of the main Curator exe). `NxmHandlerPaths.LinuxDesktopFileId`
 (`modificus-curator-nxm-handler.desktop`) is the shared desktop-file id.
 
 **Explicit registration, not startup auto-registration.** Registration as the
-OS `nxm://` handler is an explicit user action from the Integrations dialog (a
+OS `nxm://` handler is an explicit user action from the Nexus destination (a
 "Nexus download links" section with a status line + a toggle), not something
 `CuratorComposition.Build()` does on startup. The register path confirms first
 (it is a system-wide change that can affect Vortex, Mod Organizer 2, Nexus Mod
@@ -416,7 +416,7 @@ On a degraded pipe bind, `StartNxmServer` logs that the IPC server is not runnin
 and skips the accept loop; the app continues without nxm IPC.
 
 The composition root does **not** register the OS handler. Registration is an
-explicit user action from the Integrations dialog. Startup only maintains an
+explicit user action from the Nexus destination. Startup only maintains an
 already-owned AppImage registration.
 
 ## On-disk / process layout

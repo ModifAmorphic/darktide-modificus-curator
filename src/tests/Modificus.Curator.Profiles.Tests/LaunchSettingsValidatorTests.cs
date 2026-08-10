@@ -5,10 +5,10 @@ namespace Modificus.Curator.Profiles.Tests;
 /// shape of its result (index / kind / field), the per-kind verdicts, and a
 /// parameterized <b>agreement test</b> that feeds the SAME launch-settings
 /// inputs through both the service's verdict (does
-/// <see cref="IProfileService.SetLaunchSettings"/> throw?) and the validator's
-/// verdict (any errors?) and asserts they agree across valid + every invalid
-/// case. The agreement test is the regression guard against the two consumers
-/// drifting again.
+/// <see cref="IProfileService.UpdateProfile"/> throw for the launch settings?)
+/// and the validator's verdict (any errors?) and asserts they agree across
+/// valid + every invalid case. The agreement test is the regression guard
+/// against the two consumers drifting again.
 /// </summary>
 public sealed class LaunchSettingsValidatorTests
 {
@@ -185,17 +185,17 @@ public sealed class LaunchSettingsValidatorTests
         LaunchSettings settings, bool expectValid, string description)
     {
         // The validator's verdict (any errors?) must agree with the service's
-        // verdict (does SetLaunchSettings throw an ArgumentException?) across
-        // valid + every invalid case. This is the regression guard against the
-        // two consumers drifting again. (The description parameter carries the
-        // case label for the test runner's display name.)
+        // verdict (does UpdateProfile throw an ArgumentException for the launch
+        // settings?) across valid + every invalid case. This is the regression
+        // guard against the two consumers drifting again. (The description
+        // parameter carries the case label for the test runner's display name.)
         _ = description; // label only; surfaced by the theory display name.
         using var fx = new ProfileServiceFixture();
-        var profile = fx.Service.CreateProfile("P");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
         var profileId = profile.Id;
 
         var validatorSaysValid = LaunchSettingsValidator.IsValid(settings);
-        var serviceSaysValid = TrySetLaunchSettings(fx.Service, profileId, settings);
+        var serviceSaysValid = TryApplyLaunchSettings(fx.Service, profileId, settings);
 
         Assert.Equal(expectValid, validatorSaysValid);
         Assert.Equal(expectValid, serviceSaysValid);
@@ -203,16 +203,18 @@ public sealed class LaunchSettingsValidatorTests
     }
 
     /// <summary>
-    /// Drives <see cref="IProfileService.SetLaunchSettings"/> + returns whether
-    /// it accepted the settings (no <see cref="ArgumentException"/>).
+    /// Drives <see cref="IProfileService.UpdateProfile"/> with the profile's
+    /// current name + description + the supplied launch settings, and returns
+    /// whether it accepted the settings (no <see cref="ArgumentException"/>).
     /// <see cref="ArgumentNullException"/> (null settings) is not a validation
     /// verdict and rethrows; any other exception rethrows too.
     /// </summary>
-    private static bool TrySetLaunchSettings(IProfileService service, Guid profileId, LaunchSettings settings)
+    private static bool TryApplyLaunchSettings(IProfileService service, Guid profileId, LaunchSettings settings)
     {
         try
         {
-            service.SetLaunchSettings(profileId, settings);
+            var current = service.GetProfile(profileId);
+            service.UpdateProfile(profileId, current.Name, current.Description, settings);
             return true;
         }
         catch (ArgumentException)

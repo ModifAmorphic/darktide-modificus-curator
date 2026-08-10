@@ -50,7 +50,7 @@ relay-client resolves and prunes that file at launch (see
 Loads `CuratorConfig` from JSON with full defaults, and writes it back through
 `Save`. Consumers inject `IConfigLoader` and re-read on each
 operation (config is read live from disk, not cached at startup; #31), so runtime
-writes via the Settings window are visible immediately.
+writes via the Settings destination are visible immediately.
 A missing or partial file yields a fully-usable config on load: every field has
 a platform-appropriate default (see [config](config.md)).
 
@@ -146,8 +146,8 @@ public sealed class AppStateStore : IAppStateStore
   (`OnboardingService`) to decide whether to show the first-run Welcome modal:
   it reads the flag at startup and sets it to `true` once the user has chosen
   (Set up Nexus or Continue without Nexus), persisting before any further UI so
-  canceling the subsequent Integrations dialog can never cause Welcome to
-  repeat.
+  navigating away from Nexus (or the navigation failing) can never
+  cause Welcome to repeat.
 - `ActiveProfileId` is used by `IProfileSession` (the active-profile authority)
   to restore the active profile on construction and persist it on changes.
 - `LastUpdateCheckUtc` + `ManualRefreshTimestamps` are used by `UpdateCheckRunner`
@@ -156,8 +156,9 @@ public sealed class AppStateStore : IAppStateStore
   (so the manual free-refresh budget survives a close/reopen).
 - `KnownUpdates` is used by the Integrations-layer `IUpdateStateStore` to persist
   profile-scoped known-update snapshots (so a restart inside the interval gate
-  shows prior update flags before any API call). The shell and the Manage dialog
-  read the active id through the session; they do not touch this store.
+  shows prior update flags before any API call). The shell and the Profiles
+  destination read the active id through the session; they do not touch this
+  store.
 
 `KnownUpdateSnapshot` is a plain serializable DTO (no domain behavior) so the
 General library can persist it without depending on the Integrations

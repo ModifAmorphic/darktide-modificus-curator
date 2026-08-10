@@ -1,0 +1,291 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Modificus.Curator.UI.ViewModels"
+             x:Class="Modificus.Curator.UI.Views.IntegrationsView"
+             x:DataType="vm:IntegrationsViewModel">
+
+  <!--
+    Host-neutral Nexus content (Nexus-only in v1). No window chrome,
+    no Done button, no ESC behavior: the host owns those. Owns the page-level
+    vertical ScrollViewer so the sections stay usable at the main window's
+    minimum size and supported font-scale range; the host sizes this control
+    into its content region.
+
+    The Nexus section leads with the OAuth block ("Sign in to Nexus"); the
+    API-key block is demoted to the bottom (below the update-check settings +
+    the nxm download-links section) and carries a "testing only, removed at
+    release" note reflecting its pre-registration status. The two remain
+    alternative auth methods, only one active at a time:
+
+      - OAuth block: a single dual-state button that toggles by IsOAuthActive
+        (the same two-button visibility-toggle pattern as the API-key field's
+        eye toggle): "Sign in to Nexus" when not signed in via OAuth (starts the
+        OAuth loopback flow), "Clear Nexus sign-in" when signed in via OAuth
+        (clears the stored tokens / signs out). No separate Sign out: the
+        signed-in state is the clear path, so there is no re-login-over-existing
+        (to re-login, Clear then Sign in).
+      - API-key block (bottom): a masked TextBox (shows bullets when a key is
+        configured, persisted across reopens) + a Show eye-toggle Path + a
+        Validate button. When active, a per-block Sign out button appears.
+
+    The shared status line above the OAuth block reflects the signed-in state
+    ("Signed in as X (Premium)"); the API-key path appends a "via API key"
+    suffix, so the API-key method (rather than OAuth) is distinguishable. Auth
+    controls stay usable while Darktide runs (only launch + active-profile
+    changes are blocked); the eye-toggle is excluded from the in-flight IsBusy
+    gate because revealing a masked key is a read-only op that changes no
+    credentials.
+  -->
+  <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                VerticalScrollBarVisibility="Auto">
+    <StackPanel Spacing="16" Margin="24">
+
+      <!-- ============== Nexus section ============== -->
+      <StackPanel Spacing="8">
+
+        <TextBlock Text="{Binding NexusHeader}"
+                   FontWeight="SemiBold" />
+
+        <!-- Shared status line: the signed-in state (the API-key path appends a
+             "via API key" suffix) or an error. -->
+        <TextBlock Text="{Binding StatusLine}"
+                   TextWrapping="Wrap"
+                   Margin="0,4,0,8"
+                   Opacity="0.85" />
+
+        <!-- ============== OAuth block ============== -->
+        <StackPanel Spacing="8" Margin="0,4">
+          <!-- Dual-state button (the same two-button visibility-toggle pattern
+               as the API-key field's eye toggle): exactly one is visible at a
+               time, bound to IsOAuthActive, so the signed-in state occupies the
+               same visual position as the sign-in state. No separate Sign out:
+               the signed-in state clears the OAuth tokens (signs out); to
+               re-login you Clear then Sign in (no re-login-over-existing). -->
+          <!-- Sign-in state (not signed in via OAuth): "Sign in to Nexus"
+               starts the OAuth loopback flow. Material "login" icon (24x24
+               source): an arrow into a door. Drawn geometry, themed via the
+               button foreground. -->
+          <Button Command="{Binding LoginWithOAuthCommand}"
+                  IsVisible="{Binding !IsOAuthActive}"
+                  HorizontalAlignment="Stretch"
+                  HorizontalContentAlignment="Left"
+                  ToolTip.Tip="{ReflectionBinding [Integrations_LoginWithNexusTooltip], Source={StaticResource Loc}}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Path Width="16" Height="16" Stretch="Uniform"
+                    VerticalAlignment="Center"
+                    Fill="{Binding $parent[Button].Foreground}"
+                    Data="M11 7L9.6 8.4l2.6 2.6H2v2h10.2l-2.6 2.6L11 17l5-5-5-5zm9 12h-8v2h8c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-8v2h8v14z" />
+              <TextBlock Text="{Binding LoginWithOAuthLabel}"
+                         VerticalAlignment="Center"
+                         Margin="8,0,0,0" />
+            </StackPanel>
+          </Button>
+
+          <!-- Signed-in state (signed in via OAuth): "Clear Nexus sign-in"
+               clears the stored OAuth tokens (signs out). Material "logout"
+               icon (path data reused from the removed per-block Sign out).
+               Matches the sign-in button's stretch + left-content layout so the
+               two states occupy the same visual position. -->
+          <Button Command="{Binding SignOutCommand}"
+                  IsVisible="{Binding IsOAuthActive}"
+                  HorizontalAlignment="Stretch"
+                  HorizontalContentAlignment="Left"
+                  ToolTip.Tip="{ReflectionBinding [Integrations_ClearNexusSignInTooltip], Source={StaticResource Loc}}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Path Width="16" Height="16" Stretch="Uniform"
+                    VerticalAlignment="Center"
+                    Fill="{Binding $parent[Button].Foreground}"
+                    Data="M17 7l-1.4 1.4 1.6 1.6H8v2h9.2l-1.6 1.6L17 15l4-4-4-4zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z" />
+              <TextBlock Text="{Binding ClearNexusSignInLabel}"
+                         VerticalAlignment="Center"
+                         Margin="8,0,0,0" />
+            </StackPanel>
+          </Button>
+        </StackPanel>
+
+      </StackPanel>
+
+      <!-- ============== Update-check settings ==============
+           A sub-section below the auth blocks: the periodic update-check
+           toggle + interval, persisted live, plus the opt-in Premium
+           automatic-update installer toggle (independent of the periodic
+           check). These are preference settings, not credentials, so they live
+           here (Nexus is the only update source) and persist through the config
+           loader. The NumericUpDown binds its Value (decimal?) to the VM's
+           AutoUpdateCheckIntervalMinutes; Minimum/Maximum/Increment bound the
+           input, FormatString hides the decimal tail. The automatic-updates
+           checkbox is visible for every account but enabled only for a verified
+           Premium account (ShowOnDisabled surfaces the Premium-required tooltip
+           when disabled). -->
+      <Separator Margin="0,4" />
+      <StackPanel Spacing="8" Margin="0,4">
+        <TextBlock Text="{Binding AutoUpdateHeader}"
+                   FontWeight="SemiBold" />
+        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <CheckBox IsChecked="{Binding AutoUpdateCheckEnabled, Mode=TwoWay}"
+                    VerticalAlignment="Center" />
+          <TextBlock Text="{Binding AutoUpdateEnabledLabel}"
+                     VerticalAlignment="Center" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <TextBlock Text="{Binding AutoUpdateIntervalLabel}"
+                     VerticalAlignment="Center" />
+          <NumericUpDown Value="{Binding AutoUpdateCheckIntervalMinutes, Mode=TwoWay}"
+                         Minimum="5" Maximum="1440" Increment="1"
+                         FormatString="0"
+                         MinWidth="100"
+                         VerticalAlignment="Center" />
+        </StackPanel>
+        <!-- Premium opt-in automatic installation. Visible for every account;
+             enabled only when CanEditAutomaticUpdates (verified Premium).
+             ShowOnDisabled keeps the Premium-required tooltip reachable while
+             the checkbox is disabled. A configured true value is preserved
+             (stays checked) even when Premium becomes unavailable; runtime
+             execution re-verifies Premium before installing. -->
+        <CheckBox IsChecked="{Binding AutomaticUpdatesEnabled, Mode=TwoWay}"
+                  IsEnabled="{Binding CanEditAutomaticUpdates}"
+                  ToolTip.Tip="{Binding AutomaticUpdatesTooltip}"
+                  ToolTip.ShowOnDisabled="True"
+                  VerticalAlignment="Center">
+          <TextBlock Text="{Binding AutomaticUpdatesLabel}"
+                     VerticalAlignment="Center" />
+        </CheckBox>
+      </StackPanel>
+
+      <!-- ============== NXM download links ==============
+           Explicit OS nxm:// handler registration. Registration is a
+           system-wide change (it can take over links from Vortex / MO2 /
+           NMM), so the toggle's register path shows a confirmation dialog first
+           (the VM drives that); unregister only releases Curator's own
+           registration. The button label + status line flip with the
+           IsNxmRegistered state; when no registrar is available for this
+           platform the button is disabled (CanToggleNxmHandler) and the status
+           line shows "unavailable". Usable while Darktide runs. -->
+      <Separator Margin="0,4" />
+      <StackPanel Spacing="8" Margin="0,4">
+        <TextBlock Text="{Binding NxmSectionHeader}"
+                   FontWeight="SemiBold" />
+        <!-- nxm status line with a green/grey indicator mirroring the
+             status-strip one. Green when Curator is registered, grey otherwise
+             (covers not registered + unavailable, since the VM sets
+             IsNxmRegistered false when no registrar is present). -->
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <Ellipse Width="11" Height="11" VerticalAlignment="Center"
+                   Fill="#22A06B"
+                   IsVisible="{Binding IsNxmRegistered}" />
+          <Ellipse Width="11" Height="11" VerticalAlignment="Center"
+                   Fill="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                   IsVisible="{Binding !IsNxmRegistered}" />
+          <TextBlock Text="{Binding NxmStatusText}"
+                     TextWrapping="Wrap"
+                     Opacity="0.85" />
+        </StackPanel>
+        <Button Content="{Binding NxmActionLabel}"
+                Command="{Binding ToggleNxmHandlerCommand}"
+                HorizontalAlignment="Left"
+                MinWidth="220"
+                ToolTip.Tip="{Binding NxmActionTooltip}" />
+      </StackPanel>
+
+      <!-- ============== API-key block (demoted) ==============
+           The API-key alternative, moved to the bottom (below OAuth, the
+           update-check settings, and the nxm download-links section).
+           Self-contained with its own bindings. The "testing only" note signals
+           its pre-registration status; the release-time remove-vs-hide decision
+           is separate. -->
+      <Separator Margin="0,4" IsVisible="{Binding IsApiKeyAuthEnabled}" />
+      <StackPanel Spacing="8" Margin="0,4" IsVisible="{Binding IsApiKeyAuthEnabled}">
+
+        <!-- Block header. -->
+        <TextBlock Text="{Binding ApiKeyLabel}"
+                   Opacity="0.85" />
+
+        <!-- Masked TextBox + Show eye-toggle + Validate. The TextBox's
+             PasswordChar binds to ApiKeyMaskChar ('\0' = plain / revealed,
+             bullet = masked). The eye toggle is two stacked Buttons (show /
+             hide) with their visibility flipped by IsApiKeyRevealed; the active
+             one re-resolves its own tooltip via the matching VM property. -->
+        <Grid ColumnDefinitions="*,Auto,Auto">
+          <TextBox Grid.Column="0"
+                   Text="{Binding ApiKey, Mode=TwoWay}"
+                   PasswordChar="{Binding ApiKeyMaskChar}"
+                   PlaceholderText="{ReflectionBinding [Integrations_ApiKeyWatermark], Source={StaticResource Loc}}" />
+
+          <!-- Show eye toggle (revealed state -> click to hide). Material
+               "visibility_off" icon. -->
+          <Button Grid.Column="1"
+                  Command="{Binding ToggleApiKeyRevealCommand}"
+                  IsVisible="{Binding IsApiKeyRevealed}"
+                  MinWidth="36"
+                  Margin="8,0,0,0"
+                  VerticalAlignment="Stretch"
+                  HorizontalAlignment="Stretch"
+                  Padding="0"
+                  ToolTip.Tip="{Binding HideApiKeyTooltip}">
+            <Path Width="16" Height="16" Stretch="Uniform"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  Fill="{Binding $parent[Button].Foreground}"
+                  Data="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27z" />
+          </Button>
+
+          <!-- Hide eye toggle (masked state -> click to reveal). Material
+               "visibility" icon. -->
+          <Button Grid.Column="1"
+                  Command="{Binding ToggleApiKeyRevealCommand}"
+                  IsVisible="{Binding !IsApiKeyRevealed}"
+                  MinWidth="36"
+                  Margin="8,0,0,0"
+                  VerticalAlignment="Stretch"
+                  HorizontalAlignment="Stretch"
+                  Padding="0"
+                  ToolTip.Tip="{Binding ShowApiKeyTooltip}">
+            <Path Width="16" Height="16" Stretch="Uniform"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  Fill="{Binding $parent[Button].Foreground}"
+                  Data="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
+          </Button>
+
+          <Button Grid.Column="2"
+                  Content="{Binding ValidateLabel}"
+                  Command="{Binding ValidateApiKeyCommand}"
+                  Margin="8,0,0,0"
+                  MinWidth="80" />
+        </Grid>
+
+        <!-- Help link to where the user gets their API key. -->
+        <Button Content="{Binding ApiKeyHelpLabel}"
+                Classes="link"
+                HorizontalAlignment="Left"
+                Margin="0,0,0,4"
+                Click="ApiKeyHelp_Click"
+                Padding="0"
+                ToolTip.Tip="{Binding ApiKeyHelpLink}" />
+
+        <!-- Per-block Sign out: visible only when API key is the active method.
+             Material "logout" icon. -->
+        <Button Command="{Binding SignOutCommand}"
+                IsVisible="{Binding IsApiKeyActive}"
+                HorizontalAlignment="Left"
+                MinWidth="120">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Path Width="14" Height="14" Stretch="Uniform"
+                  VerticalAlignment="Center"
+                  Fill="{Binding $parent[Button].Foreground}"
+                  Data="M17 7l-1.4 1.4 1.6 1.6H8v2h9.2l-1.6 1.6L17 15l4-4-4-4zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z" />
+            <TextBlock Text="{Binding SignOutLabel}"
+                       VerticalAlignment="Center"
+                       Margin="8,0,0,0" />
+          </StackPanel>
+        </Button>
+
+        <!-- Testing-only note: signals the API-key path's pre-registration
+             status. Small + low opacity so it reads as an aside. -->
+        <TextBlock Text="{ReflectionBinding [Integrations_ApiKeyTestingNote], Source={StaticResource Loc}}"
+                   FontSize="11"
+                   Opacity="0.6"
+                   TextWrapping="Wrap" />
+      </StackPanel>
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>
