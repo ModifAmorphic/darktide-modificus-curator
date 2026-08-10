@@ -388,7 +388,7 @@ named pipe to the running app (or cold-starts Curator and retries), where the UR
 is parsed, classified, and dispatched to a pluggable handler. Single-instance is
 enforced by process enumeration before the pipe bind, and the pipe bind is a
 separate, non-fatal check that degrades gracefully; the OS handler registration
-is an explicit user action from the Nexus Integrations destination (Curator only handles
+is an explicit user action from the Nexus destination (Curator only handles
 Darktide `nxm://` downloads). Full detail (the two-process model, the cold-start
 path, single-instance enforcement, pipe-bind behavior, OS registration, and URL
 routing) is in [nxm:// scheme handler architecture](nxm-scheme-handler.md); the
@@ -403,7 +403,7 @@ validated against `GET /v1/users/validate.json`). The user's explicit choice is
 stored in `NexusConfig.AuthMethod` (`None` / `OAuth` / `ApiKey`); the v1 client's
 auth factory is selected by that flag with no fallback, and switching methods
 clears the other method's credentials. OAuth tokens are persisted in `CuratorConfig`
-with 401-reactive refresh. Full detail (the loopback flow, the Nexus Integrations
+with 401-reactive refresh. Full detail (the loopback flow, the Nexus
 destination, auth-factory selection, token persistence, the OAuth client_id, rate
 limits, and the v1 endpoints) is in
 [Nexus authentication architecture](nexus-authentication.md); the public surface

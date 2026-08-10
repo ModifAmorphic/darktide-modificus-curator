@@ -52,32 +52,43 @@
 
   <!--
     The active profile's mod list: header (title + rate-limit notice +
-    check-now refresh + auto-sort + Add split button) over a
-    scrollable row list, with owned empty states (no profile / no mods). The
-    whole content area is a drag-and-drop target (folders + archives), so mods
-    can be added by dropping as well as via the Add split button's archive +
-    folder pickers. The folder picker covers users who prefer a picker over
+    check-now refresh + auto-sort + Add split button) over a scrollable row
+    list. The no-profile handoff (a HyperlinkButton to Profiles) is owned by
+    the shell in MainWindow.axaml and overlays this page only when there is no
+    active profile; this view never paints its own no-profile text. The whole
+    content area is a drag-and-drop target (folders + archives), so mods can be
+    added by dropping as well as via the Add split button's archive + folder
+    pickers. The folder picker covers users who prefer a picker over
     drag-and-drop; the drag-and-drop hint surfaces in the no-mods empty state
     + the content-area tooltip. Row interactions route through code-behind
     handlers to the parent VM's commands (the established ManageProfilesWindow
     pattern), passing the row as CommandParameter.
+
+    The row list lives inside a borderless edge-spanning ScrollViewer (the
+    scrollbar sits at the destination's right edge): the page-level Grid carries
+    only vertical margins so the toolbar + the row content keep their safe left
+    + right insets without moving the scrollbar off the edge. Horizontal
+    scrolling is disabled (rows wrap their content rather than extending the
+    page).
 
     Icons + markers are drawn <Path> geometry (Material 24x24 source) and
     Ellipse, never Unicode glyphs, per AGENTS.md. The SplitButton's arrow is
     built-in theme chrome, not an authored glyph.
   -->
 
-  <Grid RowDefinitions="Auto,*" Margin="20,12,20,12">
+  <Grid RowDefinitions="Auto,*">
 
     <!-- Header: check-now refresh + rate-limit notice + auto-sort toggle +
          Add split button (hidden until a profile is active). The destination
          title lives in the global shell header; this toolbar shows only the
          Mods-specific actions. The rate-limit notice sits after the refresh
-         button it describes. -->
+         button it describes. The toolbar carries the page's safe left + right
+         insets (the row ScrollViewer below spans to the destination edge so
+         its scrollbar sits at the edge, not inset). -->
     <Grid Grid.Row="0"
           ColumnDefinitions="Auto,Auto,*,Auto,Auto"
           IsVisible="{Binding HasActiveProfile}"
-          Margin="0,0,0,8">
+          Margin="20,12,20,8">
       <Border Grid.Column="1"
               Classes="rateLimitedNotice"
               IsVisible="{Binding IsRateLimitActive}"
@@ -196,7 +207,14 @@
       a null Background does not receive drag events on empty space; a
       transparent brush opts in). No behavioral change for populated rows:
       their children handle their own events first.
-      Empty states + the row list overlap; visibility selects which shows.
+      Empty states + the row list overlap; visibility selects which shows. The
+      no-profile handoff is NOT here: the shell owns it (a HyperlinkButton over
+      the Mods panel in MainWindow.axaml) so navigation stays out of this VM.
+      The row list is borderless (no rectangle chrome): an edge-spanning
+      ScrollViewer (HorizontalScrollBarVisibility=Disabled) so the vertical
+      scrollbar sits at the destination's right edge. Rows carry their own
+      left + right margins inside the ItemsControl so the action controls have
+      a clear right inset without moving the scrollbar off the edge.
     -->
     <Grid Grid.Row="1"
           Background="Transparent"
@@ -204,22 +222,17 @@
           DragDrop.Drop="OnDrop"
           DragDrop.DragOver="OnDragOver">
 
-      <!-- Empty: no active profile. -->
-      <TextBlock Text="{Binding EmptyNoProfileText}"
-                 IsVisible="{Binding !HasActiveProfile}"
-                 HorizontalAlignment="Center" VerticalAlignment="Center"
-                 Opacity="0.6" />
-
       <!--
         Empty: active profile with zero or one mod (typically DMF-only right
         after onboarding). The primary hint invites the user to add their own
         mods alongside the framework. The secondary Nexus line shows ONLY when
         Curator is the registered nxm:// handler, so the user knows the
         'Vortex' / 'Mod manager download' buttons on Nexus route mods straight
-        into the app. The no-profile state does not carry either hint.
+        into the app. The no-profile state is owned by the shell.
       -->
       <StackPanel IsVisible="{Binding ShowAddModsHint}"
-                  HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
+                  HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8"
+                  Margin="20,0">
         <TextBlock Text="{Binding AddModsHintText}"
                    HorizontalAlignment="Center"
                    Opacity="0.6" />
@@ -230,25 +243,31 @@
                    HorizontalAlignment="Center" />
       </StackPanel>
 
-      <!-- The mod rows (visible only when there is at least one mod). -->
-      <Border IsVisible="{Binding HasMods}"
-              BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
-              BorderThickness="1"
-              CornerRadius="4">
-        <ScrollViewer Padding="2">
-          <ItemsControl ItemsSource="{Binding Mods}">
-            <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="vm:ModItemViewModel">
-                <!--
-                  Row layout (8 columns): Name | source badge + update marker |
-                  enabled | policy editor | update button / progress | up | down |
-                  remove. The Update button + the indeterminate ProgressBar share
-                  column 4 (toggled by IsUpdating); they sit between the policy
-                  editor and the list-management cluster so they group with
-                  per-mod actions rather than list reordering.
-                -->
-                <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
-                      Margin="6,3" MinHeight="32">
+      <!-- The mod rows (visible only when there is at least one mod). The
+           ScrollViewer spans to the destination edge so its vertical scrollbar
+           sits at the edge; horizontal scrolling is disabled (rows wrap their
+           content rather than extending the page). The inner ItemsControl
+           carries the page's safe left + right insets so the row content +
+           the action controls have a clear right inset from the scrollbar.
+           No rectangle Border around the populated list: the edge-spanning
+           ScrollViewer reads as a clean list, not a boxed region. -->
+      <ScrollViewer IsVisible="{Binding HasMods}"
+                    HorizontalScrollBarVisibility="Disabled"
+                    VerticalScrollBarVisibility="Auto"
+                    Padding="0">
+        <ItemsControl ItemsSource="{Binding Mods}" Margin="20,0">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:ModItemViewModel">
+              <!--
+                Row layout (8 columns): Name | source badge + update marker |
+                enabled | policy editor | update button / progress | up | down |
+                remove. The Update button + the indeterminate ProgressBar share
+                column 4 (toggled by IsUpdating); they sit between the policy
+                editor and the list-management cluster so they group with
+                per-mod actions rather than list reordering.
+              -->
+              <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+                    Margin="0,3" MinHeight="32">
 
                   <!-- Name -->
                   <TextBlock Grid.Column="0"
@@ -453,7 +472,6 @@
             </ItemsControl.ItemTemplate>
           </ItemsControl>
         </ScrollViewer>
-      </Border>
-    </Grid>
+      </Grid>
   </Grid>
 </UserControl>

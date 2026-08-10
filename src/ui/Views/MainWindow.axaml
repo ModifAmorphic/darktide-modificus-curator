@@ -26,7 +26,13 @@
       (Avalonia 12.1 conditional-class binding; no WPF triggers). All brushes are
       Fluent dynamic resources so light/dark + accent follow the active theme;
       no hard-coded colors. The 48px height matches the compact rail width so the
-      icon button reads as a square tile in compact mode.
+      icon button reads as a square tile in compact mode. HorizontalAlignment is
+      Stretch (overriding Fluent's Button theme default of Left) so the hover +
+      selected backgrounds fill the full pane cross-axis in both compact and
+      open mode. The open pane width grows to fit the widest localized label
+      (see MainWindow.axaml.cs); the per-label TextTrimming is only an extreme-
+      label fallback and the full label remains available via the tooltip and
+      automation name.
     -->
     <Style Selector="Button.navItem">
       <Setter Property="Background" Value="Transparent" />
@@ -34,6 +40,7 @@
       <Setter Property="Padding" Value="0" />
       <Setter Property="MinWidth" Value="0" />
       <Setter Property="Height" Value="48" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
       <Setter Property="HorizontalContentAlignment" Value="Stretch" />
       <Setter Property="VerticalContentAlignment" Value="Stretch" />
     </Style>
@@ -49,13 +56,16 @@
       <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListMediumBrush}" />
     </Style>
     <!-- Hamburger toggle uses the same navItem tile shape but is never
-         selected; it lives above the destination buttons. -->
+         selected; it lives above the destination buttons. HorizontalAlignment
+         is Stretch so the hover background fills the pane cross-axis in both
+         compact and open mode, matching the destination buttons. -->
     <Style Selector="Button.hamburger">
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderThickness" Value="0" />
       <Setter Property="Padding" Value="0" />
       <Setter Property="MinWidth" Value="0" />
       <Setter Property="Height" Value="48" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
       <Setter Property="HorizontalContentAlignment" Value="Stretch" />
       <Setter Property="VerticalContentAlignment" Value="Stretch" />
     </Style>
@@ -73,11 +83,16 @@
     The shell: a SplitView in CompactInline mode. The compact 48px icon rail is
     always visible; expanding the pane reveals the labels and reduces the content
     width (never overlays it). The pane starts collapsed (IsPaneOpen=False). The
-    content is a Grid: global header (destination title + Launch), the hosted
-    destination content (one persistent UserControl per destination, visibility-
-    switched), and the global status strip.
+    XAML OpenPaneLength=200 is the design-time/startup fallback; once the window
+    is open, MainWindow.axaml.cs measures the live localized labels at the
+    current font scale and grows the open pane length (clamped to [200, 360]) so
+    future translations do not clip at the fixed width. The content is a Grid:
+    global header (destination title + Launch), the hosted destination content
+    (one persistent UserControl per destination, visibility-switched), and the
+    global status strip.
   -->
-  <SplitView IsPaneOpen="{Binding IsNavigationPaneOpen}"
+  <SplitView x:Name="NavSplitView"
+             IsPaneOpen="{Binding IsNavigationPaneOpen}"
              DisplayMode="CompactInline"
              CompactPaneLength="48"
              OpenPaneLength="200"
@@ -85,7 +100,9 @@
 
     <SplitView.Pane>
       <Grid RowDefinitions="Auto,*,Auto">
-        <!-- Hamburger toggle: always visible (compact + expanded). -->
+        <!-- Hamburger toggle: always visible (compact + expanded). The
+             localized tooltip + automation name cover the compact mode (no
+             label is visible there). -->
         <Button Grid.Row="0"
                 Classes="hamburger"
                 Command="{Binding ToggleNavigationPaneCommand}"
@@ -121,10 +138,12 @@
                     HorizontalAlignment="Center" VerticalAlignment="Center"
                     Fill="{Binding $parent[Button].Foreground}"
                     Data="M11.99 18.54l-7.37-5.73L3 14.07l9 7 9-7-1.63-1.27-7.38 5.74zM12 16l7.36-5.73L21 9l-9-7-9 7 1.63 1.27L12 16z" />
-              <TextBlock Grid.Column="1"
+              <TextBlock x:Name="NavMeasureLabel"
+                         Grid.Column="1"
                          Text="{ReflectionBinding [Profiles_Title], Source={StaticResource Loc}}"
                          IsVisible="{Binding IsNavigationPaneOpen}"
                          VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis"
                          Margin="12,0,0,0" />
             </Grid>
           </Button>
@@ -146,11 +165,12 @@
                          Text="{ReflectionBinding [ModList_Header], Source={StaticResource Loc}}"
                          IsVisible="{Binding IsNavigationPaneOpen}"
                          VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis"
                          Margin="12,0,0,0" />
             </Grid>
           </Button>
 
-          <!-- Nexus Integrations -->
+          <!-- Nexus -->
           <Button Classes="navItem"
                   Classes.selected="{Binding IsNexusIntegrationsSelected}"
                   Command="{Binding NavigateCommand}"
@@ -168,6 +188,7 @@
                          Text="{ReflectionBinding [Integrations_Title], Source={StaticResource Loc}}"
                          IsVisible="{Binding IsNavigationPaneOpen}"
                          VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis"
                          Margin="12,0,0,0" />
             </Grid>
           </Button>
@@ -190,6 +211,7 @@
                          Text="{ReflectionBinding [Preferences_Title], Source={StaticResource Loc}}"
                          IsVisible="{Binding IsNavigationPaneOpen}"
                          VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis"
                          Margin="12,0,0,0" />
             </Grid>
           </Button>
@@ -211,6 +233,7 @@
                          Text="{ReflectionBinding [Settings_Title], Source={StaticResource Loc}}"
                          IsVisible="{Binding IsNavigationPaneOpen}"
                          VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis"
                          Margin="12,0,0,0" />
             </Grid>
           </Button>
@@ -242,13 +265,33 @@
            page is wrapped in a Panel that inherits the ShellViewModel context
            (so IsVisible compiles against the shell's Is*Visible projection);
            the inner page sets its own DataContext to its concrete singleton
-           page VM. -->
+           page VM. The Mods panel additionally hosts the no-profile handoff
+           link (a HyperlinkButton whose DataContext stays ShellViewModel so it
+           can bind NavigateCommand + ModList.HasActiveProfile); it sits above
+           the page only when no profile is active, falling behind it the moment
+           one is. -->
       <Grid Grid.Row="1">
         <Panel IsVisible="{Binding IsProfilesVisible}">
           <views:ProfilesView DataContext="{Binding Profiles}" />
         </Panel>
         <Panel IsVisible="{Binding IsModsVisible}">
           <views:ModListView DataContext="{Binding ModList}" />
+          <!--
+            The Mods no-profile handoff. The shell owns this: when no profile is
+            active the entire sentence is a HyperlinkButton bound to the shell's
+            NavigateCommand with ShellDestination.Profiles as its parameter, so a
+            click navigates to Profiles. DataContext is ShellViewModel (the
+            panel's inherited context), so ModList.HasActiveProfile is reached
+            through the ModList page VM exposed on the shell. No code-behind
+            ancestor lookup; no child-to-shell navigation service.
+          -->
+          <HyperlinkButton IsVisible="{Binding !ModList.HasActiveProfile}"
+                           Command="{Binding NavigateCommand}"
+                           CommandParameter="{x:Static vm:ShellDestination.Profiles}"
+                           Content="{ReflectionBinding [ModList_EmptyNoProfile], Source={StaticResource Loc}}"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Padding="0" />
         </Panel>
         <Panel IsVisible="{Binding IsNexusIntegrationsVisible}">
           <views:IntegrationsView DataContext="{Binding Integrations}" />

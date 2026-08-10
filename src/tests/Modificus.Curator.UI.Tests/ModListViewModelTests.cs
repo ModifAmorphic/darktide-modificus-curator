@@ -80,15 +80,19 @@ public sealed class ModListViewModelTests
     }
 
     [Fact]
-    public void Load_with_no_active_profile_clears_and_shows_the_no_profile_empty_state()
+    public void Load_with_no_active_profile_clears_and_reports_no_active_profile()
     {
+        // The no-profile handoff (a HyperlinkButton to Profiles) is owned by the
+        // shell in MainWindow.axaml, so this VM no longer exposes a
+        // no-profile text. It only reports HasActiveProfile=false + an empty
+        // list; the shell link overlays the page when there is no active
+        // profile.
         var profiles = TestDoubles.Profiles();
         var vm = Build(profiles, new FakeProfileSession { ActiveProfileId = null });
 
         Assert.False(vm.HasActiveProfile);
         Assert.False(vm.HasMods);
         Assert.Empty(vm.Mods);
-        Assert.NotEmpty(vm.EmptyNoProfileText);
     }
 
     [Fact]
@@ -144,8 +148,8 @@ public sealed class ModListViewModelTests
     [Fact]
     public void ShowAddModsHint_is_false_without_an_active_profile_regardless_of_mod_count()
     {
-        // No active profile: the no-profile empty state shows instead, so the
-        // add-mods hint must stay hidden even if Mods somehow had rows.
+        // No active profile: the shell-owned no-profile handoff shows instead,
+        // so the add-mods hint must stay hidden even if Mods somehow had rows.
         var profiles = TestDoubles.Profiles();
         var vm = Build(profiles, new FakeProfileSession { ActiveProfileId = null });
 

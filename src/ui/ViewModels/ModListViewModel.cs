@@ -49,8 +49,12 @@ public enum ModAddMode
 /// <remarks>
 /// <para><b>Active profile is the session's:</b> the list never decides the active
 /// id; it reads <see cref="IProfileSession.ActiveProfileId"/> and reloads when it
-/// changes. No active profile yields an empty list + the "no profile" empty state
-/// (owned here, not the shell).</para>
+/// changes. No active profile yields an empty list + <see cref="HasActiveProfile"/>
+/// = false. The "select or create a profile" handoff (a HyperlinkButton to the
+/// Profiles destination) is owned by the shell, not here: it binds shell-level
+/// navigation + <c>ModList.HasActiveProfile</c> from the shell context, keeping
+/// navigation out of this VM. This VM owns only the active-profile row + add-mod
+/// states (the no-mods hint, drag-and-drop target, Add split button).</para>
 /// <para><b>Rows carry state only:</b> each row is a <see cref="ModItemViewModel"/>
 /// (container id + name + source badge + enabled + order + policy + policy-edit
 /// state). All service calls live here; the view routes row interactions (toggle,
@@ -470,9 +474,6 @@ public partial class ModListViewModel : ObservableObject
         _ => _localization["ModList_AddNexusMods"],
     };
 
-    /// <summary>The localized empty-state message for the no-profile case.</summary>
-    public string EmptyNoProfileText => _localization["ModList_EmptyNoProfile"];
-
     /// <summary>
     /// The localized primary hint shown in the no-mods / DMF-only empty state.
     /// Re-fires on a culture change.
@@ -558,7 +559,6 @@ public partial class ModListViewModel : ObservableObject
             return;
         }
 
-        OnPropertyChanged(nameof(EmptyNoProfileText));
         OnPropertyChanged(nameof(AddModsHintText));
         OnPropertyChanged(nameof(NxmDownloadHintText));
         OnPropertyChanged(nameof(AddModeLabel));

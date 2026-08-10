@@ -6,7 +6,7 @@ using Modificus.Curator.UI.ViewModels;
 namespace Modificus.Curator.UI.Views;
 
 /// <summary>
-/// The Nexus Integrations destination content (a <see cref="UserControl"/>).
+/// The Nexus destination content (a <see cref="UserControl"/>).
 /// Its <c>DataContext</c> is an <see cref="IntegrationsViewModel"/> (bound from
 /// the shell). Nexus-only in v1; the VM owns all auth state + the OAuth/API-key
 /// flows. Owns only the API-key help link's browser-open mechanics; everything

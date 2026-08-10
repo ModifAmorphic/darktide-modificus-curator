@@ -5,7 +5,7 @@
              x:DataType="vm:IntegrationsViewModel">
 
   <!--
-    Host-neutral Nexus Integrations content (Nexus-only in v1). No window chrome,
+    Host-neutral Nexus content (Nexus-only in v1). No window chrome,
     no Done button, no ESC behavior: the host owns those. Owns the page-level
     vertical ScrollViewer so the sections stay usable at the main window's
     minimum size and supported font-scale range; the host sizes this control

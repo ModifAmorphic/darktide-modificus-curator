@@ -26,7 +26,7 @@ dialogs, preferences, and i18n fit together.
 │                                                                          │
 │  ┌─ Nav rail (48px compact icon tile; expands to 48px icon + label) ───┐ │
 │  │ hamburger toggle                                                    │ │
-│  │ [Profiles] [Mods] [Nexus Integrations] [Preferences] [Settings]     │ │
+│  │ [Profiles] [Mods] [Nexus] [Preferences] [Settings]     │ │
 │  └─────────────────────────────────────────────────────────────────────┘ │
 │  ┌─ Global header ─────────────────────────────────────────────────────┐ │
 │  │ Current destination title ·························· Launch Darktide│ │
@@ -70,7 +70,7 @@ a UI-layer singleton that the shell (and other view models) inject:
   │   │   │
   │   │   └── ModItemViewModel  one row; carries state only (no service calls)
   │   │
-  │   ├── IntegrationsViewModel  the Nexus Integrations destination (RefreshAsync
+  │   ├── IntegrationsViewModel  the Nexus destination (RefreshAsync
   │   │                            on enter, Deactivate on leave)
   │   ├── PreferencesViewModel   the Preferences destination
   │   └── SettingsViewModel ──── the Settings destination (RefreshFromConfig
@@ -91,15 +91,15 @@ a UI-layer singleton that the shell (and other view models) inject:
   │                              UpdateCheckRunner)
   │
   ├── OnboardingService ─────── shows the first-run Welcome modal once, then
-  │                             navigates the shell to Nexus Integrations on a
+  │                             navigates the shell to Nexus on a
   │                             "Set up Nexus" choice
   │
   ├── DmfPromptService ──────── records the new-profile trigger from
-  │                             IProfileService; ProfilesViewModel awaits
-  │                             ProcessPendingAsync immediately after the
-  │                             create + activation (no intervening dialog)
+  │                             IProfileService; the shell consumes it on the
+  │                             next real navigation into Mods (after setting
+  │                             CurrentDestination = Mods first)
 
- IDialogService ────────────── the testable dialog seam (six true-modal methods);
+  IDialogService ────────────── the testable dialog seam (seven true-modal methods);
                              production DialogService owns the real Window wiring
  LocalizationService ───────── the i18n indexer + dynamic-culture INPC refresh
  IPreferencesService ───────── applies theme / font scale / language + persists
@@ -163,25 +163,54 @@ execution time rather than from a cached selection. Mods is selected
 initially; the pane starts collapsed (compact icon rail); the hamburger
 button toggles `IsPaneOpen`.
 
+### Open-pane width grows to fit the widest localized label
+
+The SplitView's XAML `OpenPaneLength=200` is the design-time/startup fallback
+and the lower bound. Once the window is open, `MainWindow.axaml.cs` measures
+the five live localized nav-rail labels (`Profiles_Title`, `ModList_Header`,
+`Integrations_Title`, `Preferences_Title`, `Settings_Title`) with the
+representative `NavMeasureLabel` TextBlock's actual typography
+(`FontFamily`, `FontStyle`, `FontWeight`, `FontStretch`, `FontSize`,
+`LetterSpacing`) via the Avalonia 12.1 `TextLayout` API, unwrapped with
+infinite width, and grows `NavSplitView.OpenPaneLength` to
+`clamp(ceil(48 + 12 + widest + 16), 200, 360)`. Future translations and font
+scales therefore do not clip at the original 200px; the cap keeps the pane
+from eating too much of the content area, and beyond it each label's
+`TextTrimming=CharacterEllipsis` is the graceful fallback (the full text
+remains in the tooltip and the automation name). Re-measurement fires on
+inherited `Window.FontSize` changes (PreferencesService applies the user's
+font scale by overwriting the AppFontSize DynamicResource) and on
+LocalizationService Culture / `Item[]` changes (a culture flip re-resolves
+every label). The pure arithmetic lives in the internal
+`MainWindow.ComputeOpenPaneLength` helper so unit tests can exercise it
+without a live Window; the live measurement + update path is covered by XAML
+compilation + operator visual testing.
+
 ### The `NavigateAsync` lifecycle
 
 A same-destination call is a strict no-op (no guards, effects, or config
-reads). For a real destination change, `NavigateAsync` runs in order: (1) the
-current destination's leave effects; (2) switch `CurrentDestination`; (3) the
-target's enter effects. Leaving Profiles awaits the dirty-discard guard, and a
-rejection keeps `CurrentDestination` and all target state unchanged. Leaving
-Nexus Integrations calls `IntegrationsViewModel.Deactivate` (cancels the
-in-flight auth), then the shell re-reads the nxm handler status and reloads
-the mod list. Leaving Settings reloads the mod list, re-reads the
-`CheckOnStartup` toggle, and refreshes the app-update notice. Enter effects:
-Settings calls `SettingsViewModel.RefreshFromConfig` synchronously (so
-escape-hatch / config changes are visible without a transient stale page);
-Nexus Integrations awaits `IntegrationsViewModel.RefreshAsync` (paint-then-
-resolve). The destination is switched before any enter await so it stays
-active even if a refresh reports an error through its own behavior.
+reads), so a pending DMF trigger survives same-destination Mods clicks; it is
+consumed only by a real navigation into Mods. For a real destination change,
+`NavigateAsync` runs in order: (1) the current destination's leave effects;
+(2) switch `CurrentDestination`; (3) the target's enter effects. Leaving
+Profiles awaits the unsaved-changes three-choice guard, and Cancel (or a
+Save that the service rejected) keeps `CurrentDestination` and all target
+state unchanged. Leaving Nexus calls
+`IntegrationsViewModel.Deactivate` (cancels the in-flight auth), then the
+shell re-reads the nxm handler status and reloads the mod list. Leaving
+Settings reloads the mod list, re-reads the `CheckOnStartup` toggle, and
+refreshes the app-update notice. Enter effects: Settings calls
+`SettingsViewModel.RefreshFromConfig` synchronously (so escape-hatch / config
+changes are visible without a transient stale page); Nexus awaits
+`IntegrationsViewModel.RefreshAsync` (paint-then-resolve); Mods awaits
+`DmfPromptService.ProcessPendingAsync` after `CurrentDestination` is already
+Mods, then reloads `ModListViewModel` when a trigger was consumed so an
+accepted existing/Premium DMF add is visible immediately. The destination is
+switched before any enter await so it stays active even if a refresh or the
+DMF prompt reports an error through its own behavior.
 
 There is no shared `IPage` / `INavigationService` lifecycle interface:
-Profiles, Settings, and Nexus Integrations have deliberately different
+Profiles, Settings, and Nexus have deliberately different
 activation/deactivation capabilities, so the shell calls each concrete page
 VM directly. The hosted page VMs are application-lifetime singletons;
 navigation never calls an old Window-close final-cleanup (`Detach`) path.
@@ -209,19 +238,23 @@ then branches on `LaunchResult.Status`:
 ### The DMF install-prompt timing
 
 The `DmfPromptService` subscribes to `IProfileService.ProfileCreated` at
-construction (the `ProfilesViewModel` DI factory resolves `DmfPromptService`
-eagerly so the subscription exists before any profile can be created). When
-`ProfilesViewModel.SaveAsync` calls `CreateProfile`, the already-subscribed
-coordinator records the trigger as pending; `ProfilesViewModel` then awaits
-the captured `processPendingDmf` delegate immediately after the create +
-activation. There is no intervening dialog to wait for, so the DMF prompt is
-the topmost modal at that point. After the prompt, `ProfilesViewModel`
-invokes the mod-list reload delegate so an accepted DMF install shows without
-a profile switch.
+construction (the shell's DI registration resolves `DmfPromptService` before
+`ShellViewModel` so the subscription exists before any profile can be created).
+When `ProfilesViewModel.Save` calls `CreateProfile`, the already-subscribed
+coordinator records the trigger as pending; `ProfilesViewModel` itself does no
+DMF or mod-list work after Save. The shell consumes the pending trigger on the
+next real navigation into Mods: `NavigateAsync` sets `CurrentDestination = Mods`
+first, then awaits `ProcessPendingAsync`, then reloads `ModListViewModel` when a
+trigger was consumed. The DMF prompt therefore runs as the topmost modal with
+Mods already selected underneath, and an accepted existing/Premium DMF add is
+visible immediately afterward. A pending trigger survives visits to other
+destinations and is consumed only on a real Mods entry.
 
 `ProcessPendingAsync` snapshots and clears the pending trigger before
 processing it, so an exception in the prompt does not leave it stuck pending
-for the next call.
+for the next call. The boolean return carries "a trigger was consumed" (whether
+the prompt actually fired stays internal) so the shell knows whether a
+post-prompt mod-list reload is warranted.
 
 ## The mod list (`ModListViewModel` + `ModItemViewModel`)
 
@@ -504,8 +537,8 @@ close are all equivalent to Continue.
 `ShowWelcomeIfFirstRunAsync` is a one-shot: it reads the persisted flag (and an
 in-process guard) and no-ops when onboarding is already complete. On either
 choice it persists completion BEFORE any further UI, so navigating away from
-Nexus Integrations (or the navigation failing) can never cause Welcome to
-repeat. On a "Set up Nexus" choice it navigates the shell to Nexus Integrations
+Nexus (or the navigation failing) can never cause Welcome to
+repeat. On a "Set up Nexus" choice it navigates the shell to Nexus
 (`ShellViewModel.NavigateToIntegrationsAsync`) after Welcome closes, so the
 destination's auth refresh runs and leaving it later refreshes the shell's nxm
 status.
@@ -551,19 +584,25 @@ list:
 Decline is respected: nothing opens, no Integrations prompt. DMF can be added
 later via the normal add flow.
 
-### Why the prompt is owned by ProfilesViewModel
+### Why the prompt is owned by the shell on Mods entry
 
 The trigger signal (`IProfileService.ProfileCreated`) fires synchronously from
-inside `ProfilesViewModel.SaveAsync`. The coordinator subscribes at construction
-(resolved eagerly by the `ProfilesViewModel` DI factory, so the subscription
-exists before any profile can be created) and records the signal as pending;
-`ProfilesViewModel` awaits `ProcessPendingAsync` immediately after the create +
-activation, so the DMF prompt runs as the topmost modal with no intervening
-destination. `ProcessPendingAsync` snapshots and clears the pending trigger
-before processing it, so an exception in the prompt does not leave it stuck
-pending for the next call. The prompt is wrapped in a try/catch that logs and
-swallows non-cancellation exceptions, so a wiring failure never blocks the
-return to the Profiles destination.
+inside `ProfilesViewModel.Save`. The coordinator subscribes at construction
+(resolved eagerly in the shell composition path, before `ShellViewModel`
+itself, so the subscription exists before any profile can be created) and
+records the signal as pending; the shell's `NavigateAsync` consumes the
+pending trigger on the next real navigation into Mods, after setting
+`CurrentDestination = Mods` first, so the DMF prompt runs as the topmost modal
+with Mods already selected underneath. `ProcessPendingAsync` snapshots and
+clears the pending trigger before processing it, so an exception in the prompt
+does not leave it stuck pending for the next call. The prompt is wrapped in a
+try/catch that logs and swallows non-cancellation exceptions, so a wiring
+failure never blocks the shell's post-navigation return. Splitting ownership
+this way keeps the coordinator narrowly focused on the DMF cases (subscribe,
+record, run, fail-isolated) and the shell broadly owning cross-destination
+sequencing (when to prompt, which destination should be underneath the modal,
+when to reload the mod list), without the two being coupled through a
+page-level interface.
 
 ## Dialogs, preferences, and i18n
 
@@ -573,7 +612,7 @@ The testable true-modal seam. View models depend on this interface, not on
 Avalonia `Window` construction, so their logic stays unit-testable: a test
 injects a recording fake instead of a real window. The production
 `DialogService` owns every real `Window` and `ShowDialog` wiring. Hosted
-destinations (Profiles, Mods, Nexus Integrations, Preferences, Settings) are
+destinations (Profiles, Mods, Nexus, Preferences, Settings) are
 not modals and live entirely on the shell's SplitView content region.
 
 ```csharp
@@ -584,9 +623,24 @@ public interface IDialogService
     Task<ImportModResult?> ShowImportModAsync(ImportModRequest request);
     Task<bool> ShowDiscoveryEscapeHatchAsync(IReadOnlyList<string> missingFields);
     Task ShowAlertAsync(string title, string message);
+    Task<UnsavedChangesChoice> ShowUnsavedChangesAsync(string title, string message, bool canSave);
     Task<T> ShowProgressAsync<T>(string title, string message, Func<Task<T>> work);
 }
 ```
+
+`ShowUnsavedChangesAsync` is the dedicated three-choice unsaved-changes prompt
+(left to right: Cancel, Don't save, Save; Save is the accent button; the
+`UnsavedChangesChoice` enum defaults to `Cancel` so ESC, the title-bar close,
+and a window close all behave like the explicit Cancel button). When `canSave`
+is `false` the Save button is disabled and a concise localized explanation
+shows beneath the buttons so the disabled action is not mysterious; Cancel and
+Don't save stay available. A dedicated modal is preferable to parameterizing
+binary `ConfirmAsync` into a generic N-button dialog: the three choices have
+distinct caller-side semantics (Save runs the caller's save core, Don't save
+reloads authority, Cancel preserves state), and the optional disabled-Save
+explanation is specific to this prompt. The `ProfilesViewModel` dirty-
+transition core branches on the result; Save routes through the same
+`TrySaveCore` the Save button uses.
 
 `ShowProgressAsync<T>` runs the supplied work under a buttonless, non-closeable
 spinner (the `DialogTitleBar.ShowClose` styled property is set to false on
@@ -672,7 +726,7 @@ dismiss an in-flight operation.
   UI assembly) that coordinates the nxm download flow, and the
   `IModAcquisitionService` the per-mod Update button calls.
 - [Nexus authentication](nexus-authentication.md): the auth factory and
-  orchestrator the Nexus Integrations destination drives, and the
+  orchestrator the Nexus destination drives, and the
   `AuthStateChanged` event the DMF prompt coordinator subscribes to.
 - [Nexus API rate limiting](nexus-rate-limiting.md): how the update check's
   rate-limit signal becomes the mod-list "check incomplete" notice.

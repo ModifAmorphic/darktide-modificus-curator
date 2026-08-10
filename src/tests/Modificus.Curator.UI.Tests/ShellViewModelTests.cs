@@ -2,7 +2,9 @@ using System.ComponentModel;
 using Modificus.Curator.Mods;
 using Modificus.Curator.RelayClient;
 using Modificus.Curator.UI.AppUpdate;
+using Modificus.Curator.UI.Dialogs;
 using Modificus.Curator.UI.Localization;
+using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.ViewModels;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -96,14 +98,18 @@ public sealed class ShellViewModelTests
     }
 
     [Fact]
-    public async Task NexusIntegrations_title_reads_Nexus_Integrations()
+    public async Task NexusIntegration_title_reads_Nexus()
     {
-        // The user-facing title for Integrations is exactly "Nexus Integrations".
+        // The user-facing title for the destination is exactly "Nexus" (the
+        // singular short name). Internal identifiers
+        // (ShellDestination.NexusIntegrations, IsNexusIntegrationsVisible) stay
+        // plural to avoid meaningless code churn; only the user-facing string
+        // is the short noun.
         var shell = TestDoubles.BuildShell().Shell;
 
         await shell.NavigateCommand.ExecuteAsync(ShellDestination.NexusIntegrations);
 
-        Assert.Equal("Nexus Integrations", shell.CurrentDestinationTitle);
+        Assert.Equal("Nexus", shell.CurrentDestinationTitle);
     }
 
     // ---- same-destination is a strict no-op --------------------------------
@@ -142,14 +148,15 @@ public sealed class ShellViewModelTests
         Assert.Equal(afterEnter, parts.Auth.GetCurrentStateCallCount);
     }
 
-    // ---- leaving Profiles: dirty-discard guard ----------------------------
+    // ---- leaving Profiles: unsaved-changes guard ---------------------------
 
     [Fact]
-    public async Task Leaving_dirty_Profiles_keeps_Profiles_selected_on_reject()
+    public async Task Leaving_dirty_Profiles_keeps_Profiles_selected_on_cancel()
     {
-        // A dirty Profiles draft + a rejected discard keeps the destination on
-        // Profiles and runs no target lifecycle (no Integrations refresh, no
-        // destination change).
+        // A dirty Profiles draft + an unsaved-changes Cancel keeps the
+        // destination on Profiles and runs no target lifecycle (no Integrations
+        // refresh, no destination change). Cancel is the enum default, so ESC,
+        // the title-bar X, and a window close all behave the same.
         var parts = TestDoubles.BuildShell();
         var shell = parts.Shell;
         // First navigate to Profiles so a draft can be opened there.
@@ -158,7 +165,7 @@ public sealed class ShellViewModelTests
         parts.ProfilesPage.AddProfileCommand.Execute(null);
         parts.ProfilesPage.Name = "Unsaved";
 
-        parts.Dialogs.ConfirmResult = false; // reject the discard
+        parts.Dialogs.UnsavedResult = UnsavedChangesChoice.Cancel;
 
         var stateBefore = parts.Auth.GetCurrentStateCallCount;
 
@@ -167,11 +174,12 @@ public sealed class ShellViewModelTests
         Assert.Equal(ShellDestination.Profiles, shell.CurrentDestination); // unchanged
         Assert.True(parts.ProfilesPage.IsDirty); // draft preserved
         Assert.Equal(stateBefore, parts.Auth.GetCurrentStateCallCount); // no Settings/Integrations effects ran
-        Assert.Equal(1, parts.Dialogs.ConfirmCalls); // the discard prompt ran once
+        Assert.Equal(1, parts.Dialogs.UnsavedCalls); // the unsaved prompt ran once
+        Assert.Equal(0, parts.Dialogs.ConfirmCalls); // binary confirm untouched
     }
 
     [Fact]
-    public async Task Leaving_dirty_Profiles_navigates_on_discard_accept()
+    public async Task Leaving_dirty_Profiles_navigates_on_dont_save()
     {
         var parts = TestDoubles.BuildShell();
         var shell = parts.Shell;
@@ -179,12 +187,12 @@ public sealed class ShellViewModelTests
         parts.ProfilesPage.AddProfileCommand.Execute(null);
         parts.ProfilesPage.Name = "Unsaved";
 
-        parts.Dialogs.ConfirmResult = true; // accept the discard
+        parts.Dialogs.UnsavedResult = UnsavedChangesChoice.DontSave;
 
         await shell.NavigateCommand.ExecuteAsync(ShellDestination.Settings);
 
         Assert.Equal(ShellDestination.Settings, shell.CurrentDestination);
-        // Accepting reloaded from authority: the draft is gone (no longer dirty
+        // Don't save reloaded from authority: the draft is gone (no longer dirty
         // because there is no active profile to reload into an unsaved state).
         Assert.False(parts.ProfilesPage.IsDraft);
     }
@@ -192,13 +200,15 @@ public sealed class ShellViewModelTests
     [Fact]
     public async Task Leaving_clean_Profiles_does_not_prompt()
     {
-        // A clean Profiles page navigates away without any discard prompt.
+        // A clean Profiles page navigates away without any prompt (no unsaved
+        // dialog, no binary confirm).
         var parts = TestDoubles.BuildShell();
         var shell = parts.Shell;
         await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
 
         await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
 
+        Assert.Equal(0, parts.Dialogs.UnsavedCalls);
         Assert.Equal(0, parts.Dialogs.ConfirmCalls);
         Assert.Equal(ShellDestination.Mods, shell.CurrentDestination);
     }
@@ -268,7 +278,7 @@ public sealed class ShellViewModelTests
         Assert.Equal(baselineIsRegistered, parts.NxmRegistrar?.IsRegisteredCalls ?? 0);
     }
 
-    // ---- entering / leaving Nexus Integrations ----------------------------
+    // ---- entering / leaving Nexus --------------------------------------------
 
     [Fact]
     public async Task Entering_Integrations_runs_the_auth_refresh()
@@ -576,6 +586,149 @@ public sealed class ShellViewModelTests
 
         Assert.True(shell.HasPendingStagedChanges);
         Assert.True(shell.ShowRunningDirtyDot);
+    }
+
+    // ---- DMF prompt deferred to Mods entry --------------------------------
+
+    [Fact]
+    public async Task Profile_save_does_not_show_dmf_prompt()
+    {
+        // The DMF trigger is recorded at CreateProfile but consumed only on the
+        // next real navigation into Mods. Saving a new profile on the Profiles
+        // destination does NOT prompt immediately (the old behavior awaited the
+        // DMF delegate inside SaveAsync; the shell now owns the prompt).
+        var repo = new FakeModRepository();
+        var dmf = repo.Seed(new NexusSource { ModId = DmfPromptService.DmfModId }, "DMF", "1.0");
+        var profiles = TestDoubles.Profiles();
+        var session = new FakeProfileSession(() => profiles.ListProfiles());
+        var parts = TestDoubles.BuildShell(profiles: profiles, session: session, repo: repo);
+        var shell = parts.Shell;
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
+
+        // Save a new profile (drives CreateProfile -> ProfileCreated ->
+        // DmfPromptService records the trigger, does not prompt).
+        parts.ProfilesPage.AddProfileCommand.Execute(null);
+        parts.ProfilesPage.Name = "New";
+        parts.ProfilesPage.SaveCommand.Execute(null);
+
+        Assert.Equal(0, parts.Dialogs.ConfirmCalls); // no DMF prompt yet
+        Assert.True(parts.Session.ActiveProfileId is not null); // save activated
+    }
+
+    [Fact]
+    public async Task Visiting_a_non_Mods_destination_does_not_consume_the_dmf_trigger()
+    {
+        // A pending DMF trigger survives visits to Preferences and Settings;
+        // only a real navigation into Mods consumes it.
+        var repo = new FakeModRepository();
+        repo.Seed(new NexusSource { ModId = DmfPromptService.DmfModId }, "DMF", "1.0");
+        var profiles = TestDoubles.Profiles();
+        var session = new FakeProfileSession(() => profiles.ListProfiles());
+        var parts = TestDoubles.BuildShell(profiles: profiles, session: session, repo: repo);
+        var shell = parts.Shell;
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
+        parts.ProfilesPage.AddProfileCommand.Execute(null);
+        parts.ProfilesPage.Name = "New";
+        parts.ProfilesPage.SaveCommand.Execute(null);
+
+        // Tour non-Mods destinations; the trigger is still pending.
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Preferences);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Settings);
+        Assert.Equal(0, parts.Dialogs.ConfirmCalls);
+
+        // Navigating into Mods now consumes the trigger -> the DMF prompt fires.
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
+
+        Assert.Equal(1, parts.Dialogs.ConfirmCalls);
+    }
+
+    [Fact]
+    public async Task Entering_Mods_sets_destination_first_then_prompts_and_reloads()
+    {
+        // CurrentDestination is Mods BEFORE the DMF prompt fires (so Mods is
+        // selected underneath the modal). The post-prompt reload runs only when
+        // a trigger was consumed; an accepted existing-DMF add is visible in
+        // the mod list immediately after.
+        var repo = new FakeModRepository();
+        var dmf = repo.Seed(new NexusSource { ModId = DmfPromptService.DmfModId }, "DMF", "1.0");
+        var profiles = TestDoubles.Profiles();
+        var session = new FakeProfileSession(() => profiles.ListProfiles());
+        var parts = TestDoubles.BuildShell(profiles: profiles, session: session, repo: repo);
+        var shell = parts.Shell;
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
+        parts.ProfilesPage.AddProfileCommand.Execute(null);
+        parts.ProfilesPage.Name = "New";
+        parts.ProfilesPage.SaveCommand.Execute(null);
+        var createdId = session.ActiveProfileId!.Value;
+
+        // Accept the DMF add (ConfirmResult defaults to true).
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
+
+        // Destination is Mods + the prompt fired + DMF was added to the profile.
+        Assert.Equal(ShellDestination.Mods, shell.CurrentDestination);
+        Assert.Equal(1, parts.Dialogs.ConfirmCalls);
+        var add = Assert.Single(profiles.AddModCalls);
+        Assert.Equal(createdId, add.Id);
+        Assert.Equal(dmf.Id, add.ContainerId);
+        // The post-prompt reload surfaced the add: the Mods page now sees the
+        // newly added DMF row.
+        Assert.Single(parts.ModsPage.Mods);
+    }
+
+    [Fact]
+    public async Task Declined_dmf_prompt_does_not_reload_the_mod_list()
+    {
+        // A declined prompt leaves the mod list alone (no AddMod, no extra reload
+        // beyond what the shell always does on a real Mods entry).
+        var repo = new FakeModRepository();
+        repo.Seed(new NexusSource { ModId = DmfPromptService.DmfModId }, "DMF", "1.0");
+        var profiles = TestDoubles.Profiles();
+        var session = new FakeProfileSession(() => profiles.ListProfiles());
+        var parts = TestDoubles.BuildShell(profiles: profiles, session: session, repo: repo);
+        var shell = parts.Shell;
+        parts.Dialogs.ConfirmResult = false; // user says No
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
+        parts.ProfilesPage.AddProfileCommand.Execute(null);
+        parts.ProfilesPage.Name = "New";
+        parts.ProfilesPage.SaveCommand.Execute(null);
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
+
+        Assert.Equal(1, parts.Dialogs.ConfirmCalls); // prompt did fire
+        Assert.Empty(profiles.AddModCalls);          // decline respected
+    }
+
+    [Fact]
+    public async Task Second_Mods_entry_does_not_re_prompt_after_a_consumed_trigger()
+    {
+        // ProcessPendingAsync consumes the trigger; a subsequent Mods entry
+        // finds nothing pending and does not prompt again.
+        var repo = new FakeModRepository();
+        repo.Seed(new NexusSource { ModId = DmfPromptService.DmfModId }, "DMF", "1.0");
+        var profiles = TestDoubles.Profiles();
+        var session = new FakeProfileSession(() => profiles.ListProfiles());
+        var parts = TestDoubles.BuildShell(profiles: profiles, session: session, repo: repo);
+        var shell = parts.Shell;
+
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
+        parts.ProfilesPage.AddProfileCommand.Execute(null);
+        parts.ProfilesPage.Name = "New";
+        parts.ProfilesPage.SaveCommand.Execute(null);
+
+        // Navigate away from Mods then back: first Mods entry consumes + prompts.
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Preferences);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
+        Assert.Equal(1, parts.Dialogs.ConfirmCalls);
+
+        // A second Mods entry (after a non-Mods hop) does not re-prompt.
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Preferences);
+        await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
+
+        Assert.Equal(1, parts.Dialogs.ConfirmCalls);
     }
 
     // ---- helpers -----------------------------------------------------------

@@ -199,7 +199,9 @@ internal static class TestDoubles
     /// The wired parts returned by <see cref="BuildShell"/>: the shell VM plus
     /// every fake + concrete page VM a navigation test needs to drive the
     /// lifecycle (Profiles dirty edits, Integrations auth, Settings rehydrate,
-    /// the mod-list reload observer, etc.).
+    /// the mod-list reload observer, etc.). Includes the DmfPromptService so a
+    /// shell-level test can drive a pending DMF trigger through the same
+    /// instance the shell consumes on Mods entry.
     /// </summary>
     public sealed record ShellParts(
         ShellViewModel Shell,
@@ -215,7 +217,8 @@ internal static class TestDoubles
         ModListViewModel ModsPage,
         IntegrationsViewModel IntegrationsPage,
         PreferencesViewModel PreferencesPage,
-        SettingsViewModel SettingsPage);
+        SettingsViewModel SettingsPage,
+        DmfPromptService Dmf);
 
     /// <summary>
     /// Builds a <see cref="ShellViewModel"/> wired to concrete singleton page
@@ -264,8 +267,6 @@ internal static class TestDoubles
             nxmRegistrar: nxmRegistrar);
         var profilesPage = new ProfilesViewModel(
             profiles, session, dialogs, localization,
-            processPendingDmf: () => dmf.ProcessPendingAsync(),
-            reloadModList: () => modsPage.Reload(),
             NullLogger<ProfilesViewModel>.Instance);
         var integrationsPage = new IntegrationsViewModel(
             auth, localization, config, dialogs, nxmRegistrar,
@@ -282,6 +283,7 @@ internal static class TestDoubles
             session, launch, dialogs, localization,
             profilesPage, modsPage, integrationsPage, preferencesPage, settingsPage,
             appUpdate,
+            dmf,
             invokeOnUi: static action => action(),
             NullLogger<ShellViewModel>.Instance,
             config, nxmRegistrar);
@@ -289,7 +291,7 @@ internal static class TestDoubles
         return new ShellParts(
             shell, profiles, session, dialogs, launch, appUpdate, config,
             auth, nxmRegistrar, profilesPage, modsPage, integrationsPage,
-            preferencesPage, settingsPage);
+            preferencesPage, settingsPage, dmf);
     }
 }
 
@@ -1013,6 +1015,33 @@ internal sealed class FakeDialogService : IDialogService
     {
         ((List<(string, string)>)AlertCalls).Add((title, message));
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// The result returned by the next <see cref="ShowUnsavedChangesAsync"/>
+    /// call. Default <see cref="UnsavedChangesChoice.Cancel"/> (the enum default,
+    /// so ESC / close behave like the explicit Cancel button, matching the
+    /// production dialog). Independent of <see cref="ConfirmResult"/>: the
+    /// three-choice contract is a separate dialog and must not be overloaded
+    /// onto the binary confirm result.
+    /// </summary>
+    public UnsavedChangesChoice UnsavedResult { get; set; } = UnsavedChangesChoice.Cancel;
+
+    /// <summary>
+    /// The number of <see cref="ShowUnsavedChangesAsync"/> calls + the last
+    /// (title, message, canSave) triple passed in, so tests can assert on the
+    /// prompt's framing + that Save was disabled when expected.
+    /// </summary>
+    public int UnsavedCalls { get; private set; }
+    public string? LastUnsavedMessage { get; private set; }
+    public bool LastUnsavedCanSave { get; private set; }
+
+    public Task<UnsavedChangesChoice> ShowUnsavedChangesAsync(string title, string message, bool canSave)
+    {
+        UnsavedCalls++;
+        LastUnsavedMessage = message;
+        LastUnsavedCanSave = canSave;
+        return Task.FromResult(UnsavedResult);
     }
 
     /// <summary>

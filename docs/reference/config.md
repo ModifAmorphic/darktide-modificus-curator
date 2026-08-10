@@ -127,7 +127,7 @@ Nexus fields:
 - `AuthMethod`: the user's explicit auth-method choice, read live by the auth
   message factory selector on every request. `None` is the default
   (unauthenticated; API calls fail with a clear error, callers gate on it).
-  Set by the Nexus Integrations destination: OAuth login sets `OAuth`, API-key
+  Set by the Nexus destination: OAuth login sets `OAuth`, API-key
   validate sets `ApiKey`, sign-out resets to `None`. There is **no fallback**:
   if the
   selected method's credentials are missing or expired, the client surfaces an
@@ -140,7 +140,7 @@ Nexus fields:
   sign-out or when switching to API key. `null` is treated as "not
   authenticated". See `NexusOAuthTokens` below.
 - `ApiKeyAuthEnabled`: developer-only toggle (no UI control) gating the
-  Nexus Integrations destination's API-key auth block visibility. `false` by
+  Nexus destination's API-key auth block visibility. `false` by
   default: the API-key block is hidden and OAuth is the sole sign-in path.
   `true` shows the API-key block. Read live when the destination is entered, so
   editing `config.json` takes effect on the next visit; no UI control writes
@@ -155,7 +155,7 @@ Nexus fields:
   are clamped.
 - `MinAutoUpdateCheckIntervalMinutes` / `MaxAutoUpdateCheckIntervalMinutes`:
   named policy bounds (5 / 1440 minutes) for `AutoUpdateCheckIntervalMinutes`,
-  applied on save (the Nexus Integrations destination) + at tick time (the
+  applied on save (the Nexus destination) + at tick time (the
   runner). The
   5-minute floor is a Nexus API acceptable-use compliance measure (at 5 minutes
   the periodic check tops out at 288 calls/day).
@@ -166,7 +166,7 @@ Nexus fields:
   drive it), and changing the periodic-check toggle never clears a configured
   `true` here. Runtime execution additionally requires a fresh verified Premium
   account, so a configured `true` is preserved (stays checked + visible but
-  disabled in the Nexus Integrations destination) if Premium later becomes
+  disabled in the Nexus destination) if Premium later becomes
   unavailable,
   while no automatic install runs. Surfaced as a checkbox in the Integrations
   "Update checks" section, enabled only for a verified Premium account.

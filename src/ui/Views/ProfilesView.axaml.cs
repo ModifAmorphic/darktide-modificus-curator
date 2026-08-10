@@ -36,8 +36,8 @@ public partial class ProfilesView : UserControl
     /// <see cref="ProfileChoice"/> to the VM's
     /// <c>SelectProfileCommand</c>, then hides the hosting flyout so the user
     /// sees the new active profile immediately. The command is awaited so the
-    /// authoritative reload (and any discard confirmation) lands before the
-    /// flyout closes.
+    /// authoritative reload (and any unsaved-changes three-choice prompt) lands
+    /// before the flyout closes.
     /// </summary>
     private async void PickerRow_Click(object? sender, RoutedEventArgs e)
     {

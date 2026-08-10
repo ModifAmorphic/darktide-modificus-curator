@@ -1,0 +1,66 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="using:Modificus.Curator.UI.Views"
+        xmlns:behaviors="using:Modificus.Curator.UI.Behaviors"
+        x:Class="Modificus.Curator.UI.Views.UnsavedChangesDialog"
+        Title="{ReflectionBinding [Unsaved_Title], Source={StaticResource Loc}}"
+        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="None"
+        Width="440" MinWidth="320"
+        SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        behaviors:EscapeClosesBehavior.IsEnabled="True"
+        WindowStartupLocation="CenterOwner">
+
+  <!--
+    Mirrors ConfirmDialog's custom-chrome shape: WindowDecorations="None" with
+    DialogTitleBar (drag region + drawn close X) re-frames the window. The close
+    X + ESC (via EscapeClosesBehavior) + a window close all map to the
+    UnsavedChangesChoice.Cancel default, so they share the explicit Cancel
+    button's contract. SizeToContent="Height" honors font scale at show time in
+    Avalonia 12.x.
+
+    Three buttons, left to right: Cancel, Don't save, Save. Save is the accent
+    affordance. When CanSave is false the Save button is disabled and a concise
+    localized explanation surfaces beneath the buttons so the disabled action is
+    not mysterious; Cancel and Don't save stay available.
+  -->
+  <Border BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+          BorderThickness="1">
+    <Grid RowDefinitions="Auto,*">
+
+      <views:DialogTitleBar Grid.Row="0" />
+
+      <Border Grid.Row="1" Padding="24">
+        <StackPanel Spacing="16">
+          <TextBlock x:Name="MessageText"
+                     TextWrapping="Wrap" />
+          <StackPanel Orientation="Horizontal"
+                      Spacing="8"
+                      HorizontalAlignment="Right">
+            <Button Name="CancelButton"
+                    Content="{ReflectionBinding [Unsaved_CancelButton], Source={StaticResource Loc}}"
+                    Click="Cancel_Click"
+                    MinWidth="80" />
+            <Button Name="DontSaveButton"
+                    Content="{ReflectionBinding [Unsaved_DontSaveButton], Source={StaticResource Loc}}"
+                    Click="DontSave_Click"
+                    MinWidth="80" />
+            <Button Name="SaveButton"
+                    Content="{ReflectionBinding [Unsaved_SaveButton], Source={StaticResource Loc}}"
+                    Click="Save_Click"
+                    Classes="accent"
+                    MinWidth="80" />
+          </StackPanel>
+          <TextBlock Name="SaveUnavailableText"
+                     IsVisible="False"
+                     Text="{ReflectionBinding [Unsaved_SaveUnavailable], Source={StaticResource Loc}}"
+                     FontSize="11"
+                     TextWrapping="Wrap"
+                     Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}" />
+        </StackPanel>
+      </Border>
+    </Grid>
+  </Border>
+</Window>

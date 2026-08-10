@@ -16,28 +16,41 @@ namespace Modificus.Curator.UI.ViewModels;
 /// <summary>
 /// The view model behind the Modificus Curator main window, the app shell.
 /// Owns the SplitView navigation rail (five hosted destinations), the global
-/// Launch action, and the global running / pending / nxm / app-update status
-/// strip. The active profile is owned by <see cref="IProfileSession"/>; launch
-/// availability derives directly from <see cref="IProfileSession.ActiveProfileId"/>
-/// + <see cref="IsGameRunning"/>, never a cached snapshot.
+/// Launch action, the global running / pending / nxm / app-update status strip,
+/// and the deferred DMF install-prompt trigger (consumed on a real navigation
+/// into Mods). The active profile is owned by <see cref="IProfileSession"/>;
+/// launch availability derives directly from
+/// <see cref="IProfileSession.ActiveProfileId"/> + <see cref="IsGameRunning"/>,
+/// never a cached snapshot.
 /// </summary>
 /// <remarks>
 /// <para><b>Navigation lifecycle:</b> a real destination change runs the current
 /// destination's leave effects before switching. Leaving Profiles awaits the
-/// dirty-discard guard (rejection keeps the destination unchanged); leaving
-/// Nexus Integrations cancels in-flight auth + refreshes nxm status + reloads
-/// the mod list; leaving Settings reloads the mod list + re-reads the
-/// startup-check toggle + refreshes the app-update notice. Enter effects:
-/// Settings rehydrates from config synchronously; Nexus Integrations awaits its
-/// auth refresh so the page paints while its state resolves. Selecting the
-/// current destination is a strict no-op (no guards, effects, or config
-/// reads).</para>
+/// unsaved-changes three-choice guard (Cancel/Save-failure keeps the destination
+/// unchanged); leaving Nexus cancels in-flight auth + refreshes nxm
+/// status + reloads the mod list; leaving Settings reloads the mod list +
+/// re-reads the startup-check toggle + refreshes the app-update notice. Enter
+/// effects: Settings rehydrates from config synchronously; Nexus
+/// awaits its auth refresh so the page paints while its state resolves. Entering
+/// Mods consumes any pending DMF trigger (set by
+/// <see cref="DmfPromptService"/>'s ProfileCreated subscription) AFTER setting
+/// CurrentDestination, so Mods is selected underneath the modal and an accepted
+/// existing/Premium DMF add is visible after the post-prompt reload. Selecting
+/// the current destination is a strict no-op (no guards, effects, or config
+/// reads), so a pending trigger survives visits to other destinations and is
+/// consumed only on a real Mods entry.</para>
 /// <para><b>No kitchen-sink lifecycle interface:</b> Profiles, Settings, and
-/// Nexus Integrations have deliberately different capabilities, so the shell
+/// Nexus have deliberately different capabilities, so the shell
 /// calls each concrete page VM directly rather than routing through a shared
 /// <c>IPage</c>/<c>INavigationService</c>. The hosted VMs are
 /// application-lifetime singletons; navigation never calls their old Window-
 /// close final-cleanup (<c>Detach</c>) paths.</para>
+/// <para><b>DMF trigger ownership is split:</b> <see cref="DmfPromptService"/>
+/// owns the prompt mechanism (subscribe, record, run, log/fail-isolated), while
+/// the shell owns WHEN the prompt fires (on the next real navigation into Mods,
+/// after the unsaved-changes three-choice guard). This keeps the coordinator narrowly focused
+/// on the DMF cases and the shell broadly owning cross-destination sequencing
+/// without the two being coupled through a page-level interface.</para>
 /// <para><b>Running-state is live:</b> <see cref="IsGameRunning"/> is mirrored
 /// from <see cref="IProfileSession.IsRunning"/>, which a polling timer
 /// refreshes, so the status strip + launch-availability react within a few
@@ -61,6 +74,7 @@ public partial class ShellViewModel : ObservableObject
     private readonly IConfigLoader _configLoader;
     private readonly Action<Action> _invokeOnUi;
     private readonly INxmHandlerRegistrar? _nxmRegistrar;
+    private readonly DmfPromptService _dmfPrompt;
     private readonly ILogger<ShellViewModel> _logger;
 
     // Whether the automatic startup self-update check is enabled
@@ -82,6 +96,7 @@ public partial class ShellViewModel : ObservableObject
         PreferencesViewModel preferences,
         SettingsViewModel settings,
         IAppUpdateService appUpdate,
+        DmfPromptService dmfPrompt,
         Action<Action> invokeOnUi,
         ILogger<ShellViewModel> logger,
         IConfigLoader configLoader,
@@ -97,6 +112,7 @@ public partial class ShellViewModel : ObservableObject
         _preferences = preferences;
         _settings = settings;
         _appUpdate = appUpdate;
+        _dmfPrompt = dmfPrompt ?? throw new ArgumentNullException(nameof(dmfPrompt));
         _invokeOnUi = invokeOnUi ?? throw new ArgumentNullException(nameof(invokeOnUi));
         _logger = logger;
         _configLoader = configLoader ?? throw new ArgumentNullException(nameof(configLoader));
@@ -211,14 +227,17 @@ public partial class ShellViewModel : ObservableObject
     private Task Navigate(ShellDestination destination) => NavigateAsync(destination);
 
     /// <summary>
-    /// The guarded navigation core. Same-destination is a strict no-op. For a
-    /// real change: (1) leaving Profiles awaits the dirty-discard guard, which
-    /// rejects keep everything unchanged; (2) run the current destination's
-    /// other leave effects; (3) switch <see cref="CurrentDestination"/>; (4)
-    /// run the target's enter effects (Settings rehydrates synchronously; Nexus
-    /// Integrations awaits its auth refresh). The destination is switched
-    /// before any enter await so it stays active even if a refresh reports an
-    /// error through its own behavior.
+    /// The guarded navigation core. Same-destination is a strict no-op (so a
+    /// pending DMF trigger survives same-destination Mods clicks; it is consumed
+    /// only by a real navigation into Mods). For a real change: (1) leaving
+    /// Profiles awaits the unsaved-changes three-choice guard, which on
+    /// Cancel/Save-failure keeps everything unchanged; (2) run the current
+    /// destination's other leave effects; (3) switch <see cref="CurrentDestination"/>;
+    /// (4) run the target's enter effects (Settings rehydrates synchronously;
+    /// Nexus awaits its auth refresh; Mods consumes any pending DMF
+    /// trigger then reloads the mod list when one was consumed). The destination
+    /// is switched before any enter await so it stays active even if a refresh
+    /// or the DMF prompt reports an error through its own behavior.
     /// </summary>
     public async Task NavigateAsync(ShellDestination destination)
     {
@@ -229,8 +248,9 @@ public partial class ShellViewModel : ObservableObject
 
         var from = CurrentDestination;
 
-        // Leaving Profiles first asks the dirty-discard guard. A false result
-        // keeps CurrentDestination + all target lifecycle state unchanged.
+        // Leaving Profiles first asks the unsaved-changes guard. A false result
+        // (Cancel/ESC/X, or a Save that the service rejected) keeps
+        // CurrentDestination + all target lifecycle state unchanged.
         if (from == ShellDestination.Profiles
             && !await _profiles.ConfirmCanNavigateAwayAsync())
         {
@@ -252,12 +272,19 @@ public partial class ShellViewModel : ObservableObject
             RefreshAppUpdateNotice();
         }
 
+        // Switch the destination BEFORE the enter awaits so the page paints
+        // underneath any modal the enter path raises (the DMF prompt runs after
+        // the destination is already Mods, so the modal sits over the Mods
+        // page).
         CurrentDestination = destination;
 
         // Enter effects. Settings rehydrates from config synchronously so
         // escape-hatch / config changes are visible without a transient stale
-        // page; Nexus Integrations shows first, then awaits its auth refresh
-        // (paint-then-resolve, matching the former dialog behavior).
+        // page; Nexus shows first, then awaits its auth refresh
+        // (paint-then-resolve, matching the former dialog behavior); Mods
+        // consumes any pending DMF trigger (set by ProfilesViewModel.Save ->
+        // CreateProfile -> DmfPromptService's ProfileCreated subscription) then
+        // reloads the list so an accepted existing/Premium DMF add is visible.
         if (destination == ShellDestination.Settings)
         {
             _settings.RefreshFromConfig();
@@ -266,12 +293,25 @@ public partial class ShellViewModel : ObservableObject
         {
             await _integrations.RefreshAsync();
         }
+        else if (destination == ShellDestination.Mods)
+        {
+            // ProcessPendingAsync consumes the trigger (if any) and returns
+            // true when one was consumed. Reloading after a consumed trigger
+            // surfaces an accepted existing/Premium DMF add immediately; a
+            // declined / no-op / browser-open prompt leaves the list as the
+            // authoritative load already painted it.
+            var consumed = await _dmfPrompt.ProcessPendingAsync();
+            if (consumed)
+            {
+                _modList.Reload();
+            }
+        }
     }
 
     /// <summary>
-    /// Navigates to Nexus Integrations. The awaitable entry point the first-run
+    /// Navigates to Nexus. The awaitable entry point the first-run
     /// onboarding reuses for its "Set up Nexus" choice, so onboarding-completion
-    /// persistence and Integrations activation share one navigation path.
+    /// persistence and Integration activation share one navigation path.
     /// </summary>
     internal Task NavigateToIntegrationsAsync() => NavigateAsync(ShellDestination.NexusIntegrations);
 
@@ -283,7 +323,7 @@ public partial class ShellViewModel : ObservableObject
     /// <summary>The Mods destination view model (the dominant content area).</summary>
     public ModListViewModel ModList => _modList;
 
-    /// <summary>The Nexus Integrations destination view model.</summary>
+    /// <summary>The Nexus destination view model.</summary>
     public IntegrationsViewModel Integrations => _integrations;
 
     /// <summary>The Preferences destination view model.</summary>
@@ -354,7 +394,7 @@ public partial class ShellViewModel : ObservableObject
     /// Whether Curator is currently the OS <c>nxm://</c> handler (per the
     /// registrar's <see cref="INxmHandlerRegistrar.IsRegistered"/>), or
     /// <c>null</c> when no platform registrar is available. Refreshed at
-    /// startup + when leaving Nexus Integrations (the only place the
+    /// startup + when leaving Nexus (the only place the
     /// registration can change in-app). No polling.
     /// </summary>
     [ObservableProperty]

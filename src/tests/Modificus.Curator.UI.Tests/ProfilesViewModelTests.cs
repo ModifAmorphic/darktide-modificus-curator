@@ -1,6 +1,8 @@
 using System.Text.Json;
+using Avalonia.Media.Immutable;
 using Microsoft.Extensions.Logging.Abstractions;
 using Modificus.Curator.Profiles;
+using Modificus.Curator.UI.Dialogs;
 using Modificus.Curator.UI.Localization;
 using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.ViewModels;
@@ -22,51 +24,27 @@ public sealed class ProfilesViewModelTests
     private static readonly LocalizationService Localization = new();
 
     /// <summary>
-    /// Builds a <see cref="ProfilesViewModel"/> wired to in-memory fakes. The
-    /// DMF + reload seams record into <see cref="BuildOptions.Calls"/> so a test
-    /// can assert call order + count. The session's <c>ActiveProfileId</c> is
-    /// the authority (the test sets it to drive the initial load).
+    /// Builds a <see cref="ProfilesViewModel"/> wired to in-memory fakes. After
+    /// the DMF/reload-ownership move to the shell, this VM is narrowly coupled
+    /// to profile workflow (no DMF + no mod-list reload delegate seams), so the
+    /// builder is now just the four core dependencies + the logger. The fakes
+    /// are returned by reference for tests that need to drive post-construction
+    /// state (most construct + keep the locals themselves).
     /// </summary>
-    private static (ProfilesViewModel vm, BuildOptions opts) Build(
+    private static ProfilesViewModel Build(
         FakeProfileService? profiles = null,
         FakeProfileSession? session = null,
-        FakeDialogService? dialogs = null,
-        Func<Task>? processPendingDmf = null,
-        Action? reloadModList = null)
+        FakeDialogService? dialogs = null)
     {
         profiles ??= TestDoubles.Profiles();
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
         dialogs ??= new FakeDialogService();
-        var opts = new BuildOptions();
-        var dmf = processPendingDmf ?? opts.DmfAsync;
-        var reload = reloadModList ?? opts.ReloadAction;
-        var vm = new ProfilesViewModel(
+        return new ProfilesViewModel(
             profiles,
             session,
             dialogs,
             Localization,
-            dmf,
-            reload,
             NullLogger<ProfilesViewModel>.Instance);
-        return (vm, opts);
-    }
-
-    /// <summary>Holder for the delegate seam recorders, shared with the VM.</summary>
-    private sealed class BuildOptions
-    {
-        public List<string> Calls { get; } = new();
-
-        /// <summary>Records "dmf" + completes. Asserting on <see cref="Calls"/>
-        /// pins the call order against <see cref="ReloadAction"/>.</summary>
-        public Func<Task> DmfAsync => () =>
-        {
-            Calls.Add("dmf");
-            return Task.CompletedTask;
-        };
-
-        /// <summary>Records "reload". Asserting on <see cref="Calls"/> pins the
-        /// call order against <see cref="DmfAsync"/>.</summary>
-        public Action ReloadAction => () => Calls.Add("reload");
     }
 
     /// <summary>Seeds a profile summary + optional launch settings on the fake,
@@ -88,7 +66,7 @@ public sealed class ProfilesViewModelTests
             new LaunchSettings { EnvironmentVariables = new[] { new EnvVar("MOD", "1") } });
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
 
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         // Metadata from the active profile.
         Assert.Equal("Alpha", vm.Name);
@@ -129,7 +107,7 @@ public sealed class ProfilesViewModelTests
         var a = Profile(profiles, "", "");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
 
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         Assert.Equal("?", vm.ActiveProfileBanner!.FirstLetter);
     }
@@ -137,14 +115,15 @@ public sealed class ProfilesViewModelTests
     // ---- no-profiles + no-active states -------------------------------------
 
     [Fact]
-    public void No_profiles_state_shows_no_profiles_cta_and_hides_editor()
+    public void No_profiles_state_shows_no_profiles_cta_and_hides_editor_and_action_row()
     {
-        var (vm, _) = Build();
+        var vm = Build();
 
         Assert.True(vm.ShowNoProfilesCta);
         Assert.False(vm.ShowSelectAffordance);
         Assert.False(vm.IsBannerVisible);
         Assert.False(vm.IsEditorVisible);
+        Assert.False(vm.ShowProfileActions); // no profiles -> CTA replaces the action row
         Assert.False(vm.HasProfiles);
         Assert.Empty(vm.ProfileChoices);
         Assert.Null(vm.ActiveProfileBanner);
@@ -158,7 +137,7 @@ public sealed class ProfilesViewModelTests
         Profile(profiles, "Bravo");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = null };
 
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         Assert.True(vm.ShowSelectAffordance);
         Assert.False(vm.ShowNoProfilesCta);
@@ -178,7 +157,7 @@ public sealed class ProfilesViewModelTests
         var a = Profile(profiles, "Alpha");
         var b = Profile(profiles, "Bravo");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         var choice = vm.ProfileChoices.Single(c => c.Id == b.Id);
         await vm.SelectProfileCommand.ExecuteAsync(choice);
@@ -200,7 +179,7 @@ public sealed class ProfilesViewModelTests
         var a = Profile(profiles, "Alpha");
         var b = Profile(profiles, "Bravo");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         session.IsRunning = true;
         Assert.False(vm.SelectProfileCommand.CanExecute(vm.ProfileChoices[0]));
@@ -213,14 +192,14 @@ public sealed class ProfilesViewModelTests
     }
 
     [Fact]
-    public async Task Select_profile_dirty_asks_discard_rejection_preserves_draft()
+    public async Task Select_profile_dirty_cancel_preserves_draft()
     {
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha");
         var b = Profile(profiles, "Bravo");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService { ConfirmResult = false };
-        var (vm, _) = Build(profiles, session, dialogs);
+        var dialogs = new FakeDialogService { UnsavedResult = UnsavedChangesChoice.Cancel };
+        var vm = Build(profiles, session, dialogs);
 
         // Make the active profile's draft dirty.
         vm.Name = "Edited";
@@ -229,8 +208,9 @@ public sealed class ProfilesViewModelTests
         var choice = vm.ProfileChoices.Single(c => c.Id == b.Id);
         await vm.SelectProfileCommand.ExecuteAsync(choice);
 
-        // Rejection: no session request, draft preserved.
-        Assert.Equal(1, dialogs.ConfirmCalls);
+        // Cancel: no session request, draft preserved.
+        Assert.Equal(1, dialogs.UnsavedCalls);
+        Assert.Equal(0, dialogs.ConfirmCalls);
         Assert.Equal(0, session.RequestActiveCalls);
         Assert.Equal(a.Id, session.ActiveProfileId);
         Assert.Equal("Edited", vm.Name);
@@ -238,20 +218,20 @@ public sealed class ProfilesViewModelTests
     }
 
     [Fact]
-    public async Task Select_profile_dirty_acceptance_switches_and_reloads()
+    public async Task Select_profile_dirty_dont_save_switches_and_reloads()
     {
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha");
         var b = Profile(profiles, "Bravo");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService { ConfirmResult = true };
-        var (vm, _) = Build(profiles, session, dialogs);
+        var dialogs = new FakeDialogService { UnsavedResult = UnsavedChangesChoice.DontSave };
+        var vm = Build(profiles, session, dialogs);
 
         vm.Name = "Edited";
         var choice = vm.ProfileChoices.Single(c => c.Id == b.Id);
         await vm.SelectProfileCommand.ExecuteAsync(choice);
 
-        // Acceptance: session switched + reloaded authoritative (Bravo), draft cleared.
+        // Don't save: session switched + reloaded authoritative (Bravo), draft cleared.
         Assert.Equal(b.Id, session.ActiveProfileId);
         Assert.Equal("Bravo", vm.Name);
         Assert.False(vm.IsDirty);
@@ -265,7 +245,7 @@ public sealed class ProfilesViewModelTests
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         Assert.True(vm.AddProfileCommand.CanExecute(null));
         await vm.AddProfileCommand.ExecuteAsync(null);
@@ -296,7 +276,7 @@ public sealed class ProfilesViewModelTests
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         await vm.AddProfileCommand.ExecuteAsync(null);
         Assert.False(vm.SaveCommand.CanExecute(null));
@@ -312,7 +292,7 @@ public sealed class ProfilesViewModelTests
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         session.IsRunning = true;
         Assert.False(vm.AddProfileCommand.CanExecute(null));
@@ -323,35 +303,58 @@ public sealed class ProfilesViewModelTests
     }
 
     [Fact]
-    public async Task Add_profile_dirty_draft_asks_discard_and_rejection_preserves_draft()
+    public async Task Add_profile_dirty_existing_cancel_preserves_draft()
     {
+        // Add is disabled while a draft is already open (defense in depth), so
+        // the dirty-transition-via-Add path fires only when an existing (non-
+        // draft) profile's edit is dirty. Cancel preserves the staged edits.
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService { ConfirmResult = false };
-        var (vm, _) = Build(profiles, session, dialogs);
+        var dialogs = new FakeDialogService { UnsavedResult = UnsavedChangesChoice.Cancel };
+        var vm = Build(profiles, session, dialogs);
 
-        // Start a draft + type (dirty).
-        await vm.AddProfileCommand.ExecuteAsync(null);
-        vm.Name = "Draft1";
-
-        // Try to start another draft while this one is dirty.
-        await vm.AddProfileCommand.ExecuteAsync(null);
-
-        Assert.Equal(1, dialogs.ConfirmCalls);
-        // Rejection: the original draft is unchanged.
-        Assert.Equal("Draft1", vm.Name);
+        // Dirty the existing (non-draft) profile.
+        vm.Name = "Edited";
         Assert.True(vm.IsDirty);
+
+        // Try to start a draft while the existing edit is dirty.
+        Assert.True(vm.AddProfileCommand.CanExecute(null));
+        await vm.AddProfileCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, dialogs.UnsavedCalls);
+        Assert.Equal(0, dialogs.ConfirmCalls);
+        // Cancel: the original edits are preserved, no draft started.
+        Assert.Equal("Edited", vm.Name);
+        Assert.True(vm.IsDirty);
+        Assert.False(vm.IsDraft);
     }
 
-    // ---- new save: atomic create + activate + DMF + reload in order ----------
+    [Fact]
+    public async Task Add_profile_blocked_at_command_level_while_a_draft_is_open()
+    {
+        // Defense in depth: Add is hidden via ShowProfileActions AND disabled at
+        // the command level while a draft is open, so a programmatic call cannot
+        // start a second draft. ShowProfileActions also reports false.
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha");
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+        var vm = Build(profiles, session);
+
+        await vm.AddProfileCommand.ExecuteAsync(null);
+        Assert.True(vm.IsDraft);
+        Assert.False(vm.ShowProfileActions);
+        Assert.False(vm.AddProfileCommand.CanExecute(null));
+    }
+
+    // ---- new save: atomic create + activate (DMF/reload moved to shell) ----
 
     [Fact]
-    public async Task Save_new_passes_all_fields_atomically_activates_and_chains_dmf_then_reload()
+    public async Task Save_new_passes_all_fields_atomically_and_activates()
     {
         var profiles = new FakeProfileService();
         var session = new FakeProfileSession(() => profiles.ListProfiles());
-        var (vm, opts) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         await vm.AddProfileCommand.ExecuteAsync(null);
         vm.Name = "Vanilla+";
@@ -360,7 +363,7 @@ public sealed class ProfilesViewModelTests
         vm.Editor.GameArguments[0].Value = "--windowed";
         vm.Editor.EnableLuaLogs = true;
 
-        await vm.SaveCommand.ExecuteAsync(null);
+        vm.SaveCommand.Execute(null);
 
         // Exactly one atomic create, carrying all three fields.
         Assert.Single(profiles.CreateCalls);
@@ -375,10 +378,10 @@ public sealed class ProfilesViewModelTests
         Assert.Equal(profiles.ListProfiles().Single(p => p.Name == "Vanilla+").Id,
             session.ActiveProfileId);
 
-        // DMF ran exactly once, then reload ran exactly once, in that order.
-        Assert.Equal(new[] { "dmf", "reload" }, opts.Calls);
-
-        // Draft cleared: no longer drafting, banner shows the new active profile.
+        // DMF + mod-list reload are no longer this VM's job: the shell consumes
+        // the DMF trigger on the next Mods entry + reloads the mod list there.
+        // The VM's part ends at the atomic create + activate + authoritative
+        // reload, so the draft is cleared + the banner shows the new profile.
         Assert.False(vm.IsDraft);
         Assert.True(vm.IsBannerVisible);
         Assert.False(vm.IsDirty);
@@ -389,7 +392,7 @@ public sealed class ProfilesViewModelTests
     {
         var profiles = new FakeProfileService();
         var session = new FakeProfileSession(() => profiles.ListProfiles());
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         await vm.AddProfileCommand.ExecuteAsync(null);
         vm.Name = "Draft";
@@ -415,7 +418,7 @@ public sealed class ProfilesViewModelTests
         var originalSettings = new LaunchSettings { GameArguments = new[] { "--old" } };
         var a = Profile(profiles, "Alpha", "old desc", originalSettings);
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         vm.Name = "Renamed";
         vm.Description = "new desc";
@@ -423,7 +426,7 @@ public sealed class ProfilesViewModelTests
         vm.Editor.EnableLuaLogs = true;
 
         Assert.True(vm.SaveCommand.CanExecute(null));
-        await vm.SaveCommand.ExecuteAsync(null);
+        vm.SaveCommand.Execute(null);
 
         Assert.Single(profiles.UpdateCalls);
         var (id, name, description, settings) = profiles.UpdateCalls[0];
@@ -444,14 +447,14 @@ public sealed class ProfilesViewModelTests
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         vm.Name = "Edited";
         session.IsRunning = true;
 
         // Existing-profile save stays enabled while Darktide runs.
         Assert.True(vm.SaveCommand.CanExecute(null));
-        await vm.SaveCommand.ExecuteAsync(null);
+        vm.SaveCommand.Execute(null);
 
         Assert.Single(profiles.UpdateCalls);
     }
@@ -462,7 +465,7 @@ public sealed class ProfilesViewModelTests
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha", "desc");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         // Loaded but untouched: not dirty, Save disabled.
         Assert.False(vm.IsDirty);
@@ -477,13 +480,13 @@ public sealed class ProfilesViewModelTests
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         vm.Name = "Edited";
         // Simulate the service rejecting an edit the inline pass allowed.
         profiles.UpdateProfileThrows = new ArgumentException("simulated divergence");
 
-        await vm.SaveCommand.ExecuteAsync(null);
+        vm.SaveCommand.Execute(null);
 
         // The single attempted update was recorded (the fake records before
         // throwing) ...
@@ -507,7 +510,7 @@ public sealed class ProfilesViewModelTests
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha", "alpha desc");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, opts) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         vm.Name = "Discarded";
         vm.Description = "thrown away";
@@ -515,10 +518,10 @@ public sealed class ProfilesViewModelTests
 
         vm.CancelCommand.Execute(null);
 
-        // No service writes; no DMF/reload delegates fired.
+        // No service writes (this VM no longer drives DMF or mod-list reload
+        // either; both moved to the shell on Mods entry).
         Assert.Empty(profiles.UpdateCalls);
         Assert.Empty(profiles.CreateCalls);
-        Assert.Empty(opts.Calls);
 
         // Persisted state reloaded.
         Assert.Equal("Alpha", vm.Name);
@@ -531,7 +534,7 @@ public sealed class ProfilesViewModelTests
     {
         var profiles = new FakeProfileService();
         var session = new FakeProfileSession(() => profiles.ListProfiles());
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         await vm.AddProfileCommand.ExecuteAsync(null);
         vm.Name = "Phantom";
@@ -553,7 +556,7 @@ public sealed class ProfilesViewModelTests
         var b = Profile(profiles, "Bravo");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
         var dialogs = new FakeDialogService { ConfirmResult = true };
-        var (vm, _) = Build(profiles, session, dialogs);
+        var vm = Build(profiles, session, dialogs);
 
         await vm.DeleteProfileCommand.ExecuteAsync(null);
 
@@ -580,7 +583,7 @@ public sealed class ProfilesViewModelTests
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
         var dialogs = new FakeDialogService { ConfirmResult = false };
-        var (vm, _) = Build(profiles, session, dialogs);
+        var vm = Build(profiles, session, dialogs);
 
         await vm.DeleteProfileCommand.ExecuteAsync(null);
 
@@ -596,7 +599,7 @@ public sealed class ProfilesViewModelTests
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         session.IsRunning = true;
         Assert.False(vm.DeleteProfileCommand.CanExecute(null));
@@ -613,7 +616,7 @@ public sealed class ProfilesViewModelTests
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
         var dialogs = new FakeDialogService { ConfirmResult = true };
-        var (vm, _) = Build(profiles, session, dialogs);
+        var vm = Build(profiles, session, dialogs);
 
         await vm.DeleteProfileCommand.ExecuteAsync(null);
 
@@ -627,7 +630,7 @@ public sealed class ProfilesViewModelTests
     {
         var profiles = new FakeProfileService();
         var session = new FakeProfileSession(() => profiles.ListProfiles());
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         await vm.AddProfileCommand.ExecuteAsync(null);
 
@@ -642,7 +645,7 @@ public sealed class ProfilesViewModelTests
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha", "alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         Assert.False(vm.IsDirty);
         vm.Name = "Changed";
@@ -657,7 +660,7 @@ public sealed class ProfilesViewModelTests
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha", "alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         vm.Description = "edited";
         Assert.True(vm.IsDirty);
@@ -672,7 +675,7 @@ public sealed class ProfilesViewModelTests
         var a = Profile(profiles, "Alpha", "alpha",
             new LaunchSettings { GameArguments = new[] { "--x" } });
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         vm.Editor.GameArguments[0].Value = "--y";
         Assert.True(vm.IsDirty);
@@ -686,7 +689,7 @@ public sealed class ProfilesViewModelTests
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         // Simulate a paste that carries a newline (the XAML caps length but a
         // paste can still carry CR/LF).
@@ -707,7 +710,7 @@ public sealed class ProfilesViewModelTests
         var a = Profile(profiles, "Alpha");
         var b = Profile(profiles, "Bravo");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         vm.Name = "UnsavedEdit";
         Assert.True(vm.IsDirty);
@@ -729,7 +732,7 @@ public sealed class ProfilesViewModelTests
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         vm.Name = "Edit";
         var dirtyBefore = vm.IsDirty;
@@ -749,7 +752,7 @@ public sealed class ProfilesViewModelTests
         var a = Profile(profiles, "Alpha");
         var b = Profile(profiles, "Bravo");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         // Active cleared externally (e.g. delete-of-active from elsewhere).
         session.ActiveProfileId = null;
@@ -766,7 +769,7 @@ public sealed class ProfilesViewModelTests
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         // Stage an invalid env row (dirty + error from the editor).
         vm.Editor.AddEnvVarCommand.Execute(null); // empty name -> error
@@ -794,22 +797,23 @@ public sealed class ProfilesViewModelTests
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
         var dialogs = new FakeDialogService();
-        var (vm, _) = Build(profiles, session, dialogs);
+        var vm = Build(profiles, session, dialogs);
 
         var result = await vm.ConfirmCanNavigateAwayAsync();
 
         Assert.True(result);
+        Assert.Equal(0, dialogs.UnsavedCalls);
         Assert.Equal(0, dialogs.ConfirmCalls);
     }
 
     [Fact]
-    public async Task Navigate_away_dirty_acceptance_reloads_and_returns_true()
+    public async Task Navigate_away_dirty_dont_save_reloads_and_returns_true()
     {
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService { ConfirmResult = true };
-        var (vm, _) = Build(profiles, session, dialogs);
+        var dialogs = new FakeDialogService { UnsavedResult = UnsavedChangesChoice.DontSave };
+        var vm = Build(profiles, session, dialogs);
 
         vm.Name = "Edited";
         Assert.True(vm.IsDirty);
@@ -817,20 +821,21 @@ public sealed class ProfilesViewModelTests
         var result = await vm.ConfirmCanNavigateAwayAsync();
 
         Assert.True(result);
-        Assert.Equal(1, dialogs.ConfirmCalls);
-        // Reloaded persisted state: draft cleared.
+        Assert.Equal(1, dialogs.UnsavedCalls);
+        Assert.Equal(0, dialogs.ConfirmCalls);
+        // Don't save: reloaded persisted state, draft cleared.
         Assert.Equal("Alpha", vm.Name);
         Assert.False(vm.IsDirty);
     }
 
     [Fact]
-    public async Task Navigate_away_dirty_rejection_preserves_draft_and_returns_false()
+    public async Task Navigate_away_dirty_cancel_preserves_draft_and_returns_false()
     {
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService { ConfirmResult = false };
-        var (vm, _) = Build(profiles, session, dialogs);
+        var dialogs = new FakeDialogService { UnsavedResult = UnsavedChangesChoice.Cancel };
+        var vm = Build(profiles, session, dialogs);
 
         vm.Name = "Edited";
         var result = await vm.ConfirmCanNavigateAwayAsync();
@@ -838,6 +843,74 @@ public sealed class ProfilesViewModelTests
         Assert.False(result);
         Assert.Equal("Edited", vm.Name);
         Assert.True(vm.IsDirty);
+    }
+
+    [Fact]
+    public async Task Navigate_away_dirty_save_success_persists_and_returns_true()
+    {
+        // Save choice runs the same TrySaveCore the Save button uses; on success
+        // the persisted state is reloaded and navigation proceeds.
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha");
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+        var dialogs = new FakeDialogService { UnsavedResult = UnsavedChangesChoice.Save };
+        var vm = Build(profiles, session, dialogs);
+
+        vm.Name = "Edited";
+        Assert.True(vm.IsDirty);
+
+        var result = await vm.ConfirmCanNavigateAwayAsync();
+
+        Assert.True(result);
+        Assert.Equal(1, dialogs.UnsavedCalls);
+        Assert.Single(profiles.UpdateCalls);
+        Assert.False(vm.IsDirty);
+        Assert.Equal("Edited", vm.Name);
+    }
+
+    [Fact]
+    public async Task Navigate_away_dirty_save_failure_blocks_and_leaves_save_error()
+    {
+        // A service rejection after Save closes the dialog but leaves navigation
+        // blocked and surfaces the existing localized SaveError. The staged state
+        // stays so the user can fix + retry.
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha");
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+        profiles.UpdateProfileThrows = new ArgumentException("simulated divergence");
+        var dialogs = new FakeDialogService { UnsavedResult = UnsavedChangesChoice.Save };
+        var vm = Build(profiles, session, dialogs);
+
+        vm.Name = "Edited";
+        var result = await vm.ConfirmCanNavigateAwayAsync();
+
+        Assert.False(result);
+        Assert.Equal(Localization["Profiles_ErrSaveFailed"], vm.SaveError);
+        Assert.True(vm.IsDirty);
+        Assert.Equal("Edited", vm.Name);
+    }
+
+    [Fact]
+    public async Task Navigate_away_dirty_invalid_save_passes_canSave_false_to_dialog()
+    {
+        // When the staged state has a validation error (CanSave false), the
+        // dialog is opened with canSave=false so Save is disabled. The user can
+        // still Cancel or Don't save. Assert the fake recorded the canSave flag.
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha");
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+        var dialogs = new FakeDialogService { UnsavedResult = UnsavedChangesChoice.DontSave };
+        var vm = Build(profiles, session, dialogs);
+
+        // Blank the name (an invalid edit): dirty but not savable.
+        vm.Name = "   ";
+        Assert.True(vm.IsDirty);
+        Assert.False(vm.CanSave);
+
+        var result = await vm.ConfirmCanNavigateAwayAsync();
+
+        Assert.True(result);
+        Assert.False(dialogs.LastUnsavedCanSave);
     }
 
     // ---- running state reflected on IsRunning + command gates ----------------
@@ -849,7 +922,7 @@ public sealed class ProfilesViewModelTests
         var a = Profile(profiles, "Alpha");
         var b = Profile(profiles, "Bravo");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         Assert.False(vm.IsRunning);
         Assert.True(vm.AddProfileCommand.CanExecute(null));
@@ -883,7 +956,7 @@ public sealed class ProfilesViewModelTests
             IsRunning = true,
         };
 
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         Assert.True(vm.IsRunning);
         Assert.False(vm.AddProfileCommand.CanExecute(null));
@@ -915,7 +988,7 @@ public sealed class ProfilesViewModelTests
         var staleId = Guid.NewGuid(); // exists nowhere
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = staleId };
 
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         // Genuine no-active state.
         Assert.False(vm.IsBannerVisible);
@@ -949,7 +1022,7 @@ public sealed class ProfilesViewModelTests
         profiles.GetProfileThrows = new JsonException("corrupt profile.json");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
 
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         // The initial load caught the throw + fell back to no-active.
         Assert.False(vm.IsBannerVisible);
@@ -978,7 +1051,7 @@ public sealed class ProfilesViewModelTests
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha", "alpha desc");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         Assert.Equal("Alpha", vm.Name);
 
@@ -998,7 +1071,7 @@ public sealed class ProfilesViewModelTests
     {
         var profiles = new FakeProfileService();
         var session = new FakeProfileSession(() => profiles.ListProfiles());
-        var (vm, opts) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         await vm.AddProfileCommand.ExecuteAsync(null);
         vm.Name = "Draft";
@@ -1006,7 +1079,7 @@ public sealed class ProfilesViewModelTests
         // Simulate the service rejecting a create the inline pass allowed.
         profiles.CreateProfileThrows = new ArgumentException("simulated divergence");
 
-        await vm.SaveCommand.ExecuteAsync(null);
+        vm.SaveCommand.Execute(null);
 
         // Localized generic error shown; raw service text not surfaced.
         Assert.Equal(Localization["Profiles_ErrSaveFailed"], vm.SaveError);
@@ -1015,9 +1088,9 @@ public sealed class ProfilesViewModelTests
         // The attempted create was recorded (the fake records before throwing).
         Assert.Single(profiles.CreateCalls);
 
-        // NO activation, NO DMF, NO reload after a rejected create.
+        // NO activation after a rejected create (DMF + mod-list reload moved
+        // to the shell on Mods entry, so neither is this VM's concern).
         Assert.Equal(0, session.RequestActiveCalls);
-        Assert.Empty(opts.Calls);
 
         // The draft is retained (still drafting) so the user can fix + retry.
         Assert.True(vm.IsDraft);
@@ -1035,7 +1108,7 @@ public sealed class ProfilesViewModelTests
         var a = Profile(profiles, "Alpha", "alpha desc",
             new LaunchSettings { GameArguments = new[] { "--original" } });
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         // Stage edits.
         vm.Name = "EditedName";
@@ -1045,7 +1118,7 @@ public sealed class ProfilesViewModelTests
 
         // Service rejects the save before mutating anything.
         profiles.UpdateProfileThrows = new ArgumentException("simulated divergence");
-        await vm.SaveCommand.ExecuteAsync(null);
+        vm.SaveCommand.Execute(null);
 
         Assert.Single(profiles.UpdateCalls);
         Assert.Equal(Localization["Profiles_ErrSaveFailed"], vm.SaveError);
@@ -1071,7 +1144,7 @@ public sealed class ProfilesViewModelTests
     {
         var profiles = new FakeProfileService();
         var session = new FakeProfileSession(() => profiles.ListProfiles());
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         await vm.AddProfileCommand.ExecuteAsync(null);
         // Empty name -> error.
@@ -1091,7 +1164,7 @@ public sealed class ProfilesViewModelTests
     {
         var profiles = new FakeProfileService();
         var session = new FakeProfileSession(() => profiles.ListProfiles());
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         await vm.AddProfileCommand.ExecuteAsync(null);
         Assert.Empty(vm.DescriptionError); // empty is valid
@@ -1110,7 +1183,7 @@ public sealed class ProfilesViewModelTests
     {
         var profiles = new FakeProfileService();
         var session = new FakeProfileSession(() => profiles.ListProfiles());
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         await vm.AddProfileCommand.ExecuteAsync(null);
         // Blank name + multiline description so both errors are showing.
@@ -1126,35 +1199,28 @@ public sealed class ProfilesViewModelTests
         Assert.Equal(Localization["Profiles_ErrDescriptionInvalid"], vm.DescriptionError);
     }
 
-    // ---- correction 7: Cancel gated by IsSaving ------------------------------
+    // ---- Cancel gate -------------------------------------------------------
 
     [Fact]
-    public async Task Cancel_disabled_while_new_save_is_in_flight()
+    public async Task Cancel_enabled_for_a_draft_and_reloads_authoritative_state()
     {
-        // Hold the DMF delegate in flight deterministically so IsSaving is true
-        // when we assert Cancel's gate. A TaskCompletionSource gates the await.
+        // Save is synchronous (no in-flight DMF or mod-list work), so IsSaving
+        // is set + cleared within one synchronous Save call: there is no async
+        // window for a test to observe IsSaving=true. The meaningful gate
+        // coverage is: Cancel re-enables for a draft (so the user can abandon
+        // one) + reloads the authoritative state on click, leaving no draft.
         var profiles = new FakeProfileService();
         var session = new FakeProfileSession(() => profiles.ListProfiles());
-        var tcs = new TaskCompletionSource<bool>();
-        var (vm, _) = Build(profiles, session, processPendingDmf: () => tcs.Task);
+        var vm = Build(profiles, session);
 
         await vm.AddProfileCommand.ExecuteAsync(null);
         vm.Name = "Draft";
-        Assert.True(vm.CancelCommand.CanExecute(null)); // not saving yet
-
-        // Start Save; it runs CreateProfile + RequestActive + ReloadFromActive
-        // synchronously, then awaits the in-flight DMF.
-        var saveTask = vm.SaveCommand.ExecuteAsync(null);
-
-        // While the DMF await is pending, IsSaving is true + Cancel is gated off.
-        Assert.True(vm.IsSaving);
-        Assert.False(vm.CancelCommand.CanExecute(null));
-
-        // Release the DMF; Save completes + Cancel re-enables.
-        tcs.SetResult(true);
-        await saveTask;
-        Assert.False(vm.IsSaving);
         Assert.True(vm.CancelCommand.CanExecute(null));
+
+        vm.CancelCommand.Execute(null);
+
+        Assert.False(vm.IsDraft);
+        Assert.Empty(vm.Name);
     }
 
     // ---- correction 8: running-aware tooltip properties ---------------------
@@ -1165,7 +1231,7 @@ public sealed class ProfilesViewModelTests
         var profiles = new FakeProfileService();
         var a = Profile(profiles, "Alpha");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         Assert.Equal(Localization["Profiles_AddTooltip"], vm.AddTooltip);
         Assert.Equal(Localization["Profiles_DeleteTooltip"], vm.DeleteTooltip);
@@ -1188,7 +1254,7 @@ public sealed class ProfilesViewModelTests
             ActiveProfileId = a.Id,
             IsRunning = true,
         };
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         // Locked tooltips showing.
         Assert.Equal(Localization["Profiles_AddLockedTooltip"], vm.AddTooltip);
@@ -1198,26 +1264,117 @@ public sealed class ProfilesViewModelTests
         Assert.Equal(Localization["Profiles_AddLockedTooltip"], vm.AddTooltip);
     }
 
-    // ---- correction 5: Add accessible alongside Select in no-active state ----
+    // ---- correction 5: Add accessible in no-active state via shared action row ----
 
     [Fact]
-    public void No_active_but_profiles_exist_shows_select_affordance_and_editor_action_row_hidden()
+    public void No_active_but_profiles_exist_shows_select_affordance_and_shared_action_row()
     {
         // Structural assertion: in the no-active-but-profiles-exist state the
-        // Select affordance is the visible top-level affordance (the Add button
-        // that sits alongside it is driven by the same ShowSelectAffordance
-        // container). The editor action row is hidden (IsEditorVisible false).
+        // Select affordance is the full-width top-level affordance; the shared
+        // action row beneath carries Add (the side-by-side layout is gone). The
+        // editor action row is hidden (IsEditorVisible false). Add is reachable
+        // via its command even with the editor hidden.
         var profiles = new FakeProfileService();
         Profile(profiles, "Alpha");
         Profile(profiles, "Bravo");
         var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = null };
 
-        var (vm, _) = Build(profiles, session);
+        var vm = Build(profiles, session);
 
         Assert.True(vm.ShowSelectAffordance);
+        Assert.True(vm.ShowProfileActions);
         Assert.False(vm.IsEditorVisible);
-        // Add is reachable via its command even with the editor hidden (the
-        // top-level Add button binds to the same AddProfileCommand).
         Assert.True(vm.AddProfileCommand.CanExecute(null));
+    }
+
+    // ---- ShowProfileActions across states -----------------------------------
+
+    [Fact]
+    public void Active_profile_state_shows_action_row_with_add_and_delete()
+    {
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha");
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+
+        var vm = Build(profiles, session);
+
+        Assert.True(vm.ShowProfileActions);
+        Assert.True(vm.DeleteIsVisible); // active profile -> Delete available
+    }
+
+    [Fact]
+    public async Task Draft_state_hides_action_row_and_disables_add_at_command_level()
+    {
+        // Re-stated here so ShowProfileActions has its own focused coverage:
+        // the row hides AND Add is command-disabled during a draft (defense in
+        // depth on top of the visibility hide).
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha");
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+
+        var vm = Build(profiles, session);
+        Assert.True(vm.ShowProfileActions);
+
+        await vm.AddProfileCommand.ExecuteAsync(null);
+
+        Assert.False(vm.ShowProfileActions);
+        Assert.False(vm.AddProfileCommand.CanExecute(null));
+    }
+
+    // ---- stable avatar palette ---------------------------------------------
+
+    [Fact]
+    public void Same_profile_id_always_projects_the_same_avatar_color()
+    {
+        // Determinism: a profile's avatar color is a pure function of its id,
+        // so it survives reloads, sorting, and app restarts (not process-random
+        // and not list-index based). Verified through the VM (banner), then
+        // through the palette helper for a static sanity check.
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha");
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+        var vm = Build(profiles, session);
+        var first = vm.ActiveProfileBanner!.AvatarBackground;
+
+        // The palette helper is the source of truth; ToChoice uses it. The same
+        // id maps to the same immutable brush instance every call.
+        Assert.Same(first, ProfileAvatarPalette.For(a.Id));
+        Assert.Same(ProfileAvatarPalette.For(a.Id), ProfileAvatarPalette.For(a.Id));
+        Assert.IsType<ImmutableSolidColorBrush>(first);
+    }
+
+    [Fact]
+    public void Deliberately_different_ids_can_select_different_avatar_colors()
+    {
+        // Two ids whose 16-byte sums land on different palette entries: all
+        // zeros sums to 0 (index 0), and the second Guid's first byte is 0x01
+        // (.NET's little-endian UInt32 layout: "01000000-" parses to byte[0]=1,
+        // rest 0), so it sums to 1 (index 1). Different sums mod palette-size
+        // -> different immutable brush instances.
+        var zero = new Guid("00000000-0000-0000-0000-000000000000");
+        var oneByteSet = new Guid("01000000-0000-0000-0000-000000000000");
+
+        Assert.Equal(0, zero.ToByteArray().Sum(b => (int)b));
+        Assert.Equal(1, oneByteSet.ToByteArray().Sum(b => (int)b));
+        Assert.NotSame(ProfileAvatarPalette.For(zero), ProfileAvatarPalette.For(oneByteSet));
+    }
+
+    [Fact]
+    public void Banner_and_picker_rows_use_the_projected_avatar_background()
+    {
+        // The banner avatar and each picker-row avatar bind to the same
+        // ProfileChoice.AvatarBackground projection, so a profile reads with one
+        // color across the banner + the picker.
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha");
+        var b = Profile(profiles, "Bravo");
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+        var vm = Build(profiles, session);
+
+        Assert.NotNull(vm.ActiveProfileBanner!.AvatarBackground);
+        Assert.All(vm.ProfileChoices, c => Assert.NotNull(c.AvatarBackground));
+        // Each row carries the same color the palette would select.
+        var bravoChoice = vm.ProfileChoices.Single(c => c.Id == b.Id);
+        Assert.Same(ProfileAvatarPalette.For(b.Id), bravoChoice.AvatarBackground);
     }
 }

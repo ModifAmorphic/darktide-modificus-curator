@@ -66,7 +66,7 @@ installed separately from <https://dotnet.microsoft.com/download/dotnet/10.0>.
 Curator does not auto-update the portable build; download a newer ZIP manually
 to update.
 
-To enable Nexus "Download with manager" links, open **Nexus Integrations** in
+To enable Nexus "Download with manager" links, open **Nexus** in
 the left navigation and enable "Nexus download links". This registers
 the `nxm://` handler so clicking a download link on the Nexus Mods website
 opens Curator directly.

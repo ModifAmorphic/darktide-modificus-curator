@@ -16,7 +16,7 @@ update-checks both call through it.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Nexus Integrations destination (Nexus-only)                     │
+│  Nexus destination (Nexus-only)                     │
 │  [Log in with Nexus] (OAuth)   [API key: ____] [Validate]        │
 │  Status: Not signed in / Signed in as <name> (<Premium|Regular>) │
 │  AuthMethod tracks the user's EXPLICIT choice (no fallback)       │
@@ -107,11 +107,11 @@ up, calls `INexusClient.ValidateAsync` (`GET /v1/users/validate.json`), and
 display name and premium state come from the validate response.
 
 API key is an explicit alternative, not a fallback. The user chooses one
-method in the Nexus Integrations destination; switching methods clears the other
+method in the Nexus destination; switching methods clears the other
 method's credentials (clean transition, no stale leftovers). Sign-out resets
 to `None`.
 
-The API-key block in the Nexus Integrations destination is gated behind the
+The API-key block in the Nexus destination is gated behind the
 `ApiKeyAuthEnabled` `config.json` developer toggle (default off). There is no
 UI control for it: OAuth is the default and sole sign-in path unless a
 developer opts in by setting the flag, in which case the API-key block is
@@ -134,7 +134,7 @@ request and picks the matching inner factory:
 
 **No fallback.** If the selected method's credentials are missing or expired,
 the factory surfaces an auth error for **that** method (it does not silently
-use the other). The user's explicit choice in the Nexus Integrations destination is the
+use the other). The user's explicit choice in the Nexus destination is the
 single source of truth for which method is active.
 
 ## Token persistence and 401-reactive refresh
@@ -157,9 +157,9 @@ on the next request.
 - **API-key factory** has no refresh; a 401 surfaces "API key invalid/expired"
   (no OAuth fallback).
 
-## Nexus Integrations destination
+## Nexus destination
 
-A **hosted Nexus Integrations destination** in the shell's navigation rail
+A **hosted Nexus destination** in the shell's navigation rail
 (one of the five destinations), not a section crammed into Settings.
 
 **Nexus-only; no navigation structure.** The destination houses just the Nexus

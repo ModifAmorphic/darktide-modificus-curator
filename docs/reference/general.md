@@ -146,7 +146,7 @@ public sealed class AppStateStore : IAppStateStore
   (`OnboardingService`) to decide whether to show the first-run Welcome modal:
   it reads the flag at startup and sets it to `true` once the user has chosen
   (Set up Nexus or Continue without Nexus), persisting before any further UI so
-  navigating away from Nexus Integrations (or the navigation failing) can never
+  navigating away from Nexus (or the navigation failing) can never
   cause Welcome to repeat.
 - `ActiveProfileId` is used by `IProfileSession` (the active-profile authority)
   to restore the active profile on construction and persist it on changes.

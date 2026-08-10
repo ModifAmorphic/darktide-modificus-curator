@@ -18,7 +18,7 @@ Curator has three Premium-gated capabilities:
    action button (enabled when an update is available), but clicking it opens
    the mod's Nexus files page rather than installing in-app.
 2. **Opt-in automatic update installation.** A Premium user can opt in (in the
-   Nexus Integrations destination) to have flagged Nexus mod updates installed
+   Nexus destination) to have flagged Nexus mod updates installed
    automatically after each update check runs. Regular or unknown-Premium
    accounts see the checkbox but cannot enable it.
 3. **Direct DMF download from the install prompt.** When Darktide Mod Framework
@@ -186,7 +186,7 @@ click behavior reflect it. Consequences:
   files page) for that session.
 
 This is an explicit API-call trade-off in the current implementation. It avoids
-another membership lookup every time the Nexus Integrations destination is
+another membership lookup every time the Nexus destination is
 entered.
 
 ## Premium capability: opt-in automatic update installation
@@ -330,12 +330,12 @@ independently:
 
 | Surface | Read timing | Mid-session behavior |
 |---|---|---|
-| Nexus Integrations destination (incl. automatic-updates checkbox enable) | On enter and after auth actions | Status can refresh while the app remains open |
+| Nexus destination (incl. automatic-updates checkbox enable) | On enter and after auth actions | Status can refresh while the app remains open |
 | Mod-list update-action click behavior + tooltip | Once when `ModListViewModel` is constructed | Sign-in or upgrade requires restart before the click switches to in-app install |
 | DMF prompt download branch | When the confirmed prompt reaches the download decision | Uses the latest state available at that moment |
 | Automatic-update service execution | Fresh `GetCurrentStateAsync` after each check that authoritatively reports updates + has auto-update enabled | Re-verified every batch; a lapsed Premium account stops installing |
 
-This means the Nexus Integrations destination and DMF prompt can recognize a
+This means the Nexus destination and DMF prompt can recognize a
 newly Premium account while an already-created mod list still hides one-click
 Update buttons.
 

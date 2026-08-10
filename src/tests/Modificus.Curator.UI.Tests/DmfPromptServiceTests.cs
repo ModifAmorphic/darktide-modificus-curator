@@ -12,10 +12,10 @@ namespace Modificus.Curator.UI.Tests;
 /// <summary>
 /// Behaviors of the <see cref="DmfPromptService"/>: the two DMF cases (add
 /// existing / download + add or browser-open), the new-profile trigger, the
-/// decline path, and the deferred-prompt guarantee (the prompt does not fire
-/// from inside the event handler; it waits for the Profiles page to await
-/// <see cref="DmfPromptService.ProcessPendingAsync"/> after the create +
-/// activation).
+/// decline path, the deferred-prompt guarantee (the prompt does not fire from
+/// inside the event handler; it waits for the shell to await
+/// <see cref="DmfPromptService.ProcessPendingAsync"/> on the next real
+/// navigation into Mods), and the boolean "trigger consumed" return.
 /// </summary>
 /// <remarks>
 /// All against the hand-rolled fakes in <see cref="TestDoubles"/>: the
@@ -529,12 +529,35 @@ public sealed class DmfPromptServiceTests
     // ---- nothing pending -> no-op -----------------------------------------
 
     [Fact]
-    public async Task ProcessPending_with_no_signals_is_a_noop()
+    public async Task ProcessPending_with_no_signals_is_a_noop_and_returns_false()
     {
         var (service, _, _, _, _, _, dialogs) = Build();
-        await service.ProcessPendingAsync();
+        var consumed = await service.ProcessPendingAsync();
+
+        Assert.False(consumed); // no trigger -> nothing consumed
         Assert.Equal(0, dialogs.ConfirmCalls);
         Assert.Empty(dialogs.AlertCalls);
+    }
+
+    [Fact]
+    public async Task ProcessPending_returns_true_when_a_trigger_is_consumed()
+    {
+        // A pending trigger is consumed regardless of whether the prompt
+        // actually fires (DMF already in the profile -> no prompt -> still
+        // true). The boolean carries "a trigger was consumed"; whether the
+        // prompt fired stays internal.
+        var profiles = TestDoubles.Profiles();
+        var session = new FakeProfileSession(() => profiles.ListProfiles());
+        var repo = new FakeModRepository();
+        var dialogs = new FakeDialogService();
+        var (service, _, _, _, _, _, _) = Build(profiles, session, repo, dialogs: dialogs);
+
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
+        session.ActiveProfileId = created.Id;
+
+        var consumed = await service.ProcessPendingAsync();
+
+        Assert.True(consumed);
     }
 
     // ---- trigger is consumed after processing -----------------------------

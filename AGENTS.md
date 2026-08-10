@@ -27,7 +27,7 @@ game-binary constraints now live with the runtime, in
 
 - **`main`** -- production. Modificus Curator includes the SplitView app shell
   (a compact-inline navigation rail with five hosted destinations: Profiles,
-  Mods, Nexus Integrations, Preferences, Settings) + profile management, global
+  Mods, Nexus, Preferences, Settings) + profile management, global
   Preferences + i18n, the mod-list UI + local import, the
   Launch flow + discovery escape-hatch, the nxm:// scheme
   handler, Nexus auth + Integrations destination, mod acquisition, the update-check
@@ -64,9 +64,14 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
   Directory.Build.props  shared MSBuild props (net10.0, nullable, implicit usings)
   ui/                   Modificus.Curator.UI -- the Avalonia executable + DI composition root
                           (the SplitView shell: a CompactInline pane, 48px compact
-                          rail, 200px open, pane starts collapsed; five hosted
+                          rail, open pane starts at 200px and grows to fit the
+                          widest localized nav label at the current font scale
+                          (clamped to [200, 360], ellipsizing only beyond the
+                          cap, full text retained in the tooltip/auto-name),
+                          pane starts collapsed; five hosted
                           destinations in nav-rail order: Profiles, Mods,
-                          NexusIntegrations, Preferences, Settings (the
+                          NexusIntegrations (user-facing name "Nexus"),
+                          Preferences, Settings (the
                           `ShellDestination` enum), Mods selected initially,
                           hamburger toggles `IsPaneOpen`; the content area holds
                           one persistent `UserControl` per destination,
@@ -79,8 +84,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           destination as its parameter, `NavigateAsync` lifecycle:
                           same-destination is a strict no-op; a real change runs
                           the current destination's leave effects first (leaving
-                          Profiles awaits the dirty-discard guard, rejection keeps
-                          the destination unchanged; leaving Nexus Integrations
+                          Profiles awaits the unsaved-changes three-choice
+                          guard, Cancel/Save-failure keeps the destination
+                          unchanged; leaving Nexus
                           calls `IntegrationsViewModel.Deactivate` which cancels
                           the in-flight auth + the shell re-reads nxm status +
                           reloads the mod list; leaving Settings reloads the mod
@@ -88,7 +94,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           app-update notice), then switches the destination, then
                           runs the target's enter effects (Settings calls
                           `SettingsViewModel.RefreshFromConfig` synchronously;
-                          Nexus Integrations awaits `IntegrationsViewModel.RefreshAsync`
+                          Nexus awaits `IntegrationsViewModel.RefreshAsync`
                           so the page paints then resolves auth state)), the
                           global Launch (resolves the active id from
                           `IProfileSession.ActiveProfileId` at execution time, not a
@@ -116,18 +122,30 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           launch-settings validation fails (inline localized
                           reasons); Cancel reloads the persisted active profile;
                           navigating away / switching / starting another draft while
-                          dirty asks for discard confirmation; running-state gates
+                          dirty asks the unsaved-changes three-choice prompt
+                          (Cancel/ESC/X preserves the draft; Save tries the same
+                          atomic write as the Save button and proceeds only on
+                          success; Don't save reloads authority and proceeds);
+                          running-state gates
                           disable switching/Add/Delete while Darktide runs (active-
                           profile metadata + launch-settings edits stay enabled);
-                          after a successful create + activation, `ProfilesViewModel`
-                          awaits the focused DMF delegate immediately (no modal to
-                          wait for) then invokes the mod-list reload delegate so an
-                          accepted DMF install shows;
+                          a draft hides the shared Add/Delete action row AND
+                          disables Add at the command level (defense in depth so
+                          a programmatic call cannot start a second draft);
+                          after a successful create + activation,
+                          `ProfilesViewModel` does NO DMF or mod-list work;
+                          the shell consumes the DMF trigger on the next real
+                          navigation into Mods (`CurrentDestination = Mods` first,
+                          then `ProcessPendingAsync`, then a mod-list reload when
+                          a trigger was consumed) so an accepted DMF install shows
+                          immediately; the avatar palette is deterministic from the
+                          profile Guid so a profile keeps its color across reloads,
+                          sorting, and app restarts;
                           the Mods destination (`ModListViewModel` + `ModListView`):
                           the active profile's mod list (the dominant content area),
                           with its own toolbar (refresh, rate-limit notice, auto-
                           sort, the Add split button) shown only on Mods;
-                          the Nexus Integrations destination
+                          the Nexus destination
                           (`IntegrationsViewModel` + `IntegrationsView`,
                           Nexus-only): OAuth + developer-gated API-key + nxm handler
                           registration + automatic-update setting; the OAuth block
@@ -172,9 +190,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           list + re-reads the startup-check toggle + refreshes the
                           app-update notice;
                           `IDialogService` is narrowed to true modals only (the
-                          six methods: `ShowWelcomeAsync`, `ConfirmAsync`,
+                          seven methods: `ShowWelcomeAsync`, `ConfirmAsync`,
                           `ShowImportModAsync`, `ShowDiscoveryEscapeHatchAsync`,
-                          `ShowAlertAsync`, `ShowProgressAsync<T>`); hosted
+                          `ShowAlertAsync`, `ShowUnsavedChangesAsync`,
+                          `ShowProgressAsync<T>`); hosted
                           destinations are not modals and never flow through it;
                           `AddNxm()` + `StartNxmServer` (single-instance via
                           `SingleInstanceGuard` process enumeration, separate from the `Modificus.Curator.Nxm`
@@ -341,15 +360,21 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           (ui/Views/) used for its in-flight download. The
                           coordinator subscribes to
                           `IProfileService.ProfileCreated` at construction (the
-                          `ProfilesViewModel` DI factory resolves
-                          `DmfPromptService` eagerly so the subscription exists
+                          shell's DI registration resolves `DmfPromptService`
+                          before `ShellViewModel` so the subscription exists
                           before any profile can be created); when
-                          `ProfilesViewModel.SaveAsync` calls `CreateProfile`, the
+                          `ProfilesViewModel.Save` calls `CreateProfile`, the
                           already-subscribed coordinator records it as pending,
-                          and `ProfilesViewModel` awaits the captured
-                          `processPendingDmf` delegate immediately after the
-                          create + activation (no intervening dialog to wait
-                          for), so the DMF prompt runs as the topmost modal.
+                          and `ShellViewModel.NavigateAsync` consumes the
+                          pending trigger on the next real navigation into Mods
+                          (`CurrentDestination = Mods` first, then
+                          `ProcessPendingAsync`, then a mod-list reload when a
+                          trigger was consumed), so the DMF prompt runs as the
+                          topmost modal with Mods already selected underneath
+                          and an accepted existing/Premium DMF add is visible
+                          immediately afterward. A pending trigger survives
+                          visits to other destinations and is consumed only on a
+                          real Mods entry.
                           The prompt fires for one trigger
                           when DMF is not in the active profile: every new
                           profile that becomes active (no persisted flag: a
@@ -377,7 +402,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `WelcomeWindow` (ui/Views/) once on first startup
                           (persisted via `IAppStateStore.OnboardingCompleted`),
                           and on a "Set up Nexus" choice persists completion
-                          first, then navigates the shell to Nexus Integrations
+                          first, then navigates the shell to Nexus
                           (wired from `App` after the main window opens,
                           exception-safe).
                           `IDialogService.ShowProgressAsync<T>`

@@ -29,7 +29,7 @@ namespace Modificus.Curator.UI.Session;
 /// <para>
 /// <b>The Nexus step is a focused navigation delegate.</b> The
 /// <c>navigateToIntegrations</c> delegate is supplied by the composition root
-/// and resolves to the shell's navigation entry point for Nexus Integrations.
+/// and resolves to the shell's navigation entry point for Nexus.
 /// The coordinator never constructs the page or drives navigation itself; it
 /// just invokes the one delegate after persisting completion. This keeps the
 /// coordinator decoupled from the shell's navigation mechanics.</para>
@@ -68,7 +68,7 @@ public sealed class OnboardingService
     /// Shows the Welcome modal on the first run only. No-op when onboarding is
     /// already complete (persisted flag set, or already shown in this process).
     /// On a <see cref="WelcomeChoice.SetUpNexus"/> choice, persists completion
-    /// first, then navigates the shell to Nexus Integrations. On
+    /// first, then navigates the shell to Nexus. On
     /// <see cref="WelcomeChoice.Continue"/> (explicit button, ESC, or close)
     /// persists completion and returns, leaving the user at the default
     /// destination.
@@ -102,7 +102,7 @@ public sealed class OnboardingService
                 // Navigation is the shell's; a failure there is unexpected.
                 // Onboarding is already persisted, so log + continue rather than
                 // re-showing Welcome.
-                _logger.LogError(ex, "Navigating to Nexus Integrations after the Welcome choice failed.");
+                _logger.LogError(ex, "Navigating to Nexus after the Welcome choice failed.");
             }
         }
     }

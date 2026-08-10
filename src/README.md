@@ -27,7 +27,7 @@ src/
   config.example.json             sample global config (schema reference)
   ui/                             Modificus.Curator.UI       Avalonia executable + DI composition root
                                                              (the SplitView shell with five hosted destinations:
-                                                             Profiles, Mods, Nexus Integrations, Preferences,
+                                                             Profiles, Mods, Nexus, Preferences,
                                                              Settings; profile management + inline launch-settings
                                                              editor; the mod-list UI; the Launch flow)
   general/                        Modificus.Curator.General  cross-cutting infra: logging, config loader,
@@ -69,7 +69,7 @@ dotnet run --project src/ui --configuration Release
 
 The window shows the SplitView shell: a left navigation rail (compact icon
 tiles by default; expand it with the hamburger toggle to show icon + label for
-the five destinations: Profiles, Mods, Nexus Integrations, Preferences,
+the five destinations: Profiles, Mods, Nexus, Preferences,
 Settings), a global header with the current destination title and the Launch
 Darktide button, and a status strip (Darktide running indicator, the nxm
 handler status, and the dismissible app-update notice). Mods is selected

@@ -206,6 +206,32 @@ public sealed class DialogService : IDialogService
 
     /// <inheritdoc />
     /// <remarks>
+    /// Uses the dedicated <see cref="UnsavedChangesDialog"/> rather than
+    /// parameterizing <see cref="ConfirmAsync"/> into a generic N-button
+    /// dialog: the three choices have distinct caller-side semantics (Save runs
+    /// the caller's save core, Don't save reloads authority, Cancel preserves
+    /// state), and the optional disabled-Save explanation is specific to this
+    /// prompt. The Cancel default + ESC / title-bar close / window close all
+    /// fall out of the dialog's <see cref="UnsavedChangesDialog.Result"/>
+    /// default without a special close-handler path here.
+    /// </remarks>
+    public async Task<UnsavedChangesChoice> ShowUnsavedChangesAsync(
+        string title, string message, bool canSave)
+    {
+        var dialog = new UnsavedChangesDialog
+        {
+            Title = title,
+            CanSave = canSave,
+        };
+        dialog.SetMessage(message);
+
+        using var _ = DisableOwnerForModal();
+        await dialog.ShowDialog(_owner);
+        return dialog.Result;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
     /// <para>
     /// <b>Spinner lifecycle:</b> the <see cref="ProgressDialog"/> is shown with
     /// <c>ShowDialog</c> (nested event loop on the UI thread, owner disabled via

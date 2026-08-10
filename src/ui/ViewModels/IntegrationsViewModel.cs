@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging;
 namespace Modificus.Curator.UI.ViewModels;
 
 /// <summary>
-/// The view model behind the Nexus Integrations content (hosted by
+/// The view model behind the Nexus content (hosted by
 /// <see cref="Views.IntegrationsView"/>). Nexus-only: two clearly alternative, visually separated blocks, "Sign in to
 /// Nexus" (OAuth) and "Use an API key", only one of which is active at a time.
 /// The active method is shown by the method-aware status line ("Signed in as X

@@ -1,5 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json;
+using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
@@ -11,13 +13,66 @@ using Modificus.Curator.UI.Session;
 namespace Modificus.Curator.UI.ViewModels;
 
 /// <summary>
+/// A small curated palette of dark, visually distinct avatar backgrounds with
+/// adequate contrast against the alt-high/white letter foreground used by the
+/// profile banner + picker rows. Selection is deterministic from the profile id
+/// (see <see cref="ProfileChoice"/>) so a profile keeps its color across
+/// reloads, sorting, and app restarts. Palette collisions are acceptable: the
+/// goal is variety, not uniqueness.
+/// </summary>
+/// <remarks>
+/// <see cref="ImmutableSolidColorBrush"/> instances: these are immutable Avalonia
+/// brush values suitable for direct XAML binding (Avalonia 12 distinguishes
+/// mutable brushes from immutable ones via <see cref="IImmutableBrush"/>; the
+/// immutable form is safe to share across binding targets and never triggers
+/// spurious change notifications). Lives in the UI assembly: color is a UI
+/// concern, not a Profiles-domain concern.
+/// </remarks>
+internal static class ProfileAvatarPalette
+{
+    private static readonly IReadOnlyList<IBrush> _brushes = new IBrush[]
+    {
+        new ImmutableSolidColorBrush(0xFF4A6FA5), // deep blue
+        new ImmutableSolidColorBrush(0xFF5B4A8C), // deep purple
+        new ImmutableSolidColorBrush(0xFF2C7A7B), // deep teal
+        new ImmutableSolidColorBrush(0xFF8C5B2F), // deep amber-brown
+        new ImmutableSolidColorBrush(0xFF8C3A5B), // deep magenta
+        new ImmutableSolidColorBrush(0xFF3A7D44), // deep green
+        new ImmutableSolidColorBrush(0xFFB05B36), // rust
+        new ImmutableSolidColorBrush(0xFF5C6BC0), // indigo
+    };
+
+    /// <summary>
+    /// Resolves a stable avatar background for <paramref name="id"/>. The
+    /// selection is a pure function of the id's byte representation (not the
+    /// hash-code, which can vary by runtime; not the list index, which varies
+    /// with sort + reload), so the same id always maps to the same color.
+    /// </summary>
+    public static IBrush For(Guid id)
+    {
+        // Sum the 16 bytes (a cheap, stable reduction; the goal is variety +
+        // determinism, not cryptographic distribution). Modulo the palette size
+        // keeps the result in range. Summing rather than XOR avoids the
+        // all-same-byte symmetry of XOR (e.g. alternating words would XOR to 0).
+        var bytes = id.ToByteArray();
+        var sum = 0;
+        foreach (var b in bytes)
+        {
+            sum = unchecked(sum + b);
+        }
+        return _brushes[sum % _brushes.Count];
+    }
+}
+
+/// <summary>
 /// One persisted profile projected for the banner / picker card: the stable id,
-/// the display name, the trimmed description, and the uppercased first letter
-/// (or "?" when the name has no usable first character). Stateless; the parent
-/// <see cref="ProfilesViewModel"/> rebuilds these from
+/// the display name, the trimmed description, the uppercased first letter
+/// (or "?" when the name has no usable first character), and the deterministic
+/// avatar background from <see cref="ProfileAvatarPalette"/>. Stateless; the
+/// parent <see cref="ProfilesViewModel"/> rebuilds these from
 /// <see cref="IProfileService.ListProfiles"/> on every authoritative reload.
 /// </summary>
-public sealed record ProfileChoice(Guid Id, string Name, string Description, string FirstLetter);
+public sealed record ProfileChoice(Guid Id, string Name, string Description, string FirstLetter, IBrush AvatarBackground);
 
 /// <summary>
 /// The Profiles destination view model. Owns the full profile draft workflow:
@@ -46,12 +101,14 @@ public sealed record ProfileChoice(Guid Id, string Name, string Description, str
 /// settings stays enabled while the game runs (a profile.json write that does
 /// not touch the running process). A new draft's Save additionally requires the
 /// game stopped, since saving activates the new profile.</para>
-/// <para><b>Delegate seams:</b> the DMF prompt + mod-list reload are focused
-/// <c>Func&lt;Task&gt;</c> + <c>Action</c> delegates rather than service
-/// interfaces, so this VM stays narrowly coupled to profile workflow. After a
-/// successful create-and-activate the DMF delegate is awaited immediately (the
-/// coordinator was already subscribed before this VM existed) and the reload
-/// delegate is invoked so an accepted DMF install appears in the mod list.</para>
+/// <para><b>DMF + mod-list reload owned by the shell:</b> this VM is narrowly
+/// coupled to profile workflow. The DMF (Darktide Mod Framework) install-prompt
+/// coordinator subscribes to <see cref="IProfileService.ProfileCreated"/> at
+/// construction (resolved eagerly when the shell is built, before this VM can
+/// create a profile), records the trigger, and the shell awaits
+/// <see cref="DmfPromptService.ProcessPendingAsync"/> on the next navigation
+/// into Mods. After a successful create-and-activate this VM does no DMF or
+/// mod-list work; the shell's post-DMF reload surfaces an accepted install.</para>
 /// <para><b>Application-lifetime subscriptions:</b> subscribes to
 /// <see cref="IProfileSession.PropertyChanged"/> (active-id + IsRunning) +
 /// <see cref="LocalizationService.PropertyChanged"/> (culture) exactly once at
@@ -66,8 +123,6 @@ public partial class ProfilesViewModel : ObservableObject
     private readonly IProfileSession _session;
     private readonly IDialogService _dialogs;
     private readonly LocalizationService _localization;
-    private readonly Func<Task> _processPendingDmf;
-    private readonly Action _reloadModList;
     private readonly ILogger<ProfilesViewModel> _logger;
 
     // Persisted baseline captured at Load so IsDirty compares staged values
@@ -93,16 +148,12 @@ public partial class ProfilesViewModel : ObservableObject
         IProfileSession session,
         IDialogService dialogs,
         LocalizationService localization,
-        Func<Task> processPendingDmf,
-        Action reloadModList,
         ILogger<ProfilesViewModel> logger)
     {
         _profiles = profiles;
         _session = session;
         _dialogs = dialogs;
         _localization = localization;
-        _processPendingDmf = processPendingDmf;
-        _reloadModList = reloadModList;
         _logger = logger;
 
         // Snapshot the session's running state BEFORE subscribing + before any
@@ -150,8 +201,12 @@ public partial class ProfilesViewModel : ObservableObject
     [ObservableProperty]
     private bool _isDraft;
 
-    /// <summary>True while a Save is in flight; Save + Add + Select + Delete are
-    /// disabled. Defense against a double-click racing the async work.</summary>
+    /// <summary>True while a Save is in flight. Save is synchronous (the
+    /// service writes synchronously to disk), so this flag is set + cleared
+    /// within one call; it serves as a reentrancy guard and a command gate so
+    /// Save + Add + Select + Delete stay disabled for the duration of the
+    /// atomic create/update + authoritative reload and a second click cannot
+    /// reenter the same path.</summary>
     [ObservableProperty]
     private bool _isSaving;
 
@@ -207,6 +262,14 @@ public partial class ProfilesViewModel : ObservableObject
     /// <summary>True when the Select-a-profile affordance should show (no profile
     /// is active but at least one exists, and no draft is open).</summary>
     public bool ShowSelectAffordance => _activeId is null && HasProfiles && !IsDraft;
+
+    /// <summary>True when the shared Add/Delete action row beneath the banner or
+    /// Select affordance should show. Hidden while a draft is open (Save +
+    /// Cancel are the only draft-completion controls) and hidden when no profile
+    /// is active and none exist (the no-profiles CTA replaces it). Defense in
+    /// depth: <see cref="CanAddProfile"/> also disables Add while a draft is
+    /// open, so the row's visibility + the command gate both block Add.</summary>
+    public bool ShowProfileActions => !IsDraft && (_activeId is not null || HasProfiles);
 
     /// <summary>True when the picker flyout has at least one switch target.</summary>
     public bool HasPickerChoices => ProfileChoices.Count > 0;
@@ -292,9 +355,12 @@ public partial class ProfilesViewModel : ObservableObject
         }
     }
 
-    /// <summary>Add Profile: disabled while Darktide runs or a Save is in
-    /// flight. Defense-in-depth re-check in the command body.</summary>
-    private bool CanAddProfile => !IsRunning && !IsSaving;
+    /// <summary>Add Profile: disabled while Darktide runs, while a Save is in
+    /// flight, and (defense in depth) while a draft is already open. The draft
+    /// case is also hidden via <see cref="ShowProfileActions"/>; CanExecute is
+    /// the secondary guard so a programmatic call cannot start a second draft
+    /// either.</summary>
+    private bool CanAddProfile => !IsRunning && !IsSaving && !IsDraft;
 
     /// <summary>Delete Profile: requires an active persisted profile, not a
     /// draft, not saving, and the session gate. The button also hides for a
@@ -344,6 +410,7 @@ public partial class ProfilesViewModel : ObservableObject
         OnPropertyChanged(nameof(IsEditorVisible));
         OnPropertyChanged(nameof(ShowNoProfilesCta));
         OnPropertyChanged(nameof(ShowSelectAffordance));
+        OnPropertyChanged(nameof(ShowProfileActions));
         OnPropertyChanged(nameof(DeleteIsVisible));
         RefreshCommandCanExecute();
     }
@@ -375,21 +442,24 @@ public partial class ProfilesViewModel : ObservableObject
     // ---- commands ----------------------------------------------------------
 
     /// <summary>
-    /// Starts a new (unsaved) draft. Disabled while Darktide runs (and
-    /// re-checked defense-in-depth). If the current form is dirty, confirms
-    /// discard first; rejection leaves the current draft unchanged. A new draft
-    /// has empty name + empty description + default launch settings and is not
-    /// itself dirty.
+    /// Starts a new (unsaved) draft. Disabled while Darktide runs, while a Save
+    /// is in flight, or while a draft is already open (the latter also hides the
+    /// Add affordance via <see cref="ShowProfileActions"/>; CanExecute is the
+    /// secondary guard). If the current form is dirty, asks the unsaved-changes
+    /// three-choice prompt; Cancel/ESC/X preserves the current draft, Save tries
+    /// the atomic write and proceeds only on success, Don't save reloads
+    /// authority and proceeds. A new draft has empty name + empty description +
+    /// default launch settings and is not itself dirty.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanAddProfile))]
     private async Task AddProfileAsync()
     {
-        if (IsRunning || IsSaving)
+        if (IsRunning || IsSaving || IsDraft)
         {
             return;
         }
 
-        if (!await ConfirmDiscardAsync())
+        if (!await ResolveDirtyTransitionAsync())
         {
             return;
         }
@@ -398,27 +468,61 @@ public partial class ProfilesViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Saves the staged profile. For a new draft: creates via the atomic
-    /// <see cref="IProfileService.CreateProfile(string, string, LaunchSettings)"/>,
-    /// requests the new id active through the session, reloads the authoritative
-    /// active profile + choices (synchronous through RequestActive so the
-    /// running-state polling timer cannot interleave between create and
-    /// activation on the UI thread), awaits the DMF delegate, then invokes the
-    /// mod-list reload. For an existing profile: one atomic
-    /// <see cref="IProfileService.UpdateProfile"/> call with the staged fields,
-    /// then reloads. An authoritative <see cref="ArgumentException"/> surfaces a
-    /// localized generic error without exposing raw service text; edits clear
-    /// the stale error.
+    /// Saves the staged profile. Synchronous: there is no async DMF or mod-list
+    /// work in profile Save (the shell owns DMF prompting + the mod-list reload
+    /// on Mods entry), so no artificial await is preserved. For a new draft:
+    /// creates via the atomic
+    /// <see cref="IProfileService.CreateProfile(string, string, LaunchSettings)"/>
+    /// and requests the new id active through the session (synchronous through
+    /// RequestActive so the running-state polling timer cannot interleave
+    /// between create and activation on the UI thread), then reloads the
+    /// authoritative active profile + choices. For an existing profile: one
+    /// atomic <see cref="IProfileService.UpdateProfile"/> call with the staged
+    /// fields, then reloads. An authoritative <see cref="ArgumentException"/>
+    /// surfaces a localized generic error without exposing raw service text;
+    /// edits clear the stale error. The reusable core
+    /// <see cref="TrySaveCore"/> returns success/failure so the dirty-transition
+    /// helper can run the same atomic write.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanSave))]
-    private async Task SaveAsync()
+    private void Save()
+    {
+        _ = TrySaveCore();
+    }
+
+    /// <summary>
+    /// The single honest save core, reused by the Save button
+    /// (<see cref="Save"/>) and the dirty-transition helper
+    /// (<see cref="ResolveDirtyTransitionAsync"/>). Returns <c>true</c> on a
+    /// successful atomic create/update + reload; <c>false</c> on a gate failure
+    /// or a service rejection (the localized save error is set, the staged state
+    /// is preserved so the user can fix + retry). Never requests active / reloads
+    /// after a rejected create, mirroring the original contract.
+    /// </summary>
+    /// <remarks>
+    /// Synchronous through the service calls (the profile service writes
+    /// synchronously to disk). The <paramref name="simulateSavingFlag"/> hook
+    /// flips the <see cref="IsSaving"/> flag for the Save-button path only; the
+    /// dirty-transition path calls this core without the flag (no UI affordance
+    /// needs to disable for an instant atomic write that has its own modal
+    /// already up).
+    /// </remarks>
+    /// <param name="simulateSavingFlag">When <c>true</c> (the Save button path),
+    /// sets <see cref="IsSaving"/> around the work so Add/Select/Delete stay
+    /// disabled + Cancel is gated off for the duration. When <c>false</c> (the
+    /// dirty-transition path), the unsaved-changes modal is already up + the
+    /// gates are irrelevant.</param>
+    private bool TrySaveCore(bool simulateSavingFlag = true)
     {
         if (!CanSave)
         {
-            return;
+            return false;
         }
 
-        IsSaving = true;
+        if (simulateSavingFlag)
+        {
+            IsSaving = true;
+        }
         try
         {
             var name = Name.Trim();
@@ -432,7 +536,7 @@ public partial class ProfilesViewModel : ObservableObject
                 // create (which would require activation).
                 if (IsRunning)
                 {
-                    return;
+                    return false;
                 }
 
                 Guid createdId;
@@ -443,15 +547,15 @@ public partial class ProfilesViewModel : ObservableObject
                 catch (ArgumentException ex)
                 {
                     // Same defense-in-depth contract as the existing-profile
-                    // UpdateProfile path: the inline pass should have caught any
-                    // violation, so reaching here means the validator and the
-                    // service diverged. Surface the localized generic error and
-                    // keep the draft open; never request active / DMF / reload
+                    // UpdateProfile path: the inline pass should have caught
+                    // any violation, so reaching here means the validator and
+                    // the service diverged. Surface the localized generic error
+                    // and keep the draft open; never request active / reload
                     // after a rejected create.
                     _logger.LogWarning(ex,
                         "Atomic CreateProfile rejected an edit the inline pass allowed");
                     SaveError = _localization["Profiles_ErrSaveFailed"];
-                    return;
+                    return false;
                 }
 
                 // Suppress the session event handler's stale-draft displacement
@@ -469,37 +573,44 @@ public partial class ProfilesViewModel : ObservableObject
                 {
                     _syncing = false;
                 }
-
-                await _processPendingDmf();
-                _reloadModList();
+                // No DMF await + no mod-list reload here: the shell owns DMF
+                // prompting + the post-DMF reload (both fire on the next Mods
+                // entry). DmfPromptService's eagerly established
+                // ProfileCreated subscription recorded the trigger; this VM's
+                // part ends at the atomic create + activate + authoritative
+                // reload, and the shell consumes the trigger on the next real
+                // navigation into Mods.
+                return true;
             }
-            else
+
+            var id = _activeId!.Value;
+            try
             {
-                var id = _activeId!.Value;
-                try
-                {
-                    _profiles.UpdateProfile(id, name, description, settings);
-                }
-                catch (ArgumentException ex)
-                {
-                    // Defense-in-depth: the inline pass should have caught any
-                    // violation, so reaching here means the inline validator and
-                    // the service diverged. Keep the page open with a generic,
-                    // localized error; never surface the raw (non-localized)
-                    // service text. The offending row's inline message (if any)
-                    // is already shown by the editor.
-                    _logger.LogWarning(ex,
-                        "Atomic UpdateProfile rejected an edit the inline pass allowed for profile {Id}", id);
-                    SaveError = _localization["Profiles_ErrSaveFailed"];
-                    return;
-                }
-
-                ReloadFromActive();
+                _profiles.UpdateProfile(id, name, description, settings);
             }
+            catch (ArgumentException ex)
+            {
+                // Defense-in-depth: the inline pass should have caught any
+                // violation, so reaching here means the inline validator and
+                // the service diverged. Keep the page open with a generic,
+                // localized error; never surface the raw (non-localized)
+                // service text. The offending row's inline message (if any)
+                // is already shown by the editor.
+                _logger.LogWarning(ex,
+                    "Atomic UpdateProfile rejected an edit the inline pass allowed for profile {Id}", id);
+                SaveError = _localization["Profiles_ErrSaveFailed"];
+                return false;
+            }
+
+            ReloadFromActive();
+            return true;
         }
         finally
         {
-            IsSaving = false;
+            if (simulateSavingFlag)
+            {
+                IsSaving = false;
+            }
         }
     }
 
@@ -507,7 +618,8 @@ public partial class ProfilesViewModel : ObservableObject
     /// Cancel: reloads the persisted active profile (or the no-active state)
     /// without writing. Cancelling a new draft creates nothing; the editor
     /// reverts to the persisted baseline. Disabled while a Save is in flight so
-    /// a Cancel click cannot race the async create/update/reload sequence.
+    /// a Cancel click cannot reenter the synchronous create/update + reload
+    /// path.
     /// </summary>
     private bool CanCancel => !IsSaving;
 
@@ -566,10 +678,12 @@ public partial class ProfilesViewModel : ObservableObject
 
     /// <summary>
     /// Selects a persisted profile from the picker. Blocked while Darktide runs
-    /// (defense-in-depth re-check in the body). Confirms discard if the current
-    /// form is dirty; rejection leaves the draft unchanged. On confirm: requests
-    /// the id active through the session, then reloads the authoritative active
-    /// id. The view closes the flyout after the command runs.
+    /// (defense-in-depth re-check in the body). When the current form is dirty,
+    /// asks the unsaved-changes three-choice prompt; Cancel/ESC/X preserves the
+    /// draft, Save tries the atomic write and proceeds only on success, Don't
+    /// save reloads authority and proceeds. On proceed: requests the id active
+    /// through the session, then reloads the authoritative active id. The view
+    /// closes the flyout after the command runs.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanSelectProfile))]
     private async Task SelectProfileAsync(ProfileChoice? choice)
@@ -579,7 +693,7 @@ public partial class ProfilesViewModel : ObservableObject
             return;
         }
 
-        if (!await ConfirmDiscardAsync())
+        if (!await ResolveDirtyTransitionAsync())
         {
             return;
         }
@@ -597,27 +711,15 @@ public partial class ProfilesViewModel : ObservableObject
     }
 
     /// <summary>
-    /// The shell navigation guard. Clean returns true; dirty asks the
-    /// localized discard confirmation. Rejection returns false and preserves the
-    /// draft; acceptance reloads the persisted state and returns true. Shell
-    /// navigation, switching profiles, and starting another draft all reuse this
-    /// guard semantics (the command paths inline the same confirm + reload).
+    /// The shell navigation guard. Clean proceeds without a dialog; dirty asks
+    /// the unsaved-changes three-choice prompt. Cancel/ESC/X preserves the draft
+    /// and returns <c>false</c>; Save tries the same atomic create/update used
+    /// by the Save button and returns <c>true</c> only on success (the
+    /// localized save error surfaces in the editor on a service rejection);
+    /// Don't save reloads authority and returns <c>true</c>. Shell navigation,
+    /// switching profiles, and starting another draft all reuse this core.
     /// </summary>
-    public async Task<bool> ConfirmCanNavigateAwayAsync()
-    {
-        if (!IsDirty)
-        {
-            return true;
-        }
-
-        if (!await ConfirmDiscardAsync())
-        {
-            return false;
-        }
-
-        ReloadFromActive();
-        return true;
-    }
+    public async Task<bool> ConfirmCanNavigateAwayAsync() => await ResolveDirtyTransitionAsync();
 
     // ---- dirty -------------------------------------------------------------
 
@@ -634,22 +736,51 @@ public partial class ProfilesViewModel : ObservableObject
         Editor.IsDirty;
 
     /// <summary>
-    /// Internal discard-confirmation helper shared by Add, Select, and
-    /// ConfirmCanNavigateAwayAsync. Returns true when there is nothing to
-    /// discard or the user confirms; false when the user rejects (the draft is
-    /// preserved). Does not reload on acceptance; each caller performs its own
-    /// authoritative reload after the gate.
+    /// The shared dirty-transition core for navigate-away, switch, and
+    /// start-another-draft. Clean is a no-op (proceeds). Dirty asks the
+    /// unsaved-changes three-choice prompt:
+    /// <list type="bullet">
+    /// <item><term><see cref="UnsavedChangesChoice.Cancel"/></term>
+    /// <description>preserve the staged state, return <c>false</c> (the
+    /// attempted transition stops).</description></item>
+    /// <item><term><see cref="UnsavedChangesChoice.Save"/></term>
+    /// <description>run <see cref="TrySaveCore(bool)"/> without the
+    /// <see cref="IsSaving"/> flag (the modal is already up); return
+    /// <c>true</c> on success, <c>false</c> on a service rejection (the
+    /// localized save error is left in place so the user sees why the
+    /// transition stopped).</description></item>
+    /// <item><term><see cref="UnsavedChangesChoice.DontSave"/></term>
+    /// <description>reload the authoritative state, return
+    /// <c>true</c>.</description></item>
+    /// </list>
+    /// When <see cref="CanSave"/> is <c>false</c> the prompt is opened with
+    /// <c>canSave=false</c> so the Save button is disabled and the concise
+    /// unavailable explanation shows (the user can still Cancel or Don't save).
     /// </summary>
-    private async Task<bool> ConfirmDiscardAsync()
+    private async Task<bool> ResolveDirtyTransitionAsync()
     {
         if (!IsDirty)
         {
             return true;
         }
 
-        var title = _localization["Profiles_DiscardTitle"];
-        var message = _localization["Profiles_DiscardMessage"];
-        return await _dialogs.ConfirmAsync(title, message);
+        var title = _localization["Unsaved_Title"];
+        var message = _localization["Unsaved_Message"];
+        var choice = await _dialogs.ShowUnsavedChangesAsync(title, message, canSave: CanSave);
+
+        switch (choice)
+        {
+            case UnsavedChangesChoice.Save:
+                // The modal is up; do not flip IsSaving (it would disable the
+                // wrong affordances while the unsaved-changes modal is still
+                // closing). The core's own gate (CanSave) re-checks.
+                return TrySaveCore(simulateSavingFlag: false);
+            case UnsavedChangesChoice.DontSave:
+                ReloadFromActive();
+                return true;
+            default:
+                return false;
+        }
     }
 
     // ---- draft + reload ----------------------------------------------------
@@ -761,6 +892,7 @@ public partial class ProfilesViewModel : ObservableObject
         OnPropertyChanged(nameof(IsEditorVisible));
         OnPropertyChanged(nameof(ShowNoProfilesCta));
         OnPropertyChanged(nameof(ShowSelectAffordance));
+        OnPropertyChanged(nameof(ShowProfileActions));
         OnPropertyChanged(nameof(HasPickerChoices));
         OnPropertyChanged(nameof(DeleteIsVisible));
         OnPropertyChanged(nameof(IsDirty));
@@ -788,14 +920,21 @@ public partial class ProfilesViewModel : ObservableObject
     /// <summary>
     /// Builds a <see cref="ProfileChoice"/> from a summary, deriving the
     /// uppercased first letter (or "?" when the name has no usable first
-    /// character). Used for both the banner + every picker row.
+    /// character) + the deterministic avatar background from
+    /// <see cref="ProfileAvatarPalette"/>. Used for both the banner + every
+    /// picker row.
     /// </summary>
     private static ProfileChoice ToChoice(ProfileSummary summary)
     {
         var first = summary.Name.Length > 0
             ? char.ToUpperInvariant(summary.Name[0]).ToString()
             : "?";
-        return new ProfileChoice(summary.Id, summary.Name, summary.Description ?? string.Empty, first);
+        return new ProfileChoice(
+            summary.Id,
+            summary.Name,
+            summary.Description ?? string.Empty,
+            first,
+            ProfileAvatarPalette.For(summary.Id));
     }
 
     // ---- application-lifetime subscriptions --------------------------------

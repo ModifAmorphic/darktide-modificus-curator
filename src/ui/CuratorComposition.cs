@@ -179,30 +179,25 @@ public static class CuratorComposition
         // DialogService previously wired for each Window-constructed VM
         // (UI-thread marshal, typed logger, platform-resolved seams).
         //
-        // ProfilesViewModel resolves DmfPromptService eagerly inside the factory
-        // body and captures that concrete instance in the processPendingDmf
-        // delegate. The coordinator constructor subscribes to the synchronous
-        // IProfileService.ProfileCreated event, so resolving ProfilesViewModel
-        // (which resolving ShellViewModel does at startup) establishes the
-        // subscription before any profile can be created: when ProfilesViewModel
-        // SaveAsync later calls CreateProfile, the event fires synchronously into
-        // the already-subscribed coordinator, which records it as pending, and
-        // ProfilesViewModel awaits processPendingDmf immediately after the
-        // create + activation. The delegate closures stay focused
-        // (ProcessPendingAsync + ModListViewModel.Reload); no navigation or
-        // mod-list interface is introduced for those two calls.
-        services.AddSingleton<ProfilesViewModel>(sp =>
-        {
-            var dmf = sp.GetRequiredService<DmfPromptService>();
-            return new ProfilesViewModel(
-                sp.GetRequiredService<IProfileService>(),
-                sp.GetRequiredService<IProfileSession>(),
-                sp.GetRequiredService<IDialogService>(),
-                sp.GetRequiredService<LocalizationService>(),
-                processPendingDmf: () => dmf.ProcessPendingAsync(),
-                reloadModList: () => sp.GetRequiredService<ModListViewModel>().Reload(),
-                sp.GetRequiredService<ILogger<ProfilesViewModel>>());
-        });
+        // ProfilesViewModel is narrowly coupled to profile workflow: after a
+        // successful create-and-activate it does no DMF or mod-list work. The
+        // DMF (Darktide Mod Framework) install-prompt coordinator
+        // (DmfPromptService, registered below) subscribes to the synchronous
+        // IProfileService.ProfileCreated event at construction; resolving
+        // ShellViewModel at startup establishes the subscription before any
+        // profile can be created. When ProfilesViewModel.Save calls
+        // CreateProfile, the event fires synchronously into the already-
+        // subscribed coordinator, which records it as pending; the shell
+        // consumes the pending trigger on the next real navigation into Mods
+        // (ProcessPendingAsync after CurrentDestination = Mods), then reloads
+        // the mod list when a trigger was consumed so an accepted existing /
+        // Premium DMF add is visible.
+        services.AddSingleton<ProfilesViewModel>(sp => new ProfilesViewModel(
+            sp.GetRequiredService<IProfileService>(),
+            sp.GetRequiredService<IProfileSession>(),
+            sp.GetRequiredService<IDialogService>(),
+            sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<ILogger<ProfilesViewModel>>()));
         services.AddSingleton(sp => new IntegrationsViewModel(
             sp.GetRequiredService<INexusAuthService>(),
             sp.GetRequiredService<LocalizationService>(),
@@ -223,6 +218,35 @@ public static class CuratorComposition
             sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<SettingsViewModel>>()));
 
+        // The DMF (Darktide Mod Framework) install-prompt coordinator.
+        // Subscribes to the synchronous IProfileService.ProfileCreated event at
+        // construction. When ProfilesViewModel.Save later calls CreateProfile
+        // (firing ProfileCreated), the already-subscribed coordinator records it
+        // as pending; the shell consumes the trigger on the next real navigation
+        // into Mods (ProcessPendingAsync after CurrentDestination = Mods), so
+        // the DMF prompt runs as the topmost modal with Mods already selected
+        // underneath + the post-prompt mod-list reload surfaces an accepted
+        // existing/Premium DMF add. Singleton: owns the event subscription for
+        // the app lifetime. Takes the optional nxm registrar so the download
+        // confirm can tailor its message to whether Curator owns the nxm handler
+        // (manager-download vs. manual-import guidance). Registered BEFORE
+        // ShellViewModel so ShellViewModel's factory can resolve it eagerly.
+        services.AddSingleton(sp => new DmfPromptService(
+            sp.GetRequiredService<IProfileService>(),
+            sp.GetRequiredService<IProfileSession>(),
+            sp.GetRequiredService<IModRepository>(),
+            sp.GetRequiredService<IModAcquisitionService>(),
+            sp.GetRequiredService<INexusAuthService>(),
+            sp.GetRequiredService<IDialogService>(),
+            sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<ILogger<DmfPromptService>>(),
+            sp.GetService<INxmHandlerRegistrar>()));
+
+        // ShellViewModel owns navigation + the deferred DMF trigger (consumed on
+        // a real Mods entry). The concrete DmfPromptService is injected (not a
+        // delegate or navigation interface) so the shell can call
+        // ProcessPendingAsync at its chosen point without coupling the
+        // coordinator to navigation sequencing.
         services.AddSingleton(sp => new ShellViewModel(
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IRelayLaunchService>(),
@@ -234,6 +258,7 @@ public static class CuratorComposition
             sp.GetRequiredService<PreferencesViewModel>(),
             sp.GetRequiredService<SettingsViewModel>(),
             sp.GetRequiredService<IAppUpdateService>(),
+            sp.GetRequiredService<DmfPromptService>(),
             sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<ShellViewModel>>(),
             sp.GetRequiredService<IConfigLoader>(),
@@ -307,32 +332,10 @@ public static class CuratorComposition
             sp.GetRequiredService<IConfigLoader>(),
             sp.GetRequiredService<ILogger<AppUpdateCheckRunner>>()));
 
-        // The DMF (Darktide Mod Framework) install-prompt coordinator.
-        // Subscribes to the synchronous IProfileService.ProfileCreated event at
-        // construction. When ProfilesViewModel.SaveAsync later calls
-        // CreateProfile (firing ProfileCreated), the already-subscribed
-        // coordinator records it as pending; ProfilesViewModel then awaits the
-        // captured processPendingDmf delegate immediately after the create +
-        // activation, so the DMF prompt runs as the topmost modal with no
-        // intermediate destination. Singleton: owns the event subscription for
-        // the app lifetime. Takes the optional nxm registrar so the download
-        // confirm can tailor its message to whether Curator owns the nxm handler
-        // (manager-download vs. manual-import guidance).
-        services.AddSingleton(sp => new DmfPromptService(
-            sp.GetRequiredService<IProfileService>(),
-            sp.GetRequiredService<IProfileSession>(),
-            sp.GetRequiredService<IModRepository>(),
-            sp.GetRequiredService<IModAcquisitionService>(),
-            sp.GetRequiredService<INexusAuthService>(),
-            sp.GetRequiredService<IDialogService>(),
-            sp.GetRequiredService<LocalizationService>(),
-            sp.GetRequiredService<ILogger<DmfPromptService>>(),
-            sp.GetService<INxmHandlerRegistrar>()));
-
         // The first-run Welcome onboarding coordinator. Shows the Welcome modal
         // once, the first time the app starts with onboarding not yet complete,
         // persists completion, and on a "Set up Nexus" choice navigates the shell
-        // to Nexus Integrations (resolved lazily through ShellViewModel's
+        // to Nexus (resolved lazily through ShellViewModel's
         // navigation entry point, so the leave-Integrations nxm/mod-list refresh
         // applies after the Welcome-driven visit too). Singleton: owns the
         // in-process "already shown" guard. Started from App after the main

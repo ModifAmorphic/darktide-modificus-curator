@@ -19,13 +19,15 @@ namespace Modificus.Curator.UI.Session;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>The trigger fires from the backend; the prompt fires from the Profiles
-/// page.</b> <see cref="IProfileService.ProfileCreated"/> fires synchronously
-/// from inside the create call. This coordinator subscribes at construction
-/// (resolved eagerly when the Profiles page VM is built), records the signal as
-/// pending, and the Profiles page awaits <see cref="ProcessPendingAsync"/>
-/// immediately after the create + activation, so the DMF prompt runs as the
-/// topmost modal with no intermediate destination.</para>
+/// <b>The trigger fires from the backend; the prompt fires from the shell on
+/// Mods entry.</b> <see cref="IProfileService.ProfileCreated"/> fires
+/// synchronously from inside the create call. This coordinator subscribes at
+/// construction (resolved eagerly when the shell is built, before any profile
+/// can be created), records the signal as pending, and the shell awaits
+/// <see cref="ProcessPendingAsync"/> when the user next navigates into the Mods
+/// destination, so the DMF prompt runs as the topmost modal with Mods already
+/// selected underneath. A pending trigger survives visits to other destinations
+/// and is consumed only on a real navigation into Mods.</para>
 /// <para>
 /// <b>The two DMF cases.</b> On a trigger, the coordinator looks up DMF by
 /// source (<c>new NexusSource { ModId = <see cref="DmfModId"/> }</c>) and checks
@@ -39,7 +41,7 @@ namespace Modificus.Curator.UI.Session;
 /// <para>
 /// <b>No auth trigger.</b> Configuring Nexus auth no longer surfaces a DMF
 /// prompt on its own; the one-time Nexus setup offer lives in the first-run
-/// Welcome flow instead. The coordinator never opens the Nexus Integrations
+/// Welcome flow instead. The coordinator never opens the Nexus
 /// destination and never stops at an informational dead-end: on a confirmed
 /// download it either downloads in-app (premium) or opens the browser (everyone
 /// else).</para>
@@ -47,8 +49,8 @@ namespace Modificus.Curator.UI.Session;
 /// <b>Lives in the UI assembly.</b> Mirrors <see cref="UpdateCheckRunner"/>:
 /// the coordinator observes UI-layer singletons (<see cref="IProfileSession"/>,
 /// <see cref="IDialogService"/>) and orchestrates Integrations + Profiles +
-/// Mods services. Registered as a singleton; the Profiles page resolves it +
-/// awaits <see cref="ProcessPendingAsync"/> after each create + activation.</para>
+/// Mods services. Registered as a singleton; the shell resolves it + awaits
+/// <see cref="ProcessPendingAsync"/> after navigating into Mods.</para>
 /// </remarks>
 public sealed class DmfPromptService
 {
@@ -90,9 +92,10 @@ public sealed class DmfPromptService
 
     // The pending new-profile trigger, set by the event handler (which fires
     // synchronously from CreateProfile) and consumed by ProcessPendingAsync
-    // (awaited by the Profiles page immediately after the create + activation).
-    // Single-entry: the newest create wins. Read + written on the UI thread only
-    // (ProfileCreated fires from ProfileService on the UI thread).
+    // (awaited by the shell on Mods entry). Single-entry: the newest create
+    // wins. Read + written on the UI thread only (ProfileCreated fires from
+    // ProfileService on the UI thread; the shell's NavigateAsync runs on the UI
+    // thread).
     private Guid? _pendingNewProfileId;
 
     public DmfPromptService(
@@ -122,14 +125,14 @@ public sealed class DmfPromptService
     }
 
     /// <summary>
-    /// Records a new-profile-created signal. The Profiles page will await
-    /// <see cref="ProcessPendingAsync"/> immediately after the create +
-    /// activation; this method only records the pending trigger.
+    /// Records a new-profile-created signal. The shell will await
+    /// <see cref="ProcessPendingAsync"/> on the next navigation into Mods; this
+    /// method only records the pending trigger.
     /// </summary>
     /// <remarks>
     /// A second create before the first is processed overwrites it (the newest
     /// created id is the relevant one). A profile created + then deleted before
-    /// the page processes the trigger is handled by
+    /// the shell processes the trigger is handled by
     /// <see cref="PromptForNewProfileAsync"/>: it checks the active id, which
     /// no longer points at the deleted profile, so no prompt fires.
     /// </remarks>
@@ -140,16 +143,23 @@ public sealed class DmfPromptService
     }
 
     /// <summary>
-    /// Processes any pending new-profile trigger. Awaited by the Profiles page
-    /// immediately after a create + activation so the DMF prompt runs as the
-    /// topmost modal. Safe to call when nothing is pending (a no-op).
+    /// Processes any pending new-profile trigger. Awaited by the shell after a
+    /// navigation into Mods so the DMF prompt runs as the topmost modal with
+    /// the Mods destination already selected underneath. Safe to call when
+    /// nothing is pending (a no-op).
     /// </summary>
+    /// <returns><c>true</c> when a pending trigger was consumed (a prompt may or
+    /// may not have fired depending on the active-id + DMF checks); <c>false</c>
+    /// when there was no pending trigger, so the caller knows no mod list reload
+    /// is warranted.</returns>
     /// <remarks>
     /// The trigger is consumed (cleared) before it is processed so a thrown
     /// exception in the prompt does not leave it stuck pending for the next
     /// call. A failure inside the prompt is caught + logged so a wiring issue
-    /// never blocks the page's post-create return.</remarks>
-    public async Task ProcessPendingAsync()
+    /// never blocks the shell's post-navigation return. The boolean carries
+    /// only "a trigger was consumed"; whether the prompt fired (DMF missing vs.
+    /// already in the profile, declined, etc.) stays internal.</remarks>
+    public async Task<bool> ProcessPendingAsync()
     {
         // Snapshot + clear before processing so an exception in the prompt
         // doesn't leave the trigger stuck for the next call.
@@ -159,7 +169,10 @@ public sealed class DmfPromptService
         if (newProfileId is Guid id)
         {
             await RunPromptSafelyAsync(() => PromptForNewProfileAsync(id));
+            return true;
         }
+
+        return false;
     }
 
     /// <summary>
