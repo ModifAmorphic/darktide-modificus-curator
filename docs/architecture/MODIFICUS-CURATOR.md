@@ -118,8 +118,12 @@ library interfaces.
     - `AddSteam()`: Steam discovery + the platform process-lookup seam.
     - `AddRelayClient()`: the launch façade + the process-launcher seam.
     - `AddLauncher()`: the launcher stub.
-   - `AddSingleton<MainWindow>()` + `AddSingleton<MainViewModel>()`: the UI
-     surface.
+    - `AddSingleton<MainWindow>()`: the UI surface. Registered through an
+      explicit factory that supplies `IAppStateStore` via the internal
+      production constructor before the window is returned/shown; the public
+      parameterless constructor stays available for Avalonia's XAML
+      runtime/designer loader (see the UI architecture for the
+      persisted-window-geometry contract).
 4. **Build**: `BuildServiceProvider()`.
 5. **Startup prune**: `ModCleanup.PruneUnreferenced` runs once (best-effort,
    logged + swallowed on failure) to drop repository versions no profile

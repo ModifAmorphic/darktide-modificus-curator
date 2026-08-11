@@ -30,7 +30,9 @@ dialogs, preferences, and i18n fit together.
 │                                                                          │
 │  ┌─ Nav rail (48px compact icon tile; expands to 48px icon + label) ───┐ │
 │  │ hamburger toggle                                                    │ │
-│  │ [Profiles] [Mods] [Nexus] [Preferences] [Settings]     │ │
+│  │ [Profiles] [Mods] [Nexus] [Preferences] [Settings]                   │ │
+│  │ ... (star row pushes the next item to the bottom) ...                │ │
+│  │ [Exit]                                                               │ │
 │  └─────────────────────────────────────────────────────────────────────┘ │
 │  ┌─ Global header ─────────────────────────────────────────────────────┐ │
 │  │ Current destination title ·························· Launch Darktide│ │
@@ -183,9 +185,8 @@ button toggles `IsPaneOpen`.
 
 The SplitView's XAML `OpenPaneLength=200` is the design-time/startup fallback
 and the lower bound. Once the window is open, `MainWindow.axaml.cs` measures
-the five live localized nav-rail labels (`Profiles_Title`, `ModList_Header`,
-`Integrations_Title`, `Preferences_Title`, `Settings_Title`) with the
-representative `NavMeasureLabel` TextBlock's actual typography
+the live localized pane labels (the five destinations plus the pane-bottom
+Exit) with the representative `NavMeasureLabel` TextBlock's actual typography
 (`FontFamily`, `FontStyle`, `FontWeight`, `FontStretch`, `FontSize`,
 `LetterSpacing`) via the Avalonia 12.1 `TextLayout` API, unwrapped with
 infinite width, and grows `NavSplitView.OpenPaneLength` to
@@ -201,6 +202,81 @@ every label). The pure arithmetic lives in the internal
 `MainWindow.ComputeOpenPaneLength` helper so unit tests can exercise it
 without a live Window; the live measurement + update path is covered by XAML
 compilation + operator visual testing.
+
+### Persisted window geometry + the Exit anchor
+
+`MainWindow` remembers the last unmaximized (Normal) client size and whether
+the last meaningful state was Maximized, persisted as one atomic record under
+`IAppStateStore.MainWindowState` (the `AppWindowState` value type in General;
+width + height in DIP plus the boolean flag). No window position is stored;
+`WindowStartupLocation` stays `CenterScreen`.
+
+At construction `MainWindow` reads the saved state and the primary screen's
+working area (physical pixels, converted to DIP via `Screen.Scaling`), runs
+both through the pure `NormalizeSavedSize` helper (which validates finite +
+positive dimensions, clamps to the XAML minimums `MinWidth=720` /
+`MinHeight=480` and the work area, and signals a fallback when the screen is
+unavailable or the state is absent/invalid), and applies the clamped Normal
+size as `Width`/`Height` before first Show so the platform has the right
+restore size. The persisted maximized flag seeds both the in-memory
+meaningful-state flag and the one-shot first-open maximize immediately, so a
+Maximized close reopens Maximized regardless of `OnOpened`/`OnPropertyChanged`
+ordering. When the saved flag was Maximized, the window maximizes once in
+`OnOpened` (after Show) for Win32/X11 consistency; a later unmaximize then
+returns to the saved Normal size. An unavailable or invalid screen (non-finite
+or non-positive scaling or working-area dimensions), an absent or corrupt
+persisted state, or a corrupt store all fall back to the XAML 960x640 size and
+never crash startup.
+
+The last Normal size is tracked through deferred, coalesced, reason-aware
+resize observation, because the platform's settled-state ordering is not
+reliable: Win32 reports the maximized resize BEFORE its managed `WindowState`
+change, while X11 generally reports the state first. `OnResized` tags each
+observation by `WindowResizeReason` and by whether the window had already
+opened, then posts ONE apply to the UI thread. At apply time the settled state
+has propagated, and a trusted observation (User, Unspecified, Application,
+DpiChange) becomes the last Normal size when the settled state is `Normal`,
+the window is not closing, and the candidate is valid. A `Layout` observation
+is never authoritative for the persisted size. The meaningful-state flag is
+tracked through `OnPropertyChanged` for `WindowStateProperty` via the pure
+`NextMeaningfulMaximized` policy: `Normal` clears the flag, `Maximized` sets
+it, and `Minimized` and `FullScreen` leave the preceding flag unchanged. So a
+Normal then Minimized then Close restores Normal, and a Maximized then
+Minimized then Close restores Maximized with the saved unmaximized size;
+Minimized is never persisted as a launch state.
+
+A narrow post-open correction works around Avalonia issue #19431
+(https://github.com/AvaloniaUI/Avalonia/issues/19431): at Windows scaling such
+as 175%, a Maximized to Normal transition can emit a correct `Unspecified`
+Normal resize followed by a stale `Layout` resize carrying the maximized
+`ClientSize`. `MainWindow` uses manual top-level sizing, so a post-open
+`Layout` resize is not a user sizing intent. When the settled state is Normal
+and a post-open `Layout` observation materially conflicts (more than 1 DIP)
+with the trusted last Normal size, `MainWindow` reapplies that trusted size
+through `ClientSize`. The correction never persists a new size from `Layout`
+and never manipulates window position; a trusted observation arriving in the
+same burst as the stale `Layout` wins and becomes the last Normal size before
+the correction is decided, so the correction targets the trusted value.
+
+State is never written on every resize. `OnClosing` calls base (so a
+`Window.Closing` subscriber can still cancel), and if not cancelled it marks
+the window closing (any queued resize apply then no-ops), consumes any pending
+trusted candidate when the settled state is Normal (never the raw `ClientSize`,
+which may be the stale #19431 value), and writes one atomic `AppWindowState`.
+Closing while Maximized or Minimized keeps the tracked last-Normal size and
+meaningful flag (the maximized or minimized client size is not what an
+unmaximize should restore to). The Exit button in the pane calls `Close()`
+exactly like the title-bar close, so the persisted state lands through the
+same path.
+
+The Exit button is anchored at the pane bottom by the pane `Grid`'s
+`Auto,*,Auto` rows: the hamburger is row 0, the destination `StackPanel` is
+the middle star row (it grows to fill and pushes the third row down), and Exit
+is the only row-2 control. It is not a destination: it has no `selected`
+state, no `NavigateCommand`, no `ShellDestination`. Compact mode shows its
+drawn Material logout geometry with a tooltip + accessibility name; expanded
+mode adds the localized `Exit` label. Reusing the `navItem` tile chrome keeps
+it a visual sibling of the destination buttons.
 
 ### The `NavigateAsync` lifecycle
 

@@ -511,6 +511,7 @@ public sealed class AppStateStoreTests
             Assert.Null(store.LastUpdateCheckUtc);
             Assert.Null(store.ManualRefreshTimestamps);
             Assert.Null(store.LastNexusMetadataBackfillUtc);
+            Assert.Null(store.MainWindowState);
         }
         finally
         {
@@ -790,6 +791,208 @@ public sealed class AppStateStoreTests
 
             Assert.Equal(backfill, store.LastNexusMetadataBackfillUtc);
             Assert.Equal(id, store.ActiveProfileId);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    // ---- MainWindowState (the persisted main-window geometry) --------------
+
+    [Fact]
+    public void MainWindowState_is_null_when_file_is_missing()
+    {
+        var path = TempPath();
+        var store = new AppStateStore(path);
+
+        Assert.Null(store.MainWindowState);
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
+    public void MainWindowState_round_trips_width_height_and_maximized()
+    {
+        var path = TempPath();
+        try
+        {
+            var store = new AppStateStore(path);
+
+            store.MainWindowState = new AppWindowState(1280.0, 800.0, true);
+
+            Assert.True(File.Exists(path));
+            // A fresh instance over the same file reads the persisted record.
+            var reloaded = new AppStateStore(path).MainWindowState;
+            Assert.NotNull(reloaded);
+            Assert.Equal(1280.0, reloaded.Width);
+            Assert.Equal(800.0, reloaded.Height);
+            Assert.True(reloaded.IsMaximized);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void Setting_null_clears_MainWindowState()
+    {
+        var path = TempPath();
+        try
+        {
+            var store = new AppStateStore(path);
+            store.MainWindowState = new AppWindowState(1280, 800, false);
+            store.MainWindowState = null;
+
+            Assert.Null(new AppStateStore(path).MainWindowState);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void Old_state_file_without_MainWindowState_loads_null_for_the_new_field()
+    {
+        // First-run-after-upgrade: an existing app-state.json from before this
+        // field existed deserializes MainWindowState as null (System.Text.Json
+        // default for an absent nullable member). Existing fields still read.
+        var path = TempPath();
+        try
+        {
+            var dir = System.IO.Path.GetDirectoryName(path)!;
+            Directory.CreateDirectory(dir);
+            var id = Guid.NewGuid();
+            File.WriteAllText(
+                path,
+                "{\"activeProfileId\":\"" + id + "\",\"lastUpdateCheckUtc\":\"2025-01-02T03:04:05+00:00\"}");
+
+            var store = new AppStateStore(path);
+
+            Assert.Null(store.MainWindowState);
+            Assert.Equal(id, store.ActiveProfileId); // existing fields still read
+            Assert.NotNull(store.LastUpdateCheckUtc);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void Corrupt_file_loads_MainWindowState_null_without_throwing()
+    {
+        // The first-run-safe contract extends to MainWindowState: a corrupt
+        // file must not throw, and the field reads its default (null).
+        var path = TempPath();
+        try
+        {
+            var dir = System.IO.Path.GetDirectoryName(path)!;
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(path, "{ this is not json");
+
+            var store = new AppStateStore(path);
+
+            Assert.Null(store.MainWindowState);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void Setting_MainWindowState_preserves_every_sibling_field()
+    {
+        // The no-clobber guarantee now covers seven fields. Setting
+        // MainWindowState must not wipe the others (the whole cached model is
+        // rewritten) and writes atomically (the three components land together).
+        var path = TempPath();
+        var id = Guid.NewGuid();
+        var stamp = new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.Zero);
+        var window = new[] { stamp };
+        var known = new Dictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>
+        {
+            [id] = new[] { new KnownUpdateSnapshot(id, Guid.NewGuid(), 8, "1.0", stamp, null) },
+        };
+        var backfill = new DateTimeOffset(2025, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        try
+        {
+            var store = new AppStateStore(path);
+            store.OnboardingCompleted = true;
+            store.ActiveProfileId = id;
+            store.LastUpdateCheckUtc = stamp;
+            store.ManualRefreshTimestamps = window;
+            store.KnownUpdates = known;
+            store.LastNexusMetadataBackfillUtc = backfill;
+
+            store.MainWindowState = new AppWindowState(1100.0, 700.0, true); // must NOT wipe the others
+
+            Assert.True(store.OnboardingCompleted);
+            Assert.Equal(id, store.ActiveProfileId);
+            Assert.Equal(stamp, store.LastUpdateCheckUtc);
+            Assert.Equal(window, store.ManualRefreshTimestamps);
+            Assert.Equal(known, store.KnownUpdates);
+            Assert.Equal(backfill, store.LastNexusMetadataBackfillUtc);
+            Assert.Equal(1100.0, store.MainWindowState!.Width);
+            Assert.Equal(700.0, store.MainWindowState.Height);
+            Assert.True(store.MainWindowState.IsMaximized);
+
+            // And on disk: a fresh instance sees all seven.
+            var reloaded = new AppStateStore(path);
+            Assert.True(reloaded.OnboardingCompleted);
+            Assert.Equal(id, reloaded.ActiveProfileId);
+            Assert.Equal(stamp, reloaded.LastUpdateCheckUtc);
+            Assert.Equal(backfill, reloaded.LastNexusMetadataBackfillUtc);
+            Assert.NotNull(reloaded.MainWindowState);
+            Assert.True(reloaded.MainWindowState!.IsMaximized);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void Setting_another_field_preserves_MainWindowState()
+    {
+        // Mirror: assigning a sibling field must not wipe the window geometry.
+        var path = TempPath();
+        var window = new AppWindowState(1100.0, 700.0, false);
+        var id = Guid.NewGuid();
+        try
+        {
+            var store = new AppStateStore(path);
+            store.MainWindowState = window;
+
+            store.ActiveProfileId = id; // must NOT wipe the geometry
+
+            Assert.Equal(window, store.MainWindowState);
+            Assert.Equal(id, store.ActiveProfileId);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void MainWindowState_writes_atomic_width_height_maximized_together()
+    {
+        // The atomic single-record write is the design contract: a width write
+        // never lands without its height + flag. The simplest proof is that the
+        // on-disk JSON for the record carries all three keys after one write.
+        var path = TempPath();
+        try
+        {
+            var store = new AppStateStore(path);
+            store.MainWindowState = new AppWindowState(1024.0, 768.0, true);
+
+            var json = File.ReadAllText(path);
+            Assert.Contains("\"width\"", json);
+            Assert.Contains("\"height\"", json);
+            Assert.Contains("\"isMaximized\"", json);
         }
         finally
         {

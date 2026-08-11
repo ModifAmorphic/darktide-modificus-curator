@@ -100,10 +100,11 @@ public sealed class ConfigLoader : IConfigLoader
 Persists **runtime application state**: values that capture "where the app left
 off" rather than user system settings. Kept deliberately narrow: the first-run
 onboarding flag, the active profile id, the last update-check timestamp, the
-manual-refresh throttle window, the persisted known-update snapshots, and the
-last Nexus display-metadata backfill timestamp. A separate file (not
-`CuratorConfig`) holds it so the settings schema stays pure (system settings
-vs. runtime state).
+manual-refresh throttle window, the persisted known-update snapshots, the last
+Nexus display-metadata backfill timestamp, and the main window's persisted
+geometry (its last unmaximized size and whether the last meaningful state was
+maximized). A separate file (not `CuratorConfig`) holds it so the settings
+schema stays pure (system settings vs. runtime state).
 
 ```csharp
 public interface IAppStateStore
@@ -114,11 +115,17 @@ public interface IAppStateStore
     IReadOnlyList<DateTimeOffset>? ManualRefreshTimestamps { get; set; } // set persists immediately
     IReadOnlyDictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? KnownUpdates { get; set; } // set persists immediately
     DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }      // set persists immediately
+    AppWindowState? MainWindowState { get; set; }                   // set persists immediately
 }
 
 public sealed record KnownUpdateSnapshot(
     Guid ProfileId, Guid ContainerId, int ModId,
     string CurrentVersion, DateTimeOffset CheckedAt, DateTimeOffset? LatestUpdateAt);
+
+/// The persisted main-window geometry: the last valid Normal client size in
+/// DIP plus whether the last meaningful state was Maximized. Primitives only
+/// (no Avalonia type) so the General library stays source-agnostic.
+public sealed record AppWindowState(double Width, double Height, bool IsMaximized);
 
 public sealed class AppStateStore : IAppStateStore
 {
@@ -131,7 +138,8 @@ public sealed class AppStateStore : IAppStateStore
 - File: `<app-data>/app-state.json`
   (`{ "OnboardingCompleted": ..., "ActiveProfileId": ..., "LastUpdateCheckUtc": ...,
   "ManualRefreshTimestamps": ..., "KnownUpdates": { "<profile-guid>": [ { ...snapshot... }, ... ] } | null,
-  "LastNexusMetadataBackfillUtc": "<iso-8601>" | null }`),
+  "LastNexusMetadataBackfillUtc": "<iso-8601>" | null,
+  "MainWindowState": { "width": <dip>, "height": <dip>, "isMaximized": true | false } | null }`),
   derived from `AppPaths.AppDataDir` the same way `ConfigLoader` derives its
   config path.
 - JSON is handled with `System.Text.Json` directly (read + write);
@@ -176,6 +184,25 @@ public sealed class AppStateStore : IAppStateStore
   default for an absent nullable member), so the first run after upgrade proceeds
   normally. See
   [rate-limiting strategy: metadata-backfill gate](rate-limiting-strategy.md#metadata-backfill-gate).
+- `MainWindowState` is used by the UI-layer `MainWindow` to persist the main
+  window's last unmaximized (Normal) client size in device-independent pixels and
+  whether the last meaningful state was Maximized. The record is atomic: width,
+  height, and the maximized flag are written together so a partial triple can
+  never land. The UI applies the saved Normal size before first Show, then
+  maximizes on first open when the flag was set (so a later unmaximize restores
+  to the saved Normal size). Minimized is never persisted as a launch state (a
+  Normal then Minimized then Close restores Normal; a Maximized then Minimized
+  then Close restores Maximized with the saved unmaximized size), and no window
+  position is stored. The record is written once through the normal close path,
+  never on every resize, and only from a trusted resize observation
+  (`WindowResizeReason.Layout` is never persisted authority; see the UI
+  architecture for the Avalonia #19431 visible-restore correction). Defaults to
+  `null` (first run / corrupt); backward compatible on disk: an old
+  `app-state.json` written before the field existed deserializes it to `null`,
+  so the first run after upgrade opens at the XAML fallback size and the next
+  close seeds the value. The record holds only primitives so the General
+  library does not depend on Avalonia; the UI maps its `WindowState`/`Size` to
+  these primitives at the persistence boundary.
 
 `KnownUpdateSnapshot` is a plain serializable DTO (no domain behavior) so the
 General library can persist it without depending on the Integrations
@@ -184,6 +211,11 @@ record, when to clear, how to filter on hydration); this record is the persisted
 shape. Each field exists to identify the flagged mod and invalidate stale
 knowledge after a local version change without re-querying Nexus. Display names
 are not persisted (they continue to come from repository persistence).
+
+`AppWindowState` is likewise a plain serializable DTO (no Avalonia type) so the
+General library can persist the window geometry without taking a UI dependency.
+The UI (`MainWindow`) owns the meaning and the lifetime policy over it; this
+record is the persisted shape.
 
 ## DI registration
 
@@ -230,8 +262,9 @@ round-trip, parent-dir creation, sibling-section preservation, enum-as-string
 serialization), `AppStateStore` (round-trip + first-run + corrupt-file safety +
 the app-data default path, the profile-scoped `KnownUpdates` round-trip, the
 old-file-without-field compatibility for every field including
-`LastNexusMetadataBackfillUtc`, and the whole-model rewrite preserving sibling
-fields on each assignment), `LoggingBootstrap` (level parsing, Serilog
+`LastNexusMetadataBackfillUtc` and `MainWindowState`, the `MainWindowState`
+atomic-record write, and the whole-model rewrite preserving sibling fields on
+each assignment), `LoggingBootstrap` (level parsing, Serilog
 day-rolling file creation and the append-within-a-day behavior at
 `RetainedLogFileCount`), and the `AddGeneral` DI wiring (including the `TryAdd` `IConfigLoader` + `IAppStateStore`
 overrides, so the composition root + tests may pre-register their own instances).

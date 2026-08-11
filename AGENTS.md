@@ -81,7 +81,31 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           visibility-switched by `Is*Visible` projections; a
                           global header shows the current destination title +
                           Launch Darktide; the status strip carries the running /
-                          pending / nxm-handler / app-update indicators).
+                          pending / nxm-handler / app-update indicators; the
+                          pane's `Auto,*,Auto` grid anchors a drawn-icon Exit
+                          button at the bottom (row 2, not a destination, no
+                          selected state, Click -> `MainWindow.Close()` matching
+                          the title-bar close). `MainWindow` keeps a public
+                          parameterless constructor (the Avalonia XAML
+                          runtime/designer loader path; loads XAML + safe
+                          in-memory defaults, no store, AVLN3001 clean) and an
+                          internal production constructor that supplies
+                          `IAppStateStore` (resolved via an explicit singleton
+                          factory in CuratorComposition, no service locator). It
+                          persists its last unmaximized client size + whether the
+                          last meaningful state was maximized under
+                          `IAppStateStore.MainWindowState` (validated + clamped
+                          to the XAML minimums + the primary work area in DIP,
+                          applied before first Show, maximized on first open
+                          when flagged, tracked through deferred coalesced
+                          reason-aware resize observation where
+                          `WindowResizeReason.Layout` is never authoritative for
+                          the persisted size + the meaningful-state policy that
+                          ignores Minimized/FullScreen, written once through the
+                          close path, no window position; a narrow post-open
+                          correction works around Avalonia #19431 where a
+                          Maximized->Normal transition emits a stale maximized
+                          Layout resize after the correct Unspecified one).
                           `ShellViewModel` owns navigation (guarded
                           `CurrentDestination`, the `NavigateCommand` taking the
                           destination as its parameter, `NavigateAsync` lifecycle:
@@ -528,7 +552,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         config loader, app-state store (active profile id +
                         last update-check timestamp + manual-refresh throttle
                         window + profile-scoped known-update snapshots +
-                        last Nexus display-metadata backfill timestamp), AddGeneral() DI ext)
+                        last Nexus display-metadata backfill timestamp +
+                        the main window's persisted geometry as the atomic
+                        `AppWindowState` record under `MainWindowState`), AddGeneral() DI ext)
   config/               Modificus.Curator.Config -- the CuratorConfig schema + defaults (POCO),
                         including the NexusConfig slot under Integrations
                         (AuthMethod {None,OAuth,ApiKey}, ApiKey, OAuth tokens, base URLs,
@@ -784,7 +810,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
   tests/
     Modificus.Curator.General.Tests/         xUnit tests for the general library
                                           (incl. the AppStateStore KnownUpdates round-trip +
-                                          old-file-without-field compatibility)
+                                          old-file-without-field compatibility + the
+                                          atomic MainWindowState record round-trip)
     Modificus.Curator.Profiles.Tests/        xUnit tests for the profiles library (incl. staging
                                           + the launch-settings round-trip/normalization/validation)
     Modificus.Curator.Mods.Tests/      xUnit tests for the mod repository + import
@@ -894,6 +921,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             URL coalescing with per-caller cancellation, corrupt-
                                             disk retry once, app-lifetime in-memory image cache,
                                             90-day prune), against in-memory fakes)
+                                            + the MainWindowStateTests (pure
+                                            window-size normalization/clamping +
+                                            the meaningful-state policy that ignores
+                                            Minimized/FullScreen)
     Modificus.Curator.Nxm.Tests/             xUnit tests for the nxm library (parser, framing,
                                             IPC server resilience, SingleInstanceGuard, router,
                                             relay helper, standalone + AppImage Linux registrar,
@@ -1061,7 +1092,8 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   flag); the local-import service `IModImportService`). **General** carries cross-cutting
   infra: logging, `ConfigLoader`, and `AppStateStore` (the active-profile id +
   last update-check timestamp + manual-refresh throttle window + last Nexus
-  display-metadata backfill timestamp, persisted to `app-state.json`). The UI includes the shell + profile
+  display-metadata backfill timestamp + the main window's persisted geometry
+  as the atomic `AppWindowState` record, persisted to `app-state.json`). The UI includes the shell + profile
   management (with an `IProfileSession` (ui/) as the single authority for the
   active profile, the switch-block gate, and the live running-state, plus a
   session-scoped `HasPendingChanges` flag the mod-list edits set and Launch

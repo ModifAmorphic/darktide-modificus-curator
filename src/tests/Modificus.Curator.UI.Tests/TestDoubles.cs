@@ -857,6 +857,12 @@ internal sealed class FakeAppStateStore : IAppStateStore
     /// first-run real store.
     /// </summary>
     public DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
+
+    /// <summary>
+    /// The persisted main-window geometry (read + written directly by tests).
+    /// Default <c>null</c>, mirroring a fresh / first-run real store.
+    /// </summary>
+    public AppWindowState? MainWindowState { get; set; }
 }
 
 /// <summary>
