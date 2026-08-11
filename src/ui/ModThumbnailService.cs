@@ -319,28 +319,36 @@ internal sealed class ModThumbnailService : IModThumbnailService
             }
 
             await using var network = await response.Content.ReadAsStreamAsync();
-            using var file = new FileStream(
-                tempFile, FileMode.Create, FileAccess.Write, FileShare.None,
-                IoBufferSize, useAsync: true);
 
-            var buffer = new byte[IoBufferSize];
-            long total = 0;
-            int read;
-            while ((read = await network.ReadAsync(buffer.AsMemory(0, IoBufferSize))) > 0)
+            // Explicit using block (not a using declaration) so the temp handle
+            // closes before File.Move below; Windows rejects renaming an in-use
+            // source. The oversize early return also closes the handle before
+            // the outer finally cleans up the temp.
+            using (var file = new FileStream(
+                tempFile, FileMode.Create, FileAccess.Write, FileShare.None,
+                IoBufferSize, useAsync: true))
             {
-                total += read;
-                if (total > MaxBytes)
+                var buffer = new byte[IoBufferSize];
+                long total = 0;
+                int read;
+                while ((read = await network.ReadAsync(buffer.AsMemory(0, IoBufferSize))) > 0)
                 {
-                    _logger.LogWarning(
-                        "Thumbnail {Url} streamed past the {Max} byte cap; aborting.",
-                        uri, MaxBytes);
-                    return false;
+                    total += read;
+                    if (total > MaxBytes)
+                    {
+                        _logger.LogWarning(
+                            "Thumbnail {Url} streamed past the {Max} byte cap; aborting.",
+                            uri, MaxBytes);
+                        return false;
+                    }
+                    await file.WriteAsync(buffer.AsMemory(0, read));
                 }
-                await file.WriteAsync(buffer.AsMemory(0, read));
+
+                await file.FlushAsync();
             }
 
-            await file.FlushAsync();
-            // Same-volume atomic rename (temp is a sibling under the cache dir).
+            // Temp handle closed above; rename must happen after closure for
+            // Windows compatibility. Same-volume atomic (temp is a sibling).
             File.Move(tempFile, cacheFile);
             return true;
         }
