@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.25.0...v0.26.0) (2026-08-11)
+
+
+### Features
+
+* **ui:** persist window state and add exit action ([#175](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/175)) ([9daa874](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/9daa8747135741a9b4094a5e964dc892f4a7528f))
+
 ## [0.25.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.24.0...v0.25.0) (2026-08-11)
 
 
