@@ -320,10 +320,6 @@ internal sealed class ModThumbnailService : IModThumbnailService
 
             await using var network = await response.Content.ReadAsStreamAsync();
 
-            // Explicit using block (not a using declaration) so the temp handle
-            // closes before File.Move below; Windows rejects renaming an in-use
-            // source. The oversize early return also closes the handle before
-            // the outer finally cleans up the temp.
             using (var file = new FileStream(
                 tempFile, FileMode.Create, FileAccess.Write, FileShare.None,
                 IoBufferSize, useAsync: true))
@@ -347,8 +343,7 @@ internal sealed class ModThumbnailService : IModThumbnailService
                 await file.FlushAsync();
             }
 
-            // Temp handle closed above; rename must happen after closure for
-            // Windows compatibility. Same-volume atomic (temp is a sibling).
+            // Same-volume atomic rename (temp is a sibling under the cache dir).
             File.Move(tempFile, cacheFile);
             return true;
         }
