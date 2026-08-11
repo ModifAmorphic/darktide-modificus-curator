@@ -24,10 +24,13 @@ namespace Modificus.Curator.Integrations;
 /// selection logic to maintain here).</para>
 /// <para>
 /// <b>3 Nexus API calls per acquisition:</b> <c>download_link.json</c> (the CDN
-/// URL), <c>mods/{id}.json</c> (the name), and <c>mods/{id}/files.json</c> (the
-/// file's version string + publish timestamp). Within rate limits (grounded against the
-/// Nexus v1 surface). If any metadata call fails, the acquisition fails with a clear
-/// error (no degraded fallback).</para>
+/// URL), <c>mods/{id}.json</c> (the name + the display metadata: summary,
+/// thumbnail URL, adult flag), and <c>mods/{id}/files.json</c> (the file's
+/// version string + publish timestamp). Display metadata is normalized from the
+/// same <c>mods/{id}.json</c> payload the name came from, so persisting it adds
+/// no Nexus request. Within rate limits (grounded against the Nexus v1 surface).
+/// If any metadata call fails, the acquisition fails with a clear error (no
+/// degraded fallback).</para>
 /// </remarks>
 internal sealed class ModAcquisitionService : IModAcquisitionService
 {
@@ -69,14 +72,17 @@ internal sealed class ModAcquisitionService : IModAcquisitionService
             .ConfigureAwait(false);
 
         // 2. Resolve metadata (name + version + the file's remote-publish
-        //    timestamp). No degraded fallback: a failure here surfaces as a
-        //    clear error and nothing partial lands. The publish timestamp is
-        //    recorded on the imported version so the update check compares
-        //    publish dates (the imported file vs the latest file), NOT Curator's
-        //    import date (which would always be newer than any past upload and
-        //    so mask an outdated install).
-        var (modName, version, remoteUploadedAt) = await ResolveMetadataAsync(gameDomain, modId, fileId, ct)
-            .ConfigureAwait(false);
+        //    timestamp + the display metadata). No degraded fallback: a failure
+        //    here surfaces as a clear error and nothing partial lands. The
+        //    publish timestamp is recorded on the imported version so the
+        //    update check compares publish dates (the imported file vs the
+        //    latest file), NOT Curator's import date (which would always be
+        //    newer than any past upload and so mask an outdated install). The
+        //    display metadata (summary, thumbnail, adult flag) comes from the
+        //    same GetModInfoAsync call the name did, so persisting it adds no
+        //    Nexus request.
+        var (modName, version, remoteUploadedAt, displayMetadata) =
+            await ResolveMetadataAsync(gameDomain, modId, fileId, ct).ConfigureAwait(false);
 
         // 3. Download the archive to a temp file, then hand it to the import
         //    service. The temp file gets an opaque random name (Path.GetRandomFileName
@@ -98,7 +104,8 @@ internal sealed class ModAcquisitionService : IModAcquisitionService
                 modId, fileId, version);
 
             return _import.Import(
-                tempPath, modName, new NexusSource { ModId = modId }, version, remoteUploadedAt);
+                tempPath, modName, new NexusSource { ModId = modId }, version,
+                remoteUploadedAt, displayMetadata);
         }
         finally
         {
@@ -172,9 +179,9 @@ internal sealed class ModAcquisitionService : IModAcquisitionService
         return links.Data[0].Uri;
     }
 
-    // ---- step 2: resolve name + version ------------------------------------
+    // ---- step 2: resolve name + version + display metadata ----------------
 
-    private async Task<(string Name, string Version, DateTimeOffset? RemoteUploadedAt)> ResolveMetadataAsync(
+    private async Task<(string Name, string Version, DateTimeOffset? RemoteUploadedAt, ModDisplayMetadata DisplayMetadata)> ResolveMetadataAsync(
         string gameDomain, int modId, int fileId, CancellationToken ct)
     {
         var info = await _nexus.GetModInfoAsync(gameDomain, modId, ct).ConfigureAwait(false);
@@ -216,7 +223,13 @@ internal sealed class ModAcquisitionService : IModAcquisitionService
             ? null
             : DateTimeOffset.FromUnixTimeSeconds(uploadedTimestamp.Value);
 
-        return (modName, version, remoteUploadedAt);
+        // Display metadata is normalized from the same GetModInfoAsync payload
+        // the name came from, so no extra Nexus request is added. The mapper
+        // owns the HTTPS/non-empty rules; acquisition and the later backfill
+        // share it so the rules cannot drift.
+        var displayMetadata = ModDisplayMetadataMapper.ToDisplayMetadata(info.Data!);
+
+        return (modName, version, remoteUploadedAt, displayMetadata);
     }
 
     // ---- step 3: stream the archive to disk --------------------------------

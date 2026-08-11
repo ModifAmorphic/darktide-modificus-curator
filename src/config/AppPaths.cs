@@ -44,4 +44,14 @@ public static class AppPaths
     public static readonly string DefaultProfilesBaseFolder = Path.Combine(AppDataDir, "profiles");
     public static readonly string DefaultModsFolder = Path.Combine(AppDataDir, "mods");
     public static readonly string DefaultRelayDir = Path.Combine(AppDataDir, "relay");
+
+    /// <summary>
+    /// The disk cache root for downloaded mod thumbnail images:
+    /// <c>&lt;AppDataDir&gt;/cache/mod-thumbnails</c>. Files are keyed by the
+    /// lowercase SHA-256 of the normalized thumbnail URL. Managed entirely by
+    /// the UI-layer thumbnail service; no extension is stored (the image bytes
+    /// are decoded from the stream contents).
+    /// </summary>
+    public static readonly string ModThumbnailCacheDir =
+        Path.Combine(AppDataDir, "cache", "mod-thumbnails");
 }

@@ -72,4 +72,21 @@ public interface IAppStateStore
     /// whole cached model is rewritten on each assignment.</para>
     /// </remarks>
     IReadOnlyDictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? KnownUpdates { get; set; }
+
+    /// <summary>
+    /// The UTC timestamp of the last Nexus display-metadata backfill pass that
+    /// attempted at least one API request, or <c>null</c> when none has been
+    /// recorded. Reading returns the persisted value (or <c>null</c> on first
+    /// run / corrupt file); assigning persists immediately. Seeds a 24-hour gate
+    /// so the backfill service runs at most one real pass per day regardless of
+    /// how often the UI invokes it.
+    /// </summary>
+    /// <remarks>
+    /// Backward compatible on disk: an old <c>app-state.json</c> written before
+    /// this field existed deserializes it as <c>null</c> (System.Text.Json
+    /// default for an absent nullable member), so the first run after upgrade
+    /// proceeds normally. Sibling fields are preserved on every write: the whole
+    /// cached model is rewritten on each assignment.
+    /// </remarks>
+    DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
 }

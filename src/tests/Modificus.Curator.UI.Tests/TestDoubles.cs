@@ -147,6 +147,16 @@ internal static class TestDoubles
             importService,
             localization,
             NullLogger<ImportWorkflowViewModel>.Instance);
+
+        // The density coordinator child: one shared instance per BuildModList,
+        // constructed with safe no-op fakes so existing tests are unaffected.
+        var detailedRows = new DetailedModRowsViewModel(
+            configLoader,
+            new FakeNexusModMetadataService(),
+            repo,
+            new FakeModThumbnailService(),
+            NullLogger<DetailedModRowsViewModel>.Instance);
+
         invokeOnUi ??= static action => action();
         // SAFETY: an omitted launcher seam defaults to the harmless no-op
         // recorder (never the production Process.Start fallback). This is the
@@ -200,6 +210,7 @@ internal static class TestDoubles
             coordinator,
             automaticUpdates,
             importWorkflow,
+            detailedRows,
             invokeOnUi,
             NullLogger<ModListViewModel>.Instance,
             startCountdownTimer,
@@ -839,6 +850,13 @@ internal sealed class FakeAppStateStore : IAppStateStore
     /// fresh / first-run real store.
     /// </summary>
     public IReadOnlyDictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? KnownUpdates { get; set; }
+
+    /// <summary>
+    /// The persisted last Nexus display-metadata backfill timestamp (read +
+    /// written directly by tests). Default <c>null</c>, mirroring a fresh /
+    /// first-run real store.
+    /// </summary>
+    public DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
 }
 
 /// <summary>
@@ -1258,7 +1276,8 @@ internal class FakeModRepository : IModRepository
     }
 
     public ModContainer AddVersion(
-        Guid containerId, string versionString, Action<string> populateFolder, DateTimeOffset? remoteUploadedAt = null)
+        Guid containerId, string versionString, Action<string> populateFolder,
+        DateTimeOffset? remoteUploadedAt = null, ModDisplayMetadata? displayMetadata = null)
     {
         if (!_byId.TryGetValue(containerId, out var container))
         {
@@ -1288,9 +1307,31 @@ internal class FakeModRepository : IModRepository
                 .Append(entry)
                 .ToList();
         }
-        var updated = container with { Versions = versions };
+        // Mirror production: a non-null displayMetadata replaces the container
+        // value in the same update; null preserves any prior value.
+        var updated = displayMetadata is null
+            ? container with { Versions = versions }
+            : container with { Versions = versions, DisplayMetadata = displayMetadata };
         _byId[containerId] = updated;
         return updated;
+    }
+
+    public bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        if (!_byId.TryGetValue(containerId, out var container))
+        {
+            return false;
+        }
+        // Mirror production: missing-only. Any existing non-null metadata
+        // returns false with no rewrite.
+        if (container.DisplayMetadata is not null)
+        {
+            return false;
+        }
+        var updated = container with { DisplayMetadata = metadata };
+        _byId[containerId] = updated;
+        return true;
     }
 
     public void RemoveVersion(Guid containerId, string versionFolder)
@@ -1414,7 +1455,8 @@ internal sealed class FakeModImportService : IModImportService
     public TaskCompletionSource<bool>? ImportGate { get; set; }
 
     public (Guid ContainerId, string VersionId) Import(
-        string sourcePath, string modName, ModSource source, string version, DateTimeOffset? remoteUploadedAt = null)
+        string sourcePath, string modName, ModSource source, string version,
+        DateTimeOffset? remoteUploadedAt = null, ModDisplayMetadata? displayMetadata = null)
     {
         // Gate first, before recording, so a test can observe IsProcessing
         // while the worker is still blocked inside Import. Safe: Import runs on
@@ -1455,7 +1497,7 @@ internal sealed class FakeModImportService : IModImportService
         {
             container = _repo.FindBySource(source) ?? _repo.CreateContainer(source, modName);
         }
-        var updated = _repo.AddVersion(container.Id, version, _ => { }, remoteUploadedAt);
+        var updated = _repo.AddVersion(container.Id, version, _ => { }, remoteUploadedAt, displayMetadata);
         var versionId = updated.Versions.First(v => v.VersionString == version).Folder;
         return (container.Id, versionId);
     }
@@ -2060,4 +2102,29 @@ internal sealed class FakeAppUpdateService : IAppUpdateService
     }
 
     public void ApplyUpdatesAndRestart() => _applyCalls.Enqueue(1);
+}
+
+/// <summary>
+/// A no-op <see cref="INexusModMetadataService"/> for existing tests that do not
+/// exercise the backfill. Returns an empty result with zero attempts. The
+/// coordinator tests in <c>DetailedModRowsViewModelTests</c> use a richer fake
+/// local to that test class.
+/// </summary>
+internal sealed class FakeNexusModMetadataService : INexusModMetadataService
+{
+    public Task<NexusModMetadataResult> BackfillMissingAsync(
+        IReadOnlyList<Guid> priorityContainerIds, CancellationToken ct = default)
+        => Task.FromResult(NexusModMetadataResult.Empty);
+}
+
+/// <summary>
+/// A no-op <see cref="IModThumbnailService"/> for existing tests that do not
+/// exercise thumbnail loading. Always returns <c>null</c> (placeholder). The
+/// coordinator tests in <c>DetailedModRowsViewModelTests</c> use a richer fake
+/// local to that test class.
+/// </summary>
+internal sealed class FakeModThumbnailService : IModThumbnailService
+{
+    public Task<Avalonia.Media.IImage?> GetThumbnailAsync(string? thumbnailUrl, CancellationToken ct = default)
+        => Task.FromResult<Avalonia.Media.IImage?>(null);
 }

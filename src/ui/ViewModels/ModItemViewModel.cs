@@ -1,3 +1,4 @@
+using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Modificus.Curator.Mods;
 using Modificus.Curator.UI.Localization;
@@ -181,6 +182,40 @@ public partial class ModItemViewModel : ObservableObject
     private bool _isExternalBroken;
 
     /// <summary>
+    /// Optional source-agnostic display metadata (summary, thumbnail URL,
+    /// adult-content flag) joined from the container at construction and updated
+    /// by the detailed-rows coordinator when backfill enriches it. <c>null</c>
+    /// means no metadata has been fetched. Drives the summary, thumbnail, and
+    /// content-safety derived members.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SummaryText))]
+    [NotifyPropertyChangedFor(nameof(SummaryTooltip))]
+    [NotifyPropertyChangedFor(nameof(IsAdultContent))]
+    [NotifyPropertyChangedFor(nameof(ThumbnailUrl))]
+    [NotifyPropertyChangedFor(nameof(CanLoadThumbnail))]
+    private ModDisplayMetadata? _displayMetadata;
+
+    /// <summary>
+    /// The decoded thumbnail image for this row, or <c>null</c> when none has
+    /// been loaded (or the row was switched to Compact / the metadata changed).
+    /// Set by the detailed-rows coordinator; the row never performs I/O.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasThumbnail))]
+    private IImage? _thumbnail;
+
+    /// <summary>
+    /// Whether this row is displayed in Detailed mode. Pushed down by the
+    /// detailed-rows coordinator. Drives the thumbnail-loading eligibility check
+    /// (<see cref="CanLoadThumbnail"/>). The row itself performs no density
+    /// work; the coordinator owns all loading/clearing.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanLoadThumbnail))]
+    private bool _isDetailed;
+
+    /// <summary>
     /// The ComboBox selection for the policy editor (0 = Latest, 1 = Pinned),
     /// two-way bound. Initialized from <see cref="Policy"/> on construction; a user
     /// change routes through the view to the parent's <c>SetModPolicy</c> command.
@@ -318,6 +353,84 @@ public partial class ModItemViewModel : ObservableObject
         }
     }
 
+    // ---- display metadata derived members (detailed-row support) ----------
+
+    /// <summary>
+    /// The trimmed summary text for display, or a localized generic fallback
+    /// ("Details unavailable") when the metadata is absent or the summary is
+    /// empty. Re-resolves on a culture change (the fallback is localized).
+    /// </summary>
+    public string SummaryText
+    {
+        get
+        {
+            var summary = DisplayMetadata?.Summary?.Trim();
+            return string.IsNullOrEmpty(summary)
+                ? _localization["ModRow_DetailsUnavailable"]
+                : summary;
+        }
+    }
+
+    /// <summary>
+    /// The full (untrimmed) summary for the tooltip / accessibility name, or
+    /// <c>null</c> when there is no summary (the fallback text is already shown
+    /// in <see cref="SummaryText"/>; the tooltip does not repeat it).
+    /// </summary>
+    public string? SummaryTooltip =>
+        string.IsNullOrWhiteSpace(DisplayMetadata?.Summary)
+            ? null
+            : DisplayMetadata!.Summary;
+
+    /// <summary>
+    /// Whether the metadata flags this mod as adult content. The coordinator uses
+    /// this to skip thumbnail loading; the row shows the ordinary placeholder.
+    /// </summary>
+    public bool IsAdultContent => DisplayMetadata?.IsAdultContent ?? false;
+
+    /// <summary>
+    /// The thumbnail URL the coordinator reads to decide whether to load an
+    /// image. <c>null</c> when there is no metadata or no URL. The coordinator
+    /// matches this against the URL it requested before assigning a result
+    /// (stale-result protection).
+    /// </summary>
+    public string? ThumbnailUrl => DisplayMetadata?.ThumbnailUrl;
+
+    /// <summary>
+    /// Whether a decoded thumbnail is currently bound to this row.
+    /// </summary>
+    public bool HasThumbnail => Thumbnail is not null;
+
+    /// <summary>
+    /// Whether the coordinator should load a thumbnail for this row: Detailed
+    /// mode + Nexus source + non-null metadata + not adult + non-empty
+    /// ThumbnailUrl. The coordinator checks this before calling
+    /// <c>IModThumbnailService</c>.
+    /// </summary>
+    public bool CanLoadThumbnail =>
+        IsDetailed &&
+        Source is NexusSource &&
+        DisplayMetadata is not null &&
+        !DisplayMetadata.IsAdultContent &&
+        !string.IsNullOrEmpty(DisplayMetadata.ThumbnailUrl);
+
+    /// <summary>
+    /// Applies newly backfilled (or initially joined) display metadata to the
+    /// row. Clears any existing thumbnail when the new metadata is adult, has no
+    /// thumbnail URL, or carries a different URL than the one the old thumbnail
+    /// was loaded from. Performs no I/O and calls no service.
+    /// </summary>
+    public void ApplyDisplayMetadata(ModDisplayMetadata? metadata)
+    {
+        var oldUrl = DisplayMetadata?.ThumbnailUrl;
+        DisplayMetadata = metadata;
+        var newUrl = metadata?.ThumbnailUrl;
+
+        if (metadata?.IsAdultContent is true || string.IsNullOrEmpty(newUrl) || newUrl != oldUrl)
+        {
+            Thumbnail = null;
+        }
+    }
+
     /// <summary>
     /// Whether the row's source is a <see cref="LinkedSource"/> (an external
     /// folder added without copying). Constant for a row's lifetime (the source
@@ -425,6 +538,10 @@ public partial class ModItemViewModel : ObservableObject
     /// repository); drives the pin dropdown. Empty when the container is missing
     /// or version-less.</param>
     /// <param name="found">Whether the repository had a container for this entry.</param>
+    /// <param name="displayMetadata">Optional display metadata (summary,
+    /// thumbnail URL, adult flag) joined from the container. <c>null</c> when
+    /// no metadata has been fetched. Defaults to <c>null</c> for existing call
+    /// sites that have not yet been updated.</param>
     public ModItemViewModel(
         LocalizationService localization,
         Guid containerId,
@@ -435,7 +552,8 @@ public partial class ModItemViewModel : ObservableObject
         int order,
         ModVersionPolicy policy,
         IReadOnlyList<ModVersion> versions,
-        bool found)
+        bool found,
+        ModDisplayMetadata? displayMetadata = null)
     {
         _localization = localization;
         ContainerId = containerId;
@@ -446,6 +564,7 @@ public partial class ModItemViewModel : ObservableObject
         Order = order;
         Policy = policy;
         Found = found;
+        _displayMetadata = displayMetadata;
 
         // Build the dropdown source from the container's versions: each entry
         // pairs the readable tag (shown) with the opaque folder id (stored).
@@ -489,6 +608,10 @@ public partial class ModItemViewModel : ObservableObject
         OnPropertyChanged(nameof(SourceUrl));
         OnPropertyChanged(nameof(UpdatePageUrl));
         OnPropertyChanged(nameof(UpdateActionTooltip));
+        // The summary fallback is localized; re-fire so the binding re-resolves
+        // after a culture switch.
+        OnPropertyChanged(nameof(SummaryText));
+        OnPropertyChanged(nameof(SummaryTooltip));
     }
 }
 

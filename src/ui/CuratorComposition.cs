@@ -1,3 +1,4 @@
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -124,6 +125,34 @@ public static class CuratorComposition
         // circular) but raises UpdatesApplied so the list VM reloads after a
         // batch.
         services.AddSingleton<IAutomaticUpdateService, AutomaticUpdateService>();
+
+        // The mod-thumbnail disk/in-memory cache + download orchestrator. A UI-
+        // layer singleton (decoded images are kept alive for the app lifetime so
+        // multiple rows + reloads share them). Resolves IHttpClientFactory
+        // (registered by AddIntegrations via AddHttpClient) for a plain factory-
+        // created HttpClient per download; production decode uses
+        // Bitmap.DecodeToWidth at ModThumbnailService.DecodeWidth px (sized for
+        // the 112-DIP detailed-row thumbnail on scaled displays). Registered
+        // before ModListViewModel and the later detailed-row coordinator so it is
+        // available when they resolve.
+        services.AddSingleton<IModThumbnailService>(sp => new ModThumbnailService(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient,
+            cacheDirOverride: null,
+            decode: stream => Bitmap.DecodeToWidth(
+                stream, ModThumbnailService.DecodeWidth, BitmapInterpolationMode.HighQuality),
+            logger: sp.GetRequiredService<ILogger<ModThumbnailService>>()));
+
+        // The Compact/Detailed density coordinator. An application-lifetime
+        // singleton registered BEFORE ModListViewModel (which takes it as a
+        // child). Owns the persisted density selection, metadata backfill, and
+        // thumbnail hydration lifecycle.
+        services.AddSingleton(sp => new DetailedModRowsViewModel(
+            sp.GetRequiredService<IConfigLoader>(),
+            sp.GetRequiredService<INexusModMetadataService>(),
+            sp.GetRequiredService<IModRepository>(),
+            sp.GetRequiredService<IModThumbnailService>(),
+            sp.GetRequiredService<ILogger<DetailedModRowsViewModel>>()));
+
         // The inline local-import workflow VM: an application-lifetime singleton
         // registered BEFORE ModListViewModel (which takes it as a child + listens
         // to its narrow ItemImported event). Owns the batch state machine, the
@@ -174,6 +203,7 @@ public static class CuratorComposition
                 sp.GetRequiredService<UpdateCoordinator>(),
                 sp.GetRequiredService<IAutomaticUpdateService>(),
                 sp.GetRequiredService<ImportWorkflowViewModel>(),
+                sp.GetRequiredService<DetailedModRowsViewModel>(),
                 sp.GetRequiredService<Action<Action>>(),
                 sp.GetRequiredService<ILogger<ModListViewModel>>(),
                 startCountdownTimer,

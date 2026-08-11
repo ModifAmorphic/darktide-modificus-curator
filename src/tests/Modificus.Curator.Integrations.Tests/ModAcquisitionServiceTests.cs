@@ -342,6 +342,157 @@ public sealed class ModAcquisitionServiceTests
             single.RemoteUploadedAt!.Value.UtcDateTime);
     }
 
+    // ---- display-metadata capture (no extra Nexus call) -------------------
+
+    [Fact]
+    public async Task AcquireFromNexusAsync_maps_and_forwards_mod_info_display_metadata_on_premium_path()
+    {
+        // The premium (auth-only) path resolves metadata through
+        // ResolveMetadataAsync, which calls GetModInfoAsync once for the name.
+        // The summary/picture_url/contains_adult_content on that same response
+        // are normalized + forwarded to Import as ModDisplayMetadata. No extra
+        // GetModInfoAsync call is made.
+        var nexus = new FakeNexusClient
+        {
+            DownloadLinks = ParseLinks(DownloadLinksJson),
+            ModInfoResponse = () => Ok(new ModInfo
+            {
+                Name = "Test Mod",
+                Summary = "  A trimmed summary.  ",
+                PictureUrl = "https://staticdelivery.nexusmods.com/mods/1234/thumb.png",
+                ContainsAdultContent = true,
+            }),
+            ModFilesResponse = ParseFiles(ModFilesJson),
+        };
+        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(new byte[] { 0xAA }),
+        });
+        var http = new HttpClient(handler);
+        var import = new RecordingImportService();
+        var service = new ModAcquisitionService(
+            nexus, import, new SingleClientFactory(http), NullLogger<ModAcquisitionService>.Instance);
+
+        await service.AcquireFromNexusAsync(GameDomain, ModId, FileId); // premium path
+
+        var single = Assert.Single(import.Calls);
+        Assert.NotNull(single.DisplayMetadata);
+        Assert.Equal("A trimmed summary.", single.DisplayMetadata!.Summary);
+        Assert.Equal("https://staticdelivery.nexusmods.com/mods/1234/thumb.png", single.DisplayMetadata.ThumbnailUrl);
+        Assert.True(single.DisplayMetadata.IsAdultContent);
+        // Exactly one GetModInfoAsync call: display metadata added no request.
+        Assert.Equal(1, nexus.GetModInfoCallCount);
+        // The metadata path runs through the premium overload here.
+        Assert.True(nexus.PremiumDownloadLinksCalled);
+    }
+
+    [Fact]
+    public async Task AcquireFromNexusAsync_maps_and_forwards_display_metadata_on_free_user_path()
+    {
+        // The free-user (nxm key + expiry) path also resolves metadata through
+        // the same ResolveMetadataAsync, so the capture is inherited by every
+        // common acquisition path.
+        var nexus = new FakeNexusClient
+        {
+            DownloadLinks = ParseLinks(DownloadLinksJson),
+            ModInfoResponse = () => Ok(new ModInfo
+            {
+                Name = "Test Mod",
+                Summary = "free-user summary",
+                PictureUrl = "http://example.com/insecure.png", // http -> null thumbnail
+            }),
+            ModFilesResponse = ParseFiles(ModFilesJson),
+        };
+        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(new byte[] { 0xAA }),
+        });
+        var http = new HttpClient(handler);
+        var import = new RecordingImportService();
+        var service = new ModAcquisitionService(
+            nexus, import, new SingleClientFactory(http), NullLogger<ModAcquisitionService>.Instance);
+
+        await service.AcquireFromNexusAsync(GameDomain, ModId, FileId, nxmKey: "ABC", nxmExpires: 12345L);
+
+        var single = Assert.Single(import.Calls);
+        Assert.NotNull(single.DisplayMetadata);
+        Assert.Equal("free-user summary", single.DisplayMetadata!.Summary);
+        // Non-HTTPS picture URL is downgraded to null by the shared mapper.
+        Assert.Null(single.DisplayMetadata.ThumbnailUrl);
+        Assert.False(single.DisplayMetadata.IsAdultContent);
+        Assert.Equal(1, nexus.GetModInfoCallCount); // no extra call added
+        Assert.Equal("ABC", nexus.FreeUserDownloadLinksKey);
+    }
+
+    [Fact]
+    public async Task AcquireLatestNexusAsync_forwards_display_metadata_through_the_common_path()
+    {
+        // AcquireLatestNexusAsync delegates to AcquireFromNexusAsync, so the
+        // per-mod update path inherits the metadata capture too.
+        var nexus = new FakeNexusClient
+        {
+            DownloadLinks = ParseLinks(DownloadLinksJson),
+            ModInfoResponse = () => Ok(new ModInfo
+            {
+                Name = "Test Mod",
+                Summary = "latest-path summary",
+                PictureUrl = "https://example.com/thumb.png",
+                ContainsAdultContent = false,
+            }),
+            ModFilesResponse = new[]
+            {
+                FileEntry(id: 5820, category: 1, uploaded: 2000),
+            },
+        };
+        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(new byte[] { 1, 2, 3 }),
+        });
+        var http = new HttpClient(handler);
+        var import = new RecordingImportService();
+        var service = new ModAcquisitionService(
+            nexus, import, new SingleClientFactory(http), NullLogger<ModAcquisitionService>.Instance);
+
+        await service.AcquireLatestNexusAsync(GameDomain, ModId);
+
+        var single = Assert.Single(import.Calls);
+        Assert.NotNull(single.DisplayMetadata);
+        Assert.Equal("latest-path summary", single.DisplayMetadata!.Summary);
+        Assert.Equal("https://example.com/thumb.png", single.DisplayMetadata.ThumbnailUrl);
+        Assert.False(single.DisplayMetadata.IsAdultContent);
+        Assert.Equal(1, nexus.GetModInfoCallCount); // no extra call added
+    }
+
+    [Fact]
+    public async Task AcquireFromNexusAsync_does_not_add_an_extra_GetModInfo_call_for_metadata()
+    {
+        // Pinning the call-count contract: GetModInfoAsync is invoked exactly
+        // once per acquisition (the name + the metadata come from the same
+        // payload). ListModFilesAsync is invoked at most twice on the
+        // AcquireLatestNexusAsync path (once for latest-file resolution, once
+        // inside AcquireFromNexusAsync for the version); on the direct
+        // AcquireFromNexusAsync path it is invoked once.
+        var nexus = new FakeNexusClient
+        {
+            DownloadLinks = ParseLinks(DownloadLinksJson),
+            ModInfoResponse = () => Ok(new ModInfo { Name = "Test Mod", Summary = "s" }),
+            ModFilesResponse = ParseFiles(ModFilesJson),
+        };
+        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(new byte[] { 0xAA }),
+        });
+        var http = new HttpClient(handler);
+        var service = new ModAcquisitionService(
+            nexus, new RecordingImportService(), new SingleClientFactory(http),
+            NullLogger<ModAcquisitionService>.Instance);
+
+        await service.AcquireFromNexusAsync(GameDomain, ModId, FileId);
+
+        Assert.Equal(1, nexus.GetModInfoCallCount);
+        Assert.Equal(1, nexus.ListModFilesCallCount);
+    }
+
     // ---- no degraded fallback ---------------------------------------------
 
     [Fact]
@@ -661,7 +812,8 @@ public sealed class ModAcquisitionServiceTests
     /// A configurable <see cref="INexusClient"/> stub. Each method is backed by
     /// a settable field/func so each test shapes the responses it needs without
     /// a real HTTP round-trip. Records which <c>DownloadLinksAsync</c> overload
-    /// was called + the args.
+    /// was called + the args, and counts GetModInfoAsync / ListModFilesAsync
+    /// calls so a test can pin the per-acquisition Nexus call count.
     /// </summary>
     private sealed class FakeNexusClient : INexusClient
     {
@@ -675,6 +827,11 @@ public sealed class ModAcquisitionServiceTests
         public bool PremiumDownloadLinksCalled { get; private set; }
         public string? FreeUserDownloadLinksKey { get; private set; }
         public long? FreeUserDownloadLinksExpires { get; private set; }
+
+        // Call counters so tests can pin the per-acquisition Nexus call count
+        // (the display-metadata capture must add no request).
+        public int GetModInfoCallCount { get; private set; }
+        public int ListModFilesCallCount { get; private set; }
 
         public Task<Response<ValidateInfo>> ValidateAsync(CancellationToken ct = default)
             => throw new NotImplementedException();
@@ -712,6 +869,7 @@ public sealed class ModAcquisitionServiceTests
 
         public Task<Response<ModInfo>> GetModInfoAsync(string gameDomain, int modId, CancellationToken ct = default)
         {
+            GetModInfoCallCount++;
             if (ModInfoThrows is not null)
             {
                 return Task.FromException<Response<ModInfo>>(ModInfoThrows);
@@ -721,6 +879,7 @@ public sealed class ModAcquisitionServiceTests
 
         public Task<Response<ModFile[]>> ListModFilesAsync(string gameDomain, int modId, CancellationToken ct = default)
         {
+            ListModFilesCallCount++;
             var data = ModFilesResponse ?? Array.Empty<ModFile>();
             return Task.FromResult(new Response<ModFile[]>(data, NexusRateLimits.Unknown));
         }
@@ -728,20 +887,22 @@ public sealed class ModAcquisitionServiceTests
 
     /// <summary>
     /// A recording <see cref="IModImportService"/>. Each Import call captures
-    /// the args (including the optional remote-publish timestamp); an optional
-    /// <see cref="Throw"/> simulates a failed import.
+    /// the args (including the optional remote-publish timestamp + the optional
+    /// display metadata); an optional <see cref="Throw"/> simulates a failed
+    /// import.
     /// </summary>
     private sealed class RecordingImportService : IModImportService
     {
         public (Guid ContainerId, string VersionId) NextResult { get; set; } =
             (Guid.NewGuid(), Guid.NewGuid().ToString("N"));
         public Exception? Throw { get; set; }
-        public List<(string SourcePath, string ModName, ModSource Source, string Version, DateTimeOffset? RemoteUploadedAt)> Calls { get; } = new();
+        public List<(string SourcePath, string ModName, ModSource Source, string Version, DateTimeOffset? RemoteUploadedAt, ModDisplayMetadata? DisplayMetadata)> Calls { get; } = new();
 
         public (Guid ContainerId, string VersionId) Import(
-            string sourcePath, string modName, ModSource source, string version, DateTimeOffset? remoteUploadedAt = null)
+            string sourcePath, string modName, ModSource source, string version,
+            DateTimeOffset? remoteUploadedAt = null, ModDisplayMetadata? displayMetadata = null)
         {
-            Calls.Add((sourcePath, modName, source, version, remoteUploadedAt));
+            Calls.Add((sourcePath, modName, source, version, remoteUploadedAt, displayMetadata));
             if (Throw is not null)
             {
                 throw Throw;

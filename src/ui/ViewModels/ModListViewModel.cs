@@ -182,6 +182,7 @@ public partial class ModListViewModel : ObservableObject
         UpdateCoordinator updateCoordinator,
         IAutomaticUpdateService automaticUpdates,
         ImportWorkflowViewModel importWorkflow,
+        DetailedModRowsViewModel detailedRows,
         Action<Action> invokeOnUi,
         ILogger<ModListViewModel> logger,
         Action<Action>? startCountdownTimer = null,
@@ -206,6 +207,7 @@ public partial class ModListViewModel : ObservableObject
         _updateCoordinator = updateCoordinator ?? throw new ArgumentNullException(nameof(updateCoordinator));
         _automaticUpdates = automaticUpdates ?? throw new ArgumentNullException(nameof(automaticUpdates));
         ImportWorkflow = importWorkflow ?? throw new ArgumentNullException(nameof(importWorkflow));
+        DetailedRows = detailedRows ?? throw new ArgumentNullException(nameof(detailedRows));
         _logger = logger;
         _invokeOnUi = invokeOnUi ?? throw new ArgumentNullException(nameof(invokeOnUi));
         _startCountdownTimer = startCountdownTimer;
@@ -311,6 +313,16 @@ public partial class ModListViewModel : ObservableObject
     /// the active list when a successful import lands on the active profile.
     /// </summary>
     public ImportWorkflowViewModel ImportWorkflow { get; }
+
+    /// <summary>
+    /// The Compact/Detailed density coordinator child. Owns the persisted density
+    /// selection, the metadata-backfill invocation, and the thumbnail hydration
+    /// lifecycle. Exposed read-only so the toolbar (later) binds its density
+    /// commands + projections to it without widening this VM with those
+    /// mechanisms. <see cref="Reload"/> hands the final row snapshot to the child
+    /// on every reload.
+    /// </summary>
+    public DetailedModRowsViewModel DetailedRows { get; }
 
     /// <summary>
     /// Whether a profile is active. Drives the header + the "no profile" empty
@@ -815,6 +827,8 @@ public partial class ModListViewModel : ObservableObject
             HasActiveProfile = false;
             HasMods = false;
             ModCount = 0;
+            // Hand an empty snapshot so old work is cancelled.
+            _ = DetailedRows.SetRowsAsync(Array.Empty<ModItemViewModel>());
             // Still refresh the nxm registration so a profile-less state shows
             // the correct hint if/when a profile becomes active next.
             RefreshNxmRegistered();
@@ -845,7 +859,8 @@ public partial class ModListViewModel : ObservableObject
                 entry.Order,
                 entry.Policy,
                 container?.Versions ?? Array.Empty<ModVersion>(),
-                found);
+                found,
+                container?.DisplayMetadata);
             // Linked availability is a transient signal the repo recomputes on
             // rescan; read it once per Reload (no live watcher). Always false for
             // non-linked rows (the repo returns true for managed containers), so
@@ -873,6 +888,12 @@ public partial class ModListViewModel : ObservableObject
         // change, post-batch install). Cheap: a registry read on Windows, an
         // xdg-mime query on Linux.
         RefreshNxmRegistered();
+
+        // Hand the final row snapshot to the density coordinator so it can push
+        // the current density, clear thumbnails on Compact, or start thumbnail
+        // hydration + metadata backfill on Detailed. Fire-and-forget: the
+        // coordinator catches/logs all failures internally.
+        _ = DetailedRows.SetRowsAsync(Mods.ToArray());
     }
 
     /// <summary>

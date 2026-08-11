@@ -510,6 +510,7 @@ public sealed class AppStateStoreTests
             Assert.Null(store.ActiveProfileId);
             Assert.Null(store.LastUpdateCheckUtc);
             Assert.Null(store.ManualRefreshTimestamps);
+            Assert.Null(store.LastNexusMetadataBackfillUtc);
         }
         finally
         {
@@ -661,6 +662,134 @@ public sealed class AppStateStoreTests
             store.KnownUpdates = null;
 
             Assert.Null(new AppStateStore(path).KnownUpdates);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    // ---- LastNexusMetadataBackfillUtc (the metadata-backfill gate) ----------
+
+    [Fact]
+    public void LastNexusMetadataBackfillUtc_is_null_when_file_is_missing()
+    {
+        var path = TempPath();
+        var store = new AppStateStore(path);
+
+        Assert.Null(store.LastNexusMetadataBackfillUtc);
+    }
+
+    [Fact]
+    public void LastNexusMetadataBackfillUtc_persists_and_round_trips_the_value()
+    {
+        var path = TempPath();
+        var stamp = new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.Zero);
+        try
+        {
+            var store = new AppStateStore(path);
+
+            store.LastNexusMetadataBackfillUtc = stamp;
+
+            Assert.True(File.Exists(path));
+            // A fresh instance over the same file reads the persisted value.
+            Assert.Equal(stamp, new AppStateStore(path).LastNexusMetadataBackfillUtc);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void Old_state_file_without_LastNexusMetadataBackfillUtc_loads_null_for_the_new_field()
+    {
+        // First-run-after-upgrade: an existing app-state.json from before this
+        // field existed deserializes it as null (System.Text.Json default for an
+        // absent nullable member). Existing fields still read.
+        var path = TempPath();
+        try
+        {
+            var dir = System.IO.Path.GetDirectoryName(path)!;
+            Directory.CreateDirectory(dir);
+            var id = Guid.NewGuid();
+            File.WriteAllText(
+                path,
+                "{\"activeProfileId\":\"" + id + "\",\"lastUpdateCheckUtc\":\"2025-01-02T03:04:05+00:00\"}");
+
+            var store = new AppStateStore(path);
+
+            Assert.Null(store.LastNexusMetadataBackfillUtc);
+            Assert.Equal(id, store.ActiveProfileId);
+            Assert.NotNull(store.LastUpdateCheckUtc);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void Setting_LastNexusMetadataBackfillUtc_preserves_every_sibling_field()
+    {
+        // The no-clobber guarantee now covers six fields. Setting the backfill
+        // stamp must not wipe the others (the whole cached model is rewritten).
+        var path = TempPath();
+        var id = Guid.NewGuid();
+        var stamp = new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.Zero);
+        var window = new[] { stamp };
+        var known = new Dictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>
+        {
+            [id] = new[] { new KnownUpdateSnapshot(id, Guid.NewGuid(), 8, "1.0", stamp, null) },
+        };
+        var backfill = new DateTimeOffset(2025, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        try
+        {
+            var store = new AppStateStore(path);
+            store.OnboardingCompleted = true;
+            store.ActiveProfileId = id;
+            store.LastUpdateCheckUtc = stamp;
+            store.ManualRefreshTimestamps = window;
+            store.KnownUpdates = known;
+
+            store.LastNexusMetadataBackfillUtc = backfill; // must NOT wipe the others
+
+            Assert.True(store.OnboardingCompleted);
+            Assert.Equal(id, store.ActiveProfileId);
+            Assert.Equal(stamp, store.LastUpdateCheckUtc);
+            Assert.Equal(window, store.ManualRefreshTimestamps);
+            Assert.Equal(known, store.KnownUpdates);
+            Assert.Equal(backfill, store.LastNexusMetadataBackfillUtc);
+
+            // And on disk: a fresh instance sees all six.
+            var reloaded = new AppStateStore(path);
+            Assert.True(reloaded.OnboardingCompleted);
+            Assert.Equal(id, reloaded.ActiveProfileId);
+            Assert.Equal(stamp, reloaded.LastUpdateCheckUtc);
+            Assert.Equal(backfill, reloaded.LastNexusMetadataBackfillUtc);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void Setting_another_field_preserves_LastNexusMetadataBackfillUtc()
+    {
+        // Mirror: assigning a sibling field must not wipe the backfill stamp.
+        var path = TempPath();
+        var backfill = new DateTimeOffset(2025, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        var id = Guid.NewGuid();
+        try
+        {
+            var store = new AppStateStore(path);
+            store.LastNexusMetadataBackfillUtc = backfill;
+
+            store.ActiveProfileId = id; // must NOT wipe the stamp
+
+            Assert.Equal(backfill, store.LastNexusMetadataBackfillUtc);
+            Assert.Equal(id, store.ActiveProfileId);
         }
         finally
         {

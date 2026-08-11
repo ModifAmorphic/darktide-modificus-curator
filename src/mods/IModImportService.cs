@@ -79,6 +79,16 @@ public interface IModImportService
     /// manual imports (folder/archive via the picker or drag-and-drop) and
     /// non-Nexus sources. Forwarded to <see cref="IModRepository.AddVersion"/>
     /// as the version entry's <see cref="ModVersion.RemoteUploadedAt"/>.</param>
+    /// <param name="displayMetadata">Optional source-agnostic display metadata
+    /// for the container, captured by the acquisition layer at download time
+    /// and forwarded to <see cref="IModRepository.AddVersion"/>. A non-null
+    /// value replaces the container's
+    /// <see cref="ModContainer.DisplayMetadata"/> in the same manifest update
+    /// as the version mutation; <c>null</c> (the default, including a manual
+    /// re-import) preserves any prior value, so a re-import never erases a
+    /// prior Nexus acquisition or backfill. Source-agnostic: Integrations owns
+    /// the Nexus DTO mapping + passes the result through; this seam does not
+    /// know about Nexus.</param>
     /// <returns>The <c>(containerId, versionId)</c> pair the caller feeds to
     /// <c>IProfileService.AddMod(profileId, containerId, policy)</c>.
     /// <c>versionId</c> is the imported version's opaque on-disk folder id (a
@@ -104,7 +114,8 @@ public interface IModImportService
         string modName,
         ModSource source,
         string version,
-        DateTimeOffset? remoteUploadedAt = null);
+        DateTimeOffset? remoteUploadedAt = null,
+        ModDisplayMetadata? displayMetadata = null);
 
     /// <summary>
     /// Peeks the mod's base folder name from a source <em>without</em> creating

@@ -66,10 +66,19 @@ public sealed record NexusRateLimits(
 `NexusRateLimits` is parsed from the `x-rl-*` response headers (mirrors NMA's
 `ResponseMetadata.FromHttpHeaders`). Missing/unparseable headers yield `0` /
 `null` for that field (never throws). The update check inspects them after its
-one call to flag the result rate-limited when a window is exhausted; every other
-call just carries and logs them. For the full rate-limiting strategy (what Curator
+one call to flag the result rate-limited when a window is exhausted; the
+metadata backfill inspects them per response + on a `NexusRateLimitException`;
+every other call just carries and logs them. For the full rate-limiting strategy (what Curator
 observes, how it reacts, what it does not do, and what consumes the budget), see
 [Nexus API rate limiting](../architecture/nexus-rate-limiting.md).
+
+The internal `NexusRateLimitReset.ComputeEarliest(NexusRateLimits?, DateTimeOffset)`
+helper resolves the soonest server-reported reset of an actually-exhausted
+window (remaining budget zero AND reset strictly in the future; earliest wins;
+`null` when none applies, when limits are null, or when every exhausted reset is
+absent/already-past). Shared by the update check + the metadata backfill so the
+two cannot drift on what "the reset is" means. The all-zero
+`NexusRateLimits.Unknown` (a 429 with no `x-rl-*` headers) yields `null` here.
 
 ### Key Nexus types
 
@@ -107,11 +116,37 @@ public sealed class DownloadLink           // CDN link from download_link.json
     public Uri Uri { get; set; }
 }
 
-public sealed class ModInfo { /* mod_id, name, summary, version, domain_name, ... */ }
+public sealed class ModInfo                 // mod-page payload from mods/{id}.json
+{
+    public int ModId { get; set; }
+    public int GameId { get; set; }
+    public string DomainName { get; set; }
+    public string Name { get; set; }        // the container display name (acquisition)
+    public string Summary { get; set; }     // -> ModDisplayMetadata.Summary (trimmed by the mapper)
+    public string Description { get; set; }
+    public string Version { get; set; }     // page-header version (tier-2 update flag)
+    public string? PictureUrl { get; set; } // nullable -> ModDisplayMetadata.ThumbnailUrl (HTTPS-enforced by the mapper)
+    public int EndorsementCount { get; set; }
+    public long CreatedTimestamp { get; set; }
+    public long UpdatedTimestamp { get; set; }
+    public string Author { get; set; }
+    public string UploadedBy { get; set; }
+    public bool ContainsAdultContent { get; set; }  // -> ModDisplayMetadata.IsAdultContent (copied verbatim)
+    public bool Available { get; set; }
+    public string Status { get; set; }
+}
+
 public sealed class ModFile { /* file_id, file_name, name, version, size, category_id, uploaded_timestamp, archived, ... */ }
 
 public enum NexusPeriod { Day, Week, Month }  // period=1d|1w|1m
 ```
+
+`ModInfo.PictureUrl` is bound as a nullable string so an absent wire value
+(distinct from an empty string) round-trips as `null` before the display-metadata
+mapper runs. `ModInfo.ContainsAdultContent` is copied verbatim into
+`ModDisplayMetadata.IsAdultContent`. Both feed the
+[`ModDisplayMetadataMapper`](#metadata-backfill-service) shared by acquisition
+and backfill.
 
 ### Typed Nexus exceptions
 
@@ -254,9 +289,15 @@ affordance).
    factory. The **first** CDN link (`result.Data[0].Uri`) is used; Nexus
    returns them in priority order.
 2. **Resolve metadata** for the Import: `GetModInfoAsync` for the mod name +
-   `ListModFilesAsync` + find the file with matching `fileId` for the version
-   string + file name + the file's `UploadedTimestamp` (Unix seconds). These
-   are 2 API calls (3 total per acquisition, within rate limits). **No degraded
+   the display metadata + `ListModFilesAsync` + find the file with matching
+   `fileId` for the version string + file name + the file's `UploadedTimestamp`
+   (Unix seconds). These are 2 API calls (3 total per acquisition, within rate
+   limits). Display metadata (summary, thumbnail URL, adult flag) is normalized
+   from the **same** `GetModInfoAsync` payload the name came from via the shared
+   internal `ModDisplayMetadataMapper` (trim summary + picture URL; empty
+   summary becomes `string.Empty`; empty/malformed/non-HTTPS picture URL
+   becomes `null`; adult flag copied verbatim), so persisting it adds **no
+   extra Nexus request**. **No degraded
    fallback:** if the metadata fetch fails, the acquisition fails with a clear
    error (a mod stored under its numeric id as a name is worse than a clean
    failure message). The matched file's `UploadedTimestamp` is converted to a
@@ -274,12 +315,17 @@ affordance).
    is cosmetic. The temp file is deleted once Import returns (always, success or
    failure; no partial state).
 4. **Import** via `IModImportService.Import(tempPath, modName, new NexusSource
-   { ModId = modId }, version, remoteUploadedAt)`. The import service handles
+   { ModId = modId }, version, remoteUploadedAt, displayMetadata)`. The import service handles
    find-or-create-container (dedup by `NexusSource.ModId`) + add-version +
-   `IsLatest` flip + records `RemoteUploadedAt` on the new entry. Both
+   `IsLatest` flip + records `RemoteUploadedAt` on the new entry, and the
+   `displayMetadata` argument replaces the container's `DisplayMetadata` in the
+   same manifest update (an acquisition that fetched newer text wins atomically
+   with the version write). Both
    acquisition entry points (`AcquireFromNexusAsync` for nxm downloads +
    `AcquireLatestNexusAsync` for the per-mod update button) route through this
-   call, so both record the publish date.
+   call, so both record the publish date and the display metadata. Premium,
+   regular nxm, automatic update, per-row update, and DMF acquisitions all
+   inherit the capture through the existing common path.
 5. **Return** `(containerId, versionId)`.
 
 The CDN download uses a plain `HttpClient` (not the typed `INexusClient`)
@@ -559,6 +605,123 @@ never blocks startup). The mod-list UI subscribes to `CheckCompleted` and reads
 the profile-scoped `IUpdateStateStore` (not `LastResult`) to render per-row
 update flags.
 
+## Metadata backfill service
+
+`INexusModMetadataService` backfills missing display metadata (summary,
+thumbnail URL, adult-content flag) for repository containers that have none yet,
+through the stable Nexus v1 `mods/{id}.json` endpoint. The acquisition path
+already captures display metadata for every new Nexus import (see [Mod
+acquisition service](#mod-acquisition-service)); this service closes the gap for
+containers imported before that capture existed or was wired. It is invoked by
+the UI-layer detailed-rows coordinator when Detailed mode encounters rows with
+no metadata (see [ui: mod list density](ui.md#mod-list-density--detailed-rows)).
+Its single operation accepts the active profile's container ids as priority
+order and returns an immutable result; the caller fires-and-forgets.
+
+```csharp
+public interface INexusModMetadataService
+{
+    Task<NexusModMetadataResult> BackfillMissingAsync(
+        IReadOnlyList<Guid> priorityContainerIds,     // active-profile ids, tried first
+        CancellationToken ct = default);
+}
+
+public sealed class NexusModMetadataResult
+{
+    public IReadOnlyDictionary<Guid, ModDisplayMetadata> Updated { get; }   // TryInitializeDisplayMetadata == true
+    public int AttemptedCount { get; }                                       // GetModInfoAsync calls made
+    public bool RateLimited { get; }                                         // stopped on an exhausted window
+    public DateTimeOffset? RateLimitResetsAt { get; }                        // soonest exhausted-window reset, when rate-limited
+
+    public NexusModMetadataResult(
+        IReadOnlyDictionary<Guid, ModDisplayMetadata> updated,
+        int attemptedCount, bool rateLimited, DateTimeOffset? rateLimitResetsAt);
+
+    public static NexusModMetadataResult Empty { get; }
+}
+```
+
+### Backfill flow (`NexusModMetadataService`)
+
+`BackfillMissingAsync` is serialized by a `SemaphoreSlim` and never throws for
+non-cancellation failures (cancellation propagates). The singletons holds the
+semaphore, so the service is registered as a singleton (see
+[DI registration](#di-registration)).
+
+1. **Auth gate.** Read `IConfigLoader.Load().Integrations.Nexus.AuthMethod`. If
+   `None` -> return `Empty` (no API call). The user has not configured Nexus.
+2. **Persisted 24-hour gate (rechecked after acquiring the lock).** Read
+   `IAppStateStore.LastNexusMetadataBackfillUtc`. When set and within 24 hours
+   of now (strict less-than; a future stamp from clock skew gates), return
+   `Empty`. Rechecking after the semaphore is acquired means a second
+   overlapping call that arrived while the first was running returns empty
+   rather than starting a second pass inside the window. See
+   [rate-limiting strategy: metadata backfill gate](rate-limiting-strategy.md#metadata-backfill-gate).
+3. **Candidate sequence.** Build a distinct list, capped at 25 attempted
+   containers: priority ids first (de-duplicated, in caller order), then the
+   remaining repository containers in deterministic `Guid` order. Each is
+   re-resolved from the repository and included only when it is a
+   `NexusSource` container whose `DisplayMetadata` is `null` (missing-only;
+   untracked and linked containers are skipped, and a container that already
+   carries metadata, even an empty object, is authoritative + skipped).
+4. **Per-candidate loop (sequential).** For each candidate: a pre-request
+   `Get` re-checks that the metadata is still `null` (an optimization; the
+   correctness boundary is the atomic `TryInitializeDisplayMetadata` below).
+   When the 25-attempt cap is reached, the pass stops. Otherwise it calls
+   `INexusClient.GetModInfoAsync("warhammer40kdarktide", modId, ct)`.
+   - `NexusApiException` (a per-mod API failure, e.g. one removed mod) is
+     logged and the pass **continues** with the next candidate.
+   - `NexusRateLimitException` sets `RateLimited = true`, resolves the reset via
+     `NexusRateLimitReset.ComputeEarliest`, and **stops** the pass (the metadata
+     from the triggering response, when applicable, is persisted first).
+   - `NexusNotAuthenticatedException` (auth revoked mid-pass) **stops** the pass.
+   - Any other `Exception` (transport, repository, config, mapping) is caught by
+     the outer boundary, logged, and absorbed into the partial state accumulated
+     so far (the pass stops).
+   - `OperationCanceledException` propagates (cancellation is not success).
+5. **Map + persist.** A successful response's `ModInfo` is normalized through
+   the shared internal `ModDisplayMetadataMapper` (the same normalization
+   acquisition uses: trim summary + picture URL; empty summary -> `string.Empty`;
+   empty/malformed/non-HTTPS picture URL -> `null`; adult flag copied verbatim)
+   and persisted via `IModRepository.TryInitializeDisplayMetadata(containerId,
+   metadata)`. Only an atomic null-to-non-null transition returns `true` and
+   records the container in the result's `Updated` map; a container whose
+   metadata was set by a concurrent writer between the pre-request `Get` and the
+   atomic check-and-set returns `false` and is **not** overwritten. Existing
+   metadata is never cleared or rewritten on any failure path.
+6. **Exhausted-counter check (post-response).** From `response.RateLimits`:
+   treat as rate-limited only when a limit was reported AND remaining is zero
+   (`(DailyLimit > 0 && DailyRemaining <= 0) || (HourlyLimit > 0 &&
+   HourlyRemaining <= 0)`, the same `> 0` guard the update check uses to avoid a
+   false positive on `NexusRateLimits.Unknown`). When exhausted, set
+   `RateLimited = true`, resolve the reset, and stop the pass.
+7. **Stamp + return.** After the loop, when at least one API request was
+   attempted, stamp `IAppStateStore.LastNexusMetadataBackfillUtc = now` (so a
+   real pass gates the next one for 24 hours). A no-auth, already-gated, or
+   no-candidate no-op attempts zero requests and does **not** stamp. Return an
+   immutable `NexusModMetadataResult` (the `Updated` map is defensively wrapped
+   in a `ReadOnlyDictionary` over a copy of its pairs, so neither a later
+   mutation of the input nor a downcast to a mutable dictionary can change the
+   result).
+
+### `ModDisplayMetadataMapper` (internal)
+
+The single normalization from `ModInfo` to the source-agnostic
+`ModDisplayMetadata` (see [mods: ModDisplayMetadata](mods.md#moddisplaymetadata-record)).
+Shared by acquisition (`ModAcquisitionService.ResolveMetadataAsync`) and the
+backfill so the rules cannot drift between the two:
+
+- Trim `ModInfo.Summary` and `ModInfo.PictureUrl`. An empty summary becomes
+  `string.Empty`.
+- An empty, malformed, or non-HTTPS picture URL becomes `null`
+  (`Uri.TryCreate` rejects malformed input without throwing; the scheme check
+  keeps the UI thumbnail cache on HTTPS only).
+- `ModInfo.ContainsAdultContent` is copied verbatim.
+
+Never returns `null`: a fetched result with no display content is a non-null
+object whose `Summary` is empty and whose `ThumbnailUrl` is `null`, so the
+container can distinguish fetched-but-empty from not-fetched.
+
 ## DI registration
 
 ```csharp
@@ -585,6 +748,10 @@ Registers:
   update check. Depends on `INexusClient` + `IProfileService` + `IModRepository`
   + `IConfigLoader` + `IUpdateStateStore`; the Integrations -> Profiles project
   reference exists for this service).
+- `INexusModMetadataService` -> `NexusModMetadataService` (singleton; the
+  missing-only display-metadata backfill over the stable v1 endpoint. Depends on
+  `INexusClient` + `IModRepository` + `IConfigLoader` + `IAppStateStore`;
+  holds the semaphore that serializes overlapping passes).
 - `IUpdateStateStore` -> `UpdateStateStore` (singleton; the profile-scoped
   known-update persistence rules over `IAppStateStore.KnownUpdates` + the live
   profile/repository for hydration self-heal).
@@ -601,9 +768,11 @@ view. No construction-time cycle.
 ## Dependencies
 
 - **Curator libraries:** `config` (`CuratorConfig.Integrations.Nexus`),
-  `general` (`IConfigLoader`), `mods` (`IModImportService`, `NexusSource`,
-  `IModRepository` / `ModContainer` / `ModVersion` for the acquisition +
-  update-check services), `profiles` (`IProfileService` for the update-check
+  `general` (`IConfigLoader`, `IAppStateStore` for the metadata-backfill gate),
+  `mods` (`IModImportService`, `NexusSource`, `IModRepository` /
+  `ModContainer` / `ModVersion` for the acquisition + update-check services,
+  `ModDisplayMetadata` for the acquisition capture + the metadata backfill),
+  `profiles` (`IProfileService` for the update-check
   service).
 - **NuGet:** `Microsoft.Extensions.Http` (`AddHttpClient<TClient,TImpl>` +
   `IHttpClientFactory`), `Microsoft.Extensions.DependencyInjection.Abstractions`,
@@ -635,14 +804,16 @@ view. No construction-time cycle.
   redirect; the listener returns the callback query string; the friendly HTML
   response is served.
 - **`AddIntegrations`** DI wiring (the Nexus client + auth factory resolution +
-  the acquisition service + the update-check service).
+  the acquisition service + the update-check service + the metadata-backfill
+  service, all as singletons).
 - **`ModAcquisitionService`** against a fake `INexusClient` + a fake
   `IModImportService` + a stub HTTP handler for the CDN download: premium vs
   free-user overload selection, first-CDN-link use, metadata resolution (name +
-  version), the no-degraded-fallback error policy (metadata failure + missing
-  file throw, no partial import), download failure, import-failure temp cleanup,
-  progress reporting, cancellation, and the latest-MAIN-file resolution +
-  null-nxm-token forward + no-MAIN-file throw for
+  version + the display-metadata capture from the shared mapper with no extra
+  API call + its pass-through to `Import`), the no-degraded-fallback error policy
+  (metadata failure + missing file throw, no partial import), download failure,
+  import-failure temp cleanup, progress reporting, cancellation, and the
+  latest-MAIN-file resolution + null-nxm-token forward + no-MAIN-file throw for
   `AcquireLatestNexusAsync`.
 - **`UpdateCheckService`** against a fake `INexusClient` + a fake
   `IProfileService` + a fake `IModRepository` + the `FakeConfigLoader`: correct
@@ -667,10 +838,29 @@ view. No construction-time cycle.
   game id + mod ids, string + numeric UID deserialization, GraphQL-error
   surfacing (200 OK body
   with errors), + rate-limit exception.
+- **`NexusModMetadataService`** against a fake `INexusClient` + a fake
+  `IModRepository` + the `FakeConfigLoader` + a fake/real `IAppStateStore`:
+  the auth gate (None returns empty, no API call), the persisted 24-hour gate
+  (boundary, future stamp, clock skew, extreme values), serialized overlapping
+  passes (the semaphore + the post-lock gate recheck), candidate selection
+  (priority ordering, distinct ids, deterministic `Guid`-order remainder,
+  Nexus-only + missing-only filtering), the 25-attempt cap, per-candidate
+  concurrency (the `TryInitializeDisplayMetadata` atomicity means a concurrent
+  acquisition cannot be clobbered by a stale fetch that raced the check-and-set),
+  the stop/continue policy (`NexusApiException` continues; `NexusRateLimitException`,
+  `NexusNotAuthenticatedException`, and exhausted counters stop; generic
+  transport/repository/config failures are absorbed), the stamping rules (a real
+  attempt stamps; a no-auth / already-gated / no-candidate no-op does not), the
+  never-throws boundary, the immutable `NexusModMetadataResult` (defensive copy
+  of `Updated`, not downcastable to a mutable dictionary, the `Empty` singleton
+  fresh), and the shared `ModDisplayMetadataMapper` normalization (trim summary +
+  picture URL, empty summary -> `string.Empty`, empty/malformed/non-HTTPS picture
+  URL -> `null`, adult flag copied verbatim).
 
 The internal `NexusClient`, `NexusAuthService`, `NexusOAuthTokenStore`,
 `LoopbackBrowser`, `HttpListenerLoopbackListener`, `ModAcquisitionService`,
-`UpdateCheckService`, and the auth factories are visible to tests via
+`NexusModMetadataService`, `ModDisplayMetadataMapper`, `UpdateCheckService`,
+`NexusRateLimitReset`, and the auth factories are visible to tests via
 `InternalsVisibleTo`. The `NxmModDownloadHandler` (UI) is tested in
 `Modificus.Curator.UI.Tests` (visible via the UI project's `InternalsVisibleTo`),
 alongside the `UpdateCheckRunner` (the UI-layer wiring that fires the check on

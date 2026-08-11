@@ -100,9 +100,10 @@ public sealed class ConfigLoader : IConfigLoader
 Persists **runtime application state**: values that capture "where the app left
 off" rather than user system settings. Kept deliberately narrow: the first-run
 onboarding flag, the active profile id, the last update-check timestamp, the
-manual-refresh throttle window, and the persisted known-update snapshots. A
-separate file (not `CuratorConfig`) holds it so the settings schema stays pure
-(system settings vs. runtime state).
+manual-refresh throttle window, the persisted known-update snapshots, and the
+last Nexus display-metadata backfill timestamp. A separate file (not
+`CuratorConfig`) holds it so the settings schema stays pure (system settings
+vs. runtime state).
 
 ```csharp
 public interface IAppStateStore
@@ -112,6 +113,7 @@ public interface IAppStateStore
     DateTimeOffset? LastUpdateCheckUtc { get; set; }                // set persists immediately
     IReadOnlyList<DateTimeOffset>? ManualRefreshTimestamps { get; set; } // set persists immediately
     IReadOnlyDictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? KnownUpdates { get; set; } // set persists immediately
+    DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }      // set persists immediately
 }
 
 public sealed record KnownUpdateSnapshot(
@@ -128,7 +130,8 @@ public sealed class AppStateStore : IAppStateStore
 
 - File: `<app-data>/app-state.json`
   (`{ "OnboardingCompleted": ..., "ActiveProfileId": ..., "LastUpdateCheckUtc": ...,
-  "ManualRefreshTimestamps": ..., "KnownUpdates": { "<profile-guid>": [ { ...snapshot... }, ... ] } | null }`),
+  "ManualRefreshTimestamps": ..., "KnownUpdates": { "<profile-guid>": [ { ...snapshot... }, ... ] } | null,
+  "LastNexusMetadataBackfillUtc": "<iso-8601>" | null }`),
   derived from `AppPaths.AppDataDir` the same way `ConfigLoader` derives its
   config path.
 - JSON is handled with `System.Text.Json` directly (read + write);
@@ -159,6 +162,20 @@ public sealed class AppStateStore : IAppStateStore
   shows prior update flags before any API call). The shell and the Profiles
   destination read the active id through the session; they do not touch this
   store.
+- `LastNexusMetadataBackfillUtc` is used by the Integrations-layer
+  `INexusModMetadataService` (see [integrations](integrations.md#metadata-backfill-service))
+  to gate the missing-metadata backfill pass to at most one real pass per 24-hour
+  window. It is a **repository-wide** gate (not profile-scoped like
+  `KnownUpdates`, and unrelated to the update-check interval state in
+  `LastUpdateCheckUtc`): the backfill covers every Nexus container in the
+  repository missing display metadata, regardless of which profile is active.
+  Defaults to `null`; assigned the current UTC time immediately after a pass that
+  attempted at least one API request (a no-auth, already-gated, or no-candidate
+  no-op does not stamp). Backward compatible on disk: an old `app-state.json`
+  written before the field existed deserializes it to `null` (System.Text.Json
+  default for an absent nullable member), so the first run after upgrade proceeds
+  normally. See
+  [rate-limiting strategy: metadata-backfill gate](rate-limiting-strategy.md#metadata-backfill-gate).
 
 `KnownUpdateSnapshot` is a plain serializable DTO (no domain behavior) so the
 General library can persist it without depending on the Integrations
@@ -211,7 +228,10 @@ v1). `loggerFactory` is a constructed object passed in; `IConfigLoader` +
 override binding, plus `Preferences` round-trip + `Save` coverage:
 round-trip, parent-dir creation, sibling-section preservation, enum-as-string
 serialization), `AppStateStore` (round-trip + first-run + corrupt-file safety +
-the app-data default path), `LoggingBootstrap` (level parsing, Serilog
+the app-data default path, the profile-scoped `KnownUpdates` round-trip, the
+old-file-without-field compatibility for every field including
+`LastNexusMetadataBackfillUtc`, and the whole-model rewrite preserving sibling
+fields on each assignment), `LoggingBootstrap` (level parsing, Serilog
 day-rolling file creation and the append-within-a-day behavior at
 `RetainedLogFileCount`), and the `AddGeneral` DI wiring (including the `TryAdd` `IConfigLoader` + `IAppStateStore`
 overrides, so the composition root + tests may pre-register their own instances).

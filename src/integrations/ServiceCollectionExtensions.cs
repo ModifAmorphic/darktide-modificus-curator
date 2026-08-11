@@ -17,10 +17,13 @@ public static class ServiceCollectionExtensions
     /// the loopback <see cref="IBrowser"/> + the token store (singletons), the
     /// mod acquisition service (download + extract + place orchestration over
     /// <see cref="INexusClient"/> + <see cref="IModImportService"/>, singleton),
-    /// and the update-check service (one-call v2 GraphQL <c>modsByUid</c> batch
+    /// the update-check service (one-call v2 GraphQL <c>modsByUid</c> batch
     /// query for the active profile's LatestPolicy + NexusSource mods, singleton;
     /// the mod-list view binds badges to <see cref="IUpdateCheckService.LastResult"/>
-    /// + subscribes to <see cref="IUpdateCheckService.CheckCompleted"/>).
+    /// + subscribes to <see cref="IUpdateCheckService.CheckCompleted"/>), and the
+    /// Nexus display-metadata backfill service (missing-only, sequential v1
+    /// <c>GetModInfoAsync</c> pass capped at 25 attempts per persisted 24-hour
+    /// window, singleton).
     /// </summary>
     /// <remarks>
     /// <para>
@@ -35,6 +38,7 @@ public static class ServiceCollectionExtensions
         AddNexus(services);
         AddAcquisition(services);
         AddUpdateCheck(services);
+        AddMetadataBackfill(services);
 
         return services;
     }
@@ -111,6 +115,18 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<IUpdateStateStore, UpdateStateStore>();
         services.AddSingleton<IUpdateCheckService, UpdateCheckService>();
+    }
+
+    /// <summary>
+    /// Registers the Nexus display-metadata backfill service. A sequential,
+    /// missing-only, active-profile-prioritized pass over the stable v1
+    /// <c>GetModInfoAsync</c> endpoint, capped at 25 attempted containers per
+    /// persisted 24-hour window. Singleton: holds the semaphore that serializes
+    /// overlapping passes.
+    /// </summary>
+    private static void AddMetadataBackfill(IServiceCollection services)
+    {
+        services.AddSingleton<INexusModMetadataService, NexusModMetadataService>();
     }
 
     private static class NexusConfigDefaults

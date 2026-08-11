@@ -225,6 +225,105 @@ public sealed class ModImportServiceTests
         Assert.Null(version.RemoteUploadedAt);
     }
 
+    // ---- display metadata pass-through (Nexus acquisition basis) ----------
+
+    [Fact]
+    public void Import_forwards_displayMetadata_to_the_container_on_a_new_version()
+    {
+        // The acquisition layer captures display metadata and forwards it
+        // through Import; Import forwards it to AddVersion; AddVersion stamps
+        // it on the container in the same manifest update as the new entry.
+        // Source-agnostic: the seam accepts the value object, no Nexus type
+        // crosses the boundary into Mods.
+        using var fx = new ImportFixture();
+        var dir = fx.MakeSourceModFolder("Src");
+        var nexus = new NexusSource { ModId = 4242 };
+        var metadata = new ModDisplayMetadata
+        {
+            Summary = "From Nexus.",
+            ThumbnailUrl = "https://example.com/thumb.png",
+            IsAdultContent = true,
+        };
+
+        var (containerId, _) = fx.Service.Import(dir, "WT", nexus, "1.0", null, metadata);
+
+        var container = fx.Repo.Get(containerId);
+        Assert.Equal(metadata, container!.DisplayMetadata);
+    }
+
+    [Fact]
+    public void Import_forwards_displayMetadata_on_a_dedup_re_import()
+    {
+        // Re-importing the same versionString with metadata replaces the prior
+        // metadata in the same manifest update as the dedup refresh (matching
+        // how dedup refreshes RemoteUploadedAt).
+        using var fx = new ImportFixture();
+        var dir = fx.MakeSourceModFolder("Src");
+        var nexus = new NexusSource { ModId = 4242 };
+        var first = new ModDisplayMetadata { Summary = "first" };
+        var second = new ModDisplayMetadata { Summary = "second" };
+
+        fx.Service.Import(dir, "WT", nexus, "1.0", null, first);
+        var (containerId, _) = fx.Service.Import(dir, "WT", nexus, "1.0", null, second);
+
+        var container = fx.Repo.Get(containerId);
+        Assert.Equal(second, container!.DisplayMetadata);
+    }
+
+    [Fact]
+    public void Import_with_null_displayMetadata_preserves_existing_metadata()
+    {
+        // The load-bearing guarantee: a manual re-import (folder/archive via the
+        // picker, no metadata argument) never erases a prior Nexus acquisition
+        // or backfill. The default-argument path leaves the prior value intact.
+        using var fx = new ImportFixture();
+        var dir = fx.MakeSourceModFolder("Src");
+        var nexus = new NexusSource { ModId = 4242 };
+        var metadata = new ModDisplayMetadata { Summary = "captured once" };
+        fx.Service.Import(dir, "WT", nexus, "1.0", null, metadata);
+
+        var (containerId, _) = fx.Service.Import(dir, "WT", nexus, "1.0"); // no metadata arg
+
+        var container = fx.Repo.Get(containerId);
+        Assert.Equal(metadata, container!.DisplayMetadata);
+    }
+
+    [Fact]
+    public void Import_persists_displayMetadata_through_a_new_repository_instance()
+    {
+        // The nested object round-trips through container.json (STJ default
+        // options, no migration). A fresh repo reading the manifest from disk
+        // observes the captured metadata.
+        using var fx = new ImportFixture();
+        var dir = fx.MakeSourceModFolder("Src");
+        var nexus = new NexusSource { ModId = 4242 };
+        var metadata = new ModDisplayMetadata
+        {
+            Summary = "persisted",
+            ThumbnailUrl = "https://example.com/thumb.png",
+        };
+
+        var (containerId, _) = fx.Service.Import(dir, "WT", nexus, "1.0", null, metadata);
+
+        var reloaded = fx.ReloadRepo();
+        Assert.Equal(metadata, reloaded.Get(containerId)!.DisplayMetadata);
+    }
+
+    [Fact]
+    public void Import_validation_failure_leaves_no_container_and_no_metadata()
+    {
+        // An invalid source (bad folder shape) throws before any container or
+        // version is created, so there is no metadata to set either. Source-
+        // structure validation precedes the metadata-aware AddVersion call.
+        using var fx = new ImportFixture();
+        var sourceDir = fx.MakeSourceFolder("NoDescriptor", ("scripts/init.lua", "x"));
+        var metadata = new ModDisplayMetadata { Summary = "ignored" };
+
+        Assert.Throws<InvalidOperationException>(() =>
+            fx.Service.Import(sourceDir, "NoDescriptor", new UntrackedSource(), "1.0", null, metadata));
+        Assert.Empty(fx.Repo.List());
+    }
+
     // ---- folder + zip placement (base folder preserved) -------------------
 
     [Fact]
