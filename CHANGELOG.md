@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.24.0...v0.25.0) (2026-08-11)
+
+
+### Features
+
+* **ui:** add detailed mod rows ([#172](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/172)) ([ba69651](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/ba696513c11c0b998c5190e12a1991b6bea58e8b))
+
 ## [0.24.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.23.0...v0.24.0) (2026-08-10)
 
 
