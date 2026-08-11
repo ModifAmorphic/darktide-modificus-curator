@@ -10,7 +10,8 @@ namespace Modificus.Curator.General;
 /// "LastUpdateCheckUtc": "&lt;iso-8601&gt;" | null,
 /// "ManualRefreshTimestamps": [ "&lt;iso-8601&gt;", ... ] | null,
 /// "KnownUpdates": { "&lt;profile-guid&gt;": [ { ...snapshot... }, ... ] } | null,
-/// "LastNexusMetadataBackfillUtc": "&lt;iso-8601&gt;" | null }</c>).
+/// "LastNexusMetadataBackfillUtc": "&lt;iso-8601&gt;" | null,
+/// "MainWindowState": { "Width": &lt;dip&gt;, "Height": &lt;dip&gt;, "IsMaximized": true | false } | null }</c>).
 /// The app-data dir is derived the same way <see cref="ConfigLoader"/> derives its
 /// config path (both via <see cref="AppPaths.AppDataDir"/>). JSON is handled with
 /// <see cref="JsonSerializer"/> (direct, read+write) rather than
@@ -21,24 +22,20 @@ namespace Modificus.Curator.General;
 /// <para>
 /// <b>Cached model, written whole.</b> The store holds the deserialized
 /// <see cref="StateModel"/> in memory (loaded lazily on first access) and
-/// rewrites the WHOLE model on every property assignment. This keeps the five
-/// properties independent: setting <see cref="ActiveProfileId"/> preserves a
-/// previously written <see cref="LastUpdateCheckUtc"/> and
-/// <see cref="ManualRefreshTimestamps"/> and vice versa (a naive per-field save
-/// would clobber the others on every write). The store is a DI singleton for the
-/// app lifetime and is the sole writer of the file, so an in-memory cache is the
-/// honest model.</para>
+/// rewrites the WHOLE model on every property assignment. This keeps the
+/// persisted fields independent: assigning one preserves every previously
+/// written sibling (a naive per-field save would clobber the others on every
+/// write). The store is a DI singleton for the app lifetime and is the sole
+/// writer of the file, so an in-memory cache is the honest model.</para>
 /// <para><b>First-run safe:</b> a missing or corrupt state file never throws;
-/// the cache just seeds as defaults (<c>false</c> / <c>null</c> / <c>null</c> /
-/// <c>null</c> / <c>null</c>). Writes are best-effort; runtime app-state is
-/// non-critical, so a persistence failure (unwritable dir, full disk) is
-/// swallowed rather than crashing the app mid-interaction. An old file without
-/// <see cref="IAppStateStore.OnboardingCompleted"/>,
-/// <see cref="IAppStateStore.LastUpdateCheckUtc"/>,
-/// <see cref="IAppStateStore.ManualRefreshTimestamps"/>, or
-/// <see cref="IAppStateStore.KnownUpdates"/> deserializes those fields as their
-/// defaults (<c>false</c> / <c>null</c>), so a first run after upgrade sees no
-/// recorded value and the consumers seed cleanly.</para>
+/// the cache just seeds as defaults (every field <c>null</c>, except
+/// <see cref="IAppStateStore.OnboardingCompleted"/> which defaults to
+/// <c>false</c>). Writes are best-effort; runtime app-state is non-critical, so
+/// a persistence failure (unwritable dir, full disk) is swallowed rather than
+/// crashing the app mid-interaction. Any field absent from an older
+/// <c>app-state.json</c> deserializes as its default (System.Text.Json default
+/// for an absent nullable member), so a first run after upgrade sees no recorded
+/// value and the consumers seed cleanly.</para>
 /// </remarks>
 public sealed class AppStateStore : IAppStateStore
 {
@@ -129,6 +126,13 @@ public sealed class AppStateStore : IAppStateStore
         set => Mutate(m => m.LastNexusMetadataBackfillUtc = value);
     }
 
+    /// <inheritdoc />
+    public AppWindowState? MainWindowState
+    {
+        get => Load().MainWindowState;
+        set => Mutate(m => m.MainWindowState = value);
+    }
+
     /// <summary>The conventional state-file location: <c>&lt;app-data&gt;/app-state.json</c>.</summary>
     public static string DefaultStatePath() =>
         System.IO.Path.Combine(AppPaths.AppDataDir, "app-state.json");
@@ -217,5 +221,6 @@ public sealed class AppStateStore : IAppStateStore
         public List<DateTimeOffset>? ManualRefreshTimestamps { get; set; }
         public Dictionary<Guid, List<KnownUpdateSnapshot>>? KnownUpdates { get; set; }
         public DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
+        public AppWindowState? MainWindowState { get; set; }
     }
 }

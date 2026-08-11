@@ -70,5 +70,6 @@ public sealed class GeneralServiceCollectionExtensionsTests
         public IReadOnlyList<DateTimeOffset>? ManualRefreshTimestamps { get; set; }
         public IReadOnlyDictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? KnownUpdates { get; set; }
         public DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
+        public AppWindowState? MainWindowState { get; set; }
     }
 }

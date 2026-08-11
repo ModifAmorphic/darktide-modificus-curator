@@ -89,4 +89,26 @@ public interface IAppStateStore
     /// cached model is rewritten on each assignment.
     /// </remarks>
     DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
+
+    /// <summary>
+    /// The persisted main-window geometry (the last valid Normal client size in
+    /// DIP plus whether the last meaningful state was Maximized), or
+    /// <c>null</c> when none has been recorded. Reading returns the persisted
+    /// value (or <c>null</c> on first run / corrupt file); assigning persists
+    /// the whole record atomically so width, height, and the maximized flag
+    /// always land together (never a partial triple).
+    /// </summary>
+    /// <remarks>
+    /// The UI layer (<c>MainWindow</c>) owns the meaning + the lifetime policy:
+    /// it writes once through the normal close path and applies the saved Normal
+    /// size first at startup, then maximizes on first open when the flag was
+    /// true. Minimized is never persisted as a launch state (it is ignored as a
+    /// meaningful state), and no window position is stored. Backward compatible
+    /// on disk: an old <c>app-state.json</c> written before this field existed
+    /// deserializes it as <c>null</c> (System.Text.Json default for an absent
+    /// nullable member), so the first run after upgrade opens at the XAML
+    /// fallback size. Sibling fields are preserved on every write: the whole
+    /// cached model is rewritten on each assignment.
+    /// </remarks>
+    AppWindowState? MainWindowState { get; set; }
 }

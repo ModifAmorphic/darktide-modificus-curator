@@ -193,35 +193,112 @@ public partial class MainWindow : Window
     internal const double PaneLabelMargin = 12.0;
     internal const double PaneTrailingBreathingRoom = 16.0;
 
+    internal const double DefaultWidth = 960.0;        // matches XAML Width
+    internal const double DefaultHeight = 640.0;       // matches XAML Height
+    internal const double MinWindowWidth = 720.0;      // matches XAML MinWidth
+    internal const double MinWindowHeight = 480.0;     // matches XAML MinHeight
+    internal const double CorrectionTolerance = 1.0;   // DIP, #19431 threshold
+
+    public MainWindow();                               // XAML runtime/designer path (no store)
+    internal MainWindow(IAppStateStore stateStore);    // production path
+
     internal static double ComputeOpenPaneLength(double widestLabelWidth);
+    internal static (double Width, double Height) NormalizeSavedSize(
+        AppWindowState? saved, double? workAreaWidth, double? workAreaHeight,
+        double minWidth, double minHeight);
+    internal static bool NextMeaningfulMaximized(WindowState current, bool previous);
+    internal static bool IsTrustedResizeReason(WindowResizeReason reason);
+    internal static Size ResolveTrustedNormal(Size? trustedCandidate, WindowState state, Size current);
+    internal static bool ShouldCorrectFromLayout(
+        Size? layoutCandidate, bool layoutSawOpen, WindowState state, Size resolvedNormal);
+    internal static bool PersistedSeedsMaximized(AppWindowState? saved);
+    internal static bool TryConvertWorkAreaDip(
+        double scaling, double pixelWidth, double pixelHeight,
+        out double widthDip, out double heightDip);
 }
 ```
 
-The Avalonia main window. Owns only view mechanics: SplitView pane sizing and
-the no-profile handoff link (in `MainWindow.axaml`). State, navigation, and
-service calls stay in `ShellViewModel`.
+The Avalonia main window. Owns only view mechanics: SplitView pane sizing, the
+no-profile handoff link (in `MainWindow.axaml`), and the persisted window
+geometry. State, navigation, and service calls stay in `ShellViewModel`. The
+public parameterless constructor loads XAML + safe in-memory defaults and is
+the Avalonia runtime/designer loader path (it performs no store IO and locates
+no service). Production construction goes through the internal
+`MainWindow(IAppStateStore)` overload, supplied by an explicit singleton
+factory in the composition root before the window is returned/shown.
 
 - **Open-pane width grows to fit the widest localized label.** The SplitView's
   XAML `OpenPaneLength=200` is the design-time/startup fallback and the lower
-  bound. Once the window is open, `UpdateOpenPaneLength` measures the five
-  live localized nav-rail labels with the representative `NavMeasureLabel`
-  TextBlock's actual typography (`FontFamily`, `FontStyle`, `FontWeight`,
-  `FontStretch`, `FontSize`, `LetterSpacing`) via the Avalonia 12.1
-  `TextLayout` API, unwrapped with infinite width, and grows
-  `NavSplitView.OpenPaneLength` to
-  `clamp(ceil(48 + 12 + widest + 16), 200, 360)`. Future translations and
-  font scales therefore do not clip at the original 200px; the cap keeps the
-  pane from eating too much of the content area, and beyond it each label's
+  bound. Once the window is open, `UpdateOpenPaneLength` measures the live
+  localized pane labels (the five destinations plus the pane-bottom Exit) with
+  the representative `NavMeasureLabel` TextBlock's actual typography
+  (`FontFamily`, `FontStyle`, `FontWeight`, `FontStretch`, `FontSize`,
+  `LetterSpacing`) via the Avalonia 12.1 `TextLayout` API, unwrapped with
+  infinite width, and grows `NavSplitView.OpenPaneLength` to
+  `clamp(ceil(48 + 12 + widest + 16), 200, 360)`. Future translations and font
+  scales therefore do not clip at the original 200px; the cap keeps the pane
+  from eating too much of the content area, and beyond it each label's
   `TextTrimming=CharacterEllipsis` is the graceful fallback (the full text
   remains in the tooltip and the automation name). Re-measurement fires on
   inherited `Window.FontSize` changes and on LocalizationService Culture /
   `Item[]` changes.
 - **Pure arithmetic helper** `ComputeOpenPaneLength(widestLabelWidth)` is the
-  unit-testable seam: it takes the measured widest-label width and returns
-  the bounded pane length. Constants (`PaneOpenMin`, `PaneOpenMax`,
+  unit-testable seam for pane sizing. Constants (`PaneOpenMin`, `PaneOpenMax`,
   `PaneIconColumn`, `PaneLabelMargin`, `PaneTrailingBreathingRoom`) name the
-  pieces so future tweaks are deliberate. The live glyph-measurement path
-  itself is covered by XAML compilation + operator visual testing.
+  pieces so future tweaks are deliberate.
+- **Persisted window geometry.** The last unmaximized (Normal) client size in
+  DIP and whether the last meaningful state was Maximized are read from
+  `IAppStateStore.MainWindowState` on the production path, validated + clamped
+  by the pure `NormalizeSavedSize` helper to the XAML minimums (`MinWindowWidth`
+  / `MinWindowHeight`) and, when available, the primary screen's working area
+  converted from physical pixels to DIP via `Screen.Scaling` (the pure
+  `TryConvertWorkAreaDip` validates finite + positive scaling and dimensions),
+  then applied as `Width`/`Height` before first Show so the platform has the
+  right restore size. The persisted maximized flag seeds the in-memory
+  meaningful-state flag and the one-shot first-open maximize immediately (the
+  pure `PersistedSeedsMaximized` seam); when the flag is set, the window
+  maximizes once in `OnOpened` (after Show) for Win32/X11 consistency, so a
+  later unmaximize restores to the saved Normal size. The last Normal size is
+  tracked through deferred, coalesced, reason-aware resize observation:
+  `OnResized` tags each observation by `WindowResizeReason` and whether the
+  window had opened, then posts one apply; the pure `IsTrustedResizeReason`
+  treats User, Unspecified, Application, and DpiChange as authoritative and
+  `Layout` as never authoritative, and `ResolveTrustedNormal` updates the last
+  Normal size only for a trusted observation while the settled state is Normal.
+  The meaningful-state flag is tracked through `OnPropertyChanged` for
+  `WindowStateProperty` via the pure `NextMeaningfulMaximized` policy: Normal
+  clears it, Maximized sets it, and Minimized and FullScreen leave the
+  preceding flag unchanged.
+- **Avalonia #19431 visible-restore correction.** At Windows scaling such as
+  175%, a Maximized to Normal transition can emit a correct `Unspecified`
+  Normal resize followed by a stale `Layout` resize carrying the maximized
+  `ClientSize`. `MainWindow` uses manual top-level sizing, so a post-open
+  `Layout` resize is not a user sizing intent. The pure
+  `ShouldCorrectFromLayout` seam decides, after the trusted candidate has been
+  resolved into the last Normal size, whether a post-open `Layout` observation
+  that materially conflicts (more than `CorrectionTolerance` DIP) while Normal
+  should trigger a reapply of the trusted size through `ClientSize`. The
+  correction never persists a new size from `Layout` and never manipulates
+  window position; a trusted observation arriving in the same burst as the
+  stale `Layout` wins first, so the correction targets the trusted value.
+- **Close path.** `OnClosing` calls base (so a `Window.Closing` subscriber can
+  still cancel), and if not cancelled it marks the window closing (queued
+  applies then no-op), consumes any pending trusted candidate when the settled
+  state is Normal (never the raw `ClientSize`, which may be the stale #19431
+  value), and persists one atomic `AppWindowState`. Closing while Maximized or
+  Minimized keeps the tracked last-Normal size and meaningful flag. State is
+  never written on every resize, only once through the close path. No window
+  position is stored, and `WindowStartupLocation` stays `CenterScreen`. The
+  screen read is defensive: an unavailable or invalid screen, an absent or
+  invalid persisted state, or a corrupt store all fall back to the XAML 960x640
+  size and never crash startup.
+- **Exit action.** A pane-bottom button (the only pane `Grid.Row="2"` control;
+  the middle `*` row of `Auto,*,Auto` holds it at the bottom) calls `Close()`
+  exactly like the title-bar close, so the persisted window state lands through
+  the same `OnClosing` path with no `Shutdown`/`Environment.Exit`. It is not a
+  destination and never carries a selected state. Compact mode shows its drawn
+  Material logout geometry with a tooltip + accessibility name; expanded mode
+  adds the localized `Exit` label.
 - **Falls back silently** to the XAML `OpenPaneLength=200` when the live
   `LocalizationService` is unavailable (design-time paths) or when
   measurement throws at runtime; never crashes the window.

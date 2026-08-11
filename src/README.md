@@ -75,8 +75,11 @@ tiles by default; expand it with the hamburger toggle to show icon + label for
 the five destinations: Profiles, Mods, Nexus, Preferences,
 Settings), a global header with the current destination title and the Launch
 Darktide button, and a status strip (Darktide running indicator, the nxm
-handler status, and the dismissible app-update notice). Mods is selected
-initially. The Mods toolbar carries a Compact/Detailed density selector
+handler status, and the dismissible app-update notice). The rail anchors a
+drawn-icon Exit button at its bottom (it closes the window through the same
+path as the title-bar close). Mods is selected
+initially. The window remembers its last unmaximized size and whether it was
+maximized across restarts. The Mods toolbar carries a Compact/Detailed density selector
 (two drawn-icon buttons whose choice persists across restarts); Detailed rows
 show a Nexus summary and a cached thumbnail beside the name and wrap their
 action controls instead of forcing a fixed row width. The startup log lines (`Modificus Curator starting`, `Config

@@ -69,6 +69,14 @@
     <value>Expand or collapse navigation</value>
     <comment>Tooltip + accessibility name on the navigation rail's hamburger toggle.</comment>
   </data>
+  <data name="Nav_Exit" xml:space="preserve">
+    <value>Exit</value>
+    <comment>The label on the pane-bottom Exit button (expanded pane only; compact mode shows the drawn logout icon).</comment>
+  </data>
+  <data name="Nav_ExitTooltip" xml:space="preserve">
+    <value>Exit Modificus Curator</value>
+    <comment>Tooltip + accessibility name on the pane-bottom Exit button.</comment>
+  </data>
   <data name="Launch_Button" xml:space="preserve">
     <value>Launch Darktide</value>
     <comment>The Launch button in the shell top bar.</comment>

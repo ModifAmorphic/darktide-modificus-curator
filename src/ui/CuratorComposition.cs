@@ -107,7 +107,14 @@ public static class CuratorComposition
             StartRunningStatePolling));
         services.AddSingleton<LocalizationService>();
         services.AddSingleton<IPreferencesService, PreferencesService>();
-        services.AddSingleton<MainWindow>();
+        // MainWindow is a singleton resolved as desktop.MainWindow + the modal
+        // dialog owner. Built through an explicit factory that supplies
+        // IAppStateStore via the internal production constructor before the
+        // window is returned/shown; the public parameterless constructor stays
+        // available for Avalonia's XAML runtime/designer loader (AVLN3001
+        // clean), and production construction never uses a service locator.
+        services.AddSingleton<MainWindow>(sp => new MainWindow(
+            sp.GetRequiredService<IAppStateStore>()));
         // The active profile's mod-list VM: a singleton (one list, the dominant
         // content area). Resolves IModImportService (via AddMods) +
         // IModOrderResolver (via AddProfiles), both already registered above.

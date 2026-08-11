@@ -238,6 +238,31 @@
             </Grid>
           </Button>
         </StackPanel>
+
+        <!-- Exit: pane-bottom (row 2). Not a destination (no selected state, no
+              NavigateCommand). Click calls Close() in code-behind, matching the
+              title-bar close path so window state persists through OnClosing.
+              Reuses the navItem tile chrome. -->
+        <Button Grid.Row="2"
+                Classes="navItem"
+                Click="Exit_Click"
+                ToolTip.Tip="{ReflectionBinding [Nav_ExitTooltip], Source={StaticResource Loc}}"
+                AutomationProperties.Name="{ReflectionBinding [Nav_ExitTooltip], Source={StaticResource Loc}}">
+          <Grid ColumnDefinitions="48,*">
+            <!-- Material "logout" (24x24 source): drawn geometry, themed via the
+                 button foreground. -->
+            <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  Fill="{Binding $parent[Button].Foreground}"
+                  Data="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z" />
+            <TextBlock Grid.Column="1"
+                       Text="{ReflectionBinding [Nav_Exit], Source={StaticResource Loc}}"
+                       IsVisible="{Binding IsNavigationPaneOpen}"
+                       VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis"
+                       Margin="12,0,0,0" />
+          </Grid>
+        </Button>
       </Grid>
     </SplitView.Pane>
 
