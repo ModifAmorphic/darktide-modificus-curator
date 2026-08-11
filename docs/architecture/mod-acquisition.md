@@ -35,11 +35,14 @@ handler exe  →  IPC  →  NxmRouter  →  INxmModDownloadHandler
                 ├─ call IModAcquisitionService.AcquireFromNexusAsync(url)
                 │     │
                 │     ├─ INexusClient.DownloadLinksAsync  (CDN URL; premium or free-user overload)
-                │     ├─ INexusClient.GetModInfoAsync     (mod name)
+                │     ├─ INexusClient.GetModInfoAsync     (mod name + Summary/PictureUrl/
+                │     │                                     ContainsAdultContent → ModDisplayMetadata
+                │     │                                     via the shared mapper)
                 │     ├─ INexusClient.ListModFilesAsync   (file version, matched by fileId)
                 │     ├─ download to temp  (IProgress<long>)
-                │     └─ IModImportService.Import(temp.<ext>, name, NexusSource{ModId}, version)
-                │           → (containerId, versionId)
+                │     └─ IModImportService.Import(temp.<ext>, name, NexusSource{ModId}, version,
+                │                               remoteUploadedAt, displayMetadata)
+                │           → (containerId, versionId)   (metadata lands on container.json)
                 │
                 ├─ IProfileService.AddMod(profileId, containerId, LatestPolicy)
                 └─ ModListViewModel.Reload() on the UI thread  (mod appears in the list)
@@ -96,16 +99,22 @@ and `IHttpClientFactory` (for the raw CDN download) from the container.
    [auth factory](nexus-authentication.md). Use the **first** CDN link
    (`result.Data[0].Uri`); Nexus returns them in priority order (this is what
    every client does).
-2. **Resolve metadata** for the Import: `GetModInfoAsync` for the mod name,
-   `ListModFilesAsync` and match by `fileId` for the version string + the
-   matched file's `UploadedTimestamp` (Unix seconds). These are 2 API calls (3
-   total per acquisition, within rate limits). **No degraded fallback:** if the
-   metadata fetch fails, the acquisition fails with a clear error (a mod stored
-   under its numeric id as a name is worse than a clean failure message) and
-   nothing partial lands. The publish timestamp is converted to a
+2. **Resolve metadata** for the Import: `GetModInfoAsync` for the mod name
+   (and, from the same payload, the display metadata), `ListModFilesAsync` and
+   match by `fileId` for the version string + the matched file's
+   `UploadedTimestamp` (Unix seconds). These are 2 API calls (3 total per
+   acquisition, within rate limits). The display metadata (the mod's
+   `Summary`, `PictureUrl`, and `ContainsAdultContent`) is normalized once
+   through the shared `ModDisplayMetadataMapper` from the same
+   `GetModInfoAsync` response that resolved the name, so persisting it adds no
+   Nexus request; an empty summary stays empty and a non-HTTPS or absent
+   `picture_url` becomes a null `ThumbnailUrl`. **No degraded fallback:** if
+   the metadata fetch fails, the acquisition fails with a clear error (a mod
+   stored under its numeric id as a name is worse than a clean failure
+   message) and nothing partial lands. The publish timestamp is converted to a
    `DateTimeOffset?` (null when the wire value is `0` / absent) and forwarded
-   as the imported version's `RemoteUploadedAt`, the basis for the update-check
-   publish-date comparison.
+   as the imported version's `RemoteUploadedAt`, the basis for the
+   update-check publish-date comparison.
 3. **Download** from the CDN URI to a temp file
    (`Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() +
    Path.GetExtension(fileName))`, where `fileName` is the matched
@@ -117,14 +126,23 @@ and `IHttpClientFactory` (for the raw CDN download) from the container.
    is deleted once Import returns, always, success or failure (no partial
    state).
 4. **Import** via `IModImportService.Import(tempPath, modName, new NexusSource
-   { ModId = modId }, version, remoteUploadedAt)`. The import service validates
+   { ModId = modId }, version, remoteUploadedAt, displayMetadata)`. The import service validates
    the archive structure (single base folder plus matching `<base>.mod`
    descriptor; archive detection is content-based via SharpCompress), handles
    find-or-create-container (dedup by `NexusSource.ModId`) plus add-version
    plus the `IsLatest` flip, records the publish date on the new entry as
-   `RemoteUploadedAt`, and extracts into
+   `RemoteUploadedAt`, replaces the container's `DisplayMetadata` in the same
+   manifest update as the version mutation, and extracts into
    `<ModsFolder>/<containerUUID>/<versionFolder>/<baseFolder>/`.
 5. **Return** `(containerId, versionId)`.
+
+A `null` `displayMetadata` argument (the default, including a manual
+folder/archive re-import through the picker or drag-and-drop) preserves any
+prior `DisplayMetadata`, so a manual re-import never erases a prior Nexus
+acquisition or backfill. The common acquisition paths (nxm download, manual
+per-mod Premium update, automatic Premium install, DMF download) all inherit
+the capture: each forwards the normalized metadata through `Import`, which
+forwards it to `AddVersion`, which replaces it in the manifest.
 
 The CDN download uses a plain `HttpClient` (not the typed `INexusClient`)
 because the CDN URL is an absolute path with the per-file token in the query

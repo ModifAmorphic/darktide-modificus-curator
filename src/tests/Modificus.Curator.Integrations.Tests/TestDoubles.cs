@@ -41,6 +41,7 @@ internal sealed class FakeAppStateStore : IAppStateStore
     public Guid? ActiveProfileId { get; set; }
     public DateTimeOffset? LastUpdateCheckUtc { get; set; }
     public IReadOnlyList<DateTimeOffset>? ManualRefreshTimestamps { get; set; }
+    public DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
 
     IReadOnlyDictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? IAppStateStore.KnownUpdates
     {

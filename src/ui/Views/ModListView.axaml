@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Modificus.Curator.UI.ViewModels"
              xmlns:views="using:Modificus.Curator.UI.Views"
+             xmlns:config="using:Modificus.Curator.Config"
              x:Class="Modificus.Curator.UI.Views.ModListView"
              x:DataType="vm:ModListViewModel">
 
@@ -49,6 +50,84 @@
     <Style Selector="Button.updateAction:disabled">
       <Setter Property="Opacity" Value="0.4" />
     </Style>
+    <!--
+      Density (Compact/Detailed) toolbar buttons. They reuse the compact
+      Button.icon shape (small + flat) plus a `density` class whose selected
+      state is bound in XAML to DetailedRows.IsCompact / IsDetailed (the shell's
+      conditional-class pattern, not a ToggleButton). The selected background
+      uses the same Fluent dynamic resource the navItem tiles use so the active
+      density reads consistently across the app; pointerover uses the same
+      medium-fill resource so hover is distinct on both selected + unselected
+      buttons. Defined after `selected` so :pointerover takes precedence when
+      hovering a selected button (a more prominent fill, matching navItem).
+    -->
+    <Style Selector="Button.density /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.density.selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListLowBrush}" />
+    </Style>
+    <Style Selector="Button.density:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListMediumBrush}" />
+    </Style>
+    <!--
+      Detailed row card: a rounded low-emphasis Border using Fluent dynamic
+      resources. Border + faint background read as a contained card without
+      competing with the thumbnail or text. The Detailed root's IsVisible flag
+      selects it; this style only carries the chrome.
+    -->
+    <Style Selector="Border.detailedRow">
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseMediumLowBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundBaseLowBrush}" />
+    </Style>
+    <!--
+      Detailed card responsive thumbnail + action layout. Each repeated card
+      root (Border.detailedRow) carries Container.Name + Container.Sizing=Width
+      so it measures its own width; repeated cards share the name. These default
+      (wide) styles set the large-card state: a 112-DIP thumbnail spanning all
+      three content rows beside the name, summary, and the right-column action
+      strip. Width, height, row span, action column, and action column span are
+      set HERE (not as local values on the elements) so the ContainerQuery below
+      can override them; local values outrank styles and would defeat the query.
+    -->
+    <Style Selector="Border.detailedThumb">
+      <Setter Property="Width" Value="112" />
+      <Setter Property="Height" Value="112" />
+      <Setter Property="Grid.RowSpan" Value="3" />
+    </Style>
+    <Style Selector="Path.detailedPlaceholder">
+      <Setter Property="Width" Value="36" />
+      <Setter Property="Height" Value="36" />
+    </Style>
+    <Style Selector="WrapPanel.detailedActions">
+      <Setter Property="Grid.Column" Value="1" />
+      <Setter Property="Grid.ColumnSpan" Value="1" />
+    </Style>
+    <!--
+      Constrained state (card width at or below 680 DIP): the thumbnail shrinks
+      to 72 DIP and spans only name + summary; the single action strip moves to
+      a full-width row beneath both columns. The query targets descendants of
+      the named card root, never the queried Border itself, so the card chrome
+      is untouched. Declared after the wide defaults so its setters win while the
+      query is active.
+    -->
+    <ContainerQuery Name="detailedModRow" Query="max-width:680">
+      <Style Selector="Border.detailedThumb">
+        <Setter Property="Width" Value="72" />
+        <Setter Property="Height" Value="72" />
+        <Setter Property="Grid.RowSpan" Value="2" />
+      </Style>
+      <Style Selector="Path.detailedPlaceholder">
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="28" />
+      </Style>
+      <Style Selector="WrapPanel.detailedActions">
+        <Setter Property="Grid.Column" Value="0" />
+        <Setter Property="Grid.ColumnSpan" Value="2" />
+      </Style>
+    </ContainerQuery>
   </UserControl.Styles>
 
   <!--
@@ -79,17 +158,33 @@
 
   <Grid RowDefinitions="Auto,Auto,*">
 
-    <!-- Header: check-now refresh + rate-limit notice + auto-sort toggle +
-         Add split button (hidden until a profile is active). The destination
-         title lives in the global shell header; this toolbar shows only the
-         Mods-specific actions. The rate-limit notice sits after the refresh
-         button it describes. The toolbar carries the page's safe left + right
-         insets (the row ScrollViewer below spans to the destination edge so
-         its scrollbar sits at the edge, not inset). -->
+    <!-- Header: check-now refresh + rate-limit notice + hidden auto-sort seam +
+         Compact/Detailed density selector + Add split button (hidden until a
+         profile is active). The destination title lives in the global shell
+         header; this toolbar shows only the Mods-specific actions. Refresh is
+         first; the rate-limit notice follows it and occupies the single flexible
+         (*) column so the pill keeps its content width at wide widths while the
+         column still gives it a finite constraint for ellipsis at narrow widths
+         (its full text stays in the tooltip), never pushing the density pair or
+         Add out; the hidden auto-sort seam stays wired; the
+         density pair sits adjacent immediately before Add. The toolbar carries
+         the page's safe left + right insets (the row ScrollViewer below spans to
+         the destination edge so its scrollbar sits at the edge, not inset). -->
     <Grid Grid.Row="0"
-          ColumnDefinitions="Auto,Auto,*,Auto,Auto"
+          ColumnDefinitions="Auto,*,Auto,Auto,Auto"
           IsVisible="{Binding HasActiveProfile}"
           Margin="20,12,20,8">
+      <!--
+        Rate-limit notice. Occupies the toolbar's flexible (*) column: the pill
+        keeps its content width at normal/wide widths (HorizontalAlignment=Left),
+        while the star column still gives the Border a finite measure constraint
+        so its inner Grid (Auto dot, * text) can ellipsize the notice text at
+        narrow widths rather than pushing the density pair or Add out of the
+        toolbar. The full RateLimitedNoticeText stays available in the tooltip.
+        Collapses entirely when no rate limit is active; the * column then reads
+        as the normal gap between refresh and the right-side actions (the same
+        gap the old empty spacer column provided).
+      -->
       <Border Grid.Column="1"
               Classes="rateLimitedNotice"
               IsVisible="{Binding IsRateLimitActive}"
@@ -97,15 +192,18 @@
               CornerRadius="8"
               Padding="6,1"
               Margin="8,0,0,0"
+              HorizontalAlignment="Left"
               VerticalAlignment="Center"
               ToolTip.Tip="{Binding RateLimitedTooltip}">
-        <StackPanel Orientation="Horizontal" Spacing="4">
-          <Ellipse Width="6" Height="6"
+        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="4">
+          <Ellipse Grid.Column="0" Width="6" Height="6"
                    Fill="{DynamicResource CuratorCautionBrush}"
                    VerticalAlignment="Center" />
-          <TextBlock Text="{Binding RateLimitedNoticeText}"
+          <TextBlock Grid.Column="1"
+                     Text="{Binding RateLimitedNoticeText}"
+                     TextTrimming="CharacterEllipsis"
                      FontSize="11" VerticalAlignment="Center" />
-        </StackPanel>
+        </Grid>
       </Border>
       <!--
         Manual "check for updates now": a refresh-affordance button (drawn
@@ -155,13 +253,55 @@
         IdentityModOrderResolver registration) stays intact so the seam drops in
         without a UI change; only the control is collapsed out of layout.
       -->
-      <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Margin="16,0,0,0"
-                  IsVisible="False">
+      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Margin="16,0,0,0"
+                   IsVisible="False">
         <CheckBox IsChecked="{Binding AutoSortEnabled, Mode=TwoWay}"
                   Click="AutoSort_Click"
                   ToolTip.Tip="{ReflectionBinding [ModList_AutoSortTooltip], Source={StaticResource Loc}}" />
         <TextBlock Text="{ReflectionBinding [ModList_AutoSort], Source={StaticResource Loc}}"
                    VerticalAlignment="Center" />
+      </StackPanel>
+      <!--
+        Compact / Detailed density selector. Two adjacent drawn-icon buttons
+        immediately before Add; the active one carries the `selected` class
+        (bound to DetailedRows.IsCompact / IsDetailed, the shell's conditional
+        class pattern) so the current density is visibly distinct. Clicking a
+        button runs DetailedRows.SetDensityCommand with the ModRowDensity enum
+        value as its parameter; the coordinator normalizes, persists, and
+        reprocesses rows. A click on the already-active density is a strict
+        no-op (the coordinator's value-equal guard), so the buttons stay
+        enabled. The compact-icon shape comes from the `icon` class; the
+        `density` class carries the selected/pointerover background chrome.
+        Icons are Material 24x24 source: view_headline (four dense lines) for
+        Compact, view_agenda (two stacked blocks) for Detailed, so the two read
+        as distinct densities rather than two near-identical lists.
+      -->
+      <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="2"
+                   VerticalAlignment="Center" Margin="16,0,0,0">
+        <Button Classes="icon density"
+                Classes.selected="{Binding DetailedRows.IsCompact}"
+                Command="{Binding DetailedRows.SetDensityCommand}"
+                CommandParameter="{x:Static config:ModRowDensity.Compact}"
+                ToolTip.Tip="{ReflectionBinding [ModList_CompactRowsTooltip], Source={StaticResource Loc}}"
+                AutomationProperties.Name="{ReflectionBinding [ModList_CompactRowsTooltip], Source={StaticResource Loc}}">
+          <!-- Material "view_headline" (24x24 source): four dense lines. -->
+          <Path Width="16" Height="16" Stretch="Uniform"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                Fill="{Binding $parent[Button].Foreground}"
+                Data="M4 15h16v-2H4v2zm0 4h16v-2H4v2zm0-8h16V9H4v2zm0-6v2h16V5H4z" />
+        </Button>
+        <Button Classes="icon density"
+                Classes.selected="{Binding DetailedRows.IsDetailed}"
+                Command="{Binding DetailedRows.SetDensityCommand}"
+                CommandParameter="{x:Static config:ModRowDensity.Detailed}"
+                ToolTip.Tip="{ReflectionBinding [ModList_DetailedRowsTooltip], Source={StaticResource Loc}}"
+                AutomationProperties.Name="{ReflectionBinding [ModList_DetailedRowsTooltip], Source={StaticResource Loc}}">
+          <!-- Material "view_agenda" (24x24 source): two stacked blocks. -->
+          <Path Width="16" Height="16" Stretch="Uniform"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                Fill="{Binding $parent[Button].Foreground}"
+                Data="M20 3H3c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h17c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zm0 10H3c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h17c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1z" />
+        </Button>
       </StackPanel>
       <!--
         Add split button: primary click runs the current mode's action; the
@@ -275,8 +415,24 @@
                     VerticalScrollBarVisibility="Auto"
                     Padding="0">
         <ItemsControl ItemsSource="{Binding Mods}" Margin="20,0">
-          <ItemsControl.ItemTemplate>
+            <ItemsControl.ItemTemplate>
             <DataTemplate x:DataType="vm:ModItemViewModel">
+              <!--
+                One row, two mutually exclusive roots selected by the row's
+                IsDetailed projection (pushed down by the detailed-rows
+                coordinator): the existing Compact Grid + the Detailed card. The
+                Compact root is preserved unchanged except for the IsVisible flag
+                that now gates it; the Detailed root is a rounded card laid out
+                across multiple lines (thumbnail + name/badge/summary on top, a
+                wrapping action strip below). Both roots bind the exact same
+                per-row state + route to the exact same code-behind handlers, so
+                no action behavior forks between modes. The Panel root only hosts
+                the two alternatives (it carries no margin of its own); exactly
+                one is visible at a time, and each visible root owns its own row
+                spacing (the Compact Grid keeps Margin="0,3"; the Detailed Border
+                carries its own Margin="0,3").
+              -->
+              <Panel>
               <!--
                 Row layout (8 columns): Name | source badge + update marker |
                 enabled | policy editor | update button / progress | up | down |
@@ -286,7 +442,8 @@
                 per-mod actions rather than list reordering.
               -->
               <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
-                    Margin="0,3" MinHeight="32">
+                    Margin="0,3" MinHeight="32"
+                    IsVisible="{Binding !IsDetailed}">
 
                   <!-- Name -->
                   <TextBlock Grid.Column="0"
@@ -487,6 +644,270 @@
                   </Button>
 
                 </Grid>
+
+                <!--
+                  DETAILED row root. A rounded low-emphasis card (Border via the
+                  detailedRow style) laid out as one adaptive Grid: column 0 is
+                  the thumbnail/placeholder slot, column 1 holds the name +
+                  source badge (row 0) and the two-line summary (row 1), and row 2
+                  is the WrapPanel action strip. The card root is a named width
+                  container (Container.Name + Container.Sizing=Width) so a
+                  ContainerQuery in UserControl.Styles swaps the thumbnail size +
+                  row span and moves the action strip full-width at the 680-DIP
+                  breakpoint. Width, height, row-span, and action-column values
+                  that change at the breakpoint come from those styles (not local
+                  values, which would outrank styles); constant row/column
+                  positions stay local. The same action controls + code-behind
+                  handlers as the Compact root are reused, so no action behavior
+                  forks between modes. Markup is deliberately duplicated from the
+                  Compact root (no new template abstraction). No horizontal
+                  ScrollViewer; only the page-level vertical ScrollViewer scrolls.
+                -->
+                <Border IsVisible="{Binding IsDetailed}"
+                        Classes="detailedRow"
+                        Container.Name="detailedModRow"
+                        Container.Sizing="Width"
+                        Margin="0,3"
+                        Padding="12">
+                  <Grid ColumnDefinitions="Auto,*"
+                        RowDefinitions="Auto,Auto,Auto"
+                        ColumnSpacing="12"
+                        RowSpacing="6">
+                      <!--
+                        Thumbnail area (column 0). A rounded, clipped square
+                        whose Width, Height, and Grid.RowSpan come from the
+                        Border.detailedThumb styles (112 DIP spanning all three
+                        rows when wide; 72 DIP spanning name + summary when
+                        constrained). Border implements
+                        IVisualWithRoundRectClip with ClipToBoundsRadius mapped
+                        to CornerRadius, so ClipToBounds clips the child to the
+                        rounded boundary. The Image shows only when a thumbnail
+                        has been decoded; every no-image case (Untracked/Linked,
+                        missing metadata, no auth, offline, failed image, adult
+                        flag, empty URL) shows the same neutral drawn-geometry
+                        placeholder in the same box. Adult rows never receive a
+                        thumbnail (the coordinator skips them), so they fall
+                        through to the placeholder here.
+                      -->
+                      <Border Grid.Row="0" Grid.Column="0"
+                              Classes="detailedThumb"
+                              CornerRadius="8" ClipToBounds="True"
+                              HorizontalAlignment="Left" VerticalAlignment="Top"
+                              Background="{DynamicResource SystemControlBackgroundBaseMediumLowBrush}">
+                        <Panel>
+                          <Image Source="{Binding Thumbnail}" Stretch="UniformToFill"
+                                 IsVisible="{Binding HasThumbnail}" />
+                          <!--
+                            Neutral placeholder (Material "image", 24x24 source):
+                            low-opacity themed foreground so it reads as an empty
+                            image slot, not body text. Drawn geometry, not a
+                            glyph. Width/Height come from the
+                            Path.detailedPlaceholder styles (36 DIP wide; 28 DIP
+                            constrained).
+                          -->
+                          <Path Classes="detailedPlaceholder"
+                                Stretch="Uniform"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"
+                                IsVisible="{Binding !HasThumbnail}"
+                                Fill="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                                Opacity="0.6"
+                                Data="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z" />
+                        </Panel>
+                      </Border>
+
+                      <!--
+                        Name + source badge (row 0, column 1). A constrained Grid
+                        (star name, auto badge) rather than a horizontal
+                        StackPanel: the star column bounds the name so it
+                        ellipsizes on long names (the full text stays in the
+                        tooltip + the automation name), and the badge cluster
+                        keeps its natural width. Reproduces the Compact root's
+                        three mutually-exclusive badge states + the indeterminate
+                        update progress, with the same bindings +
+                        OpenFolder_Click handler.
+                      -->
+                      <Grid Grid.Row="0" Grid.Column="1"
+                            ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                          <TextBlock Grid.Column="0"
+                                     Text="{Binding Name}"
+                                     TextTrimming="CharacterEllipsis"
+                                     ToolTip.Tip="{Binding Name}"
+                                     AutomationProperties.Name="{Binding Name}"
+                                     FontWeight="SemiBold"
+                                     VerticalAlignment="Center" />
+                          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                                      VerticalAlignment="Center">
+                            <!-- Indeterminate progress while a per-row update
+                                 install runs (same binding as Compact). -->
+                            <ProgressBar Width="18" Height="18"
+                                         IsIndeterminate="True"
+                                         IsVisible="{Binding IsUpdating}"
+                                         VerticalAlignment="Center" />
+                            <!-- Nexus / Untracked badge (hidden for linked rows). -->
+                            <HyperlinkButton Classes="badge"
+                                             NavigateUri="{Binding SourceUrl}"
+                                             IsVisible="{Binding IsBadgeHyperlink}"
+                                             ToolTip.Tip="{ReflectionBinding [ModRow_SourceBadgeLinkTooltip], Source={StaticResource Loc}}">
+                              <TextBlock Text="{Binding SourceBadgeText}" FontSize="11" />
+                            </HyperlinkButton>
+                            <!-- Linked + available: opens the external folder. -->
+                            <HyperlinkButton Classes="badge"
+                                             IsVisible="{Binding IsLinkedAvailable}"
+                                             Click="OpenFolder_Click"
+                                             ToolTip.Tip="{ReflectionBinding [ModRow_LinkedOpenTooltip], Source={StaticResource Loc}}">
+                              <TextBlock Text="{Binding SourceBadgeText}" FontSize="11" />
+                            </HyperlinkButton>
+                            <!-- Linked + broken: non-clickable warning text. -->
+                            <Border Classes="badge"
+                                    IsVisible="{Binding IsLinkedBroken}"
+                                    ToolTip.Tip="{ReflectionBinding [ModRow_LinkedBrokenTooltip], Source={StaticResource Loc}}">
+                              <TextBlock Text="{Binding SourceBadgeText}" FontSize="11"
+                                         Foreground="{DynamicResource CuratorCautionBrush}" />
+                            </Border>
+                          </StackPanel>
+                        </Grid>
+
+                      <!--
+                        Summary (row 1, column 1): at most two wrapped lines,
+                        safely trimmed. The full text is preserved in the
+                        tooltip (when non-null) + the automation name (always,
+                        so the fallback text stays reachable by assistive tech
+                        even when visually clipped).
+                      -->
+                      <TextBlock Grid.Row="1" Grid.Column="1"
+                                 Text="{Binding SummaryText}"
+                                 MaxLines="2" TextWrapping="Wrap"
+                                 TextTrimming="CharacterEllipsis"
+                                 ToolTip.Tip="{Binding SummaryTooltip}"
+                                 AutomationProperties.Name="{Binding SummaryText}" />
+
+                      <!--
+                        Action strip (row 2). A WrapPanel so the controls wrap at
+                        the containing edge at narrow widths (no clip, no horizontal
+                        scrolling). ItemsAlignment=End right-aligns every wrapped
+                        line in both states. Grid.Column + Grid.ColumnSpan come from
+                        the WrapPanel.detailedActions styles (right column only when
+                        wide; full width across both columns when constrained), so
+                        the container query moves the strip without duplicating it.
+                        The exact same event handlers / two-way bindings / command
+                        parameters as the Compact root's action cells, grouped so
+                        the strip reads cleanly: Enabled (label as the checkbox
+                        content), policy controls kept together as one wrap unit,
+                        the stable update-action reserved cell, then the move/remove
+                        cluster.
+                      -->
+                      <WrapPanel Grid.Row="2"
+                                 Classes="detailedActions"
+                                 Orientation="Horizontal"
+                                 ItemSpacing="8" LineSpacing="6"
+                                 ItemsAlignment="End">
+                      <!--
+                        Enabled. The localized label is the CheckBox content so
+                        the whole label is part of the click hit target (not an
+                        unrelated sibling), with an explicit automation name. The
+                        Click handler + the two-way Enabled binding match the
+                        Compact checkbox exactly.
+                      -->
+                      <CheckBox IsChecked="{Binding Enabled, Mode=TwoWay}"
+                                Click="Enabled_Click"
+                                Content="{ReflectionBinding [ModRow_Enabled], Source={StaticResource Loc}}"
+                                ToolTip.Tip="{ReflectionBinding [ModRow_EnabledTooltip], Source={StaticResource Loc}}"
+                                AutomationProperties.Name="{ReflectionBinding [ModRow_Enabled], Source={StaticResource Loc}}"
+                                VerticalAlignment="Center" />
+
+                      <!--
+                        Policy editor: Latest/Pinned ComboBox + inline version
+                        dropdown, grouped as a single wrap unit so they stay on
+                        one line when they fit and wrap together when they do
+                        not. Same bindings + handlers as Compact.
+                      -->
+                      <StackPanel Orientation="Horizontal" Spacing="6"
+                                  VerticalAlignment="Center">
+                        <ComboBox SelectedIndex="{Binding PolicyChoice, Mode=TwoWay}"
+                                  SelectionChanged="Policy_Changed"
+                                  IsEnabled="{Binding IsPolicyEditable}"
+                                  MinWidth="100">
+                          <ComboBoxItem Content="{ReflectionBinding [ModRow_PolicyLatest], Source={StaticResource Loc}}" />
+                          <ComboBoxItem Content="{ReflectionBinding [ModRow_PolicyPinned], Source={StaticResource Loc}}" />
+                        </ComboBox>
+                        <ComboBox ItemsSource="{Binding AvailableVersions}"
+                                  SelectedItem="{Binding SelectedVersion, Mode=TwoWay}"
+                                  SelectionChanged="PinnedVersion_Changed"
+                                  IsVisible="{Binding IsPinned}"
+                                  PlaceholderText="{ReflectionBinding [ModRow_PinnedVersionPlaceholder], Source={StaticResource Loc}}"
+                                  MinWidth="120">
+                          <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:VersionOption">
+                              <TextBlock Text="{Binding VersionString}" />
+                            </DataTemplate>
+                          </ComboBox.ItemTemplate>
+                        </ComboBox>
+                      </StackPanel>
+
+                      <!--
+                        Stable update-action cell: reserved fixed width on every
+                        row, the SAME button state as Compact. For Nexus + Latest
+                        rows it holds the drawn download-arrow button (disabled
+                        + neutral when no update, accent-blue when flagged);
+                        other rows keep the reserved cell but no button.
+                      -->
+                      <Panel MinWidth="28" VerticalAlignment="Center">
+                        <Button Classes="icon updateAction"
+                                Click="Update_Click"
+                                CommandParameter="{Binding}"
+                                IsVisible="{Binding CanShowUpdateAction}"
+                                IsEnabled="{Binding UpdateActionEnabled}"
+                                ToolTip.Tip="{Binding UpdateActionTooltip}">
+                          <Panel>
+                            <!-- Neutral/grey download arrow (no update / disabled). -->
+                            <Path Width="16" Height="16" Stretch="Uniform"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                                  IsVisible="{Binding !UpdateAvailable}"
+                                  Fill="{Binding $parent[Button].Foreground}"
+                                  Data="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
+                            <!-- Accent-blue download arrow (update available). -->
+                            <Path Width="16" Height="16" Stretch="Uniform"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                                  IsVisible="{Binding UpdateAvailable}"
+                                  Fill="{DynamicResource SystemControlForegroundAccentBrush}"
+                                  Data="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
+                          </Panel>
+                        </Button>
+                      </Panel>
+
+                      <!-- Move up / down / remove: same handlers + tooltips as Compact. -->
+                      <Button Classes="icon"
+                              ToolTip.Tip="{ReflectionBinding [ModRow_MoveUpTooltip], Source={StaticResource Loc}}"
+                              Click="MoveUp_Click"
+                              CommandParameter="{Binding}">
+                        <Path Width="16" Height="16" Stretch="Uniform"
+                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Fill="{Binding $parent[Button].Foreground}"
+                              Data="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z" />
+                      </Button>
+                      <Button Classes="icon"
+                              ToolTip.Tip="{ReflectionBinding [ModRow_MoveDownTooltip], Source={StaticResource Loc}}"
+                              Click="MoveDown_Click"
+                              CommandParameter="{Binding}">
+                        <Path Width="16" Height="16" Stretch="Uniform"
+                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Fill="{Binding $parent[Button].Foreground}"
+                              Data="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z" />
+                      </Button>
+                      <Button Classes="icon"
+                              ToolTip.Tip="{ReflectionBinding [ModRow_RemoveTooltip], Source={StaticResource Loc}}"
+                              Click="Remove_Click"
+                              CommandParameter="{Binding}">
+                        <Path Width="16" Height="16" Stretch="Uniform"
+                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Fill="{Binding $parent[Button].Foreground}"
+                              Data="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+                      </Button>
+                    </WrapPanel>
+
+                  </Grid>
+                </Border>
+              </Panel>
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>

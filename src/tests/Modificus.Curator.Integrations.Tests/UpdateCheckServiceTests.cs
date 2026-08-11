@@ -1719,7 +1719,10 @@ public sealed class UpdateCheckServiceTests
         public ModContainer CreateContainer(ModSource source, string name)
             => throw new NotImplementedException();
         public ModContainer AddVersion(
-            Guid containerId, string versionString, Action<string> populateFolder, DateTimeOffset? remoteUploadedAt = null)
+            Guid containerId, string versionString, Action<string> populateFolder,
+            DateTimeOffset? remoteUploadedAt = null, ModDisplayMetadata? displayMetadata = null)
+            => throw new NotImplementedException();
+        public bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata)
             => throw new NotImplementedException();
         public void RemoveVersion(Guid containerId, string versionFolder)
             => throw new NotImplementedException();

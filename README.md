@@ -22,7 +22,9 @@ unmodified).
   libraries (Profiles, Mods, Steam, Integrations, Relay-client, General) and
   the UI (a left navigation rail with five destinations: Profiles, Mods, Nexus
   Integrations, Preferences, Settings; plus profile management and the Launch
-  flow) are in place. The app is user-usable.
+  flow) are in place. The app is user-usable. The Mods list offers a persisted
+  Compact and Detailed row density; Detailed rows show a Nexus summary and a
+  cached thumbnail when one is available, with a neutral placeholder otherwise.
   On first startup a one-time Welcome window introduces Curator and offers to
   set up the Nexus integration. The Launcher is a stub. See
   [`src/README.md`](src/README.md) for developer/build

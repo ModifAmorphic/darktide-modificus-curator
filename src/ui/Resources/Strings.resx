@@ -370,7 +370,19 @@
     <value>Sort mods by their dependencies (dependency-based sorting is coming; currently no-op).</value>
     <comment>Tooltip on the auto-sort checkbox. Notes that real sorting is coming; no em-dash.</comment>
   </data>
+  <data name="ModList_CompactRowsTooltip" xml:space="preserve">
+    <value>Use compact mod rows</value>
+    <comment>Tooltip + accessibility name on the Compact density toolbar button. The dense one-line row.</comment>
+  </data>
+  <data name="ModList_DetailedRowsTooltip" xml:space="preserve">
+    <value>Use detailed mod rows</value>
+    <comment>Tooltip + accessibility name on the Detailed density toolbar button. The multi-line row with summary + thumbnail.</comment>
+  </data>
 
+  <data name="ModRow_Enabled" xml:space="preserve">
+    <value>Enabled</value>
+    <comment>Visible label next to the enabled checkbox in a detailed mod row (the compact row shows the checkbox alone).</comment>
+  </data>
   <data name="ModRow_EnabledTooltip" xml:space="preserve">
     <value>Enable / disable this mod</value>
     <comment>Tooltip on the enabled checkbox on each mod row.</comment>
@@ -434,6 +446,10 @@
   <data name="ModRow_NotFound" xml:space="preserve">
     <value>Not found</value>
     <comment>Source badge text when a mod has no mod-store entry (stale profile reference).</comment>
+  </data>
+  <data name="ModRow_DetailsUnavailable" xml:space="preserve">
+    <value>Details unavailable</value>
+    <comment>Generic placeholder for the Nexus summary in a detailed row when no summary has been fetched (no metadata, no auth, or offline). Adult content suppresses only the thumbnail, not this summary.</comment>
   </data>
   <data name="ModRow_SourceBadgeLinkTooltip" xml:space="preserve">
     <value>Open this mod's source page</value>

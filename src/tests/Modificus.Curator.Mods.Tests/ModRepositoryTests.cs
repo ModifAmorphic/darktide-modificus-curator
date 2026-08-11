@@ -627,6 +627,335 @@ public sealed class ModRepositoryTests
 
     // ---- manifest round-trip + index rebuild ------------------------------
 
+    // ---- DisplayMetadata: backward compat + round-trip --------------------
+
+    [Fact]
+    public void Old_manifest_without_DisplayMetadata_loads_null()
+    {
+        // Backward compatibility: a manifest written before this field existed
+        // has no DisplayMetadata property. System.Text.Json's default for a
+        // missing nullable property is null, so the container loads with null
+        // metadata without any migration pass or schema version.
+        using var fx = new RepoFixture();
+        var id = Guid.NewGuid();
+        var dir = Path.Combine(fx.Folder, id.ToString());
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(
+            fx.ManifestPath(id),
+            $$"""
+            {
+              "$kind": "nexus",
+              "Id": "{{id}}",
+              "Name": "Legacy",
+              "Source": { "$kind": "nexus", "ModId": 4242 },
+              "Versions": []
+            }
+            """);
+
+        var reloaded = fx.Reload();
+
+        var container = reloaded.Get(id);
+        Assert.NotNull(container);
+        Assert.Null(container!.DisplayMetadata);
+    }
+
+    [Fact]
+    public void DisplayMetadata_round_trips_through_a_new_repository_instance()
+    {
+        // A written DisplayMetadata survives a fresh repo reading the manifest
+        // from disk (no migration; STJ round-trips the nested object).
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 4242 }, "WT");
+        var metadata = new ModDisplayMetadata
+        {
+            Summary = "A short summary.",
+            ThumbnailUrl = "https://example.com/thumb.png",
+            IsAdultContent = true,
+        };
+
+        Assert.True(fx.Repo.TryInitializeDisplayMetadata(container.Id, metadata));
+
+        var reloaded = fx.Reload();
+        var found = reloaded.Get(container.Id);
+        Assert.NotNull(found);
+        Assert.Equal(metadata, found!.DisplayMetadata);
+    }
+
+    [Fact]
+    public void Empty_DisplayMetadata_round_trips_distinct_from_null()
+    {
+        // The null / non-null distinction is load-bearing for the backfill
+        // candidate selection. A non-null empty object (fetched-but-empty) must
+        // round-trip as a non-null empty object, not collapse to null.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 4242 }, "WT");
+        var empty = new ModDisplayMetadata();
+
+        Assert.True(fx.Repo.TryInitializeDisplayMetadata(container.Id, empty));
+
+        var reloaded = fx.Reload();
+        var found = reloaded.Get(container.Id);
+        Assert.NotNull(found);
+        Assert.NotNull(found!.DisplayMetadata);
+        Assert.Equal(string.Empty, found.DisplayMetadata!.Summary);
+        Assert.Null(found.DisplayMetadata.ThumbnailUrl);
+        Assert.False(found.DisplayMetadata.IsAdultContent);
+    }
+
+    // ---- TryInitializeDisplayMetadata: missing-only atomic contract --------
+
+    [Fact]
+    public void TryInitializeDisplayMetadata_rejects_null_metadata()
+    {
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new UntrackedSource(), "DMF");
+
+        Assert.Throws<ArgumentNullException>(() =>
+            fx.Repo.TryInitializeDisplayMetadata(container.Id, null!));
+    }
+
+    [Fact]
+    public void TryInitializeDisplayMetadata_returns_false_for_unknown_id()
+    {
+        using var fx = new RepoFixture();
+        var metadata = new ModDisplayMetadata { Summary = "x" };
+
+        Assert.False(fx.Repo.TryInitializeDisplayMetadata(Guid.NewGuid(), metadata));
+    }
+
+    [Fact]
+    public void TryInitializeDisplayMetadata_sets_and_persists_on_a_null_container()
+    {
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 4242 }, "WT");
+        var metadata = new ModDisplayMetadata
+        {
+            Summary = "summary",
+            ThumbnailUrl = "https://example.com/thumb.png",
+        };
+
+        Assert.True(fx.Repo.TryInitializeDisplayMetadata(container.Id, metadata));
+        Assert.Equal(metadata, fx.Repo.Get(container.Id)!.DisplayMetadata);
+        Assert.Equal(metadata, fx.Reload().Get(container.Id)!.DisplayMetadata);
+    }
+
+    [Fact]
+    public void TryInitializeDisplayMetadata_returns_false_and_does_not_rewrite_when_metadata_already_equal()
+    {
+        // Missing-only: a value-equal existing metadata returns false with no
+        // manifest rewrite. The manifest mtime is unchanged.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 4242 }, "WT");
+        var metadata = new ModDisplayMetadata
+        {
+            Summary = "summary",
+            ThumbnailUrl = "https://example.com/thumb.png",
+        };
+        Assert.True(fx.Repo.TryInitializeDisplayMetadata(container.Id, metadata));
+
+        var manifest = fx.ManifestPath(container.Id);
+        var firstWrite = File.GetLastWriteTimeUtc(manifest);
+
+        // A brief sleep ensures the mtime check has resolution to detect a
+        // rewrite (FAT/EXT4 second-granularity mtimes).
+        Thread.Sleep(1100);
+        Assert.False(fx.Repo.TryInitializeDisplayMetadata(container.Id, metadata));
+        Assert.Equal(firstWrite, File.GetLastWriteTimeUtc(manifest)); // not rewritten
+    }
+
+    [Fact]
+    public void TryInitializeDisplayMetadata_never_overwrites_a_different_existing_value()
+    {
+        // The atomic missing-only contract: a different existing value is never
+        // overwritten. This is the TOCTOU guard the backfill relies on: a
+        // concurrent writer (acquisition, another backfill, a manual edit) that
+        // set metadata between the caller's Get and this call wins.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 4242 }, "WT");
+        var first = new ModDisplayMetadata { Summary = "original" };
+        var different = new ModDisplayMetadata { Summary = "different", IsAdultContent = true };
+        Assert.True(fx.Repo.TryInitializeDisplayMetadata(container.Id, first));
+
+        Assert.False(fx.Repo.TryInitializeDisplayMetadata(container.Id, different));
+
+        // The original value survives; the different value was not written.
+        Assert.Equal("original", fx.Repo.Get(container.Id)!.DisplayMetadata!.Summary);
+        Assert.False(fx.Repo.Get(container.Id)!.DisplayMetadata!.IsAdultContent);
+        Assert.Equal("original", fx.Reload().Get(container.Id)!.DisplayMetadata!.Summary);
+    }
+
+    [Fact]
+    public void TryInitializeDisplayMetadata_does_not_touch_source_or_versions()
+    {
+        // The setter mutates only DisplayMetadata: source identity, name, and
+        // versions are unchanged (no incidental side effects on the aggregate).
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 4242 }, "WT");
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate);
+
+        Assert.True(fx.Repo.TryInitializeDisplayMetadata(
+            container.Id, new ModDisplayMetadata { Summary = "x" }));
+
+        var reloaded = fx.Reload().Get(container.Id);
+        Assert.NotNull(reloaded);
+        Assert.IsType<NexusSource>(reloaded!.Source);
+        Assert.Equal(4242, ((NexusSource)reloaded.Source).ModId);
+        Assert.Equal("WT", reloaded.Name);
+        Assert.Single(reloaded.Versions);
+    }
+
+    [Fact]
+    public void TryInitializeDisplayMetadata_manifest_write_failure_leaves_in_memory_null_and_retryable()
+    {
+        // A WriteContainer failure (disk full, I/O error, permission denied)
+        // must propagate (repository mutations normally throw on I/O failure)
+        // AND leave the in-memory aggregate's DisplayMetadata null so the caller
+        // can retry. The manifest is written BEFORE _byId is updated, so a throw
+        // from WriteContainer never reaches the in-memory publish.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 4242 }, "WT");
+        Assert.Null(fx.Repo.Get(container.Id)!.DisplayMetadata);
+
+        // Obstruct the manifest write deterministically: replace container.json
+        // with a directory of the same name. File.WriteAllText then throws
+        // because the path is a directory, not a file.
+        var manifest = fx.ManifestPath(container.Id);
+        File.Delete(manifest);
+        Directory.CreateDirectory(manifest);
+
+        var metadata = new ModDisplayMetadata { Summary = "should not land" };
+        // The exception type varies by platform (IOException on some,
+        // UnauthorizedAccessException on Linux when the path is a directory);
+        // the test asserts any exception was thrown + the in-memory state.
+        var ex = Record.Exception(() =>
+            fx.Repo.TryInitializeDisplayMetadata(container.Id, metadata));
+        Assert.NotNull(ex);
+
+        // The in-memory aggregate still has null DisplayMetadata: the failed
+        // write did not leak into _byId, so a retry is possible.
+        Assert.Null(fx.Repo.Get(container.Id)!.DisplayMetadata);
+
+        // Clean up the obstruction so the fixture's Dispose (a recursive
+        // directory delete) is not confused by a directory named container.json
+        // where it expects a file. Directory.Delete(recursive) handles it
+        // regardless, but removing it here keeps the fixture's teardown path
+        // simple and deterministic.
+        if (Directory.Exists(manifest))
+        {
+            Directory.Delete(manifest, recursive: true);
+        }
+    }
+
+    // ---- AddVersion + displayMetadata pass-through -------------------------
+
+    [Fact]
+    public void AddVersion_applies_non_null_metadata_on_a_new_version()
+    {
+        // A new version applies the metadata in the same manifest update as the
+        // new entry: the returned container carries both the version and the
+        // metadata, and a fresh repo observes both from disk.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 4242 }, "WT");
+        var metadata = new ModDisplayMetadata
+        {
+            Summary = "from acquisition",
+            ThumbnailUrl = "https://example.com/thumb.png",
+        };
+
+        var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, null, metadata);
+
+        Assert.Equal(metadata, updated.DisplayMetadata);
+        Assert.Equal(metadata, fx.Reload().Get(container.Id)!.DisplayMetadata);
+    }
+
+    [Fact]
+    public void AddVersion_applies_non_null_metadata_on_a_dedup_re_import()
+    {
+        // Re-importing the same versionString applies the metadata in the same
+        // manifest update as the dedup refresh (matching how dedup refreshes
+        // files + RemoteUploadedAt).
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 4242 }, "WT");
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate);
+        var metadata = new ModDisplayMetadata { Summary = "fresh" };
+
+        var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, null, metadata);
+
+        Assert.Equal(metadata, updated.DisplayMetadata);
+        Assert.Equal(metadata, fx.Reload().Get(container.Id)!.DisplayMetadata);
+    }
+
+    [Fact]
+    public void AddVersion_with_null_metadata_preserves_existing_metadata()
+    {
+        // Null metadata preserves the prior value, including on a manual re-
+        // import (the default-argument path the folder/archive add flow takes).
+        // This is the load-bearing guarantee that a re-import never erases a
+        // prior Nexus acquisition or backfill.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 4242 }, "WT");
+        var metadata = new ModDisplayMetadata { Summary = "captured once" };
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, null, metadata);
+
+        // Manual re-import (no metadata argument): prior metadata survives.
+        var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate);
+
+        Assert.Equal(metadata, updated.DisplayMetadata);
+        Assert.Equal(metadata, fx.Reload().Get(container.Id)!.DisplayMetadata);
+    }
+
+    [Fact]
+    public void AddVersion_null_metadata_leaves_a_null_container_at_null()
+    {
+        // The default-argument path on a container with no prior metadata leaves
+        // it null (no spurious empty object fabricated). Distinct from a later
+        // explicit set with an empty object.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 4242 }, "WT");
+
+        var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate);
+
+        Assert.Null(updated.DisplayMetadata);
+    }
+
+    [Fact]
+    public void AddVersion_populate_failure_preserves_prior_files_and_metadata()
+    {
+        // Transactional invariant extended to metadata: a populateFolder
+        // failure rethrows before the manifest write, so the OLD version's
+        // files + the prior metadata both survive intact on disk and in the
+        // in-memory manifest.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 4242 }, "WT");
+        var metadata = new ModDisplayMetadata { Summary = "first" };
+        var first = fx.Repo.AddVersion(container.Id, "1.0", dir =>
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "a.txt"), "original");
+        }, null, metadata);
+        var originalFolder = first.Versions.Single(v => v.VersionString == "1.0").Folder;
+        var versionPath = fx.Repo.GetVersionFolderPath(container.Id, originalFolder);
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            fx.Repo.AddVersion(container.Id, "1.0", dir =>
+            {
+                File.WriteAllText(Path.Combine(dir, "partial.txt"), "partial");
+                throw new InvalidOperationException("simulated extraction failure");
+                // No metadata argument: even a non-null one would not reach the
+                // manifest write because populateFolder throws first.
+            }));
+        Assert.Equal("simulated extraction failure", ex.Message);
+
+        // Old files survived.
+        Assert.True(File.Exists(Path.Combine(versionPath, "a.txt")));
+        Assert.False(File.Exists(Path.Combine(versionPath, "partial.txt")));
+        // Prior metadata survived in memory + on disk.
+        Assert.Equal(metadata, fx.Repo.Get(container.Id)!.DisplayMetadata);
+        Assert.Equal(metadata, fx.Reload().Get(container.Id)!.DisplayMetadata);
+    }
+
+    // ---- manifest round-trip + index rebuild (existing) -------------------
+
     [Fact]
     public void Container_manifest_round_trips_through_a_new_repository_instance()
     {

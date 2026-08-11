@@ -43,7 +43,7 @@ public sealed class CuratorConfig
 | `RelayDir` | `<app-data>/relay` | Where `mod_relay.exe`, `relay_shell.dll`, and `mod_loader/` live (consumed by [relay-client](relay-client.md)). |
 | `Discovery` | see `DiscoveryConfig` | User-supplied discovery overrides (Steam / Darktide / compatdata / Proton paths). Validated on disk + healed from the discoverer + persisted by `SteamService.Discover()`. |
 | `Integrations` | see `IntegrationsConfig` | External-service (mod-source) integration settings. |
-| `Preferences` | see `PreferencesConfig` | User-facing global preferences (theme, font scale, language, show-Relay-console toggle). |
+| `Preferences` | see `PreferencesConfig` | User-facing global preferences (theme, font scale, language, show-Relay-console toggle) + the mod-list row density. |
 
 `<app-data>` is `AppPaths.AppDataDir`: `Environment.SpecialFolder.LocalApplicationData`
 plus an app-data segment that is `ModifAmorphic\Modificus Curator` on Windows (an
@@ -194,7 +194,7 @@ pattern.
 Set on a successful login; replaced wholesale on a token refresh; cleared on
 sign-out.
 
-### `PreferencesConfig` / `ThemeMode`
+### `PreferencesConfig` / `ThemeMode` / `ModRowDensity`
 
 User-facing global preferences, exposed through the Preferences destination.
 The destination applies each change immediately (theme + font scale + language
@@ -202,6 +202,13 @@ take effect live) and persists through `ConfigLoader.Save`; there is no commit
 step.
 `ShowRelayConsole` has no live-apply step: it is read at launch time by the
 Relay launcher.
+`ModRowDensity` is the exception to the "owned by the Preferences destination"
+rule: it lives in this section but is read + persisted by the Mods toolbar's
+density coordinator (see [ui](ui.md#mod-list-density--detailed-rows)), which
+does its own focused read-modify-save of only this property. It is deliberately
+not appended to `IPreferencesService.ApplyAndPersist`, whose parameters are one
+atomic live theme/font/language/console operation; the density field has its own
+focused persistence path.
 
 ```csharp
 public sealed class PreferencesConfig
@@ -210,6 +217,7 @@ public sealed class PreferencesConfig
     public double FontScale { get; set; } = 1.0;
     public string Language { get; set; } = "en";
     public bool ShowRelayConsole { get; set; }            // default false (hidden)
+    public ModRowDensity ModRowDensity { get; set; } = ModRowDensity.Compact;
 }
 
 public enum ThemeMode
@@ -217,6 +225,12 @@ public enum ThemeMode
     System = 0,   // follow the OS theme (Avalonia ThemeVariant.Default)
     Dark = 1,     // Avalonia ThemeVariant.Dark
     Light = 2,    // Avalonia ThemeVariant.Light
+}
+
+public enum ModRowDensity
+{
+    Compact = 0,   // the dense one-line row (the default)
+    Detailed = 1,  // the multi-line row with summary + thumbnail
 }
 ```
 
@@ -241,6 +255,16 @@ public enum ThemeMode
   takes effect on the next launch. On Linux no console window appears regardless,
   so the flag has no observable effect there. Surfaced as a checkbox in the
   Preferences destination.
+- `ModRowDensity`: the mod-list row density. `Compact` (the default) is the dense
+  one-line row; `Detailed` adds the Nexus summary + a cached thumbnail across
+  multiple lines while preserving every existing row action. Persisted as the
+  numeric enum value (camelCase via the same JSON-string enum conversion as
+  `ThemeMode`). Absent or undefined numeric values normalize to `Compact` when
+  the coordinator reads the value, so a hand-edit or an old config file without
+  the field yields Compact. Owned by the Mods toolbar's density coordinator
+  (`DetailedModRowsViewModel`, a child of `ModListViewModel`), which normalizes,
+  applies, and persists only this property. See
+  [ui: mod list density](ui.md#mod-list-density--detailed-rows).
 
 ### `DiscoveryConfig`
 
@@ -297,6 +321,25 @@ kept distinct from the Velopack install root at
 replaces on update) and `Modificus Curator` on Linux. Shared by `CuratorConfig`
 and `LoggingConfig` so every field has a default and the JSON binder only
 overwrites what the file sets.
+
+```csharp
+public static class AppPaths
+{
+    public static readonly string AppDataDir;                  // <LocalApplicationData>/<segment>
+    public static readonly string DefaultLogFile;              // <AppDataDir>/logs/curator-.log (Serilog day-rolled)
+    public static readonly string DefaultRelayLogFile;         // <AppDataDir>/logs/relay-.log (day-stamped by relay-client)
+    public static readonly string DefaultProfilesBaseFolder;   // <AppDataDir>/profiles
+    public static readonly string DefaultModsFolder;           // <AppDataDir>/mods
+    public static readonly string DefaultRelayDir;             // <AppDataDir>/relay
+    public static readonly string ModThumbnailCacheDir;        // <AppDataDir>/cache/mod-thumbnails
+}
+```
+
+`ModThumbnailCacheDir` is the disk cache root for the UI-layer thumbnail service
+(see [ui](ui.md#mod-thumbnail-service)): `<AppDataDir>/cache/mod-thumbnails`.
+Files are keyed by the lowercase SHA-256 of the normalized thumbnail URL (no
+extension; the image bytes are decoded from the stream contents). Managed
+entirely by the UI service; no other library reads or writes it.
 
 ## DI registration
 

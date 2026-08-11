@@ -55,9 +55,12 @@ src/
   tests/                  xUnit test projects per library
 ```
 
-The UI **never** touches files, directories, APIs, or any data directly --
-neither reads nor writes. Every data operation goes through a backend library.
-The UI is purely presentation + orchestration of library calls.
+The UI keeps domain data I/O (profile, repository, Nexus, Steam, launch)
+behind backend library services. The one deliberate exception is the focused
+UI-owned presentation-media service `IModThumbnailService`: it returns an
+Avalonia `IImage` (a presentation type the backend libraries do not depend on)
+and owns only an HTTP/disk cache for mod thumbnail images. Everything else the
+UI presents flows through a registered library interface.
 
 ## Libraries (by domain)
 
@@ -76,10 +79,13 @@ UI models.
 ## Composition & startup
 
 The composition root is `ui/CuratorComposition.cs` -- a static `Build()` that
-constructs and returns the application `IServiceProvider`. The UI **never**
-touches files, directories, or APIs directly; every data operation flows
-through a registered library interface. The UI registers only its own surface
-(main window + view model) -- no data access.
+constructs and returns the application `IServiceProvider`. Domain data I/O
+(profile, repository, Nexus, Steam, launch) flows through registered library
+interfaces; the UI keeps that boundary. The single deliberate exception is
+`IModThumbnailService`, a focused UI-owned service that returns an Avalonia
+`IImage` and owns only an HTTP/disk thumbnail cache. The UI registers only its
+own surface (main window + view models + the thumbnail service) on top of the
+library interfaces.
 
 `CuratorComposition.Build()` runs this sequence, in order:
 
@@ -272,8 +278,29 @@ Local / untracked mods use the `UntrackedSource` source (dedup by name). A
 `ExternalPath`, holds no version subfolders, and stages directly from the
 external folder at launch.
 
+A container also carries optional **source-agnostic display metadata**
+(`ModDisplayMetadata`: a short `Summary`, a `ThumbnailUrl`, and an
+`IsAdultContent` flag) on `ModContainer.DisplayMetadata`. The record is
+source-agnostic: the Mods library does not reference Integrations, and
+Integrations owns the normalization from its Nexus DTOs through one internal
+mapper so acquisition and the gradual backfill cannot drift. `null` means
+Curator has never retrieved display metadata; a non-null object with an empty
+summary and a null thumbnail URL is an authoritative fetched result that
+simply has no display content. The two states stay distinct: the backfill
+treats only `null` as a candidate. Acquisition replaces the prior value in the
+same manifest update as the version mutation (`AddVersion` with a non-null
+metadata argument); `null` preserves the prior value, so a manual re-import
+never erases a prior Nexus acquisition or backfill. The gradual missing-only
+backfill initialization goes through `TryInitializeDisplayMetadata`, which
+writes and persists atomically under the repository lock and returns false
+when `DisplayMetadata` is already non-null (a concurrent writer is never
+silently clobbered by a stale fetch). The field is backward compatible on
+disk: a manifest from before it existed deserializes to `null`, so no
+migration pass is required.
+
 **Import flow:** adding a mod to the active profile goes through
-`IModImportService` (the UI never touches the filesystem). The import service
+`IModImportService` (domain file I/O stays behind the import service; the UI's
+own `IModThumbnailService` is the narrow presentation-cache exception). The import service
 validates the source structure (the source must contain exactly one base
 directory with a matching `<base>.mod` descriptor inside it), then resolves (or
 creates) the container for the source + extracts the archive / copies a folder
@@ -291,8 +318,11 @@ untouched. The validated base folder is **preserved** under
 contents; the archive is validated to have a single top-level folder before
 extraction). Container dedup: Untracked by name, Nexus by mod id. Version dedup:
 re-importing the same tag reuses its folder (refreshed); a new tag creates a new
-version + flips `isLatest`. The service returns `(containerId, versionString)`;
-the caller then adds the profile reference via `IProfileService.AddMod`. Remote
+version + flips `isLatest`. The service returns `(containerId, versionId)`,
+where `versionId` is the imported version's opaque on-disk folder id (a
+`ModVersion.Folder` value); the display tag (`ModVersion.VersionString`) is
+recorded in the container manifest and is not returned. The caller then adds
+the profile reference via `IProfileService.AddMod`. Remote
 acquisition (the Nexus API client, auto-fetch) is handled by
 `IModAcquisitionService`; the acquisition service downloads the archive to a
 temp path preserving the real Nexus `file_name` extension, then hands it to the
@@ -416,7 +446,12 @@ When a user clicks "Mod manager download" on Nexus, the
 `NxmModDownloadHandler` orchestrates the download and import into the active
 profile. The reusable core is `IModAcquisitionService` (Integrations): it
 resolves the CDN download links, fetches mod metadata, downloads to a
-`.zip`-named temp file, and imports via `IModImportService`. The handler (in the
+`.zip`-named temp file, and imports via `IModImportService`. The same
+`GetModInfoAsync` call that resolves the mod name also carries the display
+metadata (`Summary`, `PictureUrl`, `ContainsAdultContent`); it is normalized
+once through the shared `ModDisplayMetadataMapper` and forwarded into
+`Import`/`AddVersion`, so it lands on the container in the same manifest
+update as the version mutation at no extra Nexus call. The handler (in the
 UI assembly, not Integrations, because it coordinates UI-only services) checks
 the link is for Darktide, checks auth and an active profile, calls the service,
 registers the mod with `LatestPolicy`, refreshes the mod list, and surfaces
@@ -502,6 +537,35 @@ is in [UI reference](../reference/ui.md).
   view overrides auto-sort.
 - When DMF is installed, it appears as a protected first entry (locked first
   by dependency resolution; updateable).
+- **Row density.** The list has a persisted Compact/Detailed density (Compact
+  is the default and the absent/unknown value; Detailed is the multi-line
+  variant). Compact is the unchanged one-line row. Detailed renders a rounded
+  card per row laid out as one adaptive Grid (the card root is a named width
+  container, so an Avalonia `ContainerQuery max-width:680` in the view's styles
+  swaps the layout at the 680-DIP card-width breakpoint): column 0 is the
+  thumbnail/placeholder slot, column 1 holds the name + source badge (row 0)
+  and a two-line summary (row 1), and row 2 is the action strip. When the card
+  is wide (greater than 680 DIP) a 112-DIP thumbnail spans all three rows and
+  the action strip occupies only the right column; when constrained (at or
+  below 680 DIP) the thumbnail shrinks to 72 DIP spanning name + summary and
+  the action strip moves to a full-width row beneath both columns. The action
+  strip is a right-aligned `WrapPanel` that wraps at the edge (no horizontal
+  scrolling); width, height, row span, and the action column/span are driven by
+  styles so the breakpoint changes them. The summary is plain text with `CharacterEllipsis` trimming and the full
+  text retained in the tooltip and the automation name; a fetched-but-empty
+  summary shows a neutral "details unavailable" fallback. The thumbnail is
+  hydrated only when the container carries a non-null `ModDisplayMetadata`
+  with a non-empty `ThumbnailUrl`; every no-image case (untracked/linked,
+  missing metadata, no auth, offline, a failed image, an adult flag, an empty
+  URL) shows the same neutral placeholder. An adult flag is only a persisted
+  boolean: the thumbnail is skipped and the ordinary placeholder shows; no
+  badge, filter, warning, or setting hangs off it. A stable-v1 missing-only
+  metadata backfill (see [Mod acquisition](#mod-acquisition) and
+  [Nexus API rate limiting](nexus-rate-limiting.md)) populates the summary and
+  thumbnail URL for containers that were imported before the field existed or
+  that were added without it; the backfill and the thumbnail cache live at the
+  UI layer (the cache root is `AppPaths.ModThumbnailCacheDir`), domain data I/O
+  stays behind the repository.
 - **Hot-reload** -- tied to the Relay live-control contract; out of v1.
 - **Dependency view** -- out of v1.
 - **Conflict detection** -- out of v1.

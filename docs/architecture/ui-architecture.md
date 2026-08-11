@@ -5,9 +5,13 @@ part of the codebase that talks to the user: the shell window (a SplitView with
 five hosted destinations), profile management, the mod list, every modal
 (Welcome, confirm, import, discovery escape-hatch, alert, progress), global
 preferences (theme, font scale, language), and the dynamic-language
-infrastructure. The UI never touches the filesystem, the network, or any OS
-API directly. Every data operation flows through a backend library service;
-the UI only presents state and orchestrates calls.
+infrastructure. The UI keeps domain data I/O (profile, repository, Nexus,
+Steam, launch) behind backend library services; it only presents state and
+orchestrates calls. The one deliberate exception is a focused UI-owned
+presentation-media service, `IModThumbnailService`, which returns an Avalonia
+`IImage` (a presentation type the backend libraries do not depend on) and owns
+only an HTTP/disk cache for mod thumbnail images. Everything else the UI
+presents flows through a backend library interface.
 
 This doc covers how the UI is structured, how the active profile is owned, how
 the shell wires its commands, how the mod list and the update UI behave, how
@@ -35,8 +39,10 @@ dialogs, preferences, and i18n fit together.
 │  │  visibility-switched by Is*Visible projections)                      │ │
 │  │ ProfilesView | ModListView (drag-and-drop) | IntegrationsView |      │ │
 │  │   ModListView header: rate-limit notice · refresh ·                  │ │
-│  │     auto-sort · Add split button (Nexus Mods + 3 pickers)            │ │
-│  │   rows:   name · progress + source badge · enabled · policy ·        │ │
+│  │     auto-sort · Compact/Detailed density selector ·                  │ │
+│  │     Add split button (Nexus Mods + 3 pickers)                        │ │
+│  │   rows:   Compact Grid OR Detailed card (thumbnail + name +          │ │
+│  │     badge + summary · wrapping action strip: enabled · policy ·       │ │
 │  │     update-action cell (button) · up · down · remove                 │ │
 │  │ PreferencesView | SettingsView                                       │ │
 │  └─────────────────────────────────────────────────────────────────────┘ │
@@ -67,6 +73,12 @@ a UI-layer singleton that the shell (and other view models) inject:
   │   │
   │   ├── ModListViewModel ──── the active profile's mod list; enable/disable,
   │   │   │                     reorder, per-mod policy, remove, import, update
+  │   │   │
+  │   │   ├── ImportWorkflowViewModel  the inline import-workflow child VM
+  │   │   │
+  │   │   ├── DetailedModRowsViewModel the Compact/Detailed density coordinator
+  │   │   │                             (persisted density, metadata backfill,
+  │   │   │                             thumbnail hydration)
   │   │   │
   │   │   └── ModItemViewModel  one row; carries state only (no service calls)
   │   │
@@ -99,6 +111,10 @@ a UI-layer singleton that the shell (and other view models) inject:
   │                             next real navigation into Mods (after setting
   │                             CurrentDestination = Mods first)
 
+  IModThumbnailService ──────── the focused UI-owned presentation-media service
+                             (the one deliberate exception to the domain-I/O
+                             boundary): returns an Avalonia IImage, HTTPS-only,
+                             owns the disk + in-memory thumbnail cache
   IDialogService ────────────── the testable dialog seam (six true-modal methods);
                              production DialogService owns the real Window wiring
  LocalizationService ───────── the i18n indexer + dynamic-culture INPC refresh
@@ -377,12 +393,123 @@ mods/profiles root), or a collision cancels the remaining batch.
 
 Each row is a `ModItemViewModel`: container id (immutable, the join key
 against `IModRepository`), display name, source, resolved version tag,
-enabled, order, policy, and the per-row policy-edit state. The row never
-talks to `IProfileService` directly; the parent owns every service call, and
-the view routes row interactions (toggle, move, policy, remove, update)
-through code-behind handlers calling the parent's commands with the row as
-the `CommandParameter`. This per-row code-behind pattern keeps each row a
-passive state holder while the parent owns the service boundary.
+enabled, order, policy, and the per-row policy-edit state. The row also
+carries optional display metadata (`ModDisplayMetadata`: summary, thumbnail
+URL, adult flag, joined from the container on reload), the decoded
+`Thumbnail` image, and an `IsDetailed` projection pushed down by the density
+coordinator. The row never talks to `IProfileService` directly; the parent
+owns every service call, and the view routes row interactions (toggle, move,
+policy, remove, update) through code-behind handlers calling the parent's
+commands with the row as the `CommandParameter`. This per-row code-behind
+pattern keeps each row a passive state holder while the parent owns the
+service boundary.
+
+## Compact / Detailed rows (`DetailedModRowsViewModel`)
+
+The Mods toolbar carries a Compact/Detailed density selector: two drawn-icon
+buttons (`view_headline` for Compact, `view_agenda` for Detailed) bound to
+`DetailedModRowsViewModel.SetDensityCommand` with the `ModRowDensity` enum as
+the parameter. The active button carries the `selected` class (bound to
+`IsCompact` / `IsDetailed`, the shell's conditional-class pattern, not a
+ToggleButton). The selection persists in `CuratorConfig.Preferences.ModRowDensity`
+(absent or unknown normalizes to `Compact`, the default).
+
+`DetailedModRowsViewModel` is an application-lifetime singleton child VM of
+`ModListViewModel`, analogous to `ImportWorkflowViewModel` and registered
+before it in `CuratorComposition`. It isolates the density selection, the
+metadata-backfill invocation, and the thumbnail hydration lifecycle from the
+already-large parent. It reads and writes `ModRowDensity` through its own
+focused read-modify-save (not `IPreferencesService.ApplyAndPersist`), so it
+does not widen that method.
+
+### How rows reach the coordinator
+
+`ModListViewModel.Reload` joins each row's `ModDisplayMetadata` from the
+container (alongside the name, source, and version) and hands the final row
+snapshot to the coordinator via `SetRowsAsync`. The call is fire-and-forget:
+the returned task absorbs every failure internally (cancellation is caught,
+every other exception is logged), so the parent's intentional discard can
+never fault. On a no-active-profile reload, an empty snapshot is handed over
+so any prior generation is cancelled.
+
+### The generation lifecycle
+
+Every `SetRowsAsync` call cancels the prior generation and starts a new one
+(an incrementing counter). The synchronous setup (snapshot the rows, push the
+current density down to each row, clear thumbnails on Compact) runs before the
+method returns; in Compact mode the returned task is already completed. In
+Detailed mode the returned task represents the whole generation: known-
+thumbnail hydration for eligible rows, the metadata backfill, and every
+thumbnail load started by a backfill result.
+
+Metadata and thumbnail results are applied only when four conditions all hold
+at the continuation: the generation is still current, the mode is still
+Detailed, the exact row object is still in the snapshot, and the row's
+`ThumbnailUrl` is unchanged. A profile switch, a Compact toggle, or a
+superseding reload therefore prevents stale assignment without aborting the
+thumbnail service's shared cache load (the load runs to completion and may
+still populate the cache for a later caller). All observable row mutation
+resumes on the captured UI context; the coordinator uses no
+`ConfigureAwait(false)` (the UI-layer convention).
+
+### The Detailed-mode pipeline
+
+In Detailed mode the coordinator:
+
+1. Starts known-thumbnail hydration for every eligible row (Detailed + Nexus
+   + non-null metadata + not adult + a non-empty `ThumbnailUrl`).
+2. Invokes `INexusModMetadataService.BackfillMissingAsync` with the current
+   row container ids as priority order.
+3. For each container the backfill enriched, re-reads the repository metadata
+   as authoritative (the atomic `TryInitializeDisplayMetadata` is the
+   correctness boundary, so a concurrent writer wins), applies it to the row
+   via `ApplyDisplayMetadata`, and starts that row's thumbnail load when it
+   is now eligible.
+
+`ApplyDisplayMetadata` clears any existing thumbnail when the new metadata is
+adult, has no thumbnail URL, or carries a different URL than the old thumbnail
+was loaded from. The row itself performs no I/O and calls no service.
+
+### Adult-content policy
+
+An adult-content flag is only a persisted boolean. The coordinator skips the
+thumbnail for an adult row (the row shows the ordinary placeholder), and no
+badge, filter, warning, or setting hangs off it.
+
+## The mod-thumbnail service (`IModThumbnailService`)
+
+`IModThumbnailService` is the one focused UI-owned presentation-media service
+and the deliberate exception to the domain-I/O boundary. It returns an
+Avalonia `IImage`, a presentation type the backend libraries do not depend on,
+and owns only an HTTP/disk cache. Its contract:
+
+- **HTTPS-only.** A null, empty, malformed, relative, or non-HTTPS URL returns
+  `null` without a network round-trip or a cache side effect.
+- **Cache key.** The lowercase SHA-256 hex of the normalized URL, stored as
+  raw bytes under `AppPaths.ModThumbnailCacheDir`
+  (`<app-data>/cache/mod-thumbnails`); no extension is stored.
+- **8 MiB cap.** A response declaring more, or streaming past the cap, is
+  rejected.
+- **Atomic write.** A download lands in a sibling temp file, then a same-volume
+  `File.Move` into the cache path; a download failure leaves no final file.
+- **Four-slot load bound.** A semaphore bounds distinct concurrent loads to
+  four; same-key loads coalesce into one shared task.
+- **Per-caller cancellation.** The shared load runs uncancellable
+  (`CancellationToken.None`), so cancelling one caller never cancels another's
+  load; each caller awaits it with `WaitAsync(ct)`.
+- **Corrupt-disk retry once.** A corrupt or unreadable cache entry is deleted
+  and re-downloaded once; a second decode failure returns `null`.
+- **App-lifetime image cache.** A successful decode is kept in an in-memory
+  cache for the app lifetime so multiple rows and reloads share it and no
+  bound row observes a disposed image.
+- **90-day prune.** Cache files older than 90 days are deleted best-effort
+  once per service instance; one locked file does not abort the sweep.
+
+The caller (the density coordinator) decides whether to request a thumbnail
+for a given row; the service fetches whatever trusted HTTPS URL it is handed.
+Every expected failure (invalid URL, HTTP failure, oversize data, decode
+failure, I/O failure) returns `null` and logs, without surfacing a modal;
+caller cancellation propagates.
 
 ## The update UI
 
@@ -479,6 +606,47 @@ re-hydrates from the store when the result lands.
 
 ### View affordances
 
+- **The Mods toolbar.** Refresh + an indeterminate spinner (the manual "check
+  now" affordance), the rate-limit notice pill, the hidden auto-sort seam, the
+  Compact/Detailed density selector, and the Add split button, in that order.
+  The rate-limit pill occupies the toolbar's single flexible (`*`) column with
+  `HorizontalAlignment=Left`: at normal and wide widths it keeps its content
+  width, while the star column still gives it a finite constraint so its inner
+  text ellipsizes (`CharacterEllipsis`, full text in the tooltip) at narrow
+  widths rather than pushing the density pair or Add out of the toolbar. The
+  density selector is two adjacent drawn-icon buttons (`view_headline` for
+  Compact, `view_agenda` for Detailed) bound to
+  `DetailedModRowsViewModel.SetDensityCommand`; the active one carries the
+  `selected` class (bound to `IsCompact` / `IsDetailed`). A click on the
+  already-active density is a strict no-op (the coordinator's value-equal
+  guard), so the buttons stay enabled.
+- **Row roots.** One row, two mutually exclusive roots selected by the row's
+  `IsDetailed` projection: the existing Compact `Grid` (eight columns: name,
+  badge area, enabled, policy, update-action cell, up, down, remove) and a
+  Detailed rounded card. The Compact root is preserved unchanged except for
+  the `IsVisible` flag that now gates it; the Detailed root is a rounded
+  `Border` laid out as one adaptive Grid (the card root carries
+  `Container.Name` + `Container.Sizing=Width`, so a `ContainerQuery
+  max-width:680` in `UserControl.Styles` swaps the layout at the 680-DIP
+  card-width breakpoint): column 0 is the thumbnail/placeholder slot, column 1
+  holds the name + source badge (row 0) and a two-line plain-text summary
+  (row 1, `MaxLines=2`, `TextWrapping=Wrap`, `TextTrimming=CharacterEllipsis`,
+  full text in the tooltip and the automation name), and row 2 is the action
+  strip. When the card is wide (greater than 680 DIP) a 112-DIP
+  `UniformToFill` thumbnail spans all three rows and the action strip occupies
+  only the right column; when constrained (at or below 680 DIP) the thumbnail
+  shrinks to 72 DIP spanning name + summary and the action strip moves to a
+  full-width row beneath both columns. Width, height, row span, and action
+  column/span that change at the breakpoint are driven by styles (not local
+  values, which would outrank styles); constant row/column positions stay
+  local. Both roots bind the exact same per-row state and route to the exact
+  same code-behind handlers, so no action behavior forks between modes; the
+  markup is deliberately duplicated rather than abstracted. Horizontal
+  scrolling is disabled on the page-level `ScrollViewer` (rows wrap rather
+  than extend the page); the thumbnail placeholder (a drawn `image` geometry)
+  shows for every no-image case (untracked/linked, missing metadata, no auth,
+  offline, failed image, adult flag, empty URL), so the slot reads as a
+  uniform empty-image affordance.
 - The source badge is a `HyperlinkButton` styled as a pill, with
   `NavigateUri` set to the row's `SourceUrl` (the mod's remote page; null for
   untracked, which the `HyperlinkButton` treats as a no-op click). A linked row

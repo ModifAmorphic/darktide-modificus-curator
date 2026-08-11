@@ -29,7 +29,9 @@ src/
                                                              (the SplitView shell with five hosted destinations:
                                                              Profiles, Mods, Nexus, Preferences,
                                                              Settings; profile management + inline launch-settings
-                                                             editor; the mod-list UI; the Launch flow)
+                                                             editor; the mod-list UI with a persisted Compact/Detailed
+                                                             row density and an inline thumbnail cache; the Launch
+                                                             flow)
   general/                        Modificus.Curator.General  cross-cutting infra: logging, config loader,
                                                             app-state store, DI
   config/                         Modificus.Curator.Config   the CuratorConfig schema + defaults (POCO)
@@ -47,6 +49,7 @@ src/
     Modificus.Curator.Steam.Tests/           xUnit tests for discovery + IsGameRunning
     Modificus.Curator.RelayClient.Tests/     xUnit tests for the launch façade (dual-purpose: dotnet test / dotnet run smoke harness)
     Modificus.Curator.UI.Tests/              xUnit tests for shell navigation + profiles + mod-list view models
+                                            (incl. the detailed-rows coordinator + thumbnail service)
 ```
 
 Each library exposes an `Add<Library>()` extension method on
@@ -73,7 +76,10 @@ the five destinations: Profiles, Mods, Nexus, Preferences,
 Settings), a global header with the current destination title and the Launch
 Darktide button, and a status strip (Darktide running indicator, the nxm
 handler status, and the dismissible app-update notice). Mods is selected
-initially. The startup log lines (`Modificus Curator starting`, `Config
+initially. The Mods toolbar carries a Compact/Detailed density selector
+(two drawn-icon buttons whose choice persists across restarts); Detailed rows
+show a Nexus summary and a cached thumbnail beside the name and wrap their
+action controls instead of forcing a fixed row width. The startup log lines (`Modificus Curator starting`, `Config
 loaded …`) go to the console and to the configured log file.
 
 ## Test
@@ -212,7 +218,7 @@ copying would duplicate repository files). On-disk layout:
 ```
 <ModsFolder>/                  # the mod repository root (CuratorConfig)
   <containerUUID>/                   # one container per (source, identity)
-    container.json                   # { id, source, name, versions: [{ folder, versionString, isLatest, importedAt }] }
+    container.json                   # { id, source, name, versions: [{ folder, versionString, isLatest, importedAt }], displayMetadata?: { summary, thumbnailUrl, isAdultContent } }
     <versionFolder>/                 # opaque-ID version subfolder; the mod files for that version
 <ProfilesBaseFolder>/<guid>/
   profile.json                       # metadata + mod list + launch settings (entries carry ContainerId + Policy; launch settings carry ordered env vars + game args)
@@ -221,6 +227,12 @@ copying would duplicate repository files). On-disk layout:
       <baseName>                     #   staging link → <versionFolder>/<baseName>/ (junction on Windows, symlink on Linux; Latest → isLatest; Pinned(versionId) → matching Folder); the base name, not the container display name
       mods.lst                       #   successfully-staged enabled mods, in order
 ```
+
+`displayMetadata` is optional: a container whose display metadata has never
+been fetched (a manual import, or a Nexus mod the background backfill has not
+reached) carries no field at all. A fetched result with no display content
+(summary empty, thumbnail URL null) is written as a non-null object, so "not
+fetched" and "fetched but empty" stay distinct.
 
 `Profiles` owns the staging seam (`ProfileService.PrepareModRoot` clears +
 rebuilds `staged/`, discovering each enabled mod's base folder name inside its
@@ -253,6 +265,10 @@ for the schema.
 | `ProfilesBaseFolder`           | `<app-data>/profiles`                           |
 | `ModsFolder`                   | `<app-data>/mods`                               |
 | `RelayDir`                     | `<app-data>/relay`                              |
+
+The mod-thumbnail disk cache lives at `<app-data>/cache/mod-thumbnails`
+(files keyed by the lowercase SHA-256 of the normalized thumbnail URL); it is
+managed by the UI layer and pruned best-effort to a 90-day age.
 
 Per-profile settings live with the profile, not in the global config. This
 includes the launch settings (environment variables + Darktide command-line

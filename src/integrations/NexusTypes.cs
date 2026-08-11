@@ -198,7 +198,7 @@ public sealed class ModInfo
     public string Version { get; set; } = string.Empty;
 
     [JsonPropertyName("picture_url")]
-    public string PictureUrl { get; set; } = string.Empty;
+    public string? PictureUrl { get; set; }
 
     [JsonPropertyName("endorsement_count")]
     public int EndorsementCount { get; set; }

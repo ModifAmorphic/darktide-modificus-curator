@@ -9,7 +9,8 @@ namespace Modificus.Curator.General;
 /// "ActiveProfileId": "&lt;guid&gt;" | null,
 /// "LastUpdateCheckUtc": "&lt;iso-8601&gt;" | null,
 /// "ManualRefreshTimestamps": [ "&lt;iso-8601&gt;", ... ] | null,
-/// "KnownUpdates": { "&lt;profile-guid&gt;": [ { ...snapshot... }, ... ] } | null }</c>).
+/// "KnownUpdates": { "&lt;profile-guid&gt;": [ { ...snapshot... }, ... ] } | null,
+/// "LastNexusMetadataBackfillUtc": "&lt;iso-8601&gt;" | null }</c>).
 /// The app-data dir is derived the same way <see cref="ConfigLoader"/> derives its
 /// config path (both via <see cref="AppPaths.AppDataDir"/>). JSON is handled with
 /// <see cref="JsonSerializer"/> (direct, read+write) rather than
@@ -121,6 +122,13 @@ public sealed class AppStateStore : IAppStateStore
         });
     }
 
+    /// <inheritdoc />
+    public DateTimeOffset? LastNexusMetadataBackfillUtc
+    {
+        get => Load().LastNexusMetadataBackfillUtc;
+        set => Mutate(m => m.LastNexusMetadataBackfillUtc = value);
+    }
+
     /// <summary>The conventional state-file location: <c>&lt;app-data&gt;/app-state.json</c>.</summary>
     public static string DefaultStatePath() =>
         System.IO.Path.Combine(AppPaths.AppDataDir, "app-state.json");
@@ -208,5 +216,6 @@ public sealed class AppStateStore : IAppStateStore
         public DateTimeOffset? LastUpdateCheckUtc { get; set; }
         public List<DateTimeOffset>? ManualRefreshTimestamps { get; set; }
         public Dictionary<Guid, List<KnownUpdateSnapshot>>? KnownUpdates { get; set; }
+        public DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
     }
 }

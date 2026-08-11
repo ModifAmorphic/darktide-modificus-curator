@@ -1,10 +1,12 @@
 # Nexus API rate-limiting strategy
 
-Modificus Curator proactively limits its own Nexus API calls via three
+Modificus Curator proactively limits its own Nexus API calls via four
 mechanisms: a manual sliding-window throttle on the "check now" refresh, an
-auto-check interval floor, and a persisted last-check interval gate that covers
-every automatic trigger. These run alongside the reactive handling that responds
-to rate-limit signals from the server after a call has been made; see
+auto-check interval floor, a persisted last-check interval gate that covers
+every automatic trigger, and a persisted 24-hour gate on the display-metadata
+backfill that bounds it to one pass per day. These run alongside the reactive
+handling that responds to rate-limit signals from the server after a call has
+been made; see
 [Nexus API rate limiting](../architecture/nexus-rate-limiting.md).
 
 ## The manual sliding-window throttle
@@ -61,6 +63,46 @@ after it.
 
 Owned by `IAppStateStore` (the persisted timestamp) and `UpdateCheckRunner` (the
 gate).
+
+## Metadata backfill gate
+
+The display-metadata backfill (the service that fills in the summary, thumbnail
+URL, and adult flag for existing Nexus containers imported before the capture
+was wired) carries its own proactive limit, separate from the update-check
+gates: at most **one real pass per 24-hour window**, persisted to
+`app-state.json` (`IAppStateStore.LastNexusMetadataBackfillUtc`). The pass runs
+only when the Mods destination is in Detailed mode and encounters rows missing
+metadata; Compact mode never invokes it (see
+[ui: mod list density](ui.md#mod-list-density--detailed-rows)).
+
+- **Persisted 24-hour gate.** A pass stamps the timestamp only after it
+  attempted at least one API request; a no-auth, already-gated, or no-candidate
+  no-op attempts zero requests and does **not** stamp (so the next real pass is
+  not blocked by a no-op). The gate is rechecked after the service's
+  serialization semaphore is acquired, so an overlapping call that arrived while
+  the first was running returns empty rather than starting a second pass inside
+  the window.
+- **Repository-wide.** The gate is not profile-scoped: the backfill covers every
+  Nexus container in the repository missing metadata, regardless of which
+  profile is active. It is unrelated to the update-check interval state
+  (`LastUpdateCheckUtc`).
+- **Sequential, capped at 25.** One `GetModInfoAsync` call per candidate, at
+  most 25 attempted calls per pass. Candidates are ordered: the active
+  profile's container ids first (in row order), then the remaining repository
+  containers in deterministic `Guid` order; only `NexusSource` containers whose
+  `DisplayMetadata` is `null` are candidates.
+- **Stop policy.** `NexusApiException` (a per-mod failure, e.g. one removed mod)
+  continues to the next candidate; `NexusRateLimitException`, exhausted
+  counters, `NexusNotAuthenticatedException`, and generic transport/repository
+  failures stop the pass. A stopped pass still stamps the gate (it attempted at
+  least one request). See [integrations: metadata backfill service](integrations.md#metadata-backfill-service).
+- **Timestamp behavior.** Backward compatible on disk: an old `app-state.json`
+  without `LastNexusMetadataBackfillUtc` deserializes it to `null`, so the first
+  Detailed-mode encounter after upgrade runs the pass normally (see
+  [general](general.md#iappstatestore--appstatestore)).
+
+Owned by `IAppStateStore` (the persisted timestamp) and `INexusModMetadataService`
+(the gate + the pass).
 
 ## Update-detection tiers
 
@@ -119,6 +161,23 @@ installed file version). Because the tier-3 cache is in-memory and
 session-scoped (not persisted across restarts), the cold cost re-pays on the
 first check after each app restart; a user who closes and reopens frequently
 re-pays the `1 + F` spike on the first check of each session.
+
+The metadata backfill adds at most **25 calls per 24 hours** when Detailed mode
+encounters Nexus containers missing display metadata (see
+[Metadata backfill gate](#metadata-backfill-gate)). New Nexus acquisitions
+already capture the metadata through the existing acquisition `GetModInfoAsync`
+call, so the backfill only targets containers imported before that capture was
+wired; over time the candidate set shrinks to zero. The 25 calls are a burst on
+the first Detailed pass inside the 24-hour window (a short sequential run), then
+nothing for the rest of the window; averaged across the day the contribution is
+small (25/24h is roughly 1 call/hour), but on the pass itself the burst is
+real. Because the Nexus daily/hourly budget is shared across all of the user's
+Nexus tools and Curator cannot know how much of the reported remaining is its
+own, the backfill's stop policy treats any exhausted window or rate-limit
+response as a hard stop (the metadata from the triggering response is persisted
+first). Acquisition captures + the backfill are the two paths that populate
+display metadata; they do not compound (a captured container is no longer a
+backfill candidate).
 
 The Nexus daily budget is 20,000/day (resets 00:00 GMT) and the hourly budget is
 500/hour (resets each hour), per API key or OAuth token. The budget is the

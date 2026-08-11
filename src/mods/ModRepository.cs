@@ -227,7 +227,8 @@ internal sealed class ModRepository : IModRepository
         Guid containerId,
         string versionString,
         Action<string> populateFolder,
-        DateTimeOffset? remoteUploadedAt = null)
+        DateTimeOffset? remoteUploadedAt = null,
+        ModDisplayMetadata? displayMetadata = null)
     {
         lock (_sync)
         {
@@ -296,7 +297,17 @@ internal sealed class ModRepository : IModRepository
                     versionString, containerId, folder);
             }
 
-            var updated = container with { Versions = versions };
+            // DisplayMetadata is container-scoped: a non-null argument
+            // replaces the prior value in the same manifest update as the
+            // version mutation; null preserves any prior value, so a manual
+            // re-import (folder/archive via the picker, no metadata argument)
+            // never erases a prior Nexus acquisition or backfill. A
+            // populateFolder failure above rethrows before this point, so the
+            // prior metadata survives a failed populate alongside the prior
+            // files + manifest.
+            var updated = displayMetadata is null
+                ? container with { Versions = versions }
+                : container with { Versions = versions, DisplayMetadata = displayMetadata };
             _byId[containerId] = updated;
             WriteContainer(updated, baseFolder);
             return updated;
@@ -352,6 +363,49 @@ internal sealed class ModRepository : IModRepository
                 "Renamed container {Id} '{Old}' -> '{New}'",
                 containerId, container.Name, newName);
             return updated;
+        }
+    }
+
+    /// <inheritdoc />
+    public bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        lock (_sync)
+        {
+            if (!_byId.TryGetValue(containerId, out var container))
+            {
+                return false;
+            }
+
+            // Missing-only initialization: any existing non-null metadata
+            // (whether equal or different) returns false with no rewrite. This
+            // makes the method safe against a concurrent writer (acquisition,
+            // another backfill, a manual edit) that set the value between the
+            // caller's Get and this call. The atomic check-and-set under the
+            // lock is the correctness boundary; a caller's pre-write Get is an
+            // optimization, not a guard.
+            if (container.DisplayMetadata is not null)
+            {
+                return false;
+            }
+
+            var baseFolder = EnsureBaseFolder();
+            var updated = container with { DisplayMetadata = metadata };
+            // Write the manifest BEFORE publishing into the in-memory index so a
+            // WriteContainer failure (disk full, I/O error, permission denied)
+            // leaves the in-memory aggregate's DisplayMetadata null and
+            // retryable. If the write throws, _byId still holds the original
+            // container (null metadata) and the caller can retry later.
+            WriteContainer(updated, baseFolder);
+            _byId[containerId] = updated;
+
+            _logger.LogInformation(
+                "Initialized display metadata for container {Id} (summary {HasSummary}, thumbnail {HasThumb}, adult {Adult})",
+                containerId,
+                metadata.Summary.Length > 0,
+                metadata.ThumbnailUrl is not null,
+                metadata.IsAdultContent);
+            return true;
         }
     }
 

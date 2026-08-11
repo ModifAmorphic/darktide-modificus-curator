@@ -52,6 +52,18 @@ public sealed class PreferencesConfig
     /// time by the Relay launcher; not applied live to the running app.
     /// </summary>
     public bool ShowRelayConsole { get; set; }
+
+    /// <summary>
+    /// The mod-list row density: <see cref="ModRowDensity.Compact"/> (the dense
+    /// one-line row) or <see cref="ModRowDensity.Detailed"/> (multi-line with
+    /// summary + thumbnail). Defaults to <see cref="ModRowDensity.Compact"/>.
+    /// Owned by the Mods toolbar's density coordinator, not by
+    /// <see cref="IPreferencesService.ApplyAndPersist"/>; the coordinator does
+    /// its own focused read-modify-save so the density field does not widen that
+    /// method's parameter list. Absent or undefined numeric values normalize to
+    /// Compact when read.
+    /// </summary>
+    public ModRowDensity ModRowDensity { get; set; } = ModRowDensity.Compact;
 }
 
 /// <summary>
@@ -69,4 +81,18 @@ public enum ThemeMode
 
     /// <summary>The light theme (Avalonia's ThemeVariant.Light).</summary>
     Light = 2,
+}
+
+/// <summary>
+/// The mod-list row density. <see cref="Compact"/> is the dense one-line row
+/// (the default); <see cref="Detailed"/> adds the summary + thumbnail rows. An
+/// absent or undefined numeric value normalizes to <see cref="Compact"/>.
+/// </summary>
+public enum ModRowDensity
+{
+    /// <summary>The dense one-line row (the default).</summary>
+    Compact = 0,
+
+    /// <summary>The multi-line row with summary + thumbnail.</summary>
+    Detailed = 1,
 }

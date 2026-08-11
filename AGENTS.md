@@ -38,7 +38,10 @@ game-binary constraints now live with the runtime, in
   create profiles, import mods (folder/archive, Nexus/Untracked) or link an
   external mod folder without copying it, manage
   the mod list (enable/disable/reorder/policy/remove), configure Settings
-  (discovery paths + mod-repo location), and launch modded Darktide. Every
+  (discovery paths + mod-repo location), and launch modded Darktide. The mod
+  list has a persisted Compact/Detailed row density (Compact is the default and
+  unchanged behavior; Detailed adds a Nexus summary and a cached thumbnail per
+  row). Every
   Nexus Latest row shows a stable update-action button (disabled + neutral when
   no update, enabled + accent when flagged); a Premium click installs in-app,
   a regular/unknown click opens the mod's Nexus files page. Premium users can
@@ -144,7 +147,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           the Mods destination (`ModListViewModel` + `ModListView`):
                           the active profile's mod list (the dominant content area),
                           with its own toolbar (refresh, rate-limit notice, auto-
-                          sort, the Add split button) shown only on Mods, and the
+                          sort, the Compact/Detailed density selector, the Add split
+                          button) shown only on Mods, and the
                           inline import card (`ImportWorkflowViewModel` +
                           `ImportWorkflowView`, an application-lifetime singleton
                           child VM registered before `ModListViewModel`) directly
@@ -160,6 +164,87 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           button disables and drops are rejected. Copied
                           local-import failures surface inline (not via modal
                           alert); the linked-folder flow keeps its modal alerts.
+                          The toolbar's density selector is two drawn-icon buttons
+                          (view_headline for Compact, view_agenda for Detailed)
+                          bound to `DetailedModRowsViewModel.SetDensityCommand`;
+                          the active one carries the `selected` class (the shell's
+                          conditional-class pattern, not a ToggleButton). Compact is
+                          the default + the absent/unknown value, and the Compact
+                          view + behavior are unchanged from before the selector
+                          existed. Detailed renders a rounded card per row laid
+                          out as one adaptive Grid (the card root carries
+                          `Container.Name="detailedModRow"` +
+                          `Container.Sizing="Width"`, so a `ContainerQuery
+                          max-width:680` in `UserControl.Styles` swaps the layout
+                          at the 680-DIP card-width breakpoint): column 0 is the
+                          thumbnail/placeholder slot, column 1 holds the name +
+                          source badge (row 0) + a two-line plain-text summary
+                          (row 1, `MaxLines=2`, `Wrap`, `CharacterEllipsis`; the
+                          full text is retained in the tooltip when non-null, and
+                          the automation name always carries the displayed
+                          summary/fallback), and row 2
+                          is a single `WrapPanel` action strip. Wide (card width
+                          greater than 680 DIP): a 112-DIP rounded `UniformToFill`
+                          thumbnail spans all three rows (column 0, `RowSpan=3`)
+                          and the action strip occupies only the right column.
+                          Constrained (card width at or below 680 DIP): the
+                          thumbnail shrinks to 72 DIP spanning only name +
+                          summary (`RowSpan=2`) and the same action strip moves to
+                          a full-width row beneath both columns
+                          (`Grid.ColumnSpan=2`). Width, height, row span, action
+                          column, and action column span are driven by styles
+                          (default wide styles + the container-query overrides),
+                          not local values, so the breakpoint can change them;
+                          the placeholder geometry scales with the slot (36 DIP
+                          wide, 28 DIP constrained) through the same styles. The
+                          action strip right-aligns every wrapped line
+                          (`WrapPanel.ItemsAlignment=End`) and wraps at the edge
+                          in both states (no horizontal scrolling). All action
+                          controls + code-behind handlers are shared verbatim
+                          between the Compact + Detailed row roots, so no behavior
+                          forks between modes. `DetailedModRowsViewModel`
+                          (ui/ViewModels/, an application-lifetime singleton child VM
+                          registered before `ModListViewModel`, analogous to
+                          `ImportWorkflowViewModel`) owns the persisted density
+                          selection, the metadata-backfill invocation, and the
+                          thumbnail-hydration lifecycle. It reads + writes
+                          `CuratorConfig.Preferences.ModRowDensity` through its own
+                          focused read-modify-save (not `IPreferencesService.ApplyAndPersist`),
+                          so it does not widen that method. `ModListViewModel.Reload`
+                          joins each row's `ModDisplayMetadata` from the container +
+                          hands the final row snapshot to the child via
+                          `SetRowsAsync` (fire-and-forget; the task absorbs every
+                          failure). A generation counter cancels the prior
+                          generation on every new snapshot: thumbnail + metadata
+                          results are applied only when the generation is still
+                          current, the mode is still Detailed, and the exact row is
+                          still in the snapshot with the same `ThumbnailUrl`, so a
+                          profile switch, a Compact toggle, or a superseding reload
+                          prevents stale assignment without aborting the thumbnail
+                          service's shared cache load. In Detailed mode the child
+                          starts known-thumbnail hydration for eligible rows
+                          (Detailed + Nexus + non-null metadata + not adult + a
+                          non-empty `ThumbnailUrl`) + invokes
+                          `INexusModMetadataService.BackfillMissingAsync` with the
+                          current row container ids as priority; a backfilled row's
+                          metadata is re-read from the repository as authoritative
+                          before it is applied, then its thumbnail is hydrated. An
+                          adult-content flag is only a persisted boolean; the child
+                          skips the thumbnail for it (the row shows the ordinary
+                          placeholder), and no badge, filter, warning, or setting
+                          hangs off it. `IModThumbnailService`
+                          (ui/, a UI-layer singleton) is the one focused UI-owned
+                          presentation-media service: it returns an Avalonia
+                          `IImage`, accepts HTTPS URLs only, keys cached bytes by
+                          the lowercase SHA-256 of the URL under
+                          `AppPaths.ModThumbnailCacheDir` (`<app-data>/cache/mod-thumbnails`),
+                          caps a download at 8 MiB, writes via an atomic sibling-temp
+                          move, bounds distinct concurrent loads to four, coalesces
+                          same-URL loads into one shared uncancellable task
+                          (per-caller cancellation via `WaitAsync(ct)`), retries a
+                          corrupt disk entry exactly once, decodes successful loads
+                          into an app-lifetime in-memory image cache, and prunes
+                          cache files older than 90 days best-effort.
                           the Nexus destination
                           (`IntegrationsViewModel` + `IntegrationsView`,
                           Nexus-only): OAuth + developer-gated API-key + nxm handler
@@ -442,13 +527,18 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         rolled at midnight, pruned to RetainedLogFileCount),
                         config loader, app-state store (active profile id +
                         last update-check timestamp + manual-refresh throttle
-                        window + profile-scoped known-update snapshots), AddGeneral() DI ext)
+                        window + profile-scoped known-update snapshots +
+                        last Nexus display-metadata backfill timestamp), AddGeneral() DI ext)
   config/               Modificus.Curator.Config -- the CuratorConfig schema + defaults (POCO),
                         including the NexusConfig slot under Integrations
                         (AuthMethod {None,OAuth,ApiKey}, ApiKey, OAuth tokens, base URLs,
                         AutomaticUpdatesEnabled opt-in Premium auto-install)
                         + the AppUpdatesConfig slot (CheckOnStartup, gates the
                         automatic startup self-update check)
+                        + the Preferences.ModRowDensity slot (Compact default,
+                        Detailed the multi-line variant; absent/unknown normalizes to
+                        Compact) + the AppPaths.ModThumbnailCacheDir root
+                        (<app-data>/cache/mod-thumbnails)
   profiles/             Modificus.Curator.Profiles -- profile data model, persistence,
                           container-based staging (ProfileService.PrepareModRoot
                           discovers each enabled mod's base folder name inside the
@@ -501,7 +591,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         mod-source provenance model (ModSource: UntrackedSource/
                         NexusSource/LinkedSource, the last carrying a normalized
                         ExternalPath for a no-copy external folder, + ModSourceParser
-                        URL parsing) + the
+                        URL parsing) + the source-agnostic display-metadata model
+                        (ModDisplayMetadata: summary + thumbnail URL + adult flag; a
+                        null ModContainer.DisplayMetadata means not-fetched, a non-null
+                        object with empty fields is an authoritative fetched result with
+                        no content, and the two stay distinct; backward compatible on
+                        disk since an older manifest deserializes the field to null) + the
                         local-import service (IModImportService: folder/archive ->
                         container/version; content-based archive detection via
                         SharpCompress (zip/7z/rar/...) not extension, traversal-safe
@@ -513,7 +608,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         exposes GetBaseName + FindExistingContainer peeks for the
                         collision block; AddVersion dedup refreshes
                         RemoteUploadedAt from the re-acquired version's
-                        remote-publish timestamp; LinkFolder records an external
+                        remote-publish timestamp + takes an optional ModDisplayMetadata
+                        that replaces the container's DisplayMetadata in the same
+                        manifest update, null preserving the prior value so a manual
+                        re-import never erases a prior acquisition or backfill;
+                        TryInitializeDisplayMetadata is the atomic missing-only
+                        initialization seam (writes + persists under the repo lock,
+                        returns false if DisplayMetadata is already non-null); LinkFolder records an external
                         folder as a metadata-only LinkedSource container with no
                         copy, + IsExternalAvailable reports a linked container's
                         transient external-folder availability).
@@ -541,11 +642,22 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         download; AcquireFromNexusAsync resolves the download
                         links, fetches name + version metadata, downloads to
                         temp, then imports via IModImportService.Import;
+                        the same GetModInfoAsync call that resolves the name also
+                        supplies the display metadata (summary + thumbnail URL +
+                        adult flag), normalized once through the shared internal
+                        ModDisplayMetadataMapper + forwarded through Import so it
+                        lands on the container with no extra Nexus call;
                         AcquireLatestNexusAsync resolves the newest
                         non-archived MAIN file via ListModFilesAsync then forwards
                         to AcquireFromNexusAsync with null nxm tokens (premium
                         path); ModFile gains an `archived` bool for the filter;
-                        IUpdateCheckService the Nexus-only
+                        INexusModMetadataService the stable-v1 display-metadata
+                        backfill (Nexus-only, missing-only, active-profile-prioritized,
+                        one GetModInfoAsync per candidate, at most 25 attempted
+                        per pass, at most one real pass per persisted 24-hour
+                        window, serializing semaphore, zero/hard-rate-limit stop,
+                        best-effort never-throws; persists through the repository's
+                        atomic TryInitializeDisplayMetadata); IUpdateCheckService the Nexus-only
                         update-check service (1 v2 GraphQL `modsByUid` batch
                         query per check, 1 API call for all mods; computes UIDs
                         from game_id * 2^32 + mod_id, Darktide game_id = 4943;
@@ -676,7 +788,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
     Modificus.Curator.Profiles.Tests/        xUnit tests for the profiles library (incl. staging
                                           + the launch-settings round-trip/normalization/validation)
     Modificus.Curator.Mods.Tests/      xUnit tests for the mod repository + import
-                                        (incl. the linked-folder add + linked-container prune)
+                                        (incl. the linked-folder add + linked-container prune,
+                                        + the display-metadata AddVersion/Import pass-through
+                                        + TryInitializeDisplayMetadata atomic missing-only init)
     Modificus.Curator.Integrations.Tests/    xUnit tests for the Nexus client
                                           (against a fake HttpMessageHandler),
                                           the auth factories (apikey / OAuth / None + selector),
@@ -685,7 +799,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           seam), the LoopbackBrowser/HttpListener against an
                                           ephemeral port, the NexusConfig JSON round-trip, and the
                                           ModAcquisitionService (download + extract + place against
-                                          a fake INexusClient + fake IModImportService + stub CDN)
+                                          a fake INexusClient + fake IModImportService + stub CDN,
+                                          incl. the display-metadata capture from the shared mapper)
                                           + the UpdateCheckService (Nexus-only
                                           update check against a fake INexusClient +
                                           fake IProfileService + fake IModRepository)
@@ -695,6 +810,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           preserve, no-Nexus-mods clears, acknowledge,
                                           + the hydration self-heal for removed/pinned/
                                           source-changed/version-changed entries)
+                                          + the NexusModMetadataService (stable-v1
+                                          display-metadata backfill: the 24-hour gate,
+                                          the 25-attempt cap, active-profile-priority
+                                          ordering, the zero/hard-rate-limit stop, the
+                                          atomic missing-only persistence) + the
+                                          ModDisplayMetadataMapper normalization
     Modificus.Curator.Steam.Tests/           xUnit tests for discovery + IsGameRunning
     Modificus.Curator.RelayClient.Tests/ xUnit tests for the launch façade (dual-purpose:
                                             `dotnet test` = xUnit; `dotnet run` = composition smoke harness);
@@ -761,7 +882,18 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             + the OnboardingService (already complete no-op,
                                             Continue persists + skips Integrations, Set up Nexus
                                             persists before navigating to Integrations once, close
-                                            == Continue, the in-process one-shot guard), against in-memory fakes)
+                                            == Continue, the in-process one-shot guard)
+                                            + the DetailedModRowsViewModel (persisted Compact/
+                                            Detailed density selection + normalization, the
+                                            generation-based stale-result protection across
+                                            profile switch/Compact toggle/superseding reload, the
+                                            backfill-driven thumbnail hydration, adult-content
+                                            thumbnail skip) + the ModThumbnailService (HTTPS-only
+                                            validation, lowercase SHA-256 cache key, 8 MiB cap,
+                                            atomic sibling-temp move, four-slot load bound, same-
+                                            URL coalescing with per-caller cancellation, corrupt-
+                                            disk retry once, app-lifetime in-memory image cache,
+                                            90-day prune), against in-memory fakes)
     Modificus.Curator.Nxm.Tests/             xUnit tests for the nxm library (parser, framing,
                                             IPC server resilience, SingleInstanceGuard, router,
                                             relay helper, standalone + AppImage Linux registrar,
@@ -915,7 +1047,8 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   **Steam** (Steam + Darktide + Proton discovery + `IsGameRunning`),
   **Integrations** (the Nexus v1 client/auth +
   `IModAcquisitionService` the download + extract + place orchestrator +
-  `IUpdateCheckService` the Nexus-only update-check service),
+  `IUpdateCheckService` the Nexus-only update-check service +
+  `INexusModMetadataService` the stable-v1 missing-only display-metadata backfill),
   **Relay-client** (the launch
   façade, reading per-profile launch settings + threading env vars + game args
   through the platform strategies; no version preflight), **Mods** (the unified `IModRepository`: UUID containers per
@@ -924,10 +1057,11 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   `PruneUnreferenced` GC; the version-policy model `ModVersionPolicy`; the
   mod-source provenance model `ModSource`
   (`UntrackedSource`/`NexusSource`/`LinkedSource`) + `ModSourceParser`; the
-  local-import service `IModImportService`). **General** carries cross-cutting
+  source-agnostic `ModDisplayMetadata` model (summary + thumbnail URL + adult
+  flag); the local-import service `IModImportService`). **General** carries cross-cutting
   infra: logging, `ConfigLoader`, and `AppStateStore` (the active-profile id +
-  last update-check timestamp + manual-refresh throttle window, persisted to
-  `app-state.json`). The UI includes the shell + profile
+  last update-check timestamp + manual-refresh throttle window + last Nexus
+  display-metadata backfill timestamp, persisted to `app-state.json`). The UI includes the shell + profile
   management (with an `IProfileSession` (ui/) as the single authority for the
   active profile, the switch-block gate, and the live running-state, plus a
   session-scoped `HasPendingChanges` flag the mod-list edits set and Launch
@@ -938,7 +1072,9 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   Latest/Pinned policy, auto-sort identity stub, local folder/archive import
   via file picker + drag-and-drop, and linking an external mod folder without
   copying it, joined to containers via `IModRepository` by
-  `ContainerId`), and Launch (`LaunchCommand` -> `IRelayLaunchService.Launch`
+  `ContainerId`; a persisted Compact/Detailed row density with cached
+  thumbnails + a stable-v1 display-metadata backfill, owned by the
+  `DetailedModRowsViewModel` child + the UI-layer `IModThumbnailService`), and Launch (`LaunchCommand` -> `IRelayLaunchService.Launch`
   -> branch on `LaunchResult.Status` (`Launched` -> an immediate
   `IsGameRunning` refresh (the session's `Refresh`) so the running indicator +
   launch/switch gates react at once, and clears `HasPendingChanges` since the

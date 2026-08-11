@@ -60,6 +60,23 @@ public sealed record ModContainer
     public IReadOnlyList<ModVersion> Versions { get; init; } = Array.Empty<ModVersion>();
 
     /// <summary>
+    /// Optional source-agnostic display metadata (summary, thumbnail URL,
+    /// adult-content flag) for a richer row presentation. <c>null</c> means
+    /// Curator has not retrieved display metadata; a non-null object with an
+    /// empty <see cref="ModDisplayMetadata.Summary"/> and <c>null</c>
+    /// <see cref="ModDisplayMetadata.ThumbnailUrl"/> is an authoritative
+    /// fetched result with no display content. Initialized only through
+    /// <see cref="IModRepository.TryInitializeDisplayMetadata"/> (missing-only)
+    /// or set at import via
+    /// <see cref="IModRepository.AddVersion"/>; <see cref="IModRepository.AddVersion"/>
+    /// with a <c>null</c> metadata argument preserves the prior value, so a
+    /// manual re-import never erases a prior Nexus acquisition or backfill.
+    /// Backward compatible on disk: a manifest from before this field existed
+    /// deserializes it to <c>null</c>.
+    /// </summary>
+    public ModDisplayMetadata? DisplayMetadata { get; init; }
+
+    /// <summary>
     /// Resolves the version a profile entry should stage, given its policy.
     /// <see cref="LatestPolicy"/> → the container's <see cref="ModVersion.IsLatest"/>
     /// version; <see cref="PinnedPolicy"/> → the version whose

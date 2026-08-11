@@ -86,6 +86,16 @@ public interface IModRepository
     /// <paramref name="versionString"/> creates a new opaque folder + a new
     /// version entry stamped with the current time, and that new entry becomes
     /// <see cref="ModVersion.IsLatest"/> (it is the newest).</para>
+    /// <para>
+    /// <b>Display metadata is container-scoped, not version-scoped.</b> A
+    /// non-null <paramref name="displayMetadata"/> replaces
+    /// <see cref="ModContainer.DisplayMetadata"/> in the same manifest update
+    /// as the version mutation (a new version or a dedup); <c>null</c> leaves
+    /// any prior value untouched, so a manual re-import (folder/archive via the
+    /// picker, no metadata argument) never erases a prior Nexus acquisition or
+    /// backfill. A <paramref name="populateFolder"/> failure leaves both the
+    /// version files and the prior metadata unchanged: the manifest write is
+    /// never reached.</para>
     /// </remarks>
     /// <param name="containerId">The target container.</param>
     /// <param name="versionString">The raw release tag (e.g. <c>"1.2"</c>,
@@ -104,6 +114,15 @@ public interface IModRepository
     /// remote sources, which aren't update-checked anyway. Source-agnostic:
     /// Integrations (the acquisition layer) owns Nexus metadata + passes it
     /// through; this seam does not know about Nexus.</param>
+    /// <param name="displayMetadata">Optional source-agnostic display metadata
+    /// captured at acquisition for remote-source mods (Nexus) and applied to
+    /// the container in the same manifest update as the version mutation. A
+    /// non-null value replaces the container's
+    /// <see cref="ModContainer.DisplayMetadata"/>; <c>null</c> (the default,
+    /// including a manual re-import) preserves any prior value, so a re-import
+    /// never erases a prior Nexus acquisition or backfill. Source-agnostic:
+    /// Integrations owns the Nexus DTO mapping + passes the result through;
+    /// this seam does not know about Nexus.</param>
     /// <returns>The updated container (with the new/reused version entry
     /// recorded).</returns>
     /// <exception cref="KeyNotFoundException"><paramref name="containerId"/> is
@@ -112,7 +131,8 @@ public interface IModRepository
         Guid containerId,
         string versionString,
         Action<string> populateFolder,
-        DateTimeOffset? remoteUploadedAt = null);
+        DateTimeOffset? remoteUploadedAt = null,
+        ModDisplayMetadata? displayMetadata = null);
 
     /// <summary>
     /// Renames a container's display label (the on-disk
@@ -132,6 +152,38 @@ public interface IModRepository
     /// <returns>The updated container, or <c>null</c> when the container id is
     /// unknown.</returns>
     ModContainer? RenameContainer(Guid containerId, string newName);
+
+    /// <summary>
+    /// Initializes a container's <see cref="ModContainer.DisplayMetadata"/> when
+    /// it is still <c>null</c> (never fetched). An atomic, missing-only
+    /// initialization: the write + the manifest persist run under the
+    /// repository's existing lock, and any container whose
+    /// <see cref="ModContainer.DisplayMetadata"/> is already non-null (whether
+    /// equal or different) returns <c>false</c> with no rewrite. Source-agnostic:
+    /// the caller supplies an already-normalized
+    /// <see cref="ModDisplayMetadata"/> (Integrations owns the Nexus DTO mapping).
+    /// </summary>
+    /// <remarks>
+    /// This is the missing-only initialization seam. A refresh of an already-
+    /// populated container (e.g. a re-acquisition that fetched newer summary or
+    /// thumbnail text) goes through <see cref="AddVersion"/>'s non-null
+    /// <c>displayMetadata</c> argument, which replaces the prior value in the
+    /// same manifest update as the version mutation. This method never
+    /// overwrites a value that is already present, so a concurrent writer
+    /// (acquisition, another backfill, a manual edit) cannot be silently
+    /// clobbered by a stale fetch that raced between the Get and the write.
+    /// </remarks>
+    /// <param name="containerId">The target container.</param>
+    /// <param name="metadata">The display metadata to initialize with. Must not
+    /// be <c>null</c>.</param>
+    /// <returns><c>true</c> when the metadata was set + persisted (the
+    /// container existed and its <see cref="ModContainer.DisplayMetadata"/> was
+    /// <c>null</c>). <c>false</c> when the container id is unknown or its
+    /// <see cref="ModContainer.DisplayMetadata"/> is already non-null; the
+    /// manifest is not rewritten in either case.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="metadata"/> is
+    /// <c>null</c>.</exception>
+    bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata);
 
     /// <summary>
     /// Removes a version from the container's manifest + deletes its folder

@@ -34,7 +34,8 @@ public interface IModRepository
     ModContainer? FindBySource(ModSource source);     // Nexus by ModId; Linked by normalized ExternalPath; null for Untracked
     ModContainer? FindUntrackedByName(string name);   // Untracked identity is the container Name
     ModContainer CreateContainer(ModSource source, string name);
-    ModContainer AddVersion(Guid containerId, string versionString, Action<string> populateFolder, DateTimeOffset? remoteUploadedAt = null);
+    ModContainer AddVersion(Guid containerId, string versionString, Action<string> populateFolder, DateTimeOffset? remoteUploadedAt = null, ModDisplayMetadata? displayMetadata = null);
+    bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata);   // atomic missing-only initialization
     ModContainer? RenameContainer(Guid containerId, string newName);   // display label only; Id unchanged, directory does not move
     void RemoveVersion(Guid containerId, string versionFolder);
     void PruneUnreferenced(IReadOnlySet<(Guid ContainerId, string VersionFolder)> referenced);
@@ -56,7 +57,7 @@ public interface IModRepository
 - `CreateContainer(source, name)`: new UUID container + empty `container.json`.
   Does not check for an existing same-identity container (the caller does that
   via `FindBySource` / `FindUntrackedByName` first).
-- `AddVersion(containerId, versionString, populateFolder, remoteUploadedAt = null)`: upsert by
+- `AddVersion(containerId, versionString, populateFolder, remoteUploadedAt = null, displayMetadata = null)`: upsert by
   `versionString`. Re-adding the same tag reuses + refreshes its opaque folder
   (no re-order, `IsLatest` + `ImportedAt` unchanged; `RemoteUploadedAt` IS
   overwritten from `remoteUploadedAt`, matching how dedup refreshes files); a
@@ -65,7 +66,15 @@ public interface IModRepository
   underlying remote file's publish date, captured at acquisition for
   remote-source mods (Nexus) and stamped on the entry as `RemoteUploadedAt`
   (the update-check comparison basis). `null` for manual imports + non-remote
-  sources.
+  sources. Display metadata is container-scoped, not version-scoped: a non-null
+  `displayMetadata` replaces `ModContainer.DisplayMetadata` in the **same
+  manifest update** as the version mutation (a new version or a dedup), so an
+  acquisition that fetched newer summary/thumbnail text wins atomically with
+  the version write; `null` (the default, including a manual re-import via the
+  picker or drag-and-drop) leaves any prior value untouched, so a re-import
+  never erases a prior Nexus acquisition or backfill. A `populateFolder`
+  failure leaves both the version files + the prior metadata unchanged: the
+  manifest write is never reached.
   **Transactional:** the repo stages `populateFolder`'s output into a sibling
   temp dir, then atomically swaps it into the version folder on success
   (same-volume `Directory.Move`); on any failure the temp is cleaned + the
@@ -73,6 +82,26 @@ public interface IModRepository
   is non-destructive (the old version survives a mid-extraction CRC/I/O
   failure). Orphan temps from a process crash are swept at each `AddVersion` +
   at index build (`RebuildIndex`).
+- `TryInitializeDisplayMetadata(containerId, metadata)`: the focused atomic
+  missing-only initialization seam for display metadata. Under the repository's
+  existing lock, it returns `true` + persists the full container manifest when
+  the container exists AND its `DisplayMetadata` is `null`; it returns `false`
+  with no rewrite when the id is unknown OR the metadata is already non-null
+  (whether equal or different). The write precedes the in-memory publication
+  (the manifest is persisted before the in-memory aggregate is updated), so a
+  write failure (disk full, I/O error, permission denied) leaves the in-memory
+  container's metadata `null` and retryable; on success the in-memory index is
+  updated to match. This is the invariant the missing-only backfill relies on:
+  a concurrent writer (an acquisition's `AddVersion` with a non-null
+  `displayMetadata`, another backfill, a manual edit) that set the value
+  between the caller's `Get` and this call cannot be silently clobbered by a
+  stale fetch that raced. A refresh of an already-populated container (a
+  re-acquisition that fetched newer text) goes through `AddVersion`'s non-null
+  `displayMetadata` argument, which replaces the prior value in the same
+  manifest update as the version mutation; this method never overwrites a value
+  that is already present. `metadata` must not be `null`. Source-agnostic: the
+  caller supplies an already-normalized `ModDisplayMetadata` (Integrations owns
+  the Nexus DTO mapping, see [integrations](integrations.md#metadata-backfill-service)).
 - `RenameContainer(containerId, newName)`: renames the container's display
   label (the on-disk `container.json` `Name` field) + persists the manifest.
   Identity `Id` is unchanged: the on-disk container directory is keyed by `Id`,
@@ -123,7 +152,7 @@ UI never touches the filesystem directly.
 ```csharp
 public interface IModImportService
 {
-    (Guid ContainerId, string VersionId) Import(string sourcePath, string modName, ModSource source, string version, DateTimeOffset? remoteUploadedAt = null);
+    (Guid ContainerId, string VersionId) Import(string sourcePath, string modName, ModSource source, string version, DateTimeOffset? remoteUploadedAt = null, ModDisplayMetadata? displayMetadata = null);
 
     Guid LinkFolder(string externalPath);   // record an external folder as a linked container (no copy)
 
@@ -147,6 +176,14 @@ public interface IModImportService
   the publish date reaches the entry. `null` for manual imports (folder/archive
   via the picker or drag-and-drop) and non-Nexus sources, which aren't
   update-checked anyway.
+- **`displayMetadata`** (optional): source-agnostic display metadata forwarded
+  by the acquisition layer for remote-source mods (Nexus) and passed through to
+  `IModRepository.AddVersion`. A non-null value replaces the container's
+  `DisplayMetadata` in the same manifest update as the version mutation; `null`
+  (the default, including a manual re-import) preserves any prior value, so a
+  re-import never erases a prior Nexus acquisition or backfill. Source-agnostic:
+  Integrations owns the Nexus DTO mapping and passes the result through; this
+  seam does not know about Nexus. See [integrations](integrations.md#metadata-backfill-service).
 - **Return:** the imported version's opaque folder id (`ModVersion.Folder`,
   not the display tag), so the caller can construct a `PinnedPolicy(versionId)`
   pinning the profile entry to exactly the version just imported. The display
@@ -164,8 +201,9 @@ public interface IModImportService
   [Path-traversal safety](#path-traversal-safety) below. A corrupt/CRC failure
   mid-extraction is caught and rethrown as `InvalidDataException` with a plain
   "try downloading again" message.
-- Returns `(containerId, versionString)` so the caller does
-  `IProfileService.AddMod(profileId, containerId, policy)`.
+- Returns `(containerId, versionId)` so the caller does
+  `IProfileService.AddMod(profileId, containerId, policy)`. `versionId` is the
+  opaque on-disk version folder id (`ModVersion.Folder`), not the display tag.
 - Does NOT touch profile mod lists: the caller adds the profile reference after
   the import succeeds (order matters: import the repository copy, then reference
   it from the profile).
@@ -234,6 +272,7 @@ A single mod in the repository (immutable record):
 | `Source` | Where this mod came from: Untracked / Nexus / Linked (`ModSource`, default `UntrackedSource`). |
 | `Name` | The display name + the untracked dedup key. Set at import; for Linked it is the external folder's name (fixed; Curator never renames it). |
 | `Versions` | The container's imported versions (`IReadOnlyList<ModVersion>`). One may carry `IsLatest`. Empty for Linked (no versions). |
+| `DisplayMetadata` | Optional source-agnostic display metadata (`ModDisplayMetadata?`, default `null`). `null` means Curator has not retrieved display metadata; a non-null object with an empty `Summary` and `null` `ThumbnailUrl` is an authoritative fetched result with no display content. Initialized only through `TryInitializeDisplayMetadata` (missing-only) or set at import via `AddVersion`; `AddVersion` with a `null` metadata argument preserves the prior value, so a manual re-import never erases a prior Nexus acquisition or backfill. Backward compatible on disk: a manifest from before this field existed deserializes it to `null`. |
 
 The container's on-disk path is **derived**:
 `<ModsFolder>/<Id>/`. It is never stored absolute, so moving the repository is
@@ -245,6 +284,43 @@ profile's policy to the version it should stage: `LatestPolicy` → the
 `IsLatest` version; `PinnedPolicy(vId)` → the version whose `Folder == vId`
 (raw string equality on the opaque version id). Returns `null` when there is no
 match. Centralized so staging and the startup prune cannot drift.
+
+#### `ModDisplayMetadata` (record)
+
+A cohesive source-agnostic value object for display presentation (the Mods
+library does not reference Integrations or Avalonia):
+
+```csharp
+public sealed record ModDisplayMetadata
+{
+    public string Summary { get; init; } = string.Empty;   // plain text; empty when the source carried none
+    public string? ThumbnailUrl { get; init; }             // absolute HTTPS URL the UI fetches, or null
+    public bool IsAdultContent { get; init; }              // copied verbatim from the upstream flag
+}
+```
+
+- `Summary`: a short, single-paragraph summary suitable for a dense row. Empty
+  when the source carried none. Plain text; the UI does not render markup.
+  Defaults to `string.Empty`.
+- `ThumbnailUrl`: the absolute thumbnail URL the UI fetches and caches, or
+  `null` when the source carried no picture. The UI thumbnail cache accepts
+  only HTTPS URLs, so the Integrations mapper normalizes a Nexus `picture_url`
+  by downgrading any non-HTTPS value to `null`.
+- `IsAdultContent`: whether the source flags the mod as adult content. Copied
+  verbatim; the UI uses it to skip the thumbnail and show the normal
+  placeholder. No filter, setting, badge, or separate workflow hangs off this
+  boolean.
+
+**Null vs. empty.** A `null` `ModContainer.DisplayMetadata` means Curator has
+never retrieved display metadata for the container (the backfill candidate
+state). A non-null object whose `Summary` is empty and whose `ThumbnailUrl` is
+`null` is an authoritative fetched result that simply carries no display
+content (not a candidate). The two states are distinct.
+
+Stored on `container.json`. Backward compatible on disk: a manifest from before
+this field existed deserializes `DisplayMetadata` to `null` (System.Text.Json
+default for a missing nullable property), so no migration pass or schema version
+is required.
 
 #### `ModVersion` (record)
 
@@ -357,7 +433,7 @@ change via the Settings destination takes effect immediately.
 ```
 <ModsFolder>/                 (auto-created on first run)
   <containerUUID>/                  (container dir; id-named, opaque)
-    container.json                  (id + source + name + versions[] - the manifest)
+    container.json                  (id + source + name + versions[] + displayMetadata? - the manifest)
     <versionFolder>/                (opaque-ID version subfolder)
       <baseFolder>/                 (the mod's base folder; name matches <base>.mod)
         <baseFolder>.mod            (the descriptor the loader resolves)
@@ -375,7 +451,10 @@ name into their code, so the staged symlink must carry the base name (not the
 container's display name).
 
 `container.json` is UTF-8 without BOM. Paths are derived (`ModsFolder` +
-UUIDs), never stored absolute.
+UUIDs), never stored absolute. The optional `DisplayMetadata` field is a nested
+object (`{ "summary": ..., "thumbnailUrl": ..., "isAdultContent": ... }`) or
+absent; an older manifest without it deserializes to `null` (see
+[`ModDisplayMetadata`](#moddisplaymetadata-record)).
 
 ## Dependencies
 
@@ -427,6 +506,17 @@ UUIDs), never stored absolute.
   kept by containerId sentinel) + drops an unreferenced one without touching the
   external target; an unknown `$kind` in a manifest's `Source` is skipped
   gracefully during scan.
+- Display metadata: `ModDisplayMetadata` round-trip + the null-vs-empty
+  distinction on `container.json`; `AddVersion` applies a non-null
+  `displayMetadata` in the same manifest update as the version mutation +
+  `null` preserves prior metadata (a manual re-import never erases a prior
+  acquisition or backfill); `AddVersion` display-metadata is untouched on a
+  `populateFolder` failure; `TryInitializeDisplayMetadata` is atomic +
+  missing-only (unknown id + already-non-null return `false` with no rewrite,
+  null-to-non-null transitions under the lock, persist-before-publish so a write
+  failure leaves the value retryable, concurrent `AddVersion` cannot be
+  clobbered by a stale fetch that raced the check-and-set); old manifests load
+  with `DisplayMetadata = null`.
 
 The internal `ModRepository` + `ModImportService` are visible to tests via
 `InternalsVisibleTo` (tests resolve them through the interface via DI).

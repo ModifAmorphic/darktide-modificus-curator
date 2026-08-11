@@ -78,13 +78,26 @@ the headers were absent (`NexusRateLimits.Unknown`, all zeros). A
 also caught + surfaced as `RateLimited = true`. The UI consumes this flag to
 show "check incomplete."
 
+### The metadata-backfill stop
+
+`NexusModMetadataService.BackfillMissingAsync` consumes the same per-response
+limits and stops the pass the same way: a thrown `NexusRateLimitException`
+stops immediately, and a successful response whose reported daily or hourly
+remaining is zero (the same `> 0`-on-the-limit guard) stops after persisting
+the metadata from the triggering response. A `NexusNotAuthenticatedException`
+also stops the pass (auth was revoked mid-pass); a per-mod `NexusApiException`
+is logged and the pass continues. The earliest server-reported reset of an
+exhausted window is computed through the shared `NexusRateLimitReset` helper
+(the update-check service uses the same helper), so the two cannot drift on
+what "the reset is."
+
 Both paths react only after the call has consumed a unit or hit the wall.
 Curator complements these reactive paths with proactive call limiting.
 
 ## How Curator proactively limits its calls
 
 Alongside the reactive paths, Curator caps its own API call rate before the
-wall through three mechanisms. The thresholds and named constants live in
+wall through four mechanisms. The thresholds and named constants live in
 [the rate-limiting strategy reference](../reference/rate-limiting-strategy.md);
 the mechanisms:
 
@@ -100,6 +113,12 @@ the mechanisms:
   last-check timestamp persisted across restarts, so a rapid open/close loop
   does not fire a call per launch. Owned by `IAppStateStore` and
   `UpdateCheckRunner`.
+- **Metadata-backfill 24-hour gate + attempt cap.** The stable-v1 display-
+  metadata backfill runs at most one real pass per persisted 24-hour window
+  and caps each pass at 25 attempted containers, so it cannot burst the budget
+  even on a large repository. The gate timestamp is stamped only after at
+  least one `GetModInfoAsync` request is attempted, and is persisted across
+  restarts. Owned by `INexusModMetadataService`.
 
 ## What Curator does not do
 
@@ -157,14 +176,31 @@ Only authenticated calls to `api.nexusmods.com` count. Per operation:
 - **API-key validate:** 1 call (`ValidateAsync`), only when the user validates
   an API key in the Nexus destination. (The OAuth path resolves the display
   name + Premium state from the access token's JWT payload, with no API call.)
+- **Stable-v1 metadata backfill:** one `GetModInfoAsync` call per attempted
+  missing Nexus container, fired only when the Mods list is in Detailed mode.
+  The active profile's containers are prioritized first, then the remaining
+  repository containers in deterministic Guid order. The pass stops at the
+  first hard rate-limit signal (a thrown `NexusRateLimitException` or a
+  successful response whose reported remaining is zero), and stops early when
+  the candidate set is exhausted. It makes no calls when there is no Nexus
+  auth, the persisted 24-hour gate is still open, or no candidate is missing
+  metadata. A real pass stamps the gate even if it stops early, is cancelled,
+  or fails partway, so a partial pass still counts as "this day's attempt."
+  The metadata is persisted through the repository's atomic
+  `TryInitializeDisplayMetadata`, so a container is only ever counted as
+  Updated when the check-and-set won. Linked and untracked containers are not
+  candidates and never cost a call.
 - **The archive CDN download** (the actual file bytes): served from a CDN URL
   returned by `DownloadLinksAsync`, on a separate CDN host. Not an API call, not
   counted.
 
-The update check is the only automatic Nexus call. It fires on startup, on
-profile switch, and on a periodic timer (default 10 minutes, floor 5), each
-interval-gated via a shared last-check timestamp persisted across restarts; the
-manual "check now" button is throttle-gated. See
+The update check and the Detailed-mode metadata backfill are the automatic
+Nexus calls. The update check fires on startup, on profile switch, and on a
+periodic timer (default 10 minutes, floor 5), each interval-gated via a shared
+last-check timestamp persisted across restarts; the manual "check now" button
+is throttle-gated. The metadata backfill is fired by the density coordinator
+when the Mods list is in Detailed mode, gated to one real pass per persisted
+24-hour window and capped at 25 attempted containers per pass. See
 [the rate-limiting strategy](../reference/rate-limiting-strategy.md) for the
 thresholds. A typical session is a handful of these check calls plus a few
 calls per download.
