@@ -36,6 +36,21 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Assets/app-icon.png" />
+    <!--
+      Quantico Bold (SIL Open Font License 1.1), embedded as an Avalonia
+      resource and referenced by the Launch action via
+      avares://Modificus.Curator/Assets/fonts/Quantico-Bold.ttf#Quantico.
+      Do not alter, subset, or rename the TTF. Its human-readable license ships as
+      the sibling OFL.txt None item below.
+    -->
+    <AvaloniaResource Include="Assets/fonts/Quantico-Bold.ttf" />
+    <!--
+      Copied to both build output and publish output so the SIL OFL 1.1 license +
+      copyright ship with the app (the font itself is bundled in the assembly).
+    -->
+    <None Include="Assets/fonts/OFL.txt"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

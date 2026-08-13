@@ -31,12 +31,47 @@
                 <ResourceDictionary x:Key="Light">
                     <SolidColorBrush x:Key="CuratorCautionBrush" Color="#8A6D00" />
                     <SolidColorBrush x:Key="CuratorCautionBackgroundBrush" Color="#FFF1CC" />
+                    <!--
+                      App self-update status-strip pill. Explicit Light values so
+                      the notice stays legible regardless of the platform accent
+                      (SteamOS can supply a low-contrast SystemAccentColor). The
+                      link + dismiss are styled off these in MainWindow.axaml.
+                    -->
+                    <SolidColorBrush x:Key="CuratorUpdateNoticeBackgroundBrush" Color="#E5F8FA" />
+                    <SolidColorBrush x:Key="CuratorUpdateNoticeHoverBrush" Color="#D2F0F3" />
+                    <SolidColorBrush x:Key="CuratorUpdateNoticePressedBrush" Color="#BDE5E9" />
+                    <SolidColorBrush x:Key="CuratorUpdateNoticeForegroundBrush" Color="#004B53" />
+                    <SolidColorBrush x:Key="CuratorUpdateNoticeBorderBrush" Color="#007C89" />
+                    <SolidColorBrush x:Key="CuratorUpdateNoticeFocusBrush" Color="#004B53" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SolidColorBrush x:Key="CuratorCautionBrush" Color="#E2C019" />
                     <SolidColorBrush x:Key="CuratorCautionBackgroundBrush" Color="#3D3200" />
+                    <SolidColorBrush x:Key="CuratorUpdateNoticeBackgroundBrush" Color="#0C343B" />
+                    <SolidColorBrush x:Key="CuratorUpdateNoticeHoverBrush" Color="#124650" />
+                    <SolidColorBrush x:Key="CuratorUpdateNoticePressedBrush" Color="#185864" />
+                    <SolidColorBrush x:Key="CuratorUpdateNoticeForegroundBrush" Color="#D7FAFD" />
+                    <SolidColorBrush x:Key="CuratorUpdateNoticeBorderBrush" Color="#42D3DF" />
+                    <SolidColorBrush x:Key="CuratorUpdateNoticeFocusBrush" Color="#72E4EC" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
+            <!--
+              Launch action iron-and-rust palette. Theme-independent (a branded
+              primary action): a dark gunmetal face, off-white text, and a rust
+              lower edge in every theme. Defined as plain resources so they
+              resolve to the same value in Light and Dark.
+            -->
+            <SolidColorBrush x:Key="CuratorLaunchFaceBrush" Color="#30383F" />
+            <SolidColorBrush x:Key="CuratorLaunchFaceHoverBrush" Color="#3A444C" />
+            <SolidColorBrush x:Key="CuratorLaunchFacePressedBrush" Color="#242B31" />
+            <SolidColorBrush x:Key="CuratorLaunchTextBrush" Color="#F4EEE9" />
+            <SolidColorBrush x:Key="CuratorLaunchRustBrush" Color="#D86638" />
+            <SolidColorBrush x:Key="CuratorLaunchRustHoverBrush" Color="#E47742" />
+            <SolidColorBrush x:Key="CuratorLaunchRustPressedBrush" Color="#C95A32" />
+            <SolidColorBrush x:Key="CuratorLaunchFaceDisabledBrush" Color="#3A3F44" />
+            <SolidColorBrush x:Key="CuratorLaunchRustDisabledBrush" Color="#5A4036" />
+            <SolidColorBrush x:Key="CuratorLaunchTextDisabledBrush" Color="#8C8F92" />
+            <SolidColorBrush x:Key="CuratorLaunchFocusBrush" Color="#57E8F6" />
             <!--
               The LocalizationService is exposed app-wide as a resource so every
               view binds localized strings through one source + one instance:

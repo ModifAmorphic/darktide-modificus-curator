@@ -299,6 +299,24 @@ the pill) also dismisses for the session. Dismissal is session-only, not
 persisted: a persisted dismissal would wrongly hide a later update, so the
 notice re-shows next startup if an update is still available.
 
+### Theme-safe styling (issue #181)
+
+The pill, its link, and its dismiss icon draw only from app-owned theme-driven
+brushes (the `CuratorUpdateNotice*` resources in `App.axaml`, one set per Light
+and Dark `ThemeDictionary`), never from `SystemAccentColor` or
+`SystemControlForegroundAccentBrush`. This matters because SteamOS supplies a
+platform accent the app cannot control, and a low-contrast accent made the old
+accent-bordered pill illegible. The link is a `HyperlinkButton` whose scoped
+`updateNoticeLink` styles pin its foreground and per-state background on the
+Fluent `ContentPresenter`, and the dismiss `Button` is scoped the same way
+(`updateNoticeDismiss`); both cover normal, `:pointerover`, `:pressed`,
+`:disabled`, and `:focus-visible`. The class-qualified `/template/
+ContentPresenter#PART_ContentPresenter` selectors outrank the Fluent
+ControlTheme's own per-state setters (which reapply accent-derived resources),
+so the platform accent cannot reintroduce an illegible color. The link keeps its
+underline and hand cursor (HyperlinkButton defaults). A subdued Curator
+cyan/teal treatment fits the app without competing with the Launch action.
+
 ### The Settings "Updates" section
 
 The Settings destination adds an "Updates" section that always renders (so

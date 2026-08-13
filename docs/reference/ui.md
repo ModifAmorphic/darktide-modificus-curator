@@ -299,6 +299,25 @@ factory in the composition root before the window is returned/shown.
   destination and never carries a selected state. Compact mode shows its drawn
   Material logout geometry with a tooltip + accessibility name; expanded mode
   adds the localized `Exit` label.
+- **Launch action + theme-safe update notice.** The header Launch button carries
+  a branded iron-and-rust treatment via the `Button.launchAction` class: a dark
+  gunmetal face, off-white Quantico Bold display text (the embedded
+  `Assets/fonts/Quantico-Bold.ttf`, SIL OFL 1.1, shipped unmodified; bold with
+  1-DIP letter spacing and `TextOptions.TextHintingMode="Strong"` /
+  `BaselinePixelAlignment="Aligned"` for crisp rendering; its
+  `OFL.txt` license is copied to build and publish output), a rust lower edge, a drawn play-arrow `<Path>`, and the
+  uppercase `Launch_ButtonDisplay` visible label while the accessible name and
+  tooltip stay `Launch_Button`. The dismissible app-update status-strip pill,
+  its link (`HyperlinkButton.updateNoticeLink`), and its dismiss
+  (`Button.updateNoticeDismiss`) draw only from app-owned theme-driven brushes.
+  Both surfaces' colors are app-owned resources in `App.axaml`:
+  theme-independent `CuratorLaunch*` brushes (face/text/rust/focus, identical in
+  Light and Dark) and per-theme `CuratorUpdateNotice*` brushes (background,
+  hover, pressed, foreground, border, focus per Light/Dark `ThemeDictionary`).
+  Scoped `/template/ ContentPresenter#PART_ContentPresenter` selectors cover
+  normal, `:pointerover`, `:pressed`, `:disabled`, and `:focus-visible` for both,
+  outranking the Fluent ControlTheme's accent-reapplying per-state setters so
+  neither surface depends on `SystemAccentColor`.
 - **Falls back silently** to the XAML `OpenPaneLength=200` when the live
   `LocalizationService` is unavailable (design-time paths) or when
   measurement throws at runtime; never crashes the window.

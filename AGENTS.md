@@ -80,7 +80,17 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           one persistent `UserControl` per destination,
                           visibility-switched by `Is*Visible` projections; a
                           global header shows the current destination title +
-                          Launch Darktide; the status strip carries the running /
+                          Launch Darktide (a branded iron-and-rust primary action
+                          via `Button.launchAction`: dark gunmetal face, off-white
+                          Quantico Bold display text from the embedded
+                          `Assets/fonts/Quantico-Bold.ttf` (SIL OFL 1.1),
+                          rust lower edge, a drawn play-arrow icon, the uppercase
+                          `Launch_ButtonDisplay` visible label while the
+                          accessible name + tooltip stay `Launch_Button`,
+                          explicit normal/hover/pressed/disabled states, a Curator
+                          cyan `:focus-visible` border at the same thickness so
+                          focus adds no layout shift, MinHeight 44 DIP); the
+                          status strip carries the running /
                           pending / nxm-handler / app-update indicators; the
                           pane's `Auto,*,Auto` grid anchors a drawn-icon Exit
                           button at the bottom (row 2, not a destination, no
@@ -548,8 +558,14 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           dismiss button OR cancel-on-confirm, the notice-click
                           flow is confirm then download-under-ProgressDialog
                           then ApplyUpdatesAndRestart which exits the process
-                          + Velopack relaunches) + the Settings destination
-                          "Updates" section; the
+                          + Velopack relaunches; the pill, its link
+                          (`HyperlinkButton.updateNoticeLink`), and its dismiss
+                          (`Button.updateNoticeDismiss`) draw only from app-owned
+                          per-theme `CuratorUpdateNotice*` brushes, scoped over
+                          the Fluent `ContentPresenter` for normal/hover/pressed/
+                          disabled/focus-visible so a low-contrast SteamOS accent
+                          (issue #181) cannot make the notice illegible) + the
+                          Settings destination "Updates" section; the
                           `IAppUpdateService.UpdateStateChanged` event fires on a
                           threadpool thread and the shell/Settings handlers
                           marshal to the UI thread via the shared `Action<Action>`
