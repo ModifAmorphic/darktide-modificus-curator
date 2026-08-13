@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.1](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.27.0...v0.27.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* **ui:** improve update notice and launch action styling ([#189](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/189)) ([df0f5ca](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/df0f5cac4a1a6fb6deaee7b34b096b6e1ef5bfea)), closes [#181](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/181)
+
 ## [0.27.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.26.0...v0.27.0) (2026-08-13)
 
 
