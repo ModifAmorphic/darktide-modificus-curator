@@ -1133,6 +1133,8 @@ dotnet run   --project src/ui --configuration Release   # app shell window
 
 ## Key docs
 
+- `STEAMDECK.md` (root) -- the user-facing Steam Deck setup and SteamOS Gaming
+  Mode workflow guide.
 - `docs/architecture/` -- the Modificus Curator architecture (component model,
   the Relay contract Curator consumes, profiles, launch).
 - `docs/reference/` -- per-library API reference for the Modificus

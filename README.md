@@ -88,6 +88,9 @@ support in-app self-update.
 **Recommended:** The AppImage includes .NET 10, adds a desktop entry and icon,
 and supports Curator's in-app Download and Restart updates.
 
+**Steam Deck:** see [`STEAMDECK.md`](STEAMDECK.md) for the complete Steam Deck
+setup and SteamOS Gaming Mode workflow.
+
 Install the latest stable AppImage:
 
 ```sh
