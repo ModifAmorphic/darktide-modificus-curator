@@ -71,7 +71,7 @@ then finish setup in Desktop Mode:
 
 ## Touchscreen configuration
 
-These steps enable native finger scrolling in Curator. You set them on
+These steps enable native touch scrolling in Curator. You set them on
 Curator's own controller configuration in Steam:
 
 1. Open Curator's Steam library page, then open its controller configuration.
@@ -83,7 +83,16 @@ Curator's own controller configuration in Steam:
 6. Choose **Add Command**, then **System > Touchscreen Native Support**.
 
 With **Touchscreen Native Support** active, you can scroll Curator's lists by
-dragging with your fingers.
+touch scrolling: drag across a list to scroll it.
+
+On the Mods list, touch scrolling starts anywhere outside the dedicated reorder
+grip at the left edge of each row. That grip is reserved for reordering: drag it
+up or down to move a mod, after a small movement threshold so a tap does not
+reorder. Dragging anywhere else on the row stays touch scrolling, so you can
+move through a long list without accidentally reordering mods. A mod whose
+position you want to protect can be locked in place (the lock button beside Move
+Up and Move Down); a locked row's grip is inert and its whole row scrolls with
+touch input.
 
 ## Gaming Mode
 
@@ -126,7 +135,7 @@ Darktide directly from Steam remains vanilla.
 
 - **Curator opens through Proton, or fails to start:** remove any forced
   compatibility tool from the Curator shortcut. Curator runs natively.
-- **Finger drag selects text instead of scrolling:** confirm
+- **Touch drag selects text instead of scrolling:** confirm
   **Touchscreen Native Support** is on the active action set (see
   [Touchscreen configuration](#touchscreen-configuration)).
 - **Need to add, import, or update mods, or open a folder:** switch back to

@@ -201,7 +201,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `Container.Sizing="Width"`, so a `ContainerQuery
                           max-width:680` in `UserControl.Styles` swaps the layout
                           at the 680-DIP card-width breakpoint): column 0 is the
-                          thumbnail/placeholder slot, column 1 holds the name +
+                          drag-reorder grip, column 1 is the
+                          thumbnail/placeholder slot, column 2 holds the name +
                           source badge (row 0) + a two-line plain-text summary
                           (row 1, `MaxLines=2`, `Wrap`, `CharacterEllipsis`; the
                           full text is retained in the tooltip when non-null, and
@@ -209,13 +210,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           summary/fallback), and row 2
                           is a single `WrapPanel` action strip. Wide (card width
                           greater than 680 DIP): a 112-DIP rounded `UniformToFill`
-                          thumbnail spans all three rows (column 0, `RowSpan=3`)
-                          and the action strip occupies only the right column.
+                          thumbnail spans all three rows (column 1, `RowSpan=3`)
+                          and the action strip occupies only the content column.
                           Constrained (card width at or below 680 DIP): the
                           thumbnail shrinks to 72 DIP spanning only name +
                           summary (`RowSpan=2`) and the same action strip moves to
-                          a full-width row beneath both columns
-                          (`Grid.ColumnSpan=2`). Width, height, row span, action
+                          a full-width row beneath all three columns
+                          (`Grid.ColumnSpan=3`). Width, height, row span, action
                           column, and action column span are driven by styles
                           (default wide styles + the container-query overrides),
                           not local values, so the breakpoint can change them;
@@ -269,6 +270,79 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           corrupt disk entry exactly once, decodes successful loads
                           into an app-lifetime in-memory image cache, and prunes
                           cache files older than 90 days best-effort.
+                          The mod-row reorder surface: a dedicated drag grip at
+                          the left edge of every Compact + Detailed row (a 32-DIP
+                          transparent, hit-testable Border with a drawn Material
+                          drag-handle Path) is the only place a pointer gesture
+                          may initiate row reordering; dragging anywhere else in
+                          a row stays ordinary touch scrolling (important on the
+                          Steam Deck touch list). A press on an unlocked grip
+                          calls `PreventGestureRecognition`, marks handled, and
+                          captures the pointer to the grip; a reorder starts only
+                          after an 8-DIP movement threshold (a tap is inert).
+                          While dragging, the target rank is computed among the
+                          other unlocked rows only (locked rows are never
+                          destinations; an unlocked row may cross locks), a 2-DIP
+                          accent insertion line renders before/after the target
+                          row (non-hit-testable), the realized item container (the
+                          full-width actual row) is lifted via a `RenderTransform`
+                          `TranslateTransform` + `ZIndex` so it follows the pointer
+                          while its layout slot stays reserved (rows do not jump),
+                          and a `DispatcherTimer` edge-band auto-scrolls the
+                          ScrollViewer, keeping the lifted row under the pointer +
+                          recomputing the target/marker per step. Every mutated
+                          container property is restored from a snapshot on each
+                          finish/cancel path (before VM Reload on a valid drop).
+                          A release inside the viewport recomputes the target
+                          from the final release position (closing the one-tick
+                          auto-scroll/layout lag), releases capture, then commits
+                          through
+                          `ModListViewModel.CommitReorderCommand` (one immutable
+                          `ReorderRequest` of source ContainerId + target
+                          unlocked rank; the pure `ModReorderPlanner` builds the
+                          legal full order around locked slots; the planner
+                          rejects same-rank / out-of-range / locked-source /
+                          missing-source requests without a service call, so a
+                          no-op persists nothing). Escape, `PointerCaptureLost`,
+                          view detachment, a release outside the viewport, or an
+                          invalid target all cancel without persistence + restore
+                          the lifted container. Capture
+                          is released before the VM command runs because Reload
+                          rebuilds row containers. The gesture is single-pointer:
+                          a second grip press while a row gesture is armed is
+                          ignored before it can claim the gesture, and Move /
+                          Release / CaptureLost process only the active captured
+                          pointer (by reference), so a simultaneous second
+                          pointer cannot move, commit, cancel, or release the
+                          active gesture. The gesture is custom pointer
+                          handling, structurally separate from the outer Grid's
+                          native external file/folder `DragDrop.DoDragDropAsync`
+                          handlers (which are unchanged); native drag is rejected
+                          for reorder because Avalonia 12.1 X11 lacks Escape
+                          cancel and its platform modal loops make the touch
+                          threshold/marker/auto-scroll less dependable. Move Up /
+                          Move Down move an unlocked row one unlocked rank,
+                          crossing locked rows; the lock toggle
+                          (`ToggleOrderLockCommand` -> `SetModOrderLocked`)
+                          flips lock metadata only and does NOT set
+                          `HasPendingChanges` (lock metadata alone does not
+                          change the staged mod tree or `mods.lst`). A locked
+                          row's grip has `IsHitTestVisible=False` (bound to
+                          `IsGripEnabled`) so its area falls through to touch
+                          scrolling; both move buttons disable for a locked row;
+                          the lock button's locked state reads through BOTH shape
+                          (closed vs. open padlock) and color (a caution-yellow
+                          `CuratorCautionBackgroundBrush` fill + caution-yellow
+                          closed-padlock foreground, preserved on hover) + a
+                          dynamic localized lock/unlock tooltip/automation name.
+                          Both row roots expose the same
+                          grip/lock/move behavior and route to the same
+                          handlers/commands. `OrderLocked` is threaded from each
+                          `ModListEntry` through `Reload` into `ModItemViewModel`;
+                          the pure gesture math (`ReorderGestureMath`: threshold,
+                          target rank, marker direction, lift translation, edge
+                          auto-scroll + clamp) is unit-tested separately. No
+                          `ConfigureAwait(false)` anywhere in the gesture path.
                           the Nexus destination
                           (`IntegrationsViewModel` + `IntegrationsView`,
                           Nexus-only): OAuth + developer-gated API-key + nxm handler
@@ -575,6 +649,14 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           + mods.lst name; the StagingLinkCreator delegate selects
                           junction vs symlink per OS; a linked container stages
                           directly from its external folder, no version resolution) + SetModPolicy transitions + the
+                        profile-scoped load-order lock (ModListEntry.OrderLocked:
+                        a locked entry keeps its exact zero-based index across
+                        SetModOrder, so a reorder projects the requested ordering
+                        onto the unlocked slots only; toggled via
+                        SetModOrderLocked, metadata-only so it implies no staged
+                        change; AddMod appends unlocked + compacts Order dense,
+                        RemoveMod drops the entry + compacts survivors so a
+                        surviving lock's new dense index is the new baseline) + the
                         import-time base-name collision hard-block
                         (GetBaseNameCollision; two same-folder mods can't coexist
                         in a profile; resolves a linked mod's base name from the
@@ -899,6 +981,21 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             broken, OpenFolderCommand launch + failure alert, the
                                             disabled policy + empty update-action cell for linked
                                             rows, IsExternalBroken on Reload);
+                                            + the profile-scoped load-order lock + drag-reorder
+                                            surface (the lock-aware FakeProfileService projection,
+                                            OrderLocked carried on Reload + move/grip availability,
+                                            ToggleOrderLock persists without HasPendingChanges,
+                                            locked-row move/drag no-ops, Move Up/Down skip locked
+                                            rows with locked-first-stays-first, drag CommitReorder to
+                                            first/middle/last unlocked rank with multiple locks +
+                                            one SetModOrder call + exact final order, same-rank /
+                                            invalid-rank / missing-source / locked-source /
+                                            no-active-profile rejection, no-lock move regression)
+                                            + the pure reorder math (ReorderGestureMath threshold
+                                            inclusive at 8 DIP, target unlocked rank over others
+                                            only, marker before/after/none, lift translation
+                                            (pointer delta + scroll-offset delta, both directions),
+                                            edge-band auto-scroll + offset clamp);
                                             + the DmfPromptService (the two DMF
                                             cases: add existing / download + add or
                                             browser-open, the new-profile trigger, the
@@ -1100,7 +1197,12 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   clears, surfaced as a yellow "changes pending" status dot while the game
   runs), global
   Preferences + i18n infrastructure, the mod-list UI (view mods with
-  source/version badges, enable/disable, remove-with-confirm, reorder, per-mod
+  source/version badges, enable/disable, remove-with-confirm, reorder (drag the
+  per-row grip at the left edge, Move Up / Move Down buttons, or auto-sort;
+  profile-scoped per-row order locks keep a row's exact zero-based position
+  across any reorder or auto-sort, toggled by a lock button beside Move Up /
+  Move Down; the grip is the only surface that initiates a drag so the rest of
+  every row stays touch-scrolling surface), per-mod
   Latest/Pinned policy, auto-sort identity stub, local folder/archive import
   via file picker + drag-and-drop, and linking an external mod folder without
   copying it, joined to containers via `IModRepository` by

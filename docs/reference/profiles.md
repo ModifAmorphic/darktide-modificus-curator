@@ -40,6 +40,7 @@ public interface IProfileService
     IReadOnlyList<ModListEntry> GetModList(Guid id);
     void SetModOrder(Guid id, IReadOnlyList<Guid> containerIdsInOrder);
     void SetModEnabled(Guid id, Guid containerId, bool enabled);
+    void SetModOrderLocked(Guid id, Guid containerId, bool orderLocked);
     void AddMod(Guid id, Guid containerId, ModVersionPolicy policy);
     void SetModPolicy(Guid id, Guid containerId, ModVersionPolicy policy);
     void RemoveMod(Guid id, Guid containerId);
@@ -96,21 +97,34 @@ Method behavior:
 - `SetModOrder(id, containerIdsInOrder)` -- reassigns each entry's `Order` so the
   listed containers come first; unmentioned mods keep their relative order
   appended after; unknown ids are ignored. No mods are added or removed.
+  **Lock projection:** an entry with `OrderLocked = true` keeps its current
+  zero-based load-order index; the requested ordering is projected onto the
+  unlocked slots only, so a locked row cannot be displaced. With no locks,
+  behavior is a plain reorder of the whole list. `Order`
+  values are renumbered dense 0..n-1.
 - `SetModEnabled(id, containerId, enabled)` -- toggles a single mod. Throws
   `KeyNotFoundException` if the profile or the container is not in its list.
-- `AddMod(id, containerId, policy)` -- appends a mod entry (`Enabled = true`) at
-  the end. **List entry only: does NOT fetch or install mod files** (the
-  repository holds the files; staging symlinks to them). Idempotent: re-adding a
-  `containerId` already in the list is a no-op (order/enabled/policy untouched).
+- `SetModOrderLocked(id, containerId, orderLocked)` -- toggles a single mod's
+  `OrderLocked`. Lock metadata alone preserves order, enabled, and policy, and
+  implies no staged-game change (the staged root is regenerated on the next
+  `PrepareModRoot`). Throws `KeyNotFoundException` if the profile or the
+  container is not in its list.
+- `AddMod(id, containerId, policy)` -- appends a mod entry (`Enabled = true`,
+  `OrderLocked = false`) at the end and renumbers `Order` dense across the list.
+  **List entry only: does NOT fetch or install mod files** (the repository holds
+  the files; staging symlinks to them). Idempotent: re-adding a `containerId`
+  already in the list is a strict no-op (order/enabled/policy/lock untouched).
 - `SetModPolicy(id, containerId, policy)` -- records the new policy. Resolution
   happens at stage time, so there is no on-disk transition (the policy is just
   metadata; `PrepareModRoot` re-resolves on the next launch). A `PinnedPolicy` is
   validated: its `VersionId` must reference a version present on the container,
   else `ArgumentException` (the UI dropdown can't produce a bad id; this guards
   programmatic / stale-id calls). `LatestPolicy` needs no check.
-- `RemoveMod(id, containerId)` -- drops the entry. The repository copy is **not**
-  touched (other profiles may still reference it; the startup prune reclaims it
-  when no profile does).
+- `RemoveMod(id, containerId)` -- drops the entry (locked or unlocked), then
+  renumbers survivor `Order` dense 0..n-1; the new survivor indices are the new
+  baseline for surviving locks. The repository copy is **not** touched (other
+  profiles may still reference it; the startup prune reclaims it when no profile
+  does).
 - `GetBaseNameCollision(id, baseName, excludeContainerId)`: pre-checks a
   base-name collision for the add flow: returns the profile mod (if any) whose
   resolved base folder name matches `baseName`, excluding
@@ -142,9 +156,14 @@ Method behavior:
 - `ModListEntry` -- a single mod within a profile's list (immutable record):
   `ContainerId` (Guid; the join key against `IModRepository`), `Enabled`
   (disabled mods are omitted from `mods.lst`: enable-by-omission), `Order`
-  (`int`, lower loads first), `Policy` (default `ModVersionPolicy.Latest`;
-  drives version resolution). Mutations go through `IProfileService`, which
-  rebuilds the changed entry via `with` expressions and persists.
+  (`int`, lower loads first), `OrderLocked` (bool, default false; when true the
+  entry keeps its current zero-based load-order index across `SetModOrder`
+  calls, independent of `Enabled` -- a disabled or linked row can still be
+  order-locked), `Policy` (default `ModVersionPolicy.Latest`; drives version
+  resolution). Mutations go through `IProfileService`, which rebuilds the
+  changed entry via `with` expressions and persists. An existing `profile.json`
+  written before `OrderLocked` existed loads every entry unlocked (the bool
+  default for a missing property).
 - `Profile` -- the aggregate root persisted to
   `<ProfilesBaseFolder>/<Id>/profile.json`. Identity is `Id` (a `Guid`, stable
   across renames and the on-disk directory name); `Name` is a display label, not
@@ -427,6 +446,13 @@ atomicity, and `ListProfiles`/`ProfileCreated` projecting description), mod
 list ordering/enable/policy + the base-name collision hard-block
 (`ModListTests`, including the legacy-Name-entry drop + null-Policy coercion +
 `GetBaseNameCollision` over all/none/disabled/excluded/corrupted cases), the
+profile-scoped load-order locks (`ModOrderLockTests`: `OrderLocked` persistence
++ the older-profile-json backward-compatible load, the `SetModOrder` lock
+projection over locked-first/multiple/all-locked/partial/unknown/duplicate/
+no-lock-regression cases, `SetModOrderLocked` true/false + unknown-mod
+behavior, `AddMod` append-unlocked + compaction + idempotent re-add preserving
+lock, and `RemoveMod` compaction/re-baselining permitting a locked row's
+removal), the
 launch-settings model + service (`LaunchSettingsTests`: round-trip across a
 fresh instance, old-JSON-loads-empty + explicit-null normalization, order +
 duplicate preservation, the full validation surface -- empty / `=` / NUL name,

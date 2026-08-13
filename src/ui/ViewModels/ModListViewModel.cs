@@ -860,6 +860,7 @@ public partial class ModListViewModel : ObservableObject
                 entry.Policy,
                 container?.Versions ?? Array.Empty<ModVersion>(),
                 found,
+                entry.OrderLocked,
                 container?.DisplayMetadata);
             // Linked availability is a transient signal the repo recomputes on
             // rescan; read it once per Reload (no live watcher). Always false for
@@ -874,6 +875,13 @@ public partial class ModListViewModel : ObservableObject
 
         HasMods = Mods.Count > 0;
         ModCount = Mods.Count;
+
+        // Compute per-row move availability over unlocked rows only: an unlocked
+        // row's move-up button is enabled when an unlocked row precedes it, and
+        // move-down when an unlocked row follows it. Locked rows disable both
+        // (their reorder grip is also disabled). Pushed down so the view binds
+        // directly without a parent walk.
+        ApplyMoveAvailability();
 
         // The freshly built rows default UpdateAvailable=false + carry no
         // premium / global-busy state. Push the current global state down, then
@@ -964,44 +972,160 @@ public partial class ModListViewModel : ObservableObject
         _logger.LogDebug("Toggled {Container} enabled={Enabled}", row.ContainerId, row.Enabled);
     }
 
-    // ---- reorder (up / down) -----------------------------------------------
+    // ---- reorder (up / down / drag) ----------------------------------------
 
     /// <summary>
-    /// Moves a row up one position: swaps with its predecessor in <see cref="Mods"/>,
-    /// persists the new container-id order through <see cref="IProfileService.SetModOrder"/>,
-    /// then reloads (so the persisted <see cref="ModListEntry.Order"/> fields drive
-    /// the display). No-op at the top or with no active profile.
+    /// Computes + pushes per-row <see cref="ModItemViewModel.CanMoveUp"/> /
+    /// <see cref="ModItemViewModel.CanMoveDown"/> over the unlocked rows only.
+    /// An unlocked row's move-up is enabled when an unlocked row precedes it, and
+    /// move-down when an unlocked row follows it; locked rows disable both.
+    /// Called at the end of <see cref="Reload"/> so the buttons reflect the
+    /// current order + lock state after every edit.
     /// </summary>
-    [RelayCommand]
-    private void MoveUp(ModItemViewModel? row) => Move(row, -1);
+    private void ApplyMoveAvailability()
+    {
+        var unlockedIndex = 0;
+        var unlockedCount = Mods.Count(m => !m.OrderLocked);
+        foreach (var row in Mods)
+        {
+            if (row.OrderLocked)
+            {
+                row.CanMoveUp = false;
+                row.CanMoveDown = false;
+                continue;
+            }
+
+            row.CanMoveUp = unlockedIndex > 0;
+            row.CanMoveDown = unlockedIndex < unlockedCount - 1;
+            unlockedIndex++;
+        }
+    }
 
     /// <summary>
-    /// Moves a row down one position (symmetric to <see cref="MoveUp"/>). No-op at
-    /// the bottom or with no active profile.
+    /// The unlocked rank of <paramref name="containerId"/> in <see cref="Mods"/>,
+    /// or -1 when it is locked / missing. Unlocked rank counts only unlocked rows.
+    /// </summary>
+    private int UnlockedRankOf(Guid containerId)
+    {
+        var rank = 0;
+        foreach (var row in Mods)
+        {
+            if (row.OrderLocked)
+            {
+                continue;
+            }
+
+            if (row.ContainerId == containerId)
+            {
+                return rank;
+            }
+
+            rank++;
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Moves a row up one unlocked rank: the row swaps to the previous UNLOCKED
+    /// slot, crossing any locked rows it passes. Locked rows, the top unlocked
+    /// row, and a no-active-profile call are strict no-ops. Persists the new
+    /// full order through <see cref="IProfileService.SetModOrder"/> exactly once,
+    /// marks the session pending on a real order change, and reloads.
     /// </summary>
     [RelayCommand]
-    private void MoveDown(ModItemViewModel? row) => Move(row, +1);
+    private void MoveUp(ModItemViewModel? row) => MoveTo(row, -1);
 
-    private void Move(ModItemViewModel? row, int delta)
+    /// <summary>
+    /// Moves a row down one unlocked rank (symmetric to <see cref="MoveUp"/>).
+    /// No-op for a locked row, the bottom unlocked row, or no active profile.
+    /// </summary>
+    [RelayCommand]
+    private void MoveDown(ModItemViewModel? row) => MoveTo(row, +1);
+
+    /// <summary>
+    /// Shared move core: resolves the row's current unlocked rank, adds
+    /// <paramref name="delta"/>, and commits the reorder through
+    /// <see cref="CommitReorderCore"/>. Boundary rejection (target out of range
+    /// or a no-op) happens inside the planner, so a no-move call makes no service
+    /// call. No-op for a locked row or no active profile.
+    /// </summary>
+    private void MoveTo(ModItemViewModel? row, int delta)
+    {
+        if (row is null || _session.ActiveProfileId is not Guid id || row.OrderLocked)
+        {
+            return;
+        }
+
+        var sourceRank = UnlockedRankOf(row.ContainerId);
+        if (sourceRank < 0)
+        {
+            return;
+        }
+
+        CommitReorderCore(id, new ReorderRequest(row.ContainerId, sourceRank + delta));
+    }
+
+    /// <summary>
+    /// Commits a drag-reorder request: validates against the current rows,
+    /// rejects locked / missing / out-of-range / no-op requests without a service
+    /// call, constructs the exact legal full order around locked slots, persists
+    /// it through <see cref="IProfileService.SetModOrder"/> exactly once, marks
+    /// the session pending only on a real order change, and reloads.
+    /// </summary>
+    [RelayCommand]
+    private void CommitReorder(ReorderRequest? request)
+    {
+        if (request is null || _session.ActiveProfileId is not Guid id)
+        {
+            return;
+        }
+
+        CommitReorderCore(id, request.Value);
+    }
+
+    /// <summary>
+    /// Builds + persists a reorder request against the current rows. The planner
+    /// returns null for any invalid or no-op request, so a no-change call makes
+    /// no service call and sets no pending flag.
+    /// </summary>
+    private void CommitReorderCore(Guid profileId, ReorderRequest request)
+    {
+        var rows = Mods.Select(r => (r.ContainerId, r.OrderLocked)).ToArray();
+        var fullOrder = ModReorderPlanner.BuildFullOrder(rows, request);
+        if (fullOrder is null)
+        {
+            return;
+        }
+
+        _profiles.SetModOrder(profileId, fullOrder);
+        _session.HasPendingChanges = true;
+        Reload();
+        _logger.LogDebug(
+            "Reordered container {Container} to unlocked rank {Rank}",
+            request.SourceContainerId, request.TargetUnlockedRank);
+    }
+
+    /// <summary>
+    /// Toggles a row's <see cref="ModListEntry.OrderLocked"/> through
+    /// <see cref="IProfileService.SetModOrderLocked"/> and reloads. Lock metadata
+    /// alone does NOT set <see cref="IProfileSession.HasPendingChanges"/>: it
+    /// does not change the staged mod tree or <c>mods.lst</c> (the order +
+    /// enabled + policy rows are unchanged; only the lock flag flips). No-op with
+    /// no active profile.
+    /// </summary>
+    [RelayCommand]
+    private void ToggleOrderLock(ModItemViewModel? row)
     {
         if (row is null || _session.ActiveProfileId is not Guid id)
         {
             return;
         }
 
-        var from = Mods.IndexOf(row);
-        var to = from + delta;
-        if (from < 0 || to < 0 || to >= Mods.Count)
-        {
-            return;
-        }
-
-        var ids = Mods.Select(m => m.ContainerId).ToArray();
-        (ids[from], ids[to]) = (ids[to], ids[from]);
-
-        _profiles.SetModOrder(id, ids);
-        _session.HasPendingChanges = true;
+        _profiles.SetModOrderLocked(id, row.ContainerId, !row.OrderLocked);
         Reload();
+        _logger.LogDebug(
+            "Set order lock={Locked} on container {Container}", !row.OrderLocked, row.ContainerId);
     }
 
     // ---- per-mod policy ----------------------------------------------------

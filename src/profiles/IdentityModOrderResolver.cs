@@ -2,9 +2,10 @@ namespace Modificus.Curator.Profiles;
 
 /// <summary>
 /// The identity <see cref="IModOrderResolver"/>: returns the container ids in
-/// their current <see cref="ModListEntry.Order"/> (a no-op). Phase-3 stub: the
-/// real dependency-driven auto-sort lands in a later phase; this keeps the UI's
-/// auto-sort toggle wired + shippable now.
+/// their current <see cref="ModListEntry.Order"/> (a no-op). The real
+/// dependency-driven auto-sort resolver is a separate concern; this keeps the
+/// UI's auto-sort toggle wired + shippable now and preserves the seam so the
+/// resolver can drop in without a UI change.
 /// </summary>
 /// <remarks>
 /// Pure + stateless. Stable on equal <see cref="ModListEntry.Order"/> values

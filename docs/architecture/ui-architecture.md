@@ -362,22 +362,52 @@ The command set:
 - **Enable / disable** (`ToggleEnabled`): the row's `Enabled` is two-way
   bound to its CheckBox; this persists the toggle through
   `IProfileService.SetModEnabled`.
-- **Reorder** (`MoveUp` / `MoveDown`): swaps with the predecessor or
-  successor, persists the new container-id order through
-  `IProfileService.SetModOrder`, then reloads so the persisted
-  `ModListEntry.Order` fields drive the display.
+- **Reorder** (`MoveUp` / `MoveDown` / drag grip): moves an unlocked row one
+  unlocked rank, crossing any locked rows, and persists the full container-id
+  order through `IProfileService.SetModOrder` (exactly once) on a real order
+  change. A drag is initiated only from the per-row grip at the left edge (a
+  pointer press there calls `PreventGestureRecognition` + captures the pointer,
+  and a reorder starts after an 8-DIP threshold); dragging anywhere else on a
+  row stays touch scrolling, which matters on the Steam Deck. While dragging,
+  the target rank is computed among the other unlocked rows only (locked rows
+  are never destinations), a 2-DIP accent insertion line marks the target, the
+  realized item container (the full-width actual row) is lifted via a render
+  transform + z-index so it follows the pointer while its layout slot stays
+  reserved, and a `DispatcherTimer` edge-band auto-scrolls the
+  list while keeping the lifted row under the pointer. Every mutated container
+  property is restored on each finish/cancel path. A release inside the viewport commits one immutable `ReorderRequest`
+  (source container id + target unlocked rank) through `CommitReorder`; the pure
+  `ModReorderPlanner` builds the legal full order around locked slots and
+  rejects same-rank / out-of-range / locked-source / missing-source requests
+  without a service call. On release, the target is recomputed from the final
+  release position (so it reflects the layout at release after any auto-scroll),
+  then capture is released and `CommitReorder` runs. Escape, capture loss, view
+  detach, a release outside the viewport, or an invalid target all cancel without
+  persistence. The gesture is single-pointer: a second press while a row gesture
+  is armed is ignored, and Move / Release / CaptureLost process only the active
+  captured pointer (by reference). The gesture
+  is custom pointer handling, separate from the outer Grid's native external
+  file/folder `DragDrop` handlers (which stay external-only).
+- **Order lock** (`ToggleOrderLock`): toggles `ModListEntry.OrderLocked` through
+  `IProfileService.SetModOrderLocked`. A locked row keeps its exact zero-based
+  position across any reorder or auto-sort; its grip stops intercepting pointer
+  input (the area falls through to touch scrolling) and both move buttons
+  disable. Lock metadata alone does NOT set `IProfileSession.HasPendingChanges`:
+  it does not change the staged mod tree or `mods.lst`.
 - **Per-mod policy** (`SetPolicyLatest` / `SetPolicyPinned`): routes through
   `IProfileService.SetModPolicy`. The pin is a constrained dropdown of the
-  container's actual versions (the dropdown exposes the readable tag, stores
-  the opaque folder id, and the parent wraps it as
+  container's actual versions (the dropdown exposes the readable tag, stores the
+  opaque folder id, and the parent wraps it as
   `PinnedPolicy(versionId)`).
 - **Remove** (`Remove`): a confirm gate, then `IProfileService.RemoveMod`.
   The repository copy survives; the confirm is about the profile edit, not
   data loss.
-- **Auto-sort** (`AutoSort`): applies the `IModOrderResolver` and persists.
-  The current resolver is the identity stub (a no-op); a real
-  dependency-driven resolver is out of v1. The seam is DI-swappable, so the
-  UI wires against the abstraction now.
+- **Auto-sort** (`AutoSort`): applies the `IModOrderResolver` and persists. The
+  current resolver is the identity resolver (order unchanged); a real
+  dependency-driven resolver is a separate concern. The seam is DI-swappable, so
+  the UI wires against the abstraction, and a locked row keeps its position
+  through auto-sort because the resolver routes through the lock-projecting
+  `SetModOrder`.
 - **Add** (inline import workflow): the Add split button's four flyout items are
   all modes that set themselves as the default on click (the face label tracks
   the mode): "Add Nexus Mods" (the default; opens the Darktide Nexus Mods games

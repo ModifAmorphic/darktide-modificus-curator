@@ -103,6 +103,78 @@ public partial class ModItemViewModel : ObservableObject
     public int Order { get; }
 
     /// <summary>
+    /// Whether this row's load-order position is locked against reordering. A
+    /// locked row keeps its exact zero-based position; the move up / down buttons
+    /// and the reorder grip are disabled for it, and it is skipped as a drag
+    /// destination. The drag grip stays visually present but non-intercepting for
+    /// a locked row, so its area falls through to touch scrolling. Pushed down by
+    /// the parent from <see cref="ModListEntry.OrderLocked"/> on reload; toggled
+    /// through the parent's <c>ToggleOrderLockCommand</c>.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsGripEnabled))]
+    [NotifyPropertyChangedFor(nameof(OrderLockTooltip))]
+    [NotifyPropertyChangedFor(nameof(OrderLockAutomationName))]
+    private bool _orderLocked;
+
+    /// <summary>
+    /// Whether the move-up button is enabled for this row: an unlocked row with at
+    /// least one unlocked row above it. Computed by the parent on reload (a locked
+    /// row is always <c>false</c>). Pushed down so the view binds directly without
+    /// a parent walk.
+    /// </summary>
+    [ObservableProperty]
+    private bool _canMoveUp;
+
+    /// <summary>
+    /// Whether the move-down button is enabled for this row: an unlocked row with
+    /// at least one unlocked row below it. Computed by the parent on reload (a
+    /// locked row is always <c>false</c>). Pushed down so the view binds directly
+    /// without a parent walk.
+    /// </summary>
+    [ObservableProperty]
+    private bool _canMoveDown;
+
+    /// <summary>
+    /// Whether the drag-reorder grip is enabled for this row: an unlocked row can
+    /// initiate a reorder drag; a locked row's grip is disabled and falls through
+    /// to touch scrolling. The grip stays visually present in both states.
+    /// </summary>
+    public bool IsGripEnabled => !OrderLocked;
+
+    /// <summary>
+    /// Whether the accent insertion marker should render just above this row's top
+    /// edge. Set by the view's pointer gesture on exactly one row (or none) while
+    /// dragging; the marker line itself is non-hit-testable.
+    /// </summary>
+    [ObservableProperty]
+    private bool _showReorderMarkerBefore;
+
+    /// <summary>
+    /// Whether the accent insertion marker should render just below this row's
+    /// bottom edge. Set by the view's pointer gesture on exactly one row (or
+    /// none) while dragging; the marker line itself is non-hit-testable.
+    /// </summary>
+    [ObservableProperty]
+    private bool _showReorderMarkerAfter;
+
+    /// <summary>
+    /// The localized tooltip / automation text for the order-lock toggle button,
+    /// describing the action the click will perform (lock vs. unlock).
+    /// </summary>
+    public string OrderLockTooltip => OrderLocked
+        ? _localization["ModRow_UnlockOrderTooltip"]
+        : _localization["ModRow_LockOrderTooltip"];
+
+    /// <summary>
+    /// The localized automation name for the order-lock toggle button, describing
+    /// the row's current state (locked vs. unlocked) for assistive tech.
+    /// </summary>
+    public string OrderLockAutomationName => OrderLocked
+        ? _localization["ModRow_OrderLocked"]
+        : _localization["ModRow_OrderUnlocked"];
+
+    /// <summary>
     /// The mod's current effective version policy. Set by the parent on reload;
     /// drives <see cref="PolicyChoice"/> + <see cref="PolicyDisplayText"/>.
     /// </summary>
@@ -538,6 +610,8 @@ public partial class ModItemViewModel : ObservableObject
     /// repository); drives the pin dropdown. Empty when the container is missing
     /// or version-less.</param>
     /// <param name="found">Whether the repository had a container for this entry.</param>
+    /// <param name="orderLocked">Whether this entry's position is locked against
+    /// reordering (joined from <see cref="ModListEntry.OrderLocked"/>).</param>
     /// <param name="displayMetadata">Optional display metadata (summary,
     /// thumbnail URL, adult flag) joined from the container. <c>null</c> when
     /// no metadata has been fetched. Defaults to <c>null</c> for existing call
@@ -553,6 +627,7 @@ public partial class ModItemViewModel : ObservableObject
         ModVersionPolicy policy,
         IReadOnlyList<ModVersion> versions,
         bool found,
+        bool orderLocked = false,
         ModDisplayMetadata? displayMetadata = null)
     {
         _localization = localization;
@@ -564,6 +639,7 @@ public partial class ModItemViewModel : ObservableObject
         Order = order;
         Policy = policy;
         Found = found;
+        _orderLocked = orderLocked;
         _displayMetadata = displayMetadata;
 
         // Build the dropdown source from the container's versions: each entry
@@ -612,6 +688,9 @@ public partial class ModItemViewModel : ObservableObject
         // after a culture switch.
         OnPropertyChanged(nameof(SummaryText));
         OnPropertyChanged(nameof(SummaryTooltip));
+        // The lock tooltip + automation name are localized by state; re-fire.
+        OnPropertyChanged(nameof(OrderLockTooltip));
+        OnPropertyChanged(nameof(OrderLockAutomationName));
     }
 }
 

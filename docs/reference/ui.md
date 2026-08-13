@@ -1097,6 +1097,43 @@ calls no service (state-only, unchanged contract). The new members:
 `Refresh()` re-fires `SummaryText` + `SummaryTooltip` (the fallback is
 localized) alongside the existing localized members on a culture change.
 
+### `ModItemViewModel` reorder + order-lock state
+
+The row carries lock + drag state pushed down by `ModListViewModel.Reload` (and
+the view's gesture, for the transient marker/source flags). No I/O, no service
+calls (state-only):
+
+| Member | Meaning |
+| --- | --- |
+| `bool OrderLocked` | Joined from `ModListEntry.OrderLocked` on reload. A locked row keeps its exact zero-based position; its grip + both move buttons are disabled. |
+| `bool CanMoveUp` / `bool CanMoveDown` | Whether the row can move to the previous/next unlocked rank (an unlocked row with an unlocked row above/below). Computed by the parent over unlocked rows on reload; `false` for a locked row. |
+| `bool IsGripEnabled` | Derived: `!OrderLocked`. Bound to the grip's `IsHitTestVisible` so a locked grip stops intercepting pointer input and falls through to touch scrolling. |
+| `string OrderLockTooltip` | Localized tooltip + click-action text for the order-lock button (lock vs. unlock). |
+| `string OrderLockAutomationName` | Localized automation name describing the row's current locked/unlocked state. |
+| `bool ShowReorderMarkerBefore` / `bool ShowReorderMarkerAfter` | Set by the view on at most one row while dragging: the accent insertion line anchors before/after that row. |
+
+`Refresh()` also re-fires `OrderLockTooltip` + `OrderLockAutomationName` on a
+culture change. The lock toggle (`ToggleOrderLock`) and the reorder commit
+(`CommitReorder`) live on `ModListViewModel`; `ModReorderPlanner` is the pure
+order-construction helper (rejects same-rank / out-of-range / locked-source /
+missing-source without a service call), and `ReorderGestureMath` is the pure
+pointer-gesture math (threshold, target rank, marker, lift translation, edge
+auto-scroll + clamp),
+both unit-tested separately. The order-lock button reads through BOTH shape
+(closed vs. open padlock) and color: locked carries a caution-yellow
+`CuratorCautionBackgroundBrush` fill + caution-yellow closed-padlock foreground
+(preserved on hover); unlocked is a neutral open-padlock with a large shackle
+opening. The lifted drag row is realized by lifting the actual item container (a
+render transform follows the pointer while the layout slot stays reserved) +
+z-index + an opaque/cornered/shadowed style; every mutated container property is
+restored on each finish/cancel path. The view-side gesture is single-pointer: a second
+press while a row gesture is armed is ignored, and Move / Release / CaptureLost
+process only the active captured pointer (by reference); on a release inside the
+viewport the target is recomputed from the final release position before the
+commit. The live multi-pointer wiring is reviewer/hardware verified (it cannot be
+exercised in this suite without Avalonia.Headless, which is not added for this
+feature).
+
 ### XAML affordances
 
 - **Toolbar density selector.** Two adjacent drawn-icon `Button`s (the `icon`
@@ -1113,20 +1150,22 @@ localized) alongside the existing localized members on a culture change.
   narrow widths (full text in the tooltip) without pushing the density pair or
   Add out.
 - **Row template.** A `Panel` hosts two mutually exclusive roots selected by the
-  row's `IsDetailed` projection: the existing Compact `Grid` (unchanged except
-  an `IsVisible="{Binding !IsDetailed}"` gate) and a Detailed `Border` (the
-  `detailedRow` style: rounded, low-emphasis). The Detailed card is one adaptive
+  row's `IsDetailed` projection: the existing Compact `Grid` (now with a
+  left-edge drag-grip column + an order-lock button beside Move Up / Move Down)
+  and a Detailed `Border` (the `detailedRow` style: rounded, low-emphasis). The
+  Detailed card is one adaptive
   Grid whose card root carries `Container.Name="detailedModRow"` +
   `Container.Sizing="Width"`, so a `ContainerQuery Name="detailedModRow"
   Query="max-width:680"` in `UserControl.Styles` swaps the layout at the 680-DIP
-  card-width breakpoint. Column 0 is the thumbnail/placeholder slot, column 1
+  card-width breakpoint. Column 0 is the drag-reorder grip, column 1 is the
+  thumbnail/placeholder slot, column 2
   holds the name + source badge (row 0) and the summary (row 1), and row 2 is
   the action strip. Wide (card width greater than 680 DIP): a 112-DIP
   `UniformToFill` thumbnail spans all three rows (`RowSpan=3`) and the action
-  strip occupies only the right column. Constrained (at or below 680 DIP): the
+  strip occupies only the content column. Constrained (at or below 680 DIP): the
   thumbnail shrinks to 72 DIP spanning only name + summary (`RowSpan=2`) and the
-  action strip moves to a full-width row beneath both columns
-  (`Grid.ColumnSpan=2`). Width, height, row span, and action column/span that
+  action strip moves to a full-width row beneath all three columns
+  (`Grid.ColumnSpan=3`). Width, height, row span, and action column/span that
   change at the breakpoint are style-driven (default wide styles + the
   container-query overrides), not local values; constant row/column positions
   stay local. Both roots bind the exact same per-row state + route to the exact
@@ -1500,7 +1539,7 @@ No backend library references the UI (the dependency direction is one-way).
   Profiles library -- plus the `EnableLuaLogs` Logging toggle + the `SkipSplash`
   skip-splash toggle).
 - **`ModListViewModelTests`**: enable / disable, reorder, per-mod policy,
-  remove (with confirm), auto-sort (identity stub), the inline import workflow
+  remove (with confirm), auto-sort (identity resolver), the inline import workflow
   integration (child VM exposure, `ItemImported` reload for the active profile,
   no-misdirect for an inactive profile, add-mode stability, end-to-end
   create/activate/import), the linked-folder flow
@@ -1514,6 +1553,20 @@ No backend library references the UI (the dependency direction is one-way).
   refresh-button/pill gating (server reset + fallback cooldown, precedence over
   the manual throttle), and the `NamesChanged` in-place row
   name refresh (refreshed when the flag is set, untouched when it is not).
+- **`ModListOrderLockTests`**: the profile-scoped load-order lock + drag-reorder
+  surface through the VM, against the lock-aware `FakeProfileService` projection:
+  `OrderLocked` + move/grip availability on reload, `ToggleOrderLock` persists
+  without `HasPendingChanges`, locked-row move/drag no-ops, Move Up / Down skip
+  locked rows (locked-first-stays-first, crossing locks), drag `CommitReorder` to
+  first / middle / last unlocked rank with multiple locks (one `SetModOrder`
+  call + exact final order), same-rank / invalid-rank / locked-source /
+  missing-source / no-active-profile rejection, and the no-lock move regression.
+- **`ReorderGestureMathTests`**: the pure pointer-gesture math (8-DIP threshold
+  inclusive at the boundary, target unlocked rank over other-unlocked centers,
+  insertion marker before/after/none for up/down/no-op, lift translation
+  (pointer delta + scroll-offset delta; pointer-only, scroll-only compensation,
+  combined, both directions, zero), edge-band auto-scroll
+  direction, and offset clamping to `[0, ScrollBarMaximum]`).
   Also: the `DetailedRows` child VM exposure + `Reload` handoff (joins each
   row's `ModDisplayMetadata` from the container, hands the final row snapshot to
   `DetailedRows.SetRowsAsync` fire-and-forget, empty snapshot on the no-profile

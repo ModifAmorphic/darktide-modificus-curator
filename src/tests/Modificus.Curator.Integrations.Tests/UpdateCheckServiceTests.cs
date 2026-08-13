@@ -1661,6 +1661,8 @@ public sealed class UpdateCheckServiceTests
             => throw new NotImplementedException();
         public void SetModEnabled(Guid id, Guid containerId, bool enabled)
             => throw new NotImplementedException();
+        public void SetModOrderLocked(Guid id, Guid containerId, bool orderLocked)
+            => throw new NotImplementedException();
         public void AddMod(Guid id, Guid containerId, ModVersionPolicy policy)
             => throw new NotImplementedException();
         public void SetModPolicy(Guid id, Guid containerId, ModVersionPolicy policy)

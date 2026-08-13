@@ -30,11 +30,73 @@
       <Setter Property="BorderThickness" Value="0" />
       <Setter Property="CornerRadius" Value="8" />
     </Style>
-    <!-- Compact icon buttons (up / down / trash / update): flat, inherit foreground. -->
+    <!--
+      Compact icon buttons (up / down / trash / update / order-lock): flat,
+      inherit foreground.
+    -->
     <Style Selector="Button.icon">
       <Setter Property="Padding" Value="6" />
       <Setter Property="MinWidth" Value="0" />
       <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <!--
+      Order-lock toggle button. The locked state is unmistakable through BOTH
+      shape (closed vs. open padlock) and color: a locked button carries a
+      low-emphasis caution-yellow selected fill (CuratorCautionBackgroundBrush)
+      and a caution-yellow closed-padlock foreground (CuratorCautionBrush);
+      pointer-over preserves the clearly-locked yellow fill rather than replacing
+      it with the generic list hover. An unlocked button stays transparent at
+      rest with a neutral open-padlock + the generic list hover.
+    -->
+    <Style Selector="Button.orderLock /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.orderLock:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListMediumBrush}" />
+    </Style>
+    <Style Selector="Button.orderLock.selected">
+      <Setter Property="Foreground" Value="{DynamicResource CuratorCautionBrush}" />
+    </Style>
+    <Style Selector="Button.orderLock.selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource CuratorCautionBackgroundBrush}" />
+    </Style>
+    <!--
+      Locked + pointer-over keeps the caution-yellow fill (selected fill is
+      re-asserted here after the unlocked :pointerover rule) so the row never
+      loses its clearly-locked treatment while hovered.
+    -->
+    <Style Selector="Button.orderLock.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource CuratorCautionBackgroundBrush}" />
+    </Style>
+    <!--
+      Drag-reorder grip. A 32-DIP transparent, hit-testable surface at the left
+      edge of every row; it is the ONLY surface that initiates row reordering.
+      Its IsHitTestVisible is bound to the row's IsGripEnabled (false when the row
+      is order-locked), so a locked grip stops intercepting pointer input and its
+      area falls through to normal touch scrolling. The drawn Material drag-handle
+      path stays visible in both states.
+    -->
+    <Style Selector="Border.reorderGrip">
+      <Setter Property="Width" Value="32" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="VerticalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalAlignment" Value="Left" />
+    </Style>
+    <!--
+      Lifted drag row. Once the reorder threshold is crossed the realized
+      ItemsControl container (a ContentPresenter) is lifted: a render transform
+      (set in code-behind) moves the full-width row to follow the pointer while
+      its layout slot stays reserved (rows do not jump), ZIndex raises it above
+      siblings, and this class adds an opaque surface + rounded corners + a
+      subtle elevation shadow. Background/CornerRadius/BoxShadow are render-only
+      (BorderThickness is avoided: it is AffectsMeasure and would shift sibling
+      rows). The class is added/removed by the code-behind; the per-move
+      transform + ZIndex are restored from a snapshot on every finish/cancel path.
+    -->
+    <Style Selector="ContentPresenter.liftedRow">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundAltMediumBrush}" />
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="BoxShadow" Value="0 6 16 -4 #80000000" />
     </Style>
     <!--
       The stable Nexus Latest update-action button carries the "updateAction"
@@ -85,12 +147,14 @@
     <!--
       Detailed card responsive thumbnail + action layout. Each repeated card
       root (Border.detailedRow) carries Container.Name + Container.Sizing=Width
-      so it measures its own width; repeated cards share the name. These default
-      (wide) styles set the large-card state: a 112-DIP thumbnail spanning all
-      three content rows beside the name, summary, and the right-column action
-      strip. Width, height, row span, action column, and action column span are
-      set HERE (not as local values on the elements) so the ContainerQuery below
-      can override them; local values outrank styles and would defeat the query.
+      so it measures its own width; repeated cards share the name. The card Grid
+      has three columns (grip, thumbnail, content); these default (wide) styles
+      set the large-card state: a 112-DIP thumbnail spanning all three content
+      rows in the thumbnail column, and the right-column action strip in the
+      content column. Width, height, row span, action column, and action column
+      span are set HERE (not as local values on the elements) so the
+      ContainerQuery below can override them; local values outrank styles and
+      would defeat the query.
     -->
     <Style Selector="Border.detailedThumb">
       <Setter Property="Width" Value="112" />
@@ -102,14 +166,14 @@
       <Setter Property="Height" Value="36" />
     </Style>
     <Style Selector="WrapPanel.detailedActions">
-      <Setter Property="Grid.Column" Value="1" />
+      <Setter Property="Grid.Column" Value="2" />
       <Setter Property="Grid.ColumnSpan" Value="1" />
     </Style>
     <!--
       Constrained state (card width at or below 680 DIP): the thumbnail shrinks
       to 72 DIP and spans only name + summary; the single action strip moves to
-      a full-width row beneath both columns. The query targets descendants of
-      the named card root, never the queried Border itself, so the card chrome
+      a full-width row beneath all three columns. The query targets descendants
+      of the named card root, never the queried Border itself, so the card chrome
       is untouched. Declared after the wide defaults so its setters win while the
       query is active.
     -->
@@ -125,7 +189,7 @@
       </Style>
       <Style Selector="WrapPanel.detailedActions">
         <Setter Property="Grid.Column" Value="0" />
-        <Setter Property="Grid.ColumnSpan" Value="2" />
+        <Setter Property="Grid.ColumnSpan" Value="3" />
       </Style>
     </ContainerQuery>
   </UserControl.Styles>
@@ -410,11 +474,12 @@
            the action controls have a clear right inset from the scrollbar.
            No rectangle Border around the populated list: the edge-spanning
            ScrollViewer reads as a clean list, not a boxed region. -->
-      <ScrollViewer IsVisible="{Binding HasMods}"
+      <ScrollViewer x:Name="ModListScroll"
+                    IsVisible="{Binding HasMods}"
                     HorizontalScrollBarVisibility="Disabled"
                     VerticalScrollBarVisibility="Auto"
                     Padding="0">
-        <ItemsControl ItemsSource="{Binding Mods}" Margin="20,0">
+        <ItemsControl x:Name="ModListItems" ItemsSource="{Binding Mods}" Margin="20,0">
             <ItemsControl.ItemTemplate>
             <DataTemplate x:DataType="vm:ModItemViewModel">
               <!--
@@ -434,19 +499,47 @@
               -->
               <Panel>
               <!--
-                Row layout (8 columns): Name | source badge + update marker |
-                enabled | policy editor | update button / progress | up | down |
-                remove. The Update button + the indeterminate ProgressBar share
-                column 4 (toggled by IsUpdating); they sit between the policy
-                editor and the list-management cluster so they group with
-                per-mod actions rather than list reordering.
+                Compact row layout (10 columns): grip | Name | source badge +
+                update marker | enabled | policy editor | update button / progress
+                | up | down | order-lock | remove. The drag grip is column 0 and is
+                the ONLY surface that initiates row reordering; everything else
+                stays touch-scrolling surface. The Update button + the indeterminate
+                ProgressBar share column 5 (toggled by IsUpdating); they sit between
+                the policy editor and the list-management cluster so they group with
+                per-mod actions rather than list reordering. The order-lock button
+                joins the up/down cluster.
               -->
-              <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+              <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
                     Margin="0,3" MinHeight="32"
                     IsVisible="{Binding !IsDetailed}">
 
+                  <!--
+                    Drag-reorder grip (column 0). A transparent, hit-testable
+                    surface with a drawn Material drag-handle path; pointer
+                    handlers are attached in code-behind. IsHitTestVisible is bound
+                    to IsGripEnabled so a locked row's grip stops intercepting
+                    pointer input and falls through to touch scrolling (the grip
+                    stays visible). Not keyboard-actionable: Move Up / Move Down +
+                    the lock button cover keyboard + assistive-tech reordering.
+                  -->
+                  <Border Grid.Column="0"
+                          Classes="reorderGrip"
+                          IsHitTestVisible="{Binding IsGripEnabled}"
+                          PointerPressed="Grip_PointerPressed"
+                          PointerMoved="Grip_PointerMoved"
+                          PointerReleased="Grip_PointerReleased"
+                          PointerCaptureLost="Grip_PointerCaptureLost"
+                          ToolTip.Tip="{ReflectionBinding [ModRow_DragGripTooltip], Source={StaticResource Loc}}"
+                          AutomationProperties.Name="{ReflectionBinding [ModRow_DragGripTooltip], Source={StaticResource Loc}}">
+                    <!-- Material "drag_indicator" (24x24 source): six dots. -->
+                    <Path Width="18" Height="18" Stretch="Uniform"
+                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                          Fill="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                          Data="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
+                  </Border>
+
                   <!-- Name -->
-                  <TextBlock Grid.Column="0"
+                  <TextBlock Grid.Column="1"
                              Text="{Binding Name}"
                              VerticalAlignment="Center"
                              TextTrimming="CharacterEllipsis" />
@@ -474,7 +567,7 @@
                         missing. Warning foreground (the same caution brush the
                         rate-limit notice uses) so the state is unmistakable.
                   -->
-                  <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                  <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
                               Margin="8,0,0,0" VerticalAlignment="Center">
                     <!-- Indeterminate progress while a per-row update install
                          runs. Visible only for the row whose IsUpdating is true.
@@ -514,7 +607,7 @@
                   </StackPanel>
 
                   <!-- Enabled toggle (two-way; Click applies via the parent). -->
-                  <CheckBox Grid.Column="2"
+                  <CheckBox Grid.Column="3"
                             IsChecked="{Binding Enabled, Mode=TwoWay}"
                             Click="Enabled_Click"
                             ToolTip.Tip="{ReflectionBinding [ModRow_EnabledTooltip], Source={StaticResource Loc}}"
@@ -532,7 +625,7 @@
                     version of files being imported, which is how a new version row
                     enters the container in the first place.)
                   -->
-                  <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6"
+                  <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="6"
                               Margin="12,0,0,0" VerticalAlignment="Center">
                     <ComboBox SelectedIndex="{Binding PolicyChoice, Mode=TwoWay}"
                               SelectionChanged="Policy_Changed"
@@ -578,7 +671,7 @@
                     row VM carries the click behavior; the tooltip distinguishes
                     the cases).
                   -->
-                  <Panel Grid.Column="4" Margin="8,0,0,0" VerticalAlignment="Center"
+                  <Panel Grid.Column="5" Margin="8,0,0,0" VerticalAlignment="Center"
                          MinWidth="28">
                     <Button Classes="icon updateAction"
                             Click="Update_Click"
@@ -607,8 +700,13 @@
                     </Button>
                   </Panel>
 
-                  <!-- Move up (drawn up-chevron). -->
-                  <Button Grid.Column="5" Classes="icon"
+                  <!--
+                    Move up (drawn up-chevron). Enabled only for an unlocked row
+                    with an unlocked row above it (CanMoveUp, computed by the
+                    parent); disabled otherwise, including locked rows.
+                  -->
+                  <Button Grid.Column="6" Classes="icon"
+                          IsEnabled="{Binding CanMoveUp}"
                           ToolTip.Tip="{ReflectionBinding [ModRow_MoveUpTooltip], Source={StaticResource Loc}}"
                           Click="MoveUp_Click"
                           CommandParameter="{Binding}"
@@ -620,7 +718,8 @@
                   </Button>
 
                   <!-- Move down (drawn down-chevron). -->
-                  <Button Grid.Column="6" Classes="icon"
+                  <Button Grid.Column="7" Classes="icon"
+                          IsEnabled="{Binding CanMoveDown}"
                           ToolTip.Tip="{ReflectionBinding [ModRow_MoveDownTooltip], Source={StaticResource Loc}}"
                           Click="MoveDown_Click"
                           CommandParameter="{Binding}"
@@ -631,8 +730,47 @@
                           Data="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z" />
                   </Button>
 
+                  <!--
+                    Order-lock toggle (drawn padlock). The locked state reads
+                    through BOTH shape (closed vs. open padlock) and color: the
+                    `selected` class (bound to OrderLocked) swaps the button
+                    foreground to caution-yellow + a caution-yellow fill, and the
+                    closed-padlock path is shown. The unlocked state shows a
+                    neutral open-padlock with a deliberately large, obvious
+                    shackle opening. Both paths render at 18 DIP. The tooltip +
+                    automation text are dynamic (lock / unlock).
+                  -->
+                  <Button Grid.Column="8" Classes="icon orderLock"
+                          Classes.selected="{Binding OrderLocked}"
+                          Click="ToggleOrderLock_Click"
+                          CommandParameter="{Binding}"
+                          ToolTip.Tip="{Binding OrderLockTooltip}"
+                          AutomationProperties.Name="{Binding OrderLockAutomationName}"
+                          Margin="4,0,0,0">
+                    <Panel>
+                      <!-- Closed padlock (locked): shown when locked. Inherits the
+                           caution-yellow foreground from the selected style. -->
+                      <Path Width="18" Height="18" Stretch="Uniform"
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                            IsVisible="{Binding OrderLocked}"
+                            Fill="{Binding $parent[Button].Foreground}"
+                            Data="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z" />
+                      <!--
+                        Open padlock (unlocked): the closed icon's exact body,
+                        corners, keyhole, and shackle arch, with only the shackle
+                        differing: the left leg ends above the body, leaving a
+                        clear side gap (the right leg stays attached).
+                      -->
+                      <Path Width="18" Height="18" Stretch="Uniform"
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                            IsVisible="{Binding !OrderLocked}"
+                            Fill="{Binding $parent[Button].Foreground}"
+                            Data="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 5h1.9c0-1.16 1.39-2.1 3.1-2.1 1.71 0 3.1 1.39 3.1 3.1v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z" />
+                    </Panel>
+                  </Button>
+
                   <!-- Remove (drawn trash). -->
-                  <Button Grid.Column="7" Classes="icon"
+                  <Button Grid.Column="9" Classes="icon"
                           ToolTip.Tip="{ReflectionBinding [ModRow_RemoveTooltip], Source={StaticResource Loc}}"
                           Click="Remove_Click"
                           CommandParameter="{Binding}"
@@ -643,25 +781,43 @@
                           Data="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
                   </Button>
 
+                  <!--
+                    Drag insertion markers (2-DIP accent line, non-hit-testable).
+                    At most one is visible on at most one row while dragging: before
+                    the target row for an upward move, after it for a downward move.
+                    Spans every column so the line reads across the whole row.
+                  -->
+                  <Border Grid.ColumnSpan="10"
+                          VerticalAlignment="Top" Height="2"
+                          IsHitTestVisible="False"
+                          IsVisible="{Binding ShowReorderMarkerBefore}"
+                          Background="{DynamicResource SystemControlForegroundAccentBrush}" />
+                  <Border Grid.ColumnSpan="10"
+                          VerticalAlignment="Bottom" Height="2"
+                          IsHitTestVisible="False"
+                          IsVisible="{Binding ShowReorderMarkerAfter}"
+                          Background="{DynamicResource SystemControlForegroundAccentBrush}" />
+
                 </Grid>
 
                 <!--
                   DETAILED row root. A rounded low-emphasis card (Border via the
                   detailedRow style) laid out as one adaptive Grid: column 0 is
-                  the thumbnail/placeholder slot, column 1 holds the name +
-                  source badge (row 0) and the two-line summary (row 1), and row 2
-                  is the WrapPanel action strip. The card root is a named width
-                  container (Container.Name + Container.Sizing=Width) so a
-                  ContainerQuery in UserControl.Styles swaps the thumbnail size +
-                  row span and moves the action strip full-width at the 680-DIP
-                  breakpoint. Width, height, row-span, and action-column values
-                  that change at the breakpoint come from those styles (not local
-                  values, which would outrank styles); constant row/column
-                  positions stay local. The same action controls + code-behind
-                  handlers as the Compact root are reused, so no action behavior
-                  forks between modes. Markup is deliberately duplicated from the
-                  Compact root (no new template abstraction). No horizontal
-                  ScrollViewer; only the page-level vertical ScrollViewer scrolls.
+                  the drag grip, column 1 is the thumbnail/placeholder slot,
+                  column 2 holds the name + source badge (row 0) and the two-line
+                  summary (row 1), and row 2 is the WrapPanel action strip. The
+                  card root is a named width container (Container.Name +
+                  Container.Sizing=Width) so a ContainerQuery in UserControl.Styles
+                  swaps the thumbnail size + row span and moves the action strip
+                  full-width at the 680-DIP breakpoint. Width, height, row-span,
+                  and action-column values that change at the breakpoint come from
+                  those styles (not local values, which would outrank styles);
+                  constant row/column positions stay local. The same action
+                  controls + code-behind handlers as the Compact root are reused,
+                  so no action behavior forks between modes. Markup is deliberately
+                  duplicated from the Compact root (no new template abstraction).
+                  No horizontal ScrollViewer; only the page-level vertical
+                  ScrollViewer scrolls.
                 -->
                 <Border IsVisible="{Binding IsDetailed}"
                         Classes="detailedRow"
@@ -669,12 +825,36 @@
                         Container.Sizing="Width"
                         Margin="0,3"
                         Padding="12">
-                  <Grid ColumnDefinitions="Auto,*"
+                  <Panel>
+                  <Grid ColumnDefinitions="Auto,Auto,*"
                         RowDefinitions="Auto,Auto,Auto"
                         ColumnSpacing="12"
                         RowSpacing="6">
                       <!--
-                        Thumbnail area (column 0). A rounded, clipped square
+                        Drag-reorder grip (column 0, spans all rows). Same surface
+                        + contract as the Compact grip: the only row area that
+                        initiates reordering; IsHitTestVisible bound to IsGripEnabled
+                        so a locked row falls through to touch scrolling. The grip
+                        stays at the card's left edge across both wide + constrained
+                        layouts.
+                      -->
+                      <Border Grid.Row="0" Grid.Column="0" Grid.RowSpan="3"
+                              Classes="reorderGrip"
+                              IsHitTestVisible="{Binding IsGripEnabled}"
+                              PointerPressed="Grip_PointerPressed"
+                              PointerMoved="Grip_PointerMoved"
+                              PointerReleased="Grip_PointerReleased"
+                              PointerCaptureLost="Grip_PointerCaptureLost"
+                              ToolTip.Tip="{ReflectionBinding [ModRow_DragGripTooltip], Source={StaticResource Loc}}"
+                              AutomationProperties.Name="{ReflectionBinding [ModRow_DragGripTooltip], Source={StaticResource Loc}}">
+                        <Path Width="18" Height="18" Stretch="Uniform"
+                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Fill="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                              Data="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
+                      </Border>
+
+                      <!--
+                        Thumbnail area (column 1). A rounded, clipped square
                         whose Width, Height, and Grid.RowSpan come from the
                         Border.detailedThumb styles (112 DIP spanning all three
                         rows when wide; 72 DIP spanning name + summary when
@@ -689,7 +869,7 @@
                         thumbnail (the coordinator skips them), so they fall
                         through to the placeholder here.
                       -->
-                      <Border Grid.Row="0" Grid.Column="0"
+                      <Border Grid.Row="0" Grid.Column="1"
                               Classes="detailedThumb"
                               CornerRadius="8" ClipToBounds="True"
                               HorizontalAlignment="Left" VerticalAlignment="Top"
@@ -716,7 +896,7 @@
                       </Border>
 
                       <!--
-                        Name + source badge (row 0, column 1). A constrained Grid
+                        Name + source badge (row 0, column 2). A constrained Grid
                         (star name, auto badge) rather than a horizontal
                         StackPanel: the star column bounds the name so it
                         ellipsizes on long names (the full text stays in the
@@ -726,7 +906,7 @@
                         update progress, with the same bindings +
                         OpenFolder_Click handler.
                       -->
-                      <Grid Grid.Row="0" Grid.Column="1"
+                      <Grid Grid.Row="0" Grid.Column="2"
                             ColumnDefinitions="*,Auto" ColumnSpacing="8">
                           <TextBlock Grid.Column="0"
                                      Text="{Binding Name}"
@@ -768,13 +948,13 @@
                         </Grid>
 
                       <!--
-                        Summary (row 1, column 1): at most two wrapped lines,
+                        Summary (row 1, column 2): at most two wrapped lines,
                         safely trimmed. The full text is preserved in the
                         tooltip (when non-null) + the automation name (always,
                         so the fallback text stays reachable by assistive tech
                         even when visually clipped).
                       -->
-                      <TextBlock Grid.Row="1" Grid.Column="1"
+                      <TextBlock Grid.Row="1" Grid.Column="2"
                                  Text="{Binding SummaryText}"
                                  MaxLines="2" TextWrapping="Wrap"
                                  TextTrimming="CharacterEllipsis"
@@ -875,8 +1055,14 @@
                         </Button>
                       </Panel>
 
-                      <!-- Move up / down / remove: same handlers + tooltips as Compact. -->
+                      <!--
+                        Move up / down / order-lock / remove: same handlers,
+                        tooltips, and IsEnabled bindings as the Compact root's
+                        action cluster. The lock button joins the up/down cluster
+                        (selected class bound to OrderLocked).
+                      -->
                       <Button Classes="icon"
+                              IsEnabled="{Binding CanMoveUp}"
                               ToolTip.Tip="{ReflectionBinding [ModRow_MoveUpTooltip], Source={StaticResource Loc}}"
                               Click="MoveUp_Click"
                               CommandParameter="{Binding}">
@@ -886,6 +1072,7 @@
                               Data="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z" />
                       </Button>
                       <Button Classes="icon"
+                              IsEnabled="{Binding CanMoveDown}"
                               ToolTip.Tip="{ReflectionBinding [ModRow_MoveDownTooltip], Source={StaticResource Loc}}"
                               Click="MoveDown_Click"
                               CommandParameter="{Binding}">
@@ -893,6 +1080,31 @@
                               HorizontalAlignment="Center" VerticalAlignment="Center"
                               Fill="{Binding $parent[Button].Foreground}"
                               Data="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z" />
+                      </Button>
+                      <!--
+                        Order-lock toggle (drawn padlock), same shape + color
+                        treatment as the Compact root: closed padlock + caution
+                        fill/foreground when locked, open padlock (large shackle
+                        opening) + neutral when unlocked. Both 18 DIP.
+                      -->
+                      <Button Classes="icon orderLock"
+                              Classes.selected="{Binding OrderLocked}"
+                              Click="ToggleOrderLock_Click"
+                              CommandParameter="{Binding}"
+                              ToolTip.Tip="{Binding OrderLockTooltip}"
+                              AutomationProperties.Name="{Binding OrderLockAutomationName}">
+                        <Panel>
+                          <Path Width="18" Height="18" Stretch="Uniform"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"
+                                IsVisible="{Binding OrderLocked}"
+                                Fill="{Binding $parent[Button].Foreground}"
+                                Data="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z" />
+                          <Path Width="18" Height="18" Stretch="Uniform"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"
+                                IsVisible="{Binding !OrderLocked}"
+                                Fill="{Binding $parent[Button].Foreground}"
+                                Data="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 5h1.9c0-1.16 1.39-2.1 3.1-2.1 1.71 0 3.1 1.39 3.1 3.1v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z" />
+                        </Panel>
                       </Button>
                       <Button Classes="icon"
                               ToolTip.Tip="{ReflectionBinding [ModRow_RemoveTooltip], Source={StaticResource Loc}}"
@@ -906,6 +1118,21 @@
                     </WrapPanel>
 
                   </Grid>
+                  <!--
+                    Drag insertion markers (2-DIP accent line, non-hit-testable),
+                    siblings of the card content so they anchor to the card's
+                    inner top/bottom edge. At most one is visible on at most one
+                    row while dragging.
+                  -->
+                  <Border VerticalAlignment="Top" Height="2"
+                          IsHitTestVisible="False"
+                          IsVisible="{Binding ShowReorderMarkerBefore}"
+                          Background="{DynamicResource SystemControlForegroundAccentBrush}" />
+                  <Border VerticalAlignment="Bottom" Height="2"
+                          IsHitTestVisible="False"
+                          IsVisible="{Binding ShowReorderMarkerAfter}"
+                          Background="{DynamicResource SystemControlForegroundAccentBrush}" />
+                  </Panel>
                 </Border>
               </Panel>
               </DataTemplate>

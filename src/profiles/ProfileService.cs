@@ -226,7 +226,27 @@ internal sealed class ProfileService : IProfileService
         var profile = ReadProfileFile(ProfileDir(baseFolder, id));
         var current = profile.Mods;
 
-        // Index the desired order by containerId (first occurrence wins for dupes).
+        // Canonical visible/load order: a stable sort of the current entries by
+        // Order. The zero-based index in this canonical list is what each locked
+        // entry reserves; OrderBy is stable, so equal Orders keep storage order.
+        var canonical = current.OrderBy(m => m.Order).ToList();
+
+        // Reserved slots: each locked entry holds its current canonical index;
+        // the requested ordering cannot displace it.
+        var reserved = new Dictionary<int, ModListEntry>();
+        for (var i = 0; i < canonical.Count; i++)
+        {
+            if (canonical[i].OrderLocked)
+            {
+                reserved[i] = canonical[i];
+            }
+        }
+
+        // Derive the caller's desired ordering exactly as before: index the
+        // request by containerId (first occurrence wins for dupes, Guid.Empty
+        // ignored), then stable-sort canonical so listed mods come first in the
+        // requested sequence and unmentioned mods follow in their current
+        // relative order.
         var desiredIndex = new Dictionary<Guid, int>();
         for (var i = 0; i < containerIdsInOrder.Count; i++)
         {
@@ -237,14 +257,26 @@ internal sealed class ProfileService : IProfileService
             }
         }
 
-        // Stable sort: listed mods by their desired position first, then
-        // unmentioned mods in their existing relative order. OrderBy is stable,
-        // so equal keys keep storage order. Rebuild (immutable entries) with
-        // renumbered Order.
-        profile.Mods = current
+        var desiredUnlocked = canonical
             .OrderBy(m => desiredIndex.TryGetValue(m.ContainerId, out var idx) ? idx : int.MaxValue)
-            .Select((m, i) => m with { Order = i })
+            .Where(m => !m.OrderLocked)
             .ToList();
+
+        // Walk each slot 0..n-1: a reserved slot takes its locked entry; an open
+        // slot takes the next desired-unlocked entry in relative order. The
+        // counts balance by construction (unlocked desired == open slots), so
+        // the cursor never overruns. Renumber dense 0..n-1 in one pass.
+        var result = new List<ModListEntry>(canonical.Count);
+        var unlockedCursor = 0;
+        for (var i = 0; i < canonical.Count; i++)
+        {
+            ModListEntry entry = reserved.TryGetValue(i, out var lockedEntry)
+                ? lockedEntry
+                : desiredUnlocked[unlockedCursor++];
+            result.Add(entry with { Order = i });
+        }
+
+        profile.Mods = result;
         WriteProfileFile(profile, baseFolder);
     }
 
@@ -265,6 +297,23 @@ internal sealed class ProfileService : IProfileService
     }
 
     /// <inheritdoc />
+    public void SetModOrderLocked(Guid id, Guid containerId, bool orderLocked)
+    {
+        var baseFolder = EnsureBaseFolder();
+        var profile = ReadProfileFile(ProfileDir(baseFolder, id));
+        _ = profile.Mods.FirstOrDefault(m => m.ContainerId == containerId)
+            ?? throw UnknownMod(id, containerId);
+
+        // Lock metadata only: swap the matching entry for a copy with the new
+        // OrderLocked. Order, Enabled, and Policy are untouched, and no staged
+        // change is implied (the staged root is regenerated on the next launch).
+        profile.Mods = profile.Mods
+            .Select(m => m.ContainerId == containerId ? m with { OrderLocked = orderLocked } : m)
+            .ToList();
+        WriteProfileFile(profile, baseFolder);
+    }
+
+    /// <inheritdoc />
     public void AddMod(Guid id, Guid containerId, ModVersionPolicy policy)
     {
         if (containerId == Guid.Empty)
@@ -276,17 +325,31 @@ internal sealed class ProfileService : IProfileService
         var baseFolder = EnsureBaseFolder();
         var profile = ReadProfileFile(ProfileDir(baseFolder, id));
 
-        // Idempotent: re-adding an existing container is a no-op (keeps its order,
-        // enabled state, and policy). Prevents duplicate entries from re-entrancy.
+        // Idempotent: re-adding an existing container is a strict no-op (keeps
+        // its order, enabled state, policy, AND lock). Prevents duplicate
+        // entries from re-entrancy and is evaluated before any compaction so a
+        // re-add never disturbs existing entries.
         if (profile.Mods.Any(m => m.ContainerId == containerId))
         {
             return;
         }
 
-        var nextOrder = profile.Mods.Count == 0 ? 0 : profile.Mods.Max(m => m.Order) + 1;
-        profile.Mods = profile.Mods
-            .Append(new ModListEntry { ContainerId = containerId, Enabled = true, Order = nextOrder, Policy = policy })
+        // Compact existing Order dense 0..n-1 (stable by current Order), then
+        // append the new entry unlocked at the end. The dense renumber
+        // establishes a fresh baseline (a hand-edited profile.json with gaps
+        // tightens here); survivor lock metadata travels with each entry.
+        var compacted = profile.Mods
+            .OrderBy(m => m.Order)
+            .Select((m, i) => m with { Order = i })
             .ToList();
+        compacted.Add(new ModListEntry
+        {
+            ContainerId = containerId,
+            Enabled = true,
+            Order = compacted.Count,
+            Policy = policy,
+        });
+        profile.Mods = compacted;
         WriteProfileFile(profile, baseFolder);
     }
 
@@ -335,7 +398,15 @@ internal sealed class ProfileService : IProfileService
         _ = profile.Mods.FirstOrDefault(m => m.ContainerId == containerId)
             ?? throw UnknownMod(id, containerId);
 
-        profile.Mods = profile.Mods.Where(m => m.ContainerId != containerId).ToList();
+        // Drop the entry (locked or unlocked), then compact survivor Order dense
+        // 0..n-1 (stable by current Order). A surviving locked entry keeps its
+        // lock metadata; its new dense index is the new baseline for future
+        // reorders, so removing a row before it lets it shift up.
+        profile.Mods = profile.Mods
+            .Where(m => m.ContainerId != containerId)
+            .OrderBy(m => m.Order)
+            .Select((m, i) => m with { Order = i })
+            .ToList();
         WriteProfileFile(profile, baseFolder);
 
         // The repository copy is NOT touched: other profiles may still reference
