@@ -74,8 +74,11 @@ The window shows the SplitView shell: a left navigation rail (compact icon
 tiles by default; expand it with the hamburger toggle to show icon + label for
 the five destinations: Profiles, Mods, Nexus, Preferences,
 Settings), a global header with the current destination title and the Launch
-Darktide button, and a status strip (Darktide running indicator, the nxm
-handler status, and the dismissible app-update notice). The rail anchors a
+Darktide button (a branded iron-and-rust primary action styled with the
+embedded Quantico Bold display font), and a status strip (Darktide running
+indicator, the nxm handler status, and the dismissible app-update notice, which
+is styled from app-owned theme resources so it stays legible regardless of the
+platform accent color). The rail anchors a
 drawn-icon Exit button at its bottom (it closes the window through the same
 path as the title-bar close). Mods is selected
 initially. The window remembers its last unmaximized size and whether it was

@@ -181,6 +181,47 @@ execution time rather than from a cached selection. Mods is selected
 initially; the pane starts collapsed (compact icon rail); the hamburger
 button toggles `IsPaneOpen`.
 
+### Shell appearance: the Launch action and the theme-safe update notice
+
+The global Launch action (the header `Button` bound to `LaunchCommand`) is the
+primary game action and carries a branded iron-and-rust treatment via the
+`Button.launchAction` class: a dark gunmetal face, off-white text set in the
+embedded **Quantico Bold** display font (`avares://Modificus.Curator/Assets/fonts/Quantico-Bold.ttf#Quantico`, SIL OFL 1.1, shipped unmodified), a rust lower
+edge, and a low corner radius. A drawn
+Material play-arrow `<Path>` precedes the uppercase visible label
+(`Launch_ButtonDisplay`); the accessible name and tooltip stay the ordinary
+`Launch_Button` ("Launch Darktide"). The label is bold with 1-DIP letter
+spacing and `TextOptions.TextHintingMode="Strong"` plus
+`TextOptions.BaselinePixelAlignment="Aligned"` so the display face stays crisp
+at button size and at fractional scaling. The font's human-readable license and
+copyright (`Assets/fonts/OFL.txt`) are copied to both build and publish output
+alongside the assembly. Every face, border, and foreground color
+is an app-owned `CuratorLaunch*` resource defined once in `App.axaml`
+(theme-independent, so the branded look is identical in Light and Dark), set on
+the Fluent `ContentPresenter` so explicit `:pointerover` / `:pressed` /
+`:disabled` / `:focus-visible` states outrank the theme's own per-state setters.
+Press keeps the Fluent `scale(0.98)` compression (no layout jump); only colors
+change. Keyboard focus turns the border Curator cyan at the same thickness, so
+the focus indicator is highly visible and adds no layout shift. MinHeight is 44
+DIP. No custom control, converter, or code-behind behavior is used; it is pure
+scoped styling over the stock Fluent Button.
+
+The dismissible app-update pill in the status strip is theme-safe (issue #181):
+the pill, its link, and its dismiss icon draw only from app-owned
+theme-driven brushes (the `CuratorUpdateNotice*` resources, one set per Light
+and Dark `ThemeDictionary`), never from `SystemAccentColor` or
+`SystemControlForegroundAccentBrush`. The link (`HyperlinkButton.updateNoticeLink`)
+and the dismiss (`Button.updateNoticeDismiss`) are scoped with `/template/
+ContentPresenter#PART_ContentPresenter` selectors covering normal,
+`:pointerover`, `:pressed`, `:disabled`, and `:focus-visible`; class-qualified
+selectors outrank the Fluent ControlTheme's accent-reapplying per-state setters,
+so a low-contrast platform accent (SteamOS supplies one the app cannot control)
+cannot make the notice illegible. The link keeps its underline and hand cursor.
+A subdued Curator cyan/teal treatment reads as informational without competing
+with the Launch action. Behavior (`CheckAppUpdateNowCommand` /
+`DismissAppUpdateCommand`, the tooltips, and the layout relative to the adjacent
+status indicators) is unchanged.
+
 ### Open-pane width grows to fit the widest localized label
 
 The SplitView's XAML `OpenPaneLength=200` is the design-time/startup fallback

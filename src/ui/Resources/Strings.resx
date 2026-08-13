@@ -79,7 +79,11 @@
   </data>
   <data name="Launch_Button" xml:space="preserve">
     <value>Launch Darktide</value>
-    <comment>The Launch button in the shell top bar.</comment>
+    <comment>The Launch button in the shell top bar. Used as the accessible name + tooltip; the visible label is the uppercase Launch_ButtonDisplay rendered in the Quantico Bold display font.</comment>
+  </data>
+  <data name="Launch_ButtonDisplay" xml:space="preserve">
+    <value>LAUNCH DARKTIDE</value>
+    <comment>The uppercase display label on the shell Launch button (rendered in the Quantico Bold display font). The accessible name + tooltip stay the ordinary Launch_Button form.</comment>
   </data>
   <data name="Status_GameRunning" xml:space="preserve">
     <value>Darktide: running</value>
