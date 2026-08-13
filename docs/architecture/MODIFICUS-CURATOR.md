@@ -537,8 +537,11 @@ is in [UI reference](../reference/ui.md).
 - Per-mod: enable / disable, remove, update (when the source reports a newer
   version), pin to version, per-mod auto-update override. The pinned-vs-latest
   policy drives version resolution at stage time (see [Mod repository](#mod-repository)).
-- Auto-sort (dependency-driven; toggleable); manual reorder in the sequential
-  view overrides auto-sort.
+- Auto-sort (dependency-driven; toggleable); manual reorder (drag the per-row
+  grip at the left edge, or the Move Up / Move Down buttons) overrides
+  auto-sort. A mod can be locked to its exact zero-based position; a locked row
+  keeps its position across any reorder or auto-sort, and its grip stops
+  intercepting pointer input so its area falls through to touch scrolling.
 - When DMF is installed, it appears as a protected first entry (locked first
   by dependency resolution; updateable).
 - **Row density.** The list has a persisted Compact/Detailed density (Compact
@@ -547,12 +550,13 @@ is in [UI reference](../reference/ui.md).
   card per row laid out as one adaptive Grid (the card root is a named width
   container, so an Avalonia `ContainerQuery max-width:680` in the view's styles
   swaps the layout at the 680-DIP card-width breakpoint): column 0 is the
-  thumbnail/placeholder slot, column 1 holds the name + source badge (row 0)
-  and a two-line summary (row 1), and row 2 is the action strip. When the card
+  drag-reorder grip, column 1 is the thumbnail/placeholder slot, column 2
+  holds the name + source badge (row 0) and a two-line summary (row 1), and
+  row 2 is the action strip. When the card
   is wide (greater than 680 DIP) a 112-DIP thumbnail spans all three rows and
-  the action strip occupies only the right column; when constrained (at or
+  the action strip occupies only the content column; when constrained (at or
   below 680 DIP) the thumbnail shrinks to 72 DIP spanning name + summary and
-  the action strip moves to a full-width row beneath both columns. The action
+  the action strip moves to a full-width row beneath all three columns. The action
   strip is a right-aligned `WrapPanel` that wraps at the edge (no horizontal
   scrolling); width, height, row span, and the action column/span are driven by
   styles so the breakpoint changes them. The summary is plain text with `CharacterEllipsis` trimming and the full

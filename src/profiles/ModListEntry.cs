@@ -50,6 +50,19 @@ public sealed record ModListEntry
     public int Order { get; init; }
 
     /// <summary>
+    /// Whether this entry's load-order position is locked. A locked entry keeps
+    /// its current zero-based list index across
+    /// <see cref="IProfileService.SetModOrder"/> calls; reorder requests are
+    /// projected onto the unlocked slots only, so no reorder can displace it.
+    /// Defaults to <c>false</c>; an existing <c>profile.json</c> written before
+    /// this field existed loads every entry unlocked. Independent of
+    /// <see cref="Enabled"/> (a disabled or linked row can still be
+    /// order-locked). Toggled via
+    /// <see cref="IProfileService.SetModOrderLocked"/>.
+    /// </summary>
+    public bool OrderLocked { get; init; }
+
+    /// <summary>
     /// This profile mod's version policy: <see cref="LatestPolicy"/> resolves to
     /// the container's <see cref="ModVersion.IsLatest"/> version at stage time;
     /// <see cref="PinnedPolicy"/> resolves to the version whose

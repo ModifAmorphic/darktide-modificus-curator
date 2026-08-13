@@ -474,6 +474,7 @@ internal sealed class FakeProfileService : IProfileService
     public Dictionary<Guid, List<ModListEntry>> ModLists => _modLists;
 
     public IReadOnlyList<(Guid Id, Guid ContainerId, bool Enabled)> SetModEnabledCalls { get; } = new List<(Guid, Guid, bool)>();
+    public IReadOnlyList<(Guid Id, Guid ContainerId, bool OrderLocked)> SetModOrderLockedCalls { get; } = new List<(Guid, Guid, bool)>();
     public IReadOnlyList<IReadOnlyList<Guid>> SetModOrderCalls { get; } = new List<IReadOnlyList<Guid>>();
     public IReadOnlyList<(Guid Id, Guid ContainerId, ModVersionPolicy Policy)> SetModPolicyCalls { get; } = new List<(Guid, Guid, ModVersionPolicy)>();
     public IReadOnlyList<(Guid Id, Guid ContainerId, ModVersionPolicy Policy)> AddModCalls { get; } = new List<(Guid, Guid, ModVersionPolicy)>();
@@ -649,24 +650,50 @@ internal sealed class FakeProfileService : IProfileService
         ((List<IReadOnlyList<Guid>>)SetModOrderCalls).Add(containerIdsInOrder);
 
         var list = EnsureList(id);
-        var ordered = new List<ModListEntry>();
-        var remaining = list.ToList();
-        foreach (var cid in containerIdsInOrder)
+
+        // Mirror the production lock projection (ProfileService.SetModOrder) so
+        // VM tests are LSP-faithful: locked entries keep their canonical
+        // zero-based index (canonical = stable sort by current Order), and the
+        // requested ordering projects onto the unlocked slots only. Without this
+        // a fake would silently move locks, masking UI bugs.
+        var canonical = list.OrderBy(m => m.Order).ToList();
+
+        var reserved = new Dictionary<int, ModListEntry>();
+        for (var i = 0; i < canonical.Count; i++)
         {
-            var match = remaining.FirstOrDefault(m => m.ContainerId == cid);
-            if (match is not null)
+            if (canonical[i].OrderLocked)
             {
-                ordered.Add(match);
-                remaining.Remove(match);
+                reserved[i] = canonical[i];
             }
         }
-        ordered.AddRange(remaining);
-        for (var i = 0; i < ordered.Count; i++)
+
+        var desiredIndex = new Dictionary<Guid, int>();
+        for (var i = 0; i < containerIdsInOrder.Count; i++)
         {
-            ordered[i] = ordered[i] with { Order = i };
+            var cid = containerIdsInOrder[i];
+            if (cid != Guid.Empty && !desiredIndex.ContainsKey(cid))
+            {
+                desiredIndex[cid] = i;
+            }
         }
+
+        var desiredUnlocked = canonical
+            .OrderBy(m => desiredIndex.TryGetValue(m.ContainerId, out var idx) ? idx : int.MaxValue)
+            .Where(m => !m.OrderLocked)
+            .ToList();
+
+        var result = new List<ModListEntry>(canonical.Count);
+        var unlockedCursor = 0;
+        for (var i = 0; i < canonical.Count; i++)
+        {
+            ModListEntry entry = reserved.TryGetValue(i, out var lockedEntry)
+                ? lockedEntry
+                : desiredUnlocked[unlockedCursor++];
+            result.Add(entry with { Order = i });
+        }
+
         list.Clear();
-        list.AddRange(ordered);
+        list.AddRange(result);
     }
 
     public void SetModEnabled(Guid id, Guid containerId, bool enabled)
@@ -682,6 +709,19 @@ internal sealed class FakeProfileService : IProfileService
         list[idx] = list[idx] with { Enabled = enabled };
     }
 
+    public void SetModOrderLocked(Guid id, Guid containerId, bool orderLocked)
+    {
+        ((List<(Guid, Guid, bool)>)SetModOrderLockedCalls).Add((id, containerId, orderLocked));
+
+        var list = EnsureList(id);
+        var idx = list.FindIndex(m => m.ContainerId == containerId);
+        if (idx < 0)
+        {
+            throw new KeyNotFoundException($"No container {containerId} in profile {id}");
+        }
+        list[idx] = list[idx] with { OrderLocked = orderLocked };
+    }
+
     public void AddMod(Guid id, Guid containerId, ModVersionPolicy policy)
     {
         ((List<(Guid, Guid, ModVersionPolicy)>)AddModCalls).Add((id, containerId, policy));
@@ -692,17 +732,29 @@ internal sealed class FakeProfileService : IProfileService
         }
 
         var list = EnsureList(id);
+        // Strict idempotent re-add (order/enabled/policy/lock untouched),
+        // evaluated before any compaction so a re-add never disturbs survivors.
         if (list.Any(m => m.ContainerId == containerId))
         {
-            return; // idempotent
+            return;
         }
-        list.Add(new ModListEntry
+
+        // Mirror production: compact survivor Order dense by stable Order sort
+        // (lock metadata travels with each entry), then append the new entry
+        // unlocked at the end.
+        var compacted = list
+            .OrderBy(m => m.Order)
+            .Select((m, i) => m with { Order = i })
+            .ToList();
+        compacted.Add(new ModListEntry
         {
             ContainerId = containerId,
             Enabled = true,
-            Order = list.Count,
+            Order = compacted.Count,
             Policy = policy,
         });
+        list.Clear();
+        list.AddRange(compacted);
     }
 
     public void SetModPolicy(Guid id, Guid containerId, ModVersionPolicy policy)
@@ -728,7 +780,17 @@ internal sealed class FakeProfileService : IProfileService
         {
             throw new KeyNotFoundException($"No container {containerId} in profile {id}");
         }
-        list.RemoveAt(idx);
+
+        // Mirror production: drop the entry (locked or unlocked), then compact
+        // survivor Order dense by stable Order sort so a surviving lock's new
+        // dense index is the new baseline.
+        var survivors = list
+            .Where(m => m.ContainerId != containerId)
+            .OrderBy(m => m.Order)
+            .Select((m, i) => m with { Order = i })
+            .ToList();
+        list.Clear();
+        list.AddRange(survivors);
     }
 
     /// <summary>The (profileId, baseName, excludeContainerId) triples passed to

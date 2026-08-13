@@ -114,6 +114,13 @@ public interface IProfileService
     /// relative order, appended after the listed ones; ids in the list that
     /// aren't in the profile are ignored. No mods are added or removed.
     /// </summary>
+    /// <remarks>
+    /// An entry with <see cref="ModListEntry.OrderLocked"/> = true keeps its
+    /// current zero-based load-order index: the requested ordering is projected
+    /// onto the unlocked slots only, so a locked row cannot be displaced. With
+    /// no locks, behavior is a plain reorder of the whole list. <see cref="ModListEntry.Order"/>
+    /// values are renumbered dense 0..n-1.
+    /// </remarks>
     /// <exception cref="KeyNotFoundException"><paramref name="id"/> is unknown.</exception>
     void SetModOrder(Guid id, IReadOnlyList<Guid> containerIdsInOrder);
 
@@ -124,11 +131,24 @@ public interface IProfileService
     void SetModEnabled(Guid id, Guid containerId, bool enabled);
 
     /// <summary>
+    /// Toggles <see cref="ModListEntry.OrderLocked"/> for a single mod. Lock
+    /// metadata alone preserves order, enabled, and policy, and implies no
+    /// staged-game change (the staged mod root is regenerated on the next
+    /// <see cref="PrepareModRoot"/>).
+    /// </summary>
+    /// <exception cref="KeyNotFoundException">
+    /// <paramref name="id"/> is unknown, or <paramref name="containerId"/> is not in the profile's list.
+    /// </exception>
+    void SetModOrderLocked(Guid id, Guid containerId, bool orderLocked);
+
+    /// <summary>
     /// Adds a mod entry to the end of the list (<see cref="ModListEntry.Enabled"/>
-    /// = true) with the given policy. <b>List entry only: does NOT fetch or
-    /// install mod files</b> (the repository holds the files; staging links
-    /// to them). Idempotent: re-adding a <paramref name="containerId"/> already
-    /// in the list is a no-op (order/enabled/policy untouched).
+    /// = true, <see cref="ModListEntry.OrderLocked"/> = false) with the given
+    /// policy, and renumbers <see cref="ModListEntry.Order"/> dense across the
+    /// list. <b>List entry only: does NOT fetch or install mod files</b>
+    /// (the repository holds the files; staging links to them). Idempotent:
+    /// re-adding a <paramref name="containerId"/> already in the list is a
+    /// strict no-op (order/enabled/policy/lock untouched).
     /// </summary>
     /// <exception cref="KeyNotFoundException"><paramref name="id"/> is unknown.</exception>
     void AddMod(Guid id, Guid containerId, ModVersionPolicy policy);
@@ -157,9 +177,11 @@ public interface IProfileService
     void SetModPolicy(Guid id, Guid containerId, ModVersionPolicy policy);
 
     /// <summary>
-    /// Removes the mod entry. The repository copy is <b>not</b> touched (other
-    /// profiles may still reference it; the startup prune reclaims it when no
-    /// profile does).
+    /// Removes the mod entry (locked or unlocked), then renumbers survivor
+    /// <see cref="ModListEntry.Order"/> dense 0..n-1; the new survivor indices
+    /// are the new baseline for surviving locks. The repository copy is
+    /// <b>not</b> touched (other profiles may still reference it; the startup
+    /// prune reclaims it when no profile does).
     /// </summary>
     /// <exception cref="KeyNotFoundException">
     /// <paramref name="id"/> is unknown, or <paramref name="containerId"/> is not in the profile's list.

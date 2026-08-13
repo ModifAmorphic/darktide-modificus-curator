@@ -96,6 +96,7 @@ internal sealed class FakeProfileService : IProfileService
     public IReadOnlyList<ModListEntry> GetModList(Guid id) => throw new NotSupportedException();
     public void SetModOrder(Guid id, IReadOnlyList<Guid> containerIdsInOrder) => throw new NotSupportedException();
     public void SetModEnabled(Guid id, Guid containerId, bool enabled) => throw new NotSupportedException();
+    public void SetModOrderLocked(Guid id, Guid containerId, bool orderLocked) => throw new NotSupportedException();
     public void AddMod(Guid id, Guid containerId, ModVersionPolicy policy) => throw new NotSupportedException();
     public void SetModPolicy(Guid id, Guid containerId, ModVersionPolicy policy) => throw new NotSupportedException();
     public void RemoveMod(Guid id, Guid containerId) => throw new NotSupportedException();

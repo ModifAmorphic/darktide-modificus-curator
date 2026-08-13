@@ -419,6 +419,26 @@
     <value>Move down</value>
     <comment>Tooltip on the move-down button on each mod row.</comment>
   </data>
+  <data name="ModRow_DragGripTooltip" xml:space="preserve">
+    <value>Drag to reorder</value>
+    <comment>Tooltip + automation name on the drag grip at the left edge of each mod row. The grip is the only surface that initiates row reordering; dragging anywhere else stays touch scrolling.</comment>
+  </data>
+  <data name="ModRow_LockOrderTooltip" xml:space="preserve">
+    <value>Lock load-order position</value>
+    <comment>Tooltip + automation text for the order-lock toggle button when the row is unlocked, describing the action the click will perform.</comment>
+  </data>
+  <data name="ModRow_UnlockOrderTooltip" xml:space="preserve">
+    <value>Unlock load-order position</value>
+    <comment>Tooltip + automation text for the order-lock toggle button when the row is locked, describing the action the click will perform.</comment>
+  </data>
+  <data name="ModRow_OrderLocked" xml:space="preserve">
+    <value>Load-order position locked</value>
+    <comment>Automation name describing a row's current locked state for assistive tech.</comment>
+  </data>
+  <data name="ModRow_OrderUnlocked" xml:space="preserve">
+    <value>Load-order position unlocked</value>
+    <comment>Automation name describing a row's current unlocked state for assistive tech.</comment>
+  </data>
   <data name="ModRow_RemoveTooltip" xml:space="preserve">
     <value>Remove from this profile</value>
     <comment>Tooltip on the trash (remove) button on each mod row.</comment>

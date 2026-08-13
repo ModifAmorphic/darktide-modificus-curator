@@ -224,7 +224,7 @@ copying would duplicate repository files). On-disk layout:
     container.json                   # { id, source, name, versions: [{ folder, versionString, isLatest, importedAt }], displayMetadata?: { summary, thumbnailUrl, isAdultContent } }
     <versionFolder>/                 # opaque-ID version subfolder; the mod files for that version
 <ProfilesBaseFolder>/<guid>/
-  profile.json                       # metadata + mod list + launch settings (entries carry ContainerId + Policy; launch settings carry ordered env vars + game args)
+  profile.json                       # metadata + mod list + launch settings (entries carry ContainerId + Policy + OrderLocked; launch settings carry ordered env vars + game args)
   staged/                            # the staged mod root = the --mod-path (REGENERATED each launch)
     mods/                            #   the mod host folder Relay consumes
       <baseName>                     #   staging link → <versionFolder>/<baseName>/ (junction on Windows, symlink on Linux; Latest → isLatest; Pinned(versionId) → matching Folder); the base name, not the container display name
