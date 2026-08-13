@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.26.0...v0.27.0) (2026-08-13)
+
+
+### Features
+
+* **ui:** add drag reorder and order locks ([#186](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/186)) ([9ac2a24](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/9ac2a24a8c5948e1881fbca4c5d82e018527f8b8)), closes [#184](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/184)
+
 ## [0.26.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.25.0...v0.26.0) (2026-08-11)
 
 
