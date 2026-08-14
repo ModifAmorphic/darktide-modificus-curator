@@ -199,366 +199,433 @@
   </Window.Styles>
 
   <!--
-    The shell: a SplitView in CompactInline mode. The compact 48px icon rail is
-    always visible; expanding the pane reveals the labels and reduces the content
-    width (never overlays it). The pane starts collapsed (IsPaneOpen=False). The
-    XAML OpenPaneLength=200 is the design-time/startup fallback; once the window
-    is open, MainWindow.axaml.cs measures the live localized labels at the
-    current font scale and grows the open pane length (clamped to [200, 360]) so
-    future translations do not clip at the fixed width. The content is a Grid:
-    global header (destination title + Launch), the hosted destination content
-    (one persistent UserControl per destination, visibility-switched), and the
-    global status strip.
+    Root composition: a Grid hosting the shell SplitView with the full-client
+    launch overlay layered above it (the overlay is the final child, so it
+    renders on top). While a launch attempt is in progress the SplitView is
+    disabled (IsEnabled bound to the inverse attempt state) and the overlay
+    takes the input surface; the window's native chrome is untouched.
   -->
-  <SplitView x:Name="NavSplitView"
-             IsPaneOpen="{Binding IsNavigationPaneOpen}"
-             DisplayMode="CompactInline"
-             CompactPaneLength="48"
-             OpenPaneLength="200"
-             PaneBackground="{DynamicResource SystemControlBackgroundChromeMediumBrush}">
+  <Grid>
+    <!--
+      The shell: a SplitView in CompactInline mode. The compact 48px icon rail is
+      always visible; expanding the pane reveals the labels and reduces the content
+      width (never overlays it). The pane starts collapsed (IsPaneOpen=False). The
+      XAML OpenPaneLength=200 is the design-time/startup fallback; once the window
+      is open, MainWindow.axaml.cs measures the live localized labels at the
+      current font scale and grows the open pane length (clamped to [200, 360]) so
+      future translations do not clip at the fixed width. The content is a Grid:
+      global header (destination title + Launch), the hosted destination content
+      (one persistent UserControl per destination, visibility-switched), and the
+      global status strip.
+    -->
+    <SplitView x:Name="NavSplitView"
+               IsEnabled="{Binding !IsLaunchAttemptInProgress}"
+               IsPaneOpen="{Binding IsNavigationPaneOpen}"
+               DisplayMode="CompactInline"
+               CompactPaneLength="48"
+               OpenPaneLength="200"
+               PaneBackground="{DynamicResource SystemControlBackgroundChromeMediumBrush}">
 
-    <SplitView.Pane>
-      <Grid RowDefinitions="Auto,*,Auto">
-        <!-- Hamburger toggle: always visible (compact + expanded). The
-             localized tooltip + automation name cover the compact mode (no
-             label is visible there). -->
-        <Button Grid.Row="0"
-                Classes="hamburger"
-                Command="{Binding ToggleNavigationPaneCommand}"
-                ToolTip.Tip="{ReflectionBinding [Nav_HamburgerTooltip], Source={StaticResource Loc}}"
-                AutomationProperties.Name="{ReflectionBinding [Nav_HamburgerTooltip], Source={StaticResource Loc}}">
-          <Grid ColumnDefinitions="48">
-            <!-- Material "menu" hamburger (24x24 source): drawn geometry, themed
-                 via the button foreground. -->
-            <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
-                  HorizontalAlignment="Center" VerticalAlignment="Center"
-                  Fill="{Binding $parent[Button].Foreground}"
-                  Data="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z" />
-          </Grid>
-        </Button>
-
-        <!-- Destination buttons, in nav-rail order. Each tile carries its icon
-             (always visible) + its label (visible only when the pane is
-             expanded). The localized tooltip + accessibility name cover the
-             compact mode. The `selected` class is bound to the destination's
-             Is*Selected projection. -->
-        <StackPanel Grid.Row="1" Orientation="Vertical">
-          <!-- Profiles -->
-          <Button Classes="navItem"
-                  Classes.selected="{Binding IsProfilesSelected}"
-                  Command="{Binding NavigateCommand}"
-                  CommandParameter="{x:Static vm:ShellDestination.Profiles}"
-                  ToolTip.Tip="{ReflectionBinding [Profiles_Title], Source={StaticResource Loc}}"
-                  AutomationProperties.Name="{ReflectionBinding [Profiles_Title], Source={StaticResource Loc}}">
-            <Grid ColumnDefinitions="48,*">
-              <!-- Material "layers" (24x24 source): stacked layers = multiple
-                   profiles. -->
+      <SplitView.Pane>
+        <Grid RowDefinitions="Auto,*,Auto">
+          <!-- Hamburger toggle: always visible (compact + expanded). The
+               localized tooltip + automation name cover the compact mode (no
+               label is visible there). -->
+          <Button Grid.Row="0"
+                  Classes="hamburger"
+                  Command="{Binding ToggleNavigationPaneCommand}"
+                  ToolTip.Tip="{ReflectionBinding [Nav_HamburgerTooltip], Source={StaticResource Loc}}"
+                  AutomationProperties.Name="{ReflectionBinding [Nav_HamburgerTooltip], Source={StaticResource Loc}}">
+            <Grid ColumnDefinitions="48">
+              <!-- Material "menu" hamburger (24x24 source): drawn geometry, themed
+                   via the button foreground. -->
               <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
                     HorizontalAlignment="Center" VerticalAlignment="Center"
                     Fill="{Binding $parent[Button].Foreground}"
-                    Data="M11.99 18.54l-7.37-5.73L3 14.07l9 7 9-7-1.63-1.27-7.38 5.74zM12 16l7.36-5.73L21 9l-9-7-9 7 1.63 1.27L12 16z" />
-              <TextBlock x:Name="NavMeasureLabel"
-                         Grid.Column="1"
-                         Text="{ReflectionBinding [Profiles_Title], Source={StaticResource Loc}}"
-                         IsVisible="{Binding IsNavigationPaneOpen}"
-                         VerticalAlignment="Center"
-                         TextTrimming="CharacterEllipsis"
-                         Margin="12,0,0,0" />
+                    Data="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z" />
             </Grid>
           </Button>
 
-          <!-- Mods -->
-          <Button Classes="navItem"
-                  Classes.selected="{Binding IsModsSelected}"
-                  Command="{Binding NavigateCommand}"
-                  CommandParameter="{x:Static vm:ShellDestination.Mods}"
-                  ToolTip.Tip="{ReflectionBinding [ModList_Header], Source={StaticResource Loc}}"
-                  AutomationProperties.Name="{ReflectionBinding [ModList_Header], Source={StaticResource Loc}}">
-            <Grid ColumnDefinitions="48,*">
-              <!-- Material "view_list" (24x24 source): a mod list. -->
-              <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
-                    HorizontalAlignment="Center" VerticalAlignment="Center"
-                    Fill="{Binding $parent[Button].Foreground}"
-                    Data="M4 14h4v-4H4v4zm0 5h4v-4H4v4zM4 9h4V5H4v4zm5 5h12v-4H9v4zm0 5h12v-4H9v4zM9 5v4h12V5H9z" />
-              <TextBlock Grid.Column="1"
-                         Text="{ReflectionBinding [ModList_Header], Source={StaticResource Loc}}"
-                         IsVisible="{Binding IsNavigationPaneOpen}"
-                         VerticalAlignment="Center"
-                         TextTrimming="CharacterEllipsis"
-                         Margin="12,0,0,0" />
-            </Grid>
-          </Button>
-
-          <!-- Nexus -->
-          <Button Classes="navItem"
-                  Classes.selected="{Binding IsNexusIntegrationsSelected}"
-                  Command="{Binding NavigateCommand}"
-                  CommandParameter="{x:Static vm:ShellDestination.NexusIntegrations}"
-                  ToolTip.Tip="{ReflectionBinding [Integrations_Title], Source={StaticResource Loc}}"
-                  AutomationProperties.Name="{ReflectionBinding [Integrations_Title], Source={StaticResource Loc}}">
-            <Grid ColumnDefinitions="48,*">
-              <!-- Material "extension" puzzle-piece (24x24 source): the canonical
-                   "plug things in" symbol (Nexus is the only integration). -->
-              <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
-                    HorizontalAlignment="Center" VerticalAlignment="Center"
-                    Fill="{Binding $parent[Button].Foreground}"
-                    Data="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7s2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 2-2v-4h1.5c1.38 0 2.5-1.12 2.5-2.5S21.88 11 20.5 11z" />
-              <TextBlock Grid.Column="1"
-                         Text="{ReflectionBinding [Integrations_Title], Source={StaticResource Loc}}"
-                         IsVisible="{Binding IsNavigationPaneOpen}"
-                         VerticalAlignment="Center"
-                         TextTrimming="CharacterEllipsis"
-                         Margin="12,0,0,0" />
-            </Grid>
-          </Button>
-
-          <!-- Preferences -->
-          <Button Classes="navItem"
-                  Classes.selected="{Binding IsPreferencesSelected}"
-                  Command="{Binding NavigateCommand}"
-                  CommandParameter="{x:Static vm:ShellDestination.Preferences}"
-                  ToolTip.Tip="{ReflectionBinding [Preferences_Title], Source={StaticResource Loc}}"
-                  AutomationProperties.Name="{ReflectionBinding [Preferences_Title], Source={StaticResource Loc}}">
-            <Grid ColumnDefinitions="48,*">
-              <!-- Material "tune"/"sliders" (24x24 source): sliders, distinct
-                   from the gear (Settings) next to it. -->
-              <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
-                    HorizontalAlignment="Center" VerticalAlignment="Center"
-                    Fill="{Binding $parent[Button].Foreground}"
-                    Data="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z" />
-              <TextBlock Grid.Column="1"
-                         Text="{ReflectionBinding [Preferences_Title], Source={StaticResource Loc}}"
-                         IsVisible="{Binding IsNavigationPaneOpen}"
-                         VerticalAlignment="Center"
-                         TextTrimming="CharacterEllipsis"
-                         Margin="12,0,0,0" />
-            </Grid>
-          </Button>
-
-          <!-- Settings -->
-          <Button Classes="navItem"
-                  Classes.selected="{Binding IsSettingsSelected}"
-                  Command="{Binding NavigateCommand}"
-                  CommandParameter="{x:Static vm:ShellDestination.Settings}"
-                  ToolTip.Tip="{ReflectionBinding [Settings_Title], Source={StaticResource Loc}}"
-                  AutomationProperties.Name="{ReflectionBinding [Settings_Title], Source={StaticResource Loc}}">
-            <Grid ColumnDefinitions="48,*">
-              <!-- Material "settings" gear (24x24 source). -->
-              <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
-                    HorizontalAlignment="Center" VerticalAlignment="Center"
-                    Fill="{Binding $parent[Button].Foreground}"
-                    Data="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.21.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
-              <TextBlock Grid.Column="1"
-                         Text="{ReflectionBinding [Settings_Title], Source={StaticResource Loc}}"
-                         IsVisible="{Binding IsNavigationPaneOpen}"
-                         VerticalAlignment="Center"
-                         TextTrimming="CharacterEllipsis"
-                         Margin="12,0,0,0" />
-            </Grid>
-          </Button>
-        </StackPanel>
-
-        <!-- Exit: pane-bottom (row 2). Not a destination (no selected state, no
-              NavigateCommand). Click calls Close() in code-behind, matching the
-              title-bar close path so window state persists through OnClosing.
-              Reuses the navItem tile chrome. -->
-        <Button Grid.Row="2"
-                Classes="navItem"
-                Click="Exit_Click"
-                ToolTip.Tip="{ReflectionBinding [Nav_ExitTooltip], Source={StaticResource Loc}}"
-                AutomationProperties.Name="{ReflectionBinding [Nav_ExitTooltip], Source={StaticResource Loc}}">
-          <Grid ColumnDefinitions="48,*">
-            <!-- Material "logout" (24x24 source): drawn geometry, themed via the
-                 button foreground. -->
-            <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
-                  HorizontalAlignment="Center" VerticalAlignment="Center"
-                  Fill="{Binding $parent[Button].Foreground}"
-                  Data="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z" />
-            <TextBlock Grid.Column="1"
-                       Text="{ReflectionBinding [Nav_Exit], Source={StaticResource Loc}}"
-                       IsVisible="{Binding IsNavigationPaneOpen}"
-                       VerticalAlignment="Center"
-                       TextTrimming="CharacterEllipsis"
-                       Margin="12,0,0,0" />
-          </Grid>
-        </Button>
-      </Grid>
-    </SplitView.Pane>
-
-    <Grid RowDefinitions="Auto,*,Auto">
-
-      <!-- Global header: current destination title (left) + Launch Darktide (right). -->
-      <Border Grid.Row="0"
-              BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
-              BorderThickness="0,0,0,1"
-              Padding="20,12">
-        <Grid ColumnDefinitions="*,Auto">
-          <TextBlock Grid.Column="0"
-                     Text="{Binding CurrentDestinationTitle}"
-                     FontSize="18" FontWeight="SemiBold"
-                     VerticalAlignment="Center" />
-           <!-- Launch Darktide: the global primary action. The iron-and-rust
-                treatment (Button.launchAction) makes it unmistakably the primary
-                game action. The visible label is the uppercase display form in
-                the Quantico Bold display font; the accessible name + tooltip
-                stay the ordinary localized Launch_Button. The drawn play Path
-                precedes the label (no Unicode glyph). -->
-          <Button Grid.Column="1"
-                  Classes="launchAction"
-                  Command="{Binding LaunchCommand}"
-                  VerticalAlignment="Center"
-                  ToolTip.Tip="{ReflectionBinding [Launch_Button], Source={StaticResource Loc}}"
-                  AutomationProperties.Name="{ReflectionBinding [Launch_Button], Source={StaticResource Loc}}">
-            <StackPanel Orientation="Horizontal" Spacing="10">
-              <!-- Material "play_arrow" (24x24 source): drawn geometry, themed
-                   via the Button foreground so it tracks the disabled state. -->
-              <Path Width="16" Height="16" Stretch="Uniform" VerticalAlignment="Center"
-                    Fill="{Binding $parent[Button].Foreground}"
-                    Data="M8 5v14l11-7z" />
-              <TextBlock Text="{ReflectionBinding [Launch_ButtonDisplay], Source={StaticResource Loc}}"
-                         FontFamily="avares://Modificus.Curator/Assets/fonts/Quantico-Bold.ttf#Quantico"
-                         FontSize="16" FontWeight="Bold" LetterSpacing="1"
-                         TextOptions.TextHintingMode="Strong"
-                         TextOptions.BaselinePixelAlignment="Aligned"
-                         VerticalAlignment="Center" />
-            </StackPanel>
-          </Button>
-        </Grid>
-      </Border>
-
-      <!-- Hosted destination content. One persistent instance of each page,
-           overlapping in the same cell; visibility selects which shows. Each
-           page is wrapped in a Panel that inherits the ShellViewModel context
-           (so IsVisible compiles against the shell's Is*Visible projection);
-           the inner page sets its own DataContext to its concrete singleton
-           page VM. The Mods panel additionally hosts the no-profile handoff
-           link (a HyperlinkButton whose DataContext stays ShellViewModel so it
-           can bind NavigateCommand + ModList.HasActiveProfile); it sits above
-           the page only when no profile is active, falling behind it the moment
-           one is. -->
-      <Grid Grid.Row="1">
-        <Panel IsVisible="{Binding IsProfilesVisible}">
-          <views:ProfilesView DataContext="{Binding Profiles}" />
-        </Panel>
-        <Panel IsVisible="{Binding IsModsVisible}">
-          <views:ModListView DataContext="{Binding ModList}" />
-          <!--
-            The Mods no-profile handoff. The shell owns this: when no profile is
-            active the entire sentence is a HyperlinkButton bound to the shell's
-            NavigateCommand with ShellDestination.Profiles as its parameter, so a
-            click navigates to Profiles. DataContext is ShellViewModel (the
-            panel's inherited context), so ModList.HasActiveProfile is reached
-            through the ModList page VM exposed on the shell. No code-behind
-            ancestor lookup; no child-to-shell navigation service.
-          -->
-          <HyperlinkButton IsVisible="{Binding !ModList.HasActiveProfile}"
-                           Command="{Binding NavigateCommand}"
-                           CommandParameter="{x:Static vm:ShellDestination.Profiles}"
-                           Content="{ReflectionBinding [ModList_EmptyNoProfile], Source={StaticResource Loc}}"
-                           HorizontalAlignment="Center"
-                           VerticalAlignment="Center"
-                           Padding="0" />
-        </Panel>
-        <Panel IsVisible="{Binding IsNexusIntegrationsVisible}">
-          <views:IntegrationsView DataContext="{Binding Integrations}" />
-        </Panel>
-        <Panel IsVisible="{Binding IsPreferencesVisible}">
-          <views:PreferencesView DataContext="{Binding Preferences}" />
-        </Panel>
-        <Panel IsVisible="{Binding IsSettingsVisible}">
-          <views:SettingsView DataContext="{Binding Settings}" />
-        </Panel>
-      </Grid>
-
-      <!-- Status strip: game-running indicator + the nxm handler status
-           (enabled / disabled / unavailable) + the dismissible app-update
-           notice. -->
-      <Border Grid.Row="2"
-              BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
-              BorderThickness="0,1,0,0"
-              Padding="20,6">
-        <StackPanel Orientation="Horizontal" Spacing="6">
-          <!-- Game-running indicator: three mutually-exclusive dots driven by the
-               shell's Show*Dot states. Grey = not running; green = running, in
-               sync; yellow = running with changes that apply at the next launch
-               (Curator does not re-stage the mod tree while Darktide runs). The
-               yellow fill reuses the caution brush the rate-limit pill dot uses. -->
-          <Ellipse Width="11" Height="11" VerticalAlignment="Center"
-                   Fill="{DynamicResource SystemControlForegroundBaseMediumBrush}"
-                   IsVisible="{Binding ShowNotRunningDot}" />
-          <Ellipse Width="11" Height="11" VerticalAlignment="Center"
-                   Fill="#22A06B"
-                   IsVisible="{Binding ShowRunningCleanDot}" />
-          <Ellipse Width="11" Height="11" VerticalAlignment="Center"
-                   Fill="{DynamicResource CuratorCautionBrush}"
-                   IsVisible="{Binding ShowRunningDirtyDot}" />
-          <TextBlock Text="{Binding GameRunningText}"
-                     FontSize="{DynamicResource AppStatusFontSize}" Opacity="0.8"
-                     VerticalAlignment="Center" />
-          <!-- nxm handler indicator: green when Curator is the registered handler
-               (IsNxmEnabled), grey otherwise (covers not registered + no platform
-               registrar). Mirrors the game-running Ellipse pair directly above. -->
-          <Ellipse Width="11" Height="11" VerticalAlignment="Center"
-                   Margin="12,0,0,0"
-                   Fill="#22A06B"
-                   IsVisible="{Binding IsNxmEnabled}" />
-          <Ellipse Width="11" Height="11" VerticalAlignment="Center"
-                   Margin="12,0,0,0"
-                   Fill="{DynamicResource SystemControlForegroundBaseMediumBrush}"
-                   IsVisible="{Binding !IsNxmEnabled}" />
-          <TextBlock Text="{Binding NxmHandlerStatusText}"
-                     FontSize="{DynamicResource AppStatusFontSize}" Opacity="0.8"
-                     VerticalAlignment="Center"
-                     ToolTip.Tip="{Binding NxmHandlerStatusTooltip}" />
-          <!--
-            App self-update notice: a dismissible pill in the status strip. Shown
-            only when an update is available (ShowAppUpdateNotice) and not yet
-            dismissed this session. The pill, the link, and the dismiss button
-            all draw from app-owned theme-driven resources (never the platform
-            accent), so the notice stays legible in Light and Dark regardless of
-            SystemAccentColor. The link is a HyperlinkButton whose scoped
-            updateNoticeLink styles pin its foreground + per-state background
-            (Fluent's native accent reapplied on :pointerover/:pressed is
-            overridden). The dismiss icon stays legible the same way
-            (updateNoticeDismiss). Clicking the link confirms + downloads +
-            restarts; the drawn close button hides the notice for this session.
-          -->
-          <Border IsVisible="{Binding ShowAppUpdateNotice}"
-                  Background="{DynamicResource CuratorUpdateNoticeBackgroundBrush}"
-                  BorderBrush="{DynamicResource CuratorUpdateNoticeBorderBrush}"
-                  BorderThickness="1"
-                  CornerRadius="8"
-                  Padding="6,1"
-                  Margin="12,0,0,0"
-                  VerticalAlignment="Center"
-                  ToolTip.Tip="{Binding AppUpdateNoticeTooltip}">
-            <StackPanel Orientation="Horizontal" Spacing="4">
-              <HyperlinkButton Classes="updateNoticeLink"
-                               Command="{Binding CheckAppUpdateNowCommand}"
-                               VerticalAlignment="Center"
-                               ToolTip.Tip="{Binding AppUpdateNoticeTooltip}">
-                <TextBlock Text="{Binding AppUpdateNoticeText}"
-                           FontSize="{DynamicResource AppStatusFontSize}"
-                           VerticalAlignment="Center" />
-              </HyperlinkButton>
-              <Button Classes="icon updateNoticeDismiss"
-                      Command="{Binding DismissAppUpdateCommand}"
-                      VerticalAlignment="Center"
-                      ToolTip.Tip="{Binding AppUpdateDismissTooltip}">
-                <!-- Material "close" (24x24 source): drawn geometry, themed via
-                     the Button foreground (the $parent[Button] ancestor resolves
-                     in button content; the scoped updateNoticeDismiss Foreground
-                     setters below pin it to the app-owned color). Mirrors the
-                     DialogTitleBar close Path. -->
-                <Path Width="10" Height="10" Stretch="Uniform"
+          <!-- Destination buttons, in nav-rail order. Each tile carries its icon
+               (always visible) + its label (visible only when the pane is
+               expanded). The localized tooltip + accessibility name cover the
+               compact mode. The `selected` class is bound to the destination's
+               Is*Selected projection. -->
+          <StackPanel Grid.Row="1" Orientation="Vertical">
+            <!-- Profiles -->
+            <Button Classes="navItem"
+                    Classes.selected="{Binding IsProfilesSelected}"
+                    Command="{Binding NavigateCommand}"
+                    CommandParameter="{x:Static vm:ShellDestination.Profiles}"
+                    ToolTip.Tip="{ReflectionBinding [Profiles_Title], Source={StaticResource Loc}}"
+                    AutomationProperties.Name="{ReflectionBinding [Profiles_Title], Source={StaticResource Loc}}">
+              <Grid ColumnDefinitions="48,*">
+                <!-- Material "layers" (24x24 source): stacked layers = multiple
+                     profiles. -->
+                <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
                       HorizontalAlignment="Center" VerticalAlignment="Center"
                       Fill="{Binding $parent[Button].Foreground}"
-                      Data="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-              </Button>
-            </StackPanel>
-          </Border>
+                      Data="M11.99 18.54l-7.37-5.73L3 14.07l9 7 9-7-1.63-1.27-7.38 5.74zM12 16l7.36-5.73L21 9l-9-7-9 7 1.63 1.27L12 16z" />
+                <TextBlock x:Name="NavMeasureLabel"
+                           Grid.Column="1"
+                           Text="{ReflectionBinding [Profiles_Title], Source={StaticResource Loc}}"
+                           IsVisible="{Binding IsNavigationPaneOpen}"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           Margin="12,0,0,0" />
+              </Grid>
+            </Button>
+
+            <!-- Mods -->
+            <Button Classes="navItem"
+                    Classes.selected="{Binding IsModsSelected}"
+                    Command="{Binding NavigateCommand}"
+                    CommandParameter="{x:Static vm:ShellDestination.Mods}"
+                    ToolTip.Tip="{ReflectionBinding [ModList_Header], Source={StaticResource Loc}}"
+                    AutomationProperties.Name="{ReflectionBinding [ModList_Header], Source={StaticResource Loc}}">
+              <Grid ColumnDefinitions="48,*">
+                <!-- Material "view_list" (24x24 source): a mod list. -->
+                <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
+                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                      Fill="{Binding $parent[Button].Foreground}"
+                      Data="M4 14h4v-4H4v4zm0 5h4v-4H4v4zM4 9h4V5H4v4zm5 5h12v-4H9v4zm0 5h12v-4H9v4zM9 5v4h12V5H9z" />
+                <TextBlock Grid.Column="1"
+                           Text="{ReflectionBinding [ModList_Header], Source={StaticResource Loc}}"
+                           IsVisible="{Binding IsNavigationPaneOpen}"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           Margin="12,0,0,0" />
+              </Grid>
+            </Button>
+
+            <!-- Nexus -->
+            <Button Classes="navItem"
+                    Classes.selected="{Binding IsNexusIntegrationsSelected}"
+                    Command="{Binding NavigateCommand}"
+                    CommandParameter="{x:Static vm:ShellDestination.NexusIntegrations}"
+                    ToolTip.Tip="{ReflectionBinding [Integrations_Title], Source={StaticResource Loc}}"
+                    AutomationProperties.Name="{ReflectionBinding [Integrations_Title], Source={StaticResource Loc}}">
+              <Grid ColumnDefinitions="48,*">
+                <!-- Material "extension" puzzle-piece (24x24 source): the canonical
+                     "plug things in" symbol (Nexus is the only integration). -->
+                <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
+                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                      Fill="{Binding $parent[Button].Foreground}"
+                      Data="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7s2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 2-2v-4h1.5c1.38 0 2.5-1.12 2.5-2.5S21.88 11 20.5 11z" />
+                <TextBlock Grid.Column="1"
+                           Text="{ReflectionBinding [Integrations_Title], Source={StaticResource Loc}}"
+                           IsVisible="{Binding IsNavigationPaneOpen}"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           Margin="12,0,0,0" />
+              </Grid>
+            </Button>
+
+            <!-- Preferences -->
+            <Button Classes="navItem"
+                    Classes.selected="{Binding IsPreferencesSelected}"
+                    Command="{Binding NavigateCommand}"
+                    CommandParameter="{x:Static vm:ShellDestination.Preferences}"
+                    ToolTip.Tip="{ReflectionBinding [Preferences_Title], Source={StaticResource Loc}}"
+                    AutomationProperties.Name="{ReflectionBinding [Preferences_Title], Source={StaticResource Loc}}">
+              <Grid ColumnDefinitions="48,*">
+                <!-- Material "tune"/"sliders" (24x24 source): sliders, distinct
+                     from the gear (Settings) next to it. -->
+                <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
+                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                      Fill="{Binding $parent[Button].Foreground}"
+                      Data="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z" />
+                <TextBlock Grid.Column="1"
+                           Text="{ReflectionBinding [Preferences_Title], Source={StaticResource Loc}}"
+                           IsVisible="{Binding IsNavigationPaneOpen}"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           Margin="12,0,0,0" />
+              </Grid>
+            </Button>
+
+            <!-- Settings -->
+            <Button Classes="navItem"
+                    Classes.selected="{Binding IsSettingsSelected}"
+                    Command="{Binding NavigateCommand}"
+                    CommandParameter="{x:Static vm:ShellDestination.Settings}"
+                    ToolTip.Tip="{ReflectionBinding [Settings_Title], Source={StaticResource Loc}}"
+                    AutomationProperties.Name="{ReflectionBinding [Settings_Title], Source={StaticResource Loc}}">
+              <Grid ColumnDefinitions="48,*">
+                <!-- Material "settings" gear (24x24 source). -->
+                <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
+                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                      Fill="{Binding $parent[Button].Foreground}"
+                      Data="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.21.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
+                <TextBlock Grid.Column="1"
+                           Text="{ReflectionBinding [Settings_Title], Source={StaticResource Loc}}"
+                           IsVisible="{Binding IsNavigationPaneOpen}"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           Margin="12,0,0,0" />
+              </Grid>
+            </Button>
+          </StackPanel>
+
+          <!-- Exit: pane-bottom (row 2). Not a destination (no selected state, no
+                NavigateCommand). Click calls Close() in code-behind, matching the
+                title-bar close path so window state persists through OnClosing.
+                Reuses the navItem tile chrome. -->
+          <Button Grid.Row="2"
+                  Classes="navItem"
+                  Click="Exit_Click"
+                  ToolTip.Tip="{ReflectionBinding [Nav_ExitTooltip], Source={StaticResource Loc}}"
+                  AutomationProperties.Name="{ReflectionBinding [Nav_ExitTooltip], Source={StaticResource Loc}}">
+            <Grid ColumnDefinitions="48,*">
+              <!-- Material "logout" (24x24 source): drawn geometry, themed via the
+                   button foreground. -->
+              <Path Grid.Column="0" Width="20" Height="20" Stretch="Uniform"
+                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Fill="{Binding $parent[Button].Foreground}"
+                    Data="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z" />
+              <TextBlock Grid.Column="1"
+                         Text="{ReflectionBinding [Nav_Exit], Source={StaticResource Loc}}"
+                         IsVisible="{Binding IsNavigationPaneOpen}"
+                         VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis"
+                         Margin="12,0,0,0" />
+            </Grid>
+          </Button>
+        </Grid>
+      </SplitView.Pane>
+
+      <Grid RowDefinitions="Auto,*,Auto">
+
+        <!-- Global header: current destination title (left) + Launch Darktide (right). -->
+        <Border Grid.Row="0"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                BorderThickness="0,0,0,1"
+                Padding="20,12">
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Grid.Column="0"
+                       Text="{Binding CurrentDestinationTitle}"
+                       FontSize="18" FontWeight="SemiBold"
+                       VerticalAlignment="Center" />
+             <!-- Launch Darktide: the global primary action. The iron-and-rust
+                  treatment (Button.launchAction) makes it unmistakably the primary
+                  game action. The visible label is the uppercase display form in
+                  the Quantico Bold display font; the accessible name + tooltip
+                  stay the ordinary localized Launch_Button. The drawn play Path
+                  precedes the label (no Unicode glyph). -->
+            <Button Grid.Column="1"
+                    Classes="launchAction"
+                    Command="{Binding LaunchCommand}"
+                    VerticalAlignment="Center"
+                    ToolTip.Tip="{ReflectionBinding [Launch_Button], Source={StaticResource Loc}}"
+                    AutomationProperties.Name="{ReflectionBinding [Launch_Button], Source={StaticResource Loc}}">
+              <StackPanel Orientation="Horizontal" Spacing="10">
+                <!-- Material "play_arrow" (24x24 source): drawn geometry, themed
+                     via the Button foreground so it tracks the disabled state. -->
+                <Path Width="16" Height="16" Stretch="Uniform" VerticalAlignment="Center"
+                      Fill="{Binding $parent[Button].Foreground}"
+                      Data="M8 5v14l11-7z" />
+                <TextBlock Text="{ReflectionBinding [Launch_ButtonDisplay], Source={StaticResource Loc}}"
+                           FontFamily="avares://Modificus.Curator/Assets/fonts/Quantico-Bold.ttf#Quantico"
+                           FontSize="16" FontWeight="Bold" LetterSpacing="1"
+                           TextOptions.TextHintingMode="Strong"
+                           TextOptions.BaselinePixelAlignment="Aligned"
+                           VerticalAlignment="Center" />
+              </StackPanel>
+            </Button>
+          </Grid>
+        </Border>
+
+        <!-- Hosted destination content. One persistent instance of each page,
+             overlapping in the same cell; visibility selects which shows. Each
+             page is wrapped in a Panel that inherits the ShellViewModel context
+             (so IsVisible compiles against the shell's Is*Visible projection);
+             the inner page sets its own DataContext to its concrete singleton
+             page VM. The Mods panel additionally hosts the no-profile handoff
+             link (a HyperlinkButton whose DataContext stays ShellViewModel so it
+             can bind NavigateCommand + ModList.HasActiveProfile); it sits above
+             the page only when no profile is active, falling behind it the moment
+             one is. -->
+        <Grid Grid.Row="1">
+          <Panel IsVisible="{Binding IsProfilesVisible}">
+            <views:ProfilesView DataContext="{Binding Profiles}" />
+          </Panel>
+          <Panel IsVisible="{Binding IsModsVisible}">
+            <views:ModListView DataContext="{Binding ModList}" />
+            <!--
+              The Mods no-profile handoff. The shell owns this: when no profile is
+              active the entire sentence is a HyperlinkButton bound to the shell's
+              NavigateCommand with ShellDestination.Profiles as its parameter, so a
+              click navigates to Profiles. DataContext is ShellViewModel (the
+              panel's inherited context), so ModList.HasActiveProfile is reached
+              through the ModList page VM exposed on the shell. No code-behind
+              ancestor lookup; no child-to-shell navigation service.
+            -->
+            <HyperlinkButton IsVisible="{Binding !ModList.HasActiveProfile}"
+                             Command="{Binding NavigateCommand}"
+                             CommandParameter="{x:Static vm:ShellDestination.Profiles}"
+                             Content="{ReflectionBinding [ModList_EmptyNoProfile], Source={StaticResource Loc}}"
+                             HorizontalAlignment="Center"
+                             VerticalAlignment="Center"
+                             Padding="0" />
+          </Panel>
+          <Panel IsVisible="{Binding IsNexusIntegrationsVisible}">
+            <views:IntegrationsView DataContext="{Binding Integrations}" />
+          </Panel>
+          <Panel IsVisible="{Binding IsPreferencesVisible}">
+            <views:PreferencesView DataContext="{Binding Preferences}" />
+          </Panel>
+          <Panel IsVisible="{Binding IsSettingsVisible}">
+            <views:SettingsView DataContext="{Binding Settings}" />
+          </Panel>
+        </Grid>
+
+        <!-- Status strip: game-running indicator + the nxm handler status
+             (enabled / disabled / unavailable) + the dismissible app-update
+             notice. -->
+        <Border Grid.Row="2"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                BorderThickness="0,1,0,0"
+                Padding="20,6">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <!-- Game-running indicator: three mutually-exclusive dots driven by the
+                 shell's Show*Dot states. Grey = not running; green = running, in
+                 sync; yellow = running with changes that apply at the next launch
+                 (Curator does not re-stage the mod tree while Darktide runs). The
+                 yellow fill reuses the caution brush the rate-limit pill dot uses. -->
+            <Ellipse Width="11" Height="11" VerticalAlignment="Center"
+                     Fill="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                     IsVisible="{Binding ShowNotRunningDot}" />
+            <Ellipse Width="11" Height="11" VerticalAlignment="Center"
+                     Fill="#22A06B"
+                     IsVisible="{Binding ShowRunningCleanDot}" />
+            <Ellipse Width="11" Height="11" VerticalAlignment="Center"
+                     Fill="{DynamicResource CuratorCautionBrush}"
+                     IsVisible="{Binding ShowRunningDirtyDot}" />
+            <TextBlock Text="{Binding GameRunningText}"
+                       FontSize="{DynamicResource AppStatusFontSize}" Opacity="0.8"
+                       VerticalAlignment="Center" />
+            <!-- nxm handler indicator: green when Curator is the registered handler
+                 (IsNxmEnabled), grey otherwise (covers not registered + no platform
+                 registrar). Mirrors the game-running Ellipse pair directly above. -->
+            <Ellipse Width="11" Height="11" VerticalAlignment="Center"
+                     Margin="12,0,0,0"
+                     Fill="#22A06B"
+                     IsVisible="{Binding IsNxmEnabled}" />
+            <Ellipse Width="11" Height="11" VerticalAlignment="Center"
+                     Margin="12,0,0,0"
+                     Fill="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                     IsVisible="{Binding !IsNxmEnabled}" />
+            <TextBlock Text="{Binding NxmHandlerStatusText}"
+                       FontSize="{DynamicResource AppStatusFontSize}" Opacity="0.8"
+                       VerticalAlignment="Center"
+                       ToolTip.Tip="{Binding NxmHandlerStatusTooltip}" />
+            <!--
+              App self-update notice: a dismissible pill in the status strip. Shown
+              only when an update is available (ShowAppUpdateNotice) and not yet
+              dismissed this session. The pill, the link, and the dismiss button
+              all draw from app-owned theme-driven resources (never the platform
+              accent), so the notice stays legible in Light and Dark regardless of
+              SystemAccentColor. The link is a HyperlinkButton whose scoped
+              updateNoticeLink styles pin its foreground + per-state background
+              (Fluent's native accent reapplied on :pointerover/:pressed is
+              overridden). The dismiss icon stays legible the same way
+              (updateNoticeDismiss). Clicking the link confirms + downloads +
+              restarts; the drawn close button hides the notice for this session.
+            -->
+            <Border IsVisible="{Binding ShowAppUpdateNotice}"
+                    Background="{DynamicResource CuratorUpdateNoticeBackgroundBrush}"
+                    BorderBrush="{DynamicResource CuratorUpdateNoticeBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="6,1"
+                    Margin="12,0,0,0"
+                    VerticalAlignment="Center"
+                    ToolTip.Tip="{Binding AppUpdateNoticeTooltip}">
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <HyperlinkButton Classes="updateNoticeLink"
+                                 Command="{Binding CheckAppUpdateNowCommand}"
+                                 VerticalAlignment="Center"
+                                 ToolTip.Tip="{Binding AppUpdateNoticeTooltip}">
+                  <TextBlock Text="{Binding AppUpdateNoticeText}"
+                             FontSize="{DynamicResource AppStatusFontSize}"
+                             VerticalAlignment="Center" />
+                </HyperlinkButton>
+                <Button Classes="icon updateNoticeDismiss"
+                        Command="{Binding DismissAppUpdateCommand}"
+                        VerticalAlignment="Center"
+                        ToolTip.Tip="{Binding AppUpdateDismissTooltip}">
+                  <!-- Material "close" (24x24 source): drawn geometry, themed via
+                       the Button foreground (the $parent[Button] ancestor resolves
+                       in button content; the scoped updateNoticeDismiss Foreground
+                       setters below pin it to the app-owned color). Mirrors the
+                       DialogTitleBar close Path. -->
+                  <Path Width="10" Height="10" Stretch="Uniform"
+                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Fill="{Binding $parent[Button].Foreground}"
+                        Data="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+                </Button>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </Border>
+      </Grid>
+    </SplitView>
+
+    <!--
+      The full-client launch overlay. Visible exactly while
+      ShellViewModel.IsLaunchAttemptInProgress is true (the same attempt state
+      that disables the Launch button): it dims the whole client area with a
+      semi-opaque scrim, blocks pointer + keyboard access to the disabled shell
+      beneath (the SplitView's IsEnabled is bound to the inverse state; the
+      overlay itself is also hit-testable, so input is stopped twice over), and
+      centers the launch progress card. It is a sibling layered over the shell
+      (the final child of the root Grid, plus an explicit ZIndex), never part
+      of the content flow, so layout never shifts. Native window chrome stays
+      available: the overlay lives inside the client area only, so the window
+      can still be moved, minimized, or closed. Failure + discovery dialogs are
+      separate OS-owned dialog windows, so they layer above this overlay
+      naturally while failure handling is in progress. There is deliberately no
+      Cancel control: once Relay starts there is no safe cancellation contract.
+    -->
+    <Panel x:Name="LaunchAttemptOverlay"
+           IsVisible="{Binding IsLaunchAttemptInProgress}"
+           IsHitTestVisible="True"
+           ZIndex="10"
+           Background="{DynamicResource CuratorLaunchOverlayScrimBrush}"
+           AutomationProperties.Name="{ReflectionBinding [Launch_OverlayTitle], Source={StaticResource Loc}}"
+           AutomationProperties.LiveSetting="Polite">
+      <!--
+        The centered progress card, in the iron-and-rust launch palette so the
+        blocking surface reads as part of the Launch action in both themes.
+        The bar is an ordinary indeterminate ProgressBar animated by the Fluent
+        ControlTheme's own keyframes (no custom spinner machinery), drawn from
+        app-owned brushes so the platform accent can never harm contrast. The
+        accessible names carry the localized title + message declaratively (a
+        polite live setting announces the overlay's appearance); no focus trap
+        and no imperative accessibility behavior.
+      -->
+      <Border MaxWidth="420"
+              HorizontalAlignment="Center"
+              VerticalAlignment="Center"
+              Background="{DynamicResource CuratorLaunchOverlayCardFaceBrush}"
+              BorderBrush="{DynamicResource CuratorLaunchOverlayCardBorderBrush}"
+              BorderThickness="1,1,1,3"
+              CornerRadius="8"
+              Padding="24,20"
+              AutomationProperties.Name="{ReflectionBinding [Launch_OverlayMessage], Source={StaticResource Loc}}">
+        <StackPanel Spacing="14">
+          <TextBlock Text="{ReflectionBinding [Launch_OverlayTitle], Source={StaticResource Loc}}"
+                     FontSize="18" FontWeight="SemiBold"
+                     Foreground="{DynamicResource CuratorLaunchOverlayTitleBrush}" />
+          <TextBlock Text="{ReflectionBinding [Launch_OverlayMessage], Source={StaticResource Loc}}"
+                     TextWrapping="Wrap"
+                     Foreground="{DynamicResource CuratorLaunchOverlayMessageBrush}" />
+          <ProgressBar IsIndeterminate="True"
+                       MinHeight="6"
+                       Foreground="{DynamicResource CuratorLaunchOverlayBarBrush}"
+                       Background="{DynamicResource CuratorLaunchOverlayTrackBrush}" />
         </StackPanel>
       </Border>
-    </Grid>
-  </SplitView>
+    </Panel>
+  </Grid>
 </Window>

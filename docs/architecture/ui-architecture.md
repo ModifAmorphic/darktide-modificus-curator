@@ -175,11 +175,12 @@ The shell owns navigation across five hosted destinations (the
 `ShellDestination` enum: Profiles, Mods, NexusIntegrations, Preferences,
 Settings), the global Launch action, and the global status strip. It does not
 own the active id, the gate, or the running-state; those are the session's.
-Launch availability derives directly from `IProfileSession.ActiveProfileId` +
-`IsGameRunning`, and Launch resolves the active id from the session at
-execution time rather than from a cached selection. Mods is selected
-initially; the pane starts collapsed (compact icon rail); the hamburger
-button toggles `IsPaneOpen`.
+The shell does own the launch-attempt state (below). Launch availability
+derives directly from `IProfileSession.ActiveProfileId` + `IsGameRunning` +
+the shell's `IsLaunchAttemptInProgress`, and Launch resolves the active id
+from the session at execution time rather than from a cached selection. Mods
+is selected initially; the pane starts collapsed (compact icon rail); the
+hamburger button toggles `IsPaneOpen`.
 
 ### Shell appearance: the Launch action and the theme-safe update notice
 
@@ -348,16 +349,34 @@ activation/deactivation capabilities, so the shell calls each concrete page
 VM directly. The hosted page VMs are application-lifetime singletons;
 navigation never calls an old Window-close final-cleanup (`Detach`) path.
 
-### Launch + the result branches
+### Launch + the launch-attempt state + the result branches
 
 `LaunchCommand` resolves the active id from `IProfileSession.ActiveProfileId`
-at execution time and calls `IRelayLaunchService.Launch(activeProfileId)`,
-then branches on `LaunchResult.Status`:
+at execution time. Before invoking the launch service it sets the shell-owned
+`IsLaunchAttemptInProgress` (a method-level guard also refuses a second,
+direct/programmatic execution while an attempt is active; `CanExecute` alone
+gates only the button), then yields once to the Avalonia dispatcher at
+`DispatcherPriority.Loaded` (after layout + render, before subsequent input)
+so the freshly-disabled button and the launch overlay paint before the
+synchronous discovery/staging/spawn call runs on the UI thread. The button's
+text, tooltip, and accessible name are unchanged; the overlay is the
+additional feedback. It then calls
+`IRelayLaunchService.Launch(activeProfileId)` and branches on
+`LaunchResult.Status`:
 
 - **`Launched`**: an immediate `_session.Refresh()` so the indicator and
   launch-availability react at once, not on the next poll. Successful launch
   surfaces no status note or other confirmation; the running indicator is the
-  durable signal.
+  durable signal. The attempt state then stays set until the session's
+  running-state signal observes Darktide or a 30-second timeout elapses (the
+  timeout starts only after the spawn returns; a false polling result never
+  clears the state). When the game is observed, the ordinary `IsGameRunning`
+  gate keeps Launch disabled; on timeout with the game absent, retry becomes
+  possible. The wait observes the existing session signal only (subscribe
+  before the initial check so a flip cannot be missed; the temporary
+  subscription is removed deterministically): it is bounded detector
+  handoff, not process waiting or process ownership (Relay and Darktide stay
+  fire-and-forget, no process handle).
 - **`DiscoveryIncomplete`**: opens the focused escape-hatch dialog with the
   missing fields. No auto-retry: the user submits the paths, closes the
   dialog, and clicks Launch again. A loop here would trap the user if they
@@ -367,6 +386,51 @@ then branches on `LaunchResult.Status`:
   framing + hint, then appends that body (mirroring the Update/Import failure
   alerts).
 - **`Error`**: a modal alert with the result's message.
+
+The attempt state stays set while a failure dialog is open and clears in all
+completion and exception paths (a single clear point after the result
+handling), so retry becomes possible exactly when the flow finishes. The
+pre-launch yield and the handoff timeout are injected delegates (production:
+the dispatcher yield + a real 30-second delay; tests: completed or
+TaskCompletionSource-backed tasks) so unit tests need no live Avalonia
+dispatcher and never wait real time.
+
+### The full-client launch overlay
+
+While `IsLaunchAttemptInProgress` is true, the whole Curator client area is
+blocked by an in-window overlay. The main window's content is a root `Grid`
+hosting the shell SplitView plus the overlay as its final child (explicit
+`ZIndex` on top), so the overlay is a layered sibling, not inserted into the
+content flow, and layout never shifts. Blocking is doubled: the SplitView's
+`IsEnabled` is bound to the inverse attempt state (keyboard focus and
+activation cannot reach any shell control), and the overlay itself is a
+hit-testable panel carrying a semi-opaque scrim background across the entire
+client area (pointer input stops at the scrim). Native window chrome is
+untouched: the overlay lives inside the client area only, so the window can
+still be moved, minimized, or closed while a launch is in flight.
+
+Centered over the scrim sits a compact progress card in the same iron-and-rust
+palette as the Launch action (app-owned `CuratorLaunchOverlay*` brushes: a
+theme-independent gunmetal card face + rust edge + off-white text, and a
+theme-dependent scrim opacity, never the platform accent), carrying the
+localized "Launching Darktide" title, the localized "Preparing your modded
+game…" message (a real ellipsis, matching the localization style), and an
+ordinary indeterminate `ProgressBar` animated by the Fluent ControlTheme's
+own keyframes (no custom spinner control, no composition animation, no
+code-behind animation machinery). There is no Cancel control or any other
+interactive element: once Relay starts there is no safe cancellation
+contract. Accessibility is declarative: the overlay and card carry
+`AutomationProperties.Name` values from the localized strings and the overlay
+is marked a polite live region; no focus trap and no imperative
+accessibility service is introduced.
+
+The overlay's visibility binds directly to the attempt state (no second state
+machine), so it appears with the pre-launch render yield, stays through the
+synchronous launch and the post-spawn handoff until Darktide is detected or
+the 30-second timeout expires, and disappears through the existing `finally`
+state clear. Failure and discovery dialogs are separate OS-owned dialog
+windows (`Window.ShowDialog`), so they appear above the overlay while failure
+handling is in progress; the overlay remains behind them as the dimmed shell.
 
 ### The DMF install-prompt timing
 
@@ -924,7 +988,10 @@ list:
    URL.
 
 Decline is respected: nothing opens, no Integrations prompt. DMF can be added
-later via the normal add flow.
+later via the normal add flow. Whenever an accepted path does call `AddMod`
+with DMF, the profile add boundary's fresh-add rule places it first (rank 0)
+and order-locked; the prompt itself carries no placement choreography (see
+the [profiles reference](../reference/profiles.md)).
 
 ### Why the prompt is owned by the shell on Mods entry
 

@@ -129,7 +129,8 @@ The view model behind the main window. Owns SplitView navigation (the
 `ShellDestination` enum), the global Launch action, and the global status strip
 (running + pending + nxm-handler + app-update notice). The active profile is
 owned by `IProfileSession`; launch availability derives directly from
-`ActiveProfileId` + `IsGameRunning`, never a cached snapshot.
+`ActiveProfileId` + `IsGameRunning` + the shell's own
+`IsLaunchAttemptInProgress`, never a cached snapshot.
 
 - `CurrentDestination`: the active destination. Starts on `Mods`. Mutated only
   through `NavigateAsync`, which runs the guarded leave/enter lifecycle; the
@@ -175,6 +176,32 @@ owned by `IProfileSession`; launch availability derives directly from
   text/tooltip, `ShowAppUpdateNotice` + its text/tooltip, and the
   `CheckAppUpdateNowCommand` / `DismissAppUpdateCommand` notice flow): described
   where relevant below and in the app-update section.
+- `IsLaunchAttemptInProgress`: whether a launch attempt is executing, from the
+  executable launch request (where it is set before anything else, disabling
+  the button via `LaunchCommand`'s can-execute) through the pre-launch render
+  yield, the synchronous launch call, failure-dialog handling, and the
+  post-spawn wait for the session's running-state signal to observe Darktide
+  (or a 30-second timeout, started only after the spawn returns; a false
+  polling result never clears it). Shell-owned and distinct from
+  `IsGameRunning`: the attempt covers the process-detection gap the session's
+  detector cannot yet see. A method-level guard refuses a second,
+  direct/programmatic execution while an attempt is active. The state clears
+  in all completion and exception paths; on the `Launched` path only after
+  the handoff resolves (game observed -> the ordinary running gate keeps
+  Launch disabled; timeout with the game absent -> retry is possible). While
+  the state is true, the shell also shows the full-client launch overlay (a
+  scrim + centered indeterminate progress card layered over the disabled
+  shell inside `MainWindow`; see the `MainWindow` section). The button's
+  text, tooltip, and accessible name never change. The pre-launch yield
+  (production: one Avalonia dispatcher yield at
+  `DispatcherPriority.Loaded`, after layout + render and before subsequent
+  input, so the disabled style + overlay paint before the synchronous launch
+  work resumes) and the handoff timeout are injected delegates, so unit tests
+  run deterministically without a live dispatcher or real waiting. The wait
+  observes the existing session signal only (subscribe-before-check, the
+  temporary subscription removed deterministically): bounded detector
+  handoff, not process supervision (no process handle is taken; Relay and
+  Darktide stay fire-and-forget).
 
 The hosted page view models are application-lifetime singletons; navigation
 never calls an old Window-close final-cleanup (`Detach`) path. There is no
@@ -219,14 +246,40 @@ public partial class MainWindow : Window
 ```
 
 The Avalonia main window. Owns only view mechanics: SplitView pane sizing, the
-no-profile handoff link (in `MainWindow.axaml`), and the persisted window
-geometry. State, navigation, and service calls stay in `ShellViewModel`. The
-public parameterless constructor loads XAML + safe in-memory defaults and is
-the Avalonia runtime/designer loader path (it performs no store IO and locates
-no service). Production construction goes through the internal
-`MainWindow(IAppStateStore)` overload, supplied by an explicit singleton
-factory in the composition root before the window is returned/shown.
+no-profile handoff link, the full-client launch overlay (in
+`MainWindow.axaml`), and the persisted window geometry. State, navigation, and
+service calls stay in `ShellViewModel`. The public parameterless constructor
+loads XAML + safe in-memory defaults and is the Avalonia runtime/designer
+loader path (it performs no store IO and locates no service). Production
+construction goes through the internal `MainWindow(IAppStateStore)` overload,
+supplied by an explicit singleton factory in the composition root before the
+window is returned/shown.
 
+- **Root composition + the full-client launch overlay.** The window's content
+  is a root `Grid` with two children: the named `NavSplitView` shell and, as
+  the final child (explicit `ZIndex` on top), the `LaunchAttemptOverlay` panel
+  bound to `ShellViewModel.IsLaunchAttemptInProgress`. While a launch attempt
+  is in progress the SplitView's `IsEnabled` is bound to the inverse state
+  (keyboard + pointer activation are blocked at the shell root) and the
+  overlay takes the input surface: a semi-opaque scrim background covering
+  the whole client area (hit-testable, so pointer input stops at the overlay;
+  defense in depth behind disabling the shell) with a centered progress card
+  in the iron-and-rust launch palette (`CuratorLaunchOverlay*` app-owned
+  brushes; theme-independent card, theme-dependent scrim opacity, never the
+  platform accent). The card carries the localized `Launch_OverlayTitle` /
+  `Launch_OverlayMessage` strings and an ordinary indeterminate `ProgressBar`
+  animated by the Fluent ControlTheme's own keyframes, with declarative
+  accessibility metadata (`AutomationProperties.Name` from the localized
+  strings and a polite `AutomationProperties.LiveSetting`; no focus trap, no
+  imperative accessibility code-behind). There is no Cancel control (once
+  Relay starts there is no safe cancellation contract), and the overlay is a
+  layered sibling rather than inserted into the content flow, so layout never
+  shifts. Native window chrome stays available: the overlay lives inside the
+  client area only, so the window can still be moved, minimized, or closed.
+  Failure + discovery dialogs are separate OS-owned dialog windows and
+  therefore appear above the overlay while failure handling is in progress;
+  the overlay disappears through the existing attempt-state clear in the
+  shell's `finally`.
 - **Open-pane width grows to fit the widest localized label.** The SplitView's
   XAML `OpenPaneLength=200` is the design-time/startup fallback and the lower
   bound. Once the window is open, `UpdateOpenPaneLength` measures the live
@@ -629,7 +682,10 @@ Two cases on a trigger:
 
 Decline is respected: nothing opens, no Integrations prompt. The DMF flow never
 navigates to Nexus; the one-time Nexus setup offer lives in the
-first-run Welcome flow.
+first-run Welcome flow. Whenever an accepted path calls `AddMod` with DMF, the
+profile add boundary's fresh-add rule places it first (rank 0) and
+order-locked; the prompt carries no placement choreography (see
+[profiles](profiles.md)).
 
 `launchExternal` is injectable so tests exercise the browser-open failure
 path without launching a real browser. The default uses `Process.Start` with
@@ -1542,6 +1598,28 @@ No backend library references the UI (the dependency direction is one-way).
   (Launched / DiscoveryIncomplete / StagingFailed / Error), and
   the nxm handler status (startup read + refresh after leaving Nexus
   Integrations + unavailable when no registrar).
+- **`ShellLaunchAttemptTests`**: the shell-owned launch-attempt state with
+  deterministic timing seams (a controllable pre-launch render yield + a
+  controllable handoff timeout, no live dispatcher and no real 30-second
+  wait): the attempt state disables Launch before the launch service runs, a
+  false eager refresh + false polling notification never re-enable it while
+  waiting, a later `IsRunning = true` completes the handoff (attempt cleared,
+  Launch still disabled by the running gate), the timeout clears the attempt
+  and re-enables retry when the game stays absent, failure results keep the
+  attempt through the dialog then clear and permit retry, a launch-service
+  exception clears it, and a direct concurrent execution is refused (one
+  launch call).
+- **`LaunchOverlayTests`**: the full-client launch overlay as repository
+  source tests over MainWindow.axaml / App.axaml / Strings.resx (the XAML
+  parsed as XML): the overlay binds to `IsLaunchAttemptInProgress` while the
+  SplitView's `IsEnabled` binds to the inverse, the overlay is the final
+  top-layered hit-testable child carrying the scrim brush, the card holds
+  the localized title/message + a stock indeterminate `ProgressBar` on
+  app-owned brushes, no interactive control or command exists in the
+  overlay, declarative accessibility metadata is present, the Launch
+  button's surface is unchanged, native window chrome is not suppressed,
+  the palette passes WCAG contrast in both themes, and the resx strings
+  avoid an em dash.
 - **`ShellViewModelAppUpdateTests`**: the status-strip notice (show/hide on
   `IsUpdateSupported` + `LastCheckResult` + dismissal, session-only dismiss,
   the `UpdateStateChanged` marshal), and the notice-click flow (confirm gate,

@@ -92,6 +92,24 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           focus adds no layout shift, MinHeight 44 DIP); the
                           status strip carries the running /
                           pending / nxm-handler / app-update indicators; the
+                          window content is a root Grid hosting the shell
+                          SplitView plus a full-client launch overlay as its
+                          final top child: while
+                          `ShellViewModel.IsLaunchAttemptInProgress` is true
+                          the SplitView disables (IsEnabled bound to the
+                          inverse state) and a hit-testable scrim panel
+                          (ZIndex-top, semi-opaque `CuratorLaunchOverlayScrimBrush`,
+                          theme-dependent opacity) blocks pointer input over
+                          the whole client area, with a centered iron-and-rust
+                          progress card (localized Launch_OverlayTitle /
+                          Launch_OverlayMessage + an ordinary indeterminate
+                          ProgressBar on app-owned `CuratorLaunchOverlay*`
+                          brushes, declarative AutomationProperties names +
+                          a polite live setting, no Cancel control, native
+                          window chrome untouched, failure dialogs above it
+                          as OS-owned windows; layout-stable sibling layer,
+                          visibility bound straight to the attempt state);
+                          the
                           pane's `Auto,*,Auto` grid anchors a drawn-icon Exit
                           button at the bottom (row 2, not a destination, no
                           selected state, Click -> `MainWindow.Close()` matching
@@ -135,13 +153,25 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           so the page paints then resolves auth state)), the
                           global Launch (resolves the active id from
                           `IProfileSession.ActiveProfileId` at execution time, not a
-                          cached selection; branches on `LaunchResult.Status`), and
+                          cached selection; sets the shell-owned
+                          `IsLaunchAttemptInProgress` before anything else +
+                          yields once to the Avalonia dispatcher at Loaded
+                          priority so the freshly-disabled button paints, then
+                          runs the synchronous launch on the UI thread;
+                          branches on `LaunchResult.Status`, keeping the
+                          attempt state through failure-dialog handling; after
+                          `Launched` + the eager refresh the attempt state
+                          stays set until the session's running-state signal
+                          observes Darktide or a 30-second timeout elapses
+                          (bounded detector handoff, no process handle; the
+                          state clears in all completion/exception paths)), and
                           the global status strip (running + pending + nxm-handler
                           + app-update notice). The hosted page VMs are
                           application-lifetime singletons; navigation never calls an
                           old Window-close Detach path. The active profile is owned
                           by `IProfileSession`; launch availability derives directly
-                          from `ActiveProfileId` + `IsGameRunning`;
+                          from `ActiveProfileId` + `IsGameRunning` +
+                          `IsLaunchAttemptInProgress`;
                           the Profiles destination (`ProfilesViewModel` +
                           `ProfilesView`): edits the active profile only (name +
                           120-char description + inline launch settings via the
@@ -685,7 +715,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         SetModOrder, so a reorder projects the requested ordering
                         onto the unlocked slots only; toggled via
                         SetModOrderLocked, metadata-only so it implies no staged
-                        change; AddMod appends unlocked + compacts Order dense,
+                        change; AddMod inserts a fresh DMF add (Nexus mod 8 by
+                        source, or the canonical lower-case dmf base folder
+                        containing dmf.mod) at rank 0 + OrderLocked true,
+                        shifting survivors down one rank, while every other add
+                        appends unlocked + compacts Order dense,
                         RemoveMod drops the entry + compacts survivors so a
                         surviving lock's new dense index is the new baseline) + the
                         import-time base-name collision hard-block
@@ -932,7 +966,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           old-file-without-field compatibility + the
                                           atomic MainWindowState record round-trip)
     Modificus.Curator.Profiles.Tests/        xUnit tests for the profiles library (incl. staging
-                                          + the launch-settings round-trip/normalization/validation)
+                                          + the launch-settings round-trip/normalization/validation
+                                          + DmfAddTests: the DMF fresh-add rule -- Nexus mod 8 +
+                                          canonical dmf/dmf.mod recognition (untracked + linked),
+                                          prepend-at-rank-0-locked with survivor metadata intact,
+                                          lookalikes/unknown ids ordinary, idempotent re-add,
+                                          remove-then-re-add)
     Modificus.Curator.Mods.Tests/      xUnit tests for the mod repository + import
                                         (incl. the linked-folder add + linked-container prune,
                                         + the display-metadata AddVersion/Import pass-through
@@ -991,6 +1030,21 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             leaving cancels auth + refreshes nxm/mod-list, Launch
                                             CanExecute + execution following
                                             IProfileSession.ActiveProfileId directly) + the
+                                            ShellLaunchAttemptTests (the launch-attempt state via
+                                            deterministic yield + timeout seams: attempt set +
+                                            CanExecute false before the launch service runs, false
+                                            eager/polling state never re-enables while waiting,
+                                            IsRunning=true completes the handoff with Launch still
+                                            disabled by the running gate, timeout clears the attempt
+                                            for retry, failure results keep the attempt through the
+                                            dialog then clear, exception path clears, direct
+                                            concurrent execution rejected) + the LaunchOverlayTests
+                                            (the full-client launch overlay as XML source tests:
+                                            overlay bound to the attempt state + SplitView disabled,
+                                            top-layered hit-testable scrim, localized card + stock
+                                            indeterminate ProgressBar, no interactive controls,
+                                            accessibility metadata, unchanged Launch button, palette
+                                            contrast, no suppressed window chrome) + the
                                             ProfilesViewModelTests (profile create/save/cancel/
                                             delete/switch, no-active states, running-state gates,
                                             dirty navigation, banner/picker, inline launch-settings

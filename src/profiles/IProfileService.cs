@@ -142,13 +142,22 @@ public interface IProfileService
     void SetModOrderLocked(Guid id, Guid containerId, bool orderLocked);
 
     /// <summary>
-    /// Adds a mod entry to the end of the list (<see cref="ModListEntry.Enabled"/>
-    /// = true, <see cref="ModListEntry.OrderLocked"/> = false) with the given
-    /// policy, and renumbers <see cref="ModListEntry.Order"/> dense across the
-    /// list. <b>List entry only: does NOT fetch or install mod files</b>
-    /// (the repository holds the files; staging links to them). Idempotent:
-    /// re-adding a <paramref name="containerId"/> already in the list is a
-    /// strict no-op (order/enabled/policy/lock untouched).
+    /// Adds a mod entry with the given policy and renumbers
+    /// <see cref="ModListEntry.Order"/> dense across the list. A fresh add of
+    /// DMF (recognized by a deliberately small rule: the container's source is
+    /// Nexus mod 8, or the content the given policy would stage resolves to
+    /// the canonical lower-case <c>dmf</c> base folder containing
+    /// <c>dmf.mod</c>) is inserted at rank 0 with
+    /// <see cref="ModListEntry.OrderLocked"/> = true, shifting existing entries
+    /// down one rank while preserving their relative order + all metadata
+    /// (including lock bits); every other add is appended at the end
+    /// (<see cref="ModListEntry.Enabled"/> = true,
+    /// <see cref="ModListEntry.OrderLocked"/> = false). <b>List entry only:
+    /// does NOT fetch or install mod files</b> (the repository holds the files;
+    /// staging links to them). Idempotent: re-adding a
+    /// <paramref name="containerId"/> already in the list is a strict no-op
+    /// (order/enabled/policy/lock untouched), so a DMF update or re-import
+    /// never overrides the user's current arrangement.
     /// </summary>
     /// <exception cref="KeyNotFoundException"><paramref name="id"/> is unknown.</exception>
     void AddMod(Guid id, Guid containerId, ModVersionPolicy policy);
