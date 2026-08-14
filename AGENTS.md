@@ -383,12 +383,22 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           switching); each change applies + persists immediately;
                           the Settings destination (`SettingsViewModel` +
                           `SettingsView`): discovery write-through over the shared
-                          `Settings/DiscoveryField` descriptor +
-                          `DiscoveryConfig`/`SteamService.Discover()`
-                          validate+heal+persist (the Browse buttons seed the picker
-                          at the row's current value via `SuggestedStartLocation`;
-                          the Storage section has two buttons that open the OS file
-                          manager at the Curator data root + profiles root paths) +
+                          `Settings/DiscoveryField` descriptor + the global
+                          `OverrideAutomaticDiscovery` mode + Discover button
+                          (automatic mode: rows read-only + Browse-disabled, the
+                          discoverer owns the snapshot; manual mode: rows
+                          editable + Browse-enabled, stored paths validated as-is;
+                          turning override off persists false + runs an ordinary
+                          `ISteamService.Discover` (automatic) + refreshes the
+                          rows; turning it on persists true + enables editing;
+                          the Discover button forces `ISteamService.Rediscover`
+                          in either mode, replacing the snapshot without changing
+                          the mode; a manual-mode row edit writes through
+                          immediately via a read-modify-save; the Browse buttons
+                          seed the picker at the row's current value via
+                          `SuggestedStartLocation`; the Storage section has two
+                          buttons that open the OS file manager at the Curator
+                          data root + profiles root paths) +
                           the app-update "Updates" section (current version + Check
                           for Updates + startup-check toggle + inline result +
                           Download and Restart); `RefreshFromConfig` is the enter
@@ -651,6 +661,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         AutomaticUpdatesEnabled opt-in Premium auto-install)
                         + the AppUpdatesConfig slot (CheckOnStartup, gates the
                         automatic startup self-update check)
+                        + the DiscoveryConfig slot (OverrideAutomaticDiscovery +
+                        the neutral SteamInstallPath/DarktideGameBinaryPath/
+                        CompatdataPath/ProtonBinaryPath snapshot fields; automatic
+                        mode rewrites the active-platform fields from the discoverer,
+                        manual mode validates the stored paths as-is)
                         + the Preferences.ModRowDensity slot (Compact default,
                         Detailed the multi-line variant; absent/unknown normalizes to
                         Compact) + the AppPaths.ModThumbnailCacheDir root
@@ -832,7 +847,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         Integrations references Profiles, acyclic, for
                         IProfileService.GetModList)
   steam/                Modificus.Curator.Steam -- Steam + Darktide + Proton discovery
-                        (multi-library + compatdata), IsGameRunning (WinProcessLookup
+                        (multi-library + compatdata; Linux Proton resolves from Steam's
+                        CompatToolMapping in config.vdf to a custom compatibilitytool.vdf
+                        or a Valve-managed appinfo/appmanifest install, never a directory-name
+                        guess; Steam text KV1 parsing centralized through SteamTextVdf with
+                        HasEscapeSequences always on, ValveKeyValue 0.70.0.499), the
+                        ISteamService.Discover automatic/manual mode policy + Rediscover
+                        forced-automatic surface, IsGameRunning (WinProcessLookup
                         via process comm on Windows; LinuxProcessLookup via /proc
                         argv[0] under Proton -- selected once by DI), injectable seams
   relay-client/         Modificus.Curator.RelayClient -- the v1 launch façade
@@ -1153,8 +1174,9 @@ dotnet run   --project src/ui --configuration Release   # app shell window
 ```
 - The composition root is `src/ui/CuratorComposition.cs` (loads
   config → builds the Serilog logger → wires every `Add<Library>()` → runs the
-  startup `ModCleanup.PruneUnreferenced` pass + the startup
-  `ISteamService.Discover()` validate/heal/persist pass). The Avalonia
+  startup `ModCleanup.PruneUnreferenced` pass + an ordinary startup
+  `ISteamService.Discover()` pass, so automatic mode re-runs the platform
+  discoverer and replaces the active-platform snapshot up front). The Avalonia
   `AppBuilder` is built in `src/ui/Program.cs`, which binds an explicit
   `X11PlatformOptions.WmClass = "ModifAmorphic.ModificusCurator"` (via
   `DesktopIdentityOptions`) so the running window's WM_CLASS matches the Velopack
@@ -1188,7 +1210,7 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   boundary; ordered env-var entries + game args; validated up front via the
   shared `LaunchSettingsValidator`, applied at launch; `GetLaunchSettings` is the
   focused read the launch path uses),
-  **Steam** (Steam + Darktide + Proton discovery + `IsGameRunning`),
+  **Steam** (Steam + Darktide + Proton discovery via Steam's CompatToolMapping + the automatic/manual mode policy + `Rediscover` + `IsGameRunning`),
   **Integrations** (the Nexus v1 client/auth +
   `IModAcquisitionService` the download + extract + place orchestrator +
   `IUpdateCheckService` the Nexus-only update-check service +
@@ -1231,12 +1253,19 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   successful stage re-staged the profile; `DiscoveryIncomplete` -> the focused discovery
   escape-hatch modal over the shared `DiscoveryField` descriptor; `StagingFailed`
   -> a localized modal alert whose body appends the raised staging exception's
-  message (a runtime/OS error) to the localized framing; `Error` -> modal alert) + a Settings destination editing `CuratorConfig.Discovery` user
-  overrides (per-field read-modify-save; the Browse buttons seed the picker at
+  message (a runtime/OS error) to the localized framing; `Error` -> modal alert) + a Settings destination editing `CuratorConfig.Discovery` (the global
+  `OverrideAutomaticDiscovery` mode + Discover button over the shared
+  `DiscoveryField` descriptor; automatic mode keeps the rows read-only with the
+  discoverer owning the snapshot, manual mode makes them editable + validates the
+  stored paths as-is; turning override off persists false + runs an ordinary
+  `ISteamService.Discover` (automatic) + refreshes the rows, turning it on
+  persists true + enables editing; the Discover button forces
+                          `ISteamService.Rediscover` in either mode, replacing the
+                          snapshot without changing the mode; the Browse buttons seed the picker at
                           the row's current value via `SuggestedStartLocation`) with a Storage section
                           of two buttons that open the OS file manager at the Curator data root +
                           profiles root, over the `DiscoveryConfig` +
-  `SteamService.Discover()` validate+heal+persist pipeline). The DMF (Darktide
+  `SteamService.Discover()`/`Rediscover()` automatic/manual mode policy). The DMF (Darktide
   Mod Framework) install-prompt coordinator `DmfPromptService` (ui/Session/)
   offers to add/download DMF every new profile that becomes active without DMF
   in it; the prompt is a modal on the main window, fired by `ProfilesViewModel`

@@ -129,10 +129,11 @@ library interfaces.
    logged + swallowed on failure) to drop repository versions no profile
    references + empty containers.
 6. **Startup discovery**: `ISteamService.Discover()` runs once (best-effort +
-   non-blocking, logged + swallowed on failure) to validate + heal + persist the
-   discovery overrides up front, so the Settings destination shows resolved
-   paths rather than blanks. Missing fields block launch (re-checked at
-   launch), not app startup.
+   non-blocking, logged + swallowed on failure). In automatic mode (the
+   default) this runs the platform discoverer and replaces the active-platform
+   path snapshot, so the Settings destination shows the resolved paths rather
+   than blanks. Missing fields block launch (re-checked at launch), not app
+   startup.
 
 **The DI contract:** each library exposes one `Add<Library>()` extension and
 accepts only interfaces or primitives (never concrete UI models). Supporting
@@ -652,8 +653,12 @@ Responsibilities:
     for multi-library; handle non-default + Flatpak Steam installs).
   - Find Darktide's install (Windows in-prefix path) + its compatdata
     (`steamapps/compatdata/1361210/`).
-  - Find the Proton version Darktide is configured to use (Steam's bundled
-    Proton, or `compatibilitytools.d/` custom builds like ProtonUp-GE).
+  - Resolve the Proton version Darktide is configured to use by reading
+    Steam's `CompatToolMapping` (the app-specific entry for Darktide is
+    authoritative; the global entry is the fallback), then resolving that tool
+    name to a `proton` binary from a custom `compatibilitytools.d` manifest or a
+    Valve-managed install. This follows Darktide's own Steam compatibility
+    selection rather than guessing from directory names.
   - **Escape hatch:** when auto-discovery can't resolve any of the above,
     prompt the user for the missing path(s). This is possible only because
     discovery lives in the UI app, not in Relay (which has no UI and could
@@ -699,24 +704,33 @@ The **Settings** destination in the shell's navigation rail hosts two
 sections, both persisting through `IConfigLoader` (read live, so the next
 `Discover()` / launch picks them up):
 
-- **Discovery:** the four user-override paths (`CuratorConfig.Discovery`).
-  `SteamService.Discover()` runs the **validate + heal + persist** pipeline:
-  each platform-relevant override is checked on disk (existing = valid, kept);
-  missing/non-existent fields are healed from the platform discoverer (one run
-  when any field needs healing) + the healed values are persisted back (only
-  the healed fields; valid fields are preserved). On Windows the compatdata +
-  Proton rows are hidden (Linux-only). When every field is valid the discoverer
-  is skipped entirely (fast path).
+- **Discovery:** the four discovery paths plus the global
+  `OverrideAutomaticDiscovery` mode (`CuratorConfig.Discovery`). Platform-gated
+  so Windows renders only the Steam install + Darktide binary rows (the
+  compatdata + Proton rows are Linux-only). In automatic mode (off, the default)
+  the rows are read-only and show the latest discovered snapshot; in manual mode
+  (on) the rows are editable and Browse is enabled. Flipping the toggle is
+  write-through: turning it on persists `true` and enables editing; turning it
+  off persists `false`, runs an ordinary `ISteamService.Discover` (automatic),
+  and refreshes every row. The Discover button forces an
+  `ISteamService.Rediscover` in either mode (replaces the snapshot, leaves the
+  mode unchanged). A manual-mode row edit writes through immediately via a
+  read-modify-save; row writes are ignored in automatic mode.
 - **Storage:** two buttons that launch the OS file manager at the Curator
   data root and the profiles root. The data-root path is the static
   `AppPaths.AppDataDir`; the profiles path is read live from config. Nothing
   in this section is editable.
 
 The **escape-hatch dialog** is the focused form shown on `DiscoveryIncomplete`.
-It shows inputs **only for the missing fields**, pre-filled with the current
-config value (or blank). Submit does one read-modify-save of the entered paths
-into `Discovery.User*Path`, then closes (no retry). A friendly header explains
-auto-discovery could not resolve everything.
+It shows inputs only for the missing fields, pre-filled with the current config
+value (or blank). Alongside the rows it carries the same global
+`OverrideAutomaticDiscovery` toggle + Discover button as Settings, with
+identical write-through semantics, so the user can refresh the snapshot or switch
+to manual entry without leaving the dialog. Submit writes each staged row value
+plus `OverrideAutomaticDiscovery = true` in one read-modify-save (manual mode),
+then closes; in automatic mode Submit does not rewrite path values (the toggle's
+own write-through already persisted the mode). No auto-retry: the user clicks
+Launch again.
 
 Both the Settings discovery rows and the escape-hatch rows are driven by a
 shared **`DiscoveryField` descriptor** (one source of truth for the field

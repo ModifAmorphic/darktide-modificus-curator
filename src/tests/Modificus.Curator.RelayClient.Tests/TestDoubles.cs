@@ -110,11 +110,22 @@ internal sealed class FakeSteamService : ISteamService
 {
     public DiscoveryResult Result { get; set; } = FakeDiscovery.CompleteLinux;
     public int DiscoverCalls { get; private set; }
+    public int RediscoverCalls { get; private set; }
 
     /// <inheritdoc />
     public DiscoveryResult Discover()
     {
         DiscoverCalls++;
+        return Result;
+    }
+
+    /// <summary>
+    /// Returns <see cref="Result"/> + records the call separately from
+    /// <see cref="Discover"/>. Deterministic: does not mutate state.
+    /// </summary>
+    public DiscoveryResult Rediscover()
+    {
+        RediscoverCalls++;
         return Result;
     }
 

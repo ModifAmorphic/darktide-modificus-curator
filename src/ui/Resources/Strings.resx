@@ -763,6 +763,18 @@
     <value>Browse…</value>
     <comment>The Browse button next to every discovery / ModsFolder row.</comment>
   </data>
+  <data name="Discovery_OverrideToggle" xml:space="preserve">
+    <value>Override automatic discovery</value>
+    <comment>Checkbox label for the global discovery mode, shared by the Settings discovery section and the discovery escape-hatch. When checked, Curator uses the entered paths as-is and skips automatic Steam/Darktide detection; when unchecked, it rediscovers automatically.</comment>
+  </data>
+  <data name="Discovery_OverrideToggleTooltip" xml:space="preserve">
+    <value>When on, Curator uses these paths as-is and skips automatic detection. Turn off to rediscover Steam, Darktide, and Proton automatically.</value>
+    <comment>Tooltip for the global discovery override checkbox. Explains that the manual mode keeps the entered paths and turning it off reruns automatic discovery.</comment>
+  </data>
+  <data name="Discovery_DiscoverButton" xml:space="preserve">
+    <value>Discover</value>
+    <comment>The Discover button shared by the Settings discovery section and the discovery escape-hatch. Forces a fresh automatic discovery pass regardless of the current mode and refreshes the displayed paths.</comment>
+  </data>
 
   <!-- ============================================================ -->
   <!-- Discovery escape-hatch dialog                                -->

@@ -19,8 +19,11 @@ public interface IRelayLaunchService
 `Launch(profileId)` always returns a `LaunchResult` -- it never throws for
 expected conditions:
 
-- Resolves Steam discovery first (`ISteamService.Discover()`). If discovery is
-  missing required fields for the current OS, returns `DiscoveryIncomplete`
+- Resolves Steam discovery first (`ISteamService.Discover()`, honoring the
+  configured discovery mode). In automatic mode (the default) this re-runs the
+  platform discoverer, so a launch follows changes to the Steam/Darktide/Proton
+  layout live; in manual mode it validates the stored paths as-is. If discovery
+  is missing required fields for the current OS, returns `DiscoveryIncomplete`
   **without** writing the profile's mod root (no point writing `mods.lst` for a
   launch that won't happen) -- `MissingDiscoveryFields` lists them. The
   per-platform required set comes from the active `IPlatformLaunchStrategy`.
@@ -65,17 +68,17 @@ public enum LaunchStatus { Launched, DiscoveryIncomplete, StagingFailed, Error }
   `Message`.
 
 `MissingDiscoveryFields` is derived from the `DiscoveryResult` fields directly
-(both platforms need Steam + the game binary; Linux additionally needs compatdata
-+ Proton), so it and `DiscoveryStatus` cannot diverge -- it is equivalent to
-`Status != Complete`. The per-platform required set is owned by the active
+(Linux needs Steam + the game binary + compatdata + Proton; Windows needs only
+the game binary), so it and `DiscoveryStatus` cannot diverge -- it is equivalent
+to `Status != Complete`. The per-platform required set is owned by the active
 `IPlatformLaunchStrategy` (`RequiredDiscoveryFields`).
 
 ### Injectable seams
 
 - `IPlatformLaunchStrategy` (internal) -- the per-platform launch surface:
   - `RequiredDiscoveryFields(discovery)` -- the discovery fields this platform
-    requires but could not resolve (Windows: Steam + game binary; Linux: +
-    compatdata + Proton).
+    requires but could not resolve (Windows: the game binary only; Linux: Steam +
+    game binary + compatdata + Proton).
   - `Start(launcherPath, discovery, gameBinary, modPath, logFile, launchSettings, createNoWindow) → bool`
     -- the spawn. Windows: a direct invocation of the launcher with native
     (untranslated) args; Linux: `<proton> run <launcher.exe> <args>` with both

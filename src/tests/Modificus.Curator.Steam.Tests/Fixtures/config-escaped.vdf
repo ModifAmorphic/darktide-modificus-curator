@@ -1,0 +1,116 @@
+"InstallConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"Servers"
+				{
+					"0"
+					{
+						"addr"		"203.0.113.10:27015"
+						"gm"		"18"
+						"name"		"Fabricated Test Server"
+					}
+					"1"
+					{
+						"addr"		"203.0.113.20:27016"
+						"gm"		"18"
+						"name"		"Another Test Server"
+					}
+				}
+				" source install"
+				{
+					"0"
+					{
+						"0"		"0"
+						"1"		"1001"
+					}
+				}
+				"CompatToolMapping"
+				{
+					"1361210"
+					{
+						"name"		"fixture-proton"
+						"config"	""
+						"priority"	"250"
+					}
+					"0"
+					{
+						"name"		"fixture-proton"
+						"config"	""
+						"priority"	"250"
+					}
+				}
+				"WebStorage"
+				{
+					"DownloadsStoreRecentlyCompleted"
+					{
+						"0"
+						{
+							"timestamp"		"1700000000"
+							"download_data"		"{\"version\":2,\"appid\":1361210,\"depotid\":1361211,\"manifestid\":1234567890123456789,\"size\":1073741824,\"path\":\"/home/test/steamapps/common/TestGame\",\"numdownloaded\":42,\"bytes_downloaded\":1073741824,\"bytes_to_download\":1073741824,\"error\":0,\"status\":\"complete\",\"dlc\":[{\"depotid\":1361212,\"name\":\"Test DLC 1\",\"size\":52428800},{\"depotid\":1361213,\"name\":\"Test DLC 2\",\"size\":104857600}]}"
+						}
+						"1"
+						{
+							"timestamp"		"1700000100"
+							"download_data"		"{\"version\":2,\"appid\":1361210,\"depotid\":1361214,\"manifestid\":9876543210987654321,\"size\":5368709120,\"path\":\"/home/test/steamapps/common/TestGame2\",\"numdownloaded\":10,\"bytes_downloaded\":5368709120,\"bytes_to_download\":5368709120,\"error\":0,\"status\":\"complete\",\"dlc\":[]}"
+						}
+						"2"
+						{
+							"timestamp"		"1700000200"
+							"download_data"		"{\"version\":2,\"appid\":1361210,\"depotid\":1361215,\"manifestid\":1111222233334444555,\"size\":2147483648,\"path\":\"/home/test/steamapps/common/TestGame3\",\"numdownloaded\":5,\"bytes_downloaded\":2147483648,\"bytes_to_download\":2147483648,\"error\":0,\"status\":\"complete\",\"dlc\":[{\"depotid\":1361216,\"name\":\"Test DLC 3\",\"size\":268435456}]}"
+						}
+					}
+					"UserInterfacePreferences"
+					{
+						"0"
+						{
+							"timestamp"		"1700000300"
+							"prefs_data"		"{\"theme\":\"dark\",\"language\":\"english\",\"window_width\":1280,\"window_height\":720,\"library_sort\":\"recent\",\"download_queue\":[]}"
+						}
+					}
+					" FriendStoreAPI"
+					{
+						"0"
+						{
+							"timestamp"		"1700000400"
+							"friends"		"{\"count\":3,\"friends\":[{\"id\":\"000000000000000001\",\"name\":\"TestFriend1\",\"state\":\"online\"},{\"id\":\"000000000000000002\",\"name\":\"TestFriend2\",\"state\":\"away\"},{\"id\":\"000000000000000003\",\"name\":\"TestFriend3\",\"state\":\"in-game\"}]}"
+						}
+					}
+				}
+				"MusicPlayer"
+				{
+					"volume"		"0.50"
+					"shuffle"		"0"
+					"repeat"		"0"
+				}
+				"Apps"
+				{
+					"1361210"
+					{
+						"Installed"		"1"
+						"Updated"		"1700000000"
+						"SizeData"		"10737418240"
+						"LaunchOptions"		"-test-flag"
+					}
+				}
+				"system"
+				{
+					"localip"		"192.168.1.100"
+					"device_id"		"aaaa1111bbbb2222cccc3333dddd4444"
+				}
+			}
+		}
+	}
+	"Browser"
+	{
+		"recently_visited"
+		{
+			"0"		"https://example.com/store"
+			"1"		"https://example.com/community"
+		}
+	}
+}

@@ -223,7 +223,7 @@ public sealed class ShellViewModelTests
         var parts = TestDoubles.BuildShell();
         var shell = parts.Shell;
         // Externally change a discovery override + the startup-check toggle.
-        parts.Config.Config.Discovery.UserSteamInstallPath = "/extern/steam";
+        parts.Config.Config.Discovery.SteamInstallPath = "/extern/steam";
         parts.Config.Config.AppUpdates.CheckOnStartup = false;
 
         await shell.NavigateCommand.ExecuteAsync(ShellDestination.Settings);

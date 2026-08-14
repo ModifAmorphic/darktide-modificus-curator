@@ -41,7 +41,7 @@ public sealed class CuratorConfig
 | `ProfilesBaseFolder` | `<app-data>/profiles` | Where profiles and per-profile settings are stored (mods live in `ModsFolder`; see [mods](mods.md)). |
 | `ModsFolder` | `<app-data>/mods` | The global mod store (see [mods](mods.md)). |
 | `RelayDir` | `<app-data>/relay` | Where `mod_relay.exe`, `relay_shell.dll`, and `mod_loader/` live (consumed by [relay-client](relay-client.md)). |
-| `Discovery` | see `DiscoveryConfig` | User-supplied discovery overrides (Steam / Darktide / compatdata / Proton paths). Validated on disk + healed from the discoverer + persisted by `SteamService.Discover()`. |
+| `Discovery` | see `DiscoveryConfig` | The Steam/Darktide/Proton discovery mode + path snapshot. Automatic mode (the default) rewrites the active-platform fields from the discoverer on each `Discover()`; manual mode validates the stored paths as-is. See `DiscoveryConfig`. |
 | `Integrations` | see `IntegrationsConfig` | External-service (mod-source) integration settings. |
 | `Preferences` | see `PreferencesConfig` | User-facing global preferences (theme, font scale, language, show-Relay-console toggle) + the mod-list row density. |
 
@@ -268,49 +268,51 @@ public enum ModRowDensity
 
 ### `DiscoveryConfig`
 
-User-supplied overrides for Steam/Darktide/Proton discovery. The Settings
-destination and the discovery escape-hatch dialog write these;
-`SteamService.Discover()` reads them live (one `Load()` per call, via
-[IConfigLoader](general.md)), validates each platform-relevant field's path on
-disk, heals the missing/non-existent ones from the platform discoverer, and
-persists **only the healed fields** back through `Save` (preserving valid
-fields + any concurrent hand-edit). An absent section yields a fully-defaulted
-(all-null) instance, which causes every field to be healed on the first
-`Discover()` call (typically at startup).
+The Steam/Darktide discovery mode + path snapshot. Bound from the `Discovery`
+section of `CuratorConfig`; written by the Settings destination, the discovery
+escape-hatch, and `SteamService` itself. `SteamService.Discover()` reads it live
+(one `Load()` per call, via [IConfigLoader](general.md)).
 
 ```csharp
 public sealed class DiscoveryConfig
 {
-    public string? UserSteamInstallPath { get; set; }       // Steam client dir; null/non-existent = heal
-    public string? UserDarktideGameBinaryPath { get; set; } // native Darktide.exe path; null/non-existent = heal
-    public string? UserCompatdataPath { get; set; }         // Wine prefix (Linux only); null/non-existent = heal
-    public string? UserProtonBinaryPath { get; set; }       // proton script path (Linux only); null/non-existent = heal
+    public bool OverrideAutomaticDiscovery { get; set; }   // default false (automatic)
+    public string? SteamInstallPath { get; set; }          // Steam client dir
+    public string? DarktideGameBinaryPath { get; set; }    // native Darktide.exe path
+    public string? CompatdataPath { get; set; }            // Wine prefix (Linux only)
+    public string? ProtonBinaryPath { get; set; }          // proton script path (Linux only)
 }
 ```
 
-- Every field is nullable and defaults to `null`, meaning "no override yet."
-  On the first `Discover()` call, missing fields are healed from the platform
-  discoverer and persisted here so the next call is a fast validation (no
-  discoverer run).
-- **Validate + heal + persist:** a supplied value is checked on disk (directory
-  for Steam install + compatdata; file for the Darktide binary + Proton script).
-  A value that exists is kept as-is (preserved across calls). A null/whitespace
-  value, or one whose path no longer exists, is healed from the platform
-  discoverer when possible, and the healed value is persisted back here (only
-  that field; the others are untouched). A field the discoverer also cannot
-  resolve stays null and is flagged via `DiscoveryResult.Status`.
-- **Platform-gating:** the compatdata + Proton fields are Linux-only; on
-  Windows they are neither validated nor healed, so they stay null in the
-  result. A leftover Linux value (e.g. from a prior Linux run) is preserved
-  untouched rather than cleared.
-- Field mapping to `DiscoveryResult` (the final path is the override when it
-  exists on disk, otherwise the discoverer's value): `UserSteamInstallPath` →
-  `DiscoveryResult.SteamInstallPath`; `UserDarktideGameBinaryPath` →
-  `DarktideGameBinaryPath`; `UserCompatdataPath` → `CompatdataPath`;
-  `UserProtonBinaryPath` → `ProtonBinaryPath`. See [steam](steam.md) for the
-  validate + heal + persist pipeline + the shared completeness rule.
-- `UserCompatdataPath` / `UserProtonBinaryPath` are Linux-only (Windows is
-  native; they are not validated or healed there, and stay null in the result).
+- **Mode (`OverrideAutomaticDiscovery`):** selects automatic vs. manual
+  discovery. `false` (the default) is automatic: every `Discover()` call runs
+  the platform discoverer and atomically replaces the active-platform fields
+  below with that result (including nulls that clear stale values). `true` is
+  manual: the discoverer is not invoked, the stored paths are validated by kind
+  on disk (directory for Steam + compatdata; file for the Darktide binary +
+  Proton script), valid values pass through, and invalid/missing ones surface as
+  null result fields without rewriting the stored input. `Rediscover()` forces
+  one automatic pass regardless of the mode and leaves the mode unchanged.
+- **Path fields:** in automatic mode they hold the discoverer's snapshot
+  (rewritten on every pass); in manual mode they hold the user's static values
+  (validated, never rewritten). The four field names match the `DiscoveryResult`
+  property names, which are what `LaunchResult.MissingDiscoveryFields` carries
+  to the escape-hatch. An absent section yields a fully-defaulted instance
+  (`OverrideAutomaticDiscovery = false`, all paths null), so the first automatic
+  `Discover()` populates the snapshot from scratch.
+- **Platform ownership:** `SteamInstallPath` + `DarktideGameBinaryPath` are
+  active on every platform. `CompatdataPath` + `ProtonBinaryPath` are
+  Linux-only: an automatic pass on Windows writes only the two Windows fields
+  and leaves the Linux-only fields untouched (a leftover Linux value from a
+  prior run is preserved, not cleared), and a manual pass on Windows validates
+  only the active platform's fields (the Linux-only fields stay null in the
+  result). On Windows the Darktide binary alone determines `Complete`;
+  `SteamInstallPath` is optional for launch (returned for display when valid,
+  null in the result when not) though the automatic discoverer still anchors on
+  Steam and writes it whenever it resolves.
+
+See [steam](steam.md) for the discovery pipeline, the Linux Proton
+compatibility-tool resolution, and the shared completeness rule.
 
 ### `AppPaths`
 

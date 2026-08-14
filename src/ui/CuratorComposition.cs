@@ -263,6 +263,7 @@ public static class CuratorComposition
             OperatingSystem.IsWindows()));
         services.AddSingleton(sp => new SettingsViewModel(
             sp.GetRequiredService<IConfigLoader>(),
+            sp.GetRequiredService<ISteamService>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<IAppUpdateService>(),
             sp.GetRequiredService<IDialogService>(),
@@ -321,7 +322,8 @@ public static class CuratorComposition
             new DialogService(
                 sp.GetRequiredService<MainWindow>(),
                 sp.GetRequiredService<LocalizationService>(),
-                sp.GetRequiredService<IConfigLoader>()));
+                sp.GetRequiredService<IConfigLoader>(),
+                sp.GetRequiredService<ISteamService>()));
 
         // The UI-layer glue that fires an update check
         // (IUpdateCheckService, registered above via AddIntegrations) on the
@@ -405,12 +407,12 @@ public static class CuratorComposition
         // next startup retries).
         RunStartupPrune(provider, loggerFactory);
 
-        // Startup discovery: validate + heal + persist. The persisted overrides
-        // are populated from the platform discoverer when missing/non-existent
-        // (so the Settings window shows the resolved paths rather than blanks).
+        // Startup discovery: an ordinary ISteamService.Discover() so automatic
+        // mode (the default) runs the platform discoverer and replaces the
+        // active-platform snapshot, which is what the Settings rows display.
         // Non-blocking: a missing-fields result is logged as a warning + the
         // user can still use the app (browse mods, manage profiles); they just
-        // cannot launch until resolved (the launch-time Discover re-checks and
+        // cannot launch until resolved (the launch-time Discover re-runs and
         // surfaces the escape-hatch when incomplete).
         RunStartupDiscovery(provider, loggerFactory);
 
@@ -475,13 +477,13 @@ public static class CuratorComposition
     }
 
     /// <summary>
-    /// Runs <see cref="ISteamService.Discover"/> once after composition so the
-    /// persisted discovery overrides are validated + healed up front (the
-    /// Settings window reads them directly, so this populates the fields rather
-    /// than leaving them blank). Best-effort + non-blocking: any failure is
+    /// Runs <see cref="ISteamService.Discover"/> once after composition so
+    /// automatic mode (the default) runs the platform discoverer up front and
+    /// the persisted snapshot reflects the current install (the Settings rows
+    /// display that snapshot). Best-effort + non-blocking: any failure is
     /// logged + swallowed so a discovery problem never blocks app startup. A
     /// missing-fields result is logged as a warning so the operator knows they
-    /// cannot launch yet; the launch-time Discover re-checks and surfaces the
+    /// cannot launch yet; the launch-time Discover re-runs and surfaces the
     /// escape-hatch when incomplete.
     /// </summary>
     private static void RunStartupDiscovery(IServiceProvider provider, ILoggerFactory loggerFactory)
@@ -499,8 +501,8 @@ public static class CuratorComposition
             {
                 // Non-blocking: the user can still use the app; they just cannot
                 // launch until the missing fields are resolved (the launch-time
-                // Discover re-validates + heals, then surfaces the escape-hatch
-                // when still incomplete).
+                // Discover re-runs discovery and surfaces the escape-hatch when
+                // still incomplete).
                 logger.LogWarning(
                     "Startup discovery is {Status}: missing fields will block launch until resolved " +
                     "(steam={Steam}, darktide={Darktide}, compatdata={Compatdata}, proton={Proton}).",

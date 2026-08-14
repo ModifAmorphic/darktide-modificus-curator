@@ -1,74 +1,63 @@
 namespace Modificus.Curator.Config;
 
 /// <summary>
-/// User-supplied overrides for Steam/Darktide discovery. Bound from the
+/// The Steam/Darktide discovery snapshot + mode. Bound from the
 /// <c>Discovery</c> section of <see cref="CuratorConfig"/> by the config loader
-/// in <c>Modificus.Curator.General</c>. Every field is nullable and defaults to
-/// <c>null</c>, meaning "no override yet": on the first
-/// <see cref="Steam.ISteamService.Discover"/> call, missing fields are healed
-/// from the platform discoverer and persisted here so the next call is a fast
-/// validation (no discoverer run). A user-supplied value is re-validated on
-/// disk every call: if it ceases to exist, it is healed again.
+/// in <c>Modificus.Curator.General</c>. <see cref="General.IConfigLoader"/>
+/// persists it, and <see cref="Steam.ISteamService"/> reads it live (one
+/// <c>Load()</c> per call) so a Settings write is visible on the next discovery
+/// pass.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The Settings window + the discovery escape-hatch dialog write these;
-/// <see cref="General.IConfigLoader"/> persists them, and
-/// <c>SteamService.Discover()</c> reads them live (one <c>Load()</c> per call)
-/// so a Settings write is visible on the next discovery pass.</para>
+/// <b>Mode:</b> <see cref="OverrideAutomaticDiscovery"/> selects between
+/// automatic and manual discovery. <c>false</c> (the default) is automatic:
+/// every <see cref="Steam.ISteamService.Discover"/> call runs the platform
+/// discoverer and atomically replaces the active-platform fields below with that
+/// result (including nulls that clear stale values). <c>true</c> is manual: the
+/// discoverer is not invoked, the stored paths are validated on disk as-is, and
+/// invalid/missing values surface as null result fields without rewriting the
+/// stored input. <see cref="Steam.ISteamService.Rediscover"/> forces one
+/// automatic pass regardless of the mode and leaves the mode unchanged.</para>
 /// <para>
-/// <b>Validate + heal + persist (Track C review fix):</b> a supplied value is
-/// checked on disk (directory for Steam install + compatdata; file for the
-/// Darktide binary + Proton script). A value that exists is kept as-is
-/// (preserved across calls). A null/whitespace value, or one whose path no
-/// longer exists, is <i>healed</i> from the platform discoverer when possible,
-/// and the healed value is persisted back here (only that field; the others
-/// are untouched). A field the discoverer also cannot resolve stays null and
-/// is flagged via <see cref="Steam.DiscoveryResult.Status"/>.</para>
-/// <para>
-/// Field mapping to <see cref="Steam.DiscoveryResult"/> (the final path is the
-/// override when it exists on disk, otherwise the discoverer's value):
-/// <list type="table">
-/// <listheader><term>Override</term><description>DiscoveryResult field</description></listheader>
-/// <item><term><see cref="UserSteamInstallPath"/></term><description><see cref="Steam.DiscoveryResult.SteamInstallPath"/></description></item>
-/// <item><term><see cref="UserDarktideGameBinaryPath"/></term><description><see cref="Steam.DiscoveryResult.DarktideGameBinaryPath"/></description></item>
-/// <item><term><see cref="UserCompatdataPath"/></term><description><see cref="Steam.DiscoveryResult.CompatdataPath"/></description></item>
-/// <item><term><see cref="UserProtonBinaryPath"/></term><description><see cref="Steam.DiscoveryResult.ProtonBinaryPath"/></description></item>
-/// </list>
-/// </para>
+/// <b>Platform ownership:</b> the Steam root + Darktide binary are
+/// active on every platform; CompatdataPath + ProtonBinaryPath are Linux-only.
+/// An automatic pass on Windows writes only the two Windows fields and leaves
+/// the Linux-only fields untouched (and vice versa). A manual pass validates
+/// only the active platform's fields.</para>
 /// </remarks>
 public sealed class DiscoveryConfig
 {
     /// <summary>
-    /// User override for the Steam client install directory
-    /// (the value for <c>STEAM_COMPAT_CLIENT_INSTALL_PATH</c>). Null/whitespace
-    /// or a non-existent path is healed from the platform discoverer on the
-    /// next <see cref="Steam.ISteamService.Discover"/> call.
+    /// When <c>true</c>, <see cref="Steam.ISteamService.Discover"/> skips the
+    /// platform discoverer and validates the stored paths below as static manual
+    /// values. When <c>false</c> (the default), every <see cref="Steam.ISteamService.Discover"/>
+    /// call runs full platform discovery and replaces the active-platform fields.
     /// </summary>
-    public string? UserSteamInstallPath { get; set; }
+    public bool OverrideAutomaticDiscovery { get; set; }
 
     /// <summary>
-    /// User override for the native path to <c>Darktide.exe</c>. Null/whitespace
-    /// or a non-existent path is healed from the platform discoverer on the
-    /// next <see cref="Steam.ISteamService.Discover"/> call.
+    /// The Steam client install directory (the value for
+    /// <c>STEAM_COMPAT_CLIENT_INSTALL_PATH</c>). In automatic mode this holds the
+    /// discoverer's snapshot; in manual mode it holds the user's static value.
     /// </summary>
-    public string? UserDarktideGameBinaryPath { get; set; }
+    public string? SteamInstallPath { get; set; }
 
     /// <summary>
-    /// User override for the Wine prefix (compatdata) directory
-    /// (the value for <c>STEAM_COMPAT_DATA_PATH</c>). Linux only; never checked
-    /// or healed on Windows (native). Null/whitespace or a non-existent path is
-    /// healed from the platform discoverer on the next
-    /// <see cref="Steam.ISteamService.Discover"/> call.
+    /// The native path to <c>Darktide.exe</c>. In automatic mode this holds the
+    /// discoverer's snapshot; in manual mode it holds the user's static value.
     /// </summary>
-    public string? UserCompatdataPath { get; set; }
+    public string? DarktideGameBinaryPath { get; set; }
 
     /// <summary>
-    /// User override for the <c>proton</c> script path used for
-    /// <c>proton run</c>. Linux only; never checked or healed on Windows
-    /// (native). Null/whitespace or a non-existent path is healed from the
-    /// platform discoverer on the next <see cref="Steam.ISteamService.Discover"/>
-    /// call.
+    /// The Wine prefix (compatdata) directory (the value for
+    /// <c>STEAM_COMPAT_DATA_PATH</c>). Linux only; never active on Windows.
     /// </summary>
-    public string? UserProtonBinaryPath { get; set; }
+    public string? CompatdataPath { get; set; }
+
+    /// <summary>
+    /// The <c>proton</c> script path used for <c>proton run</c>. Linux only;
+    /// never active on Windows.
+    /// </summary>
+    public string? ProtonBinaryPath { get; set; }
 }

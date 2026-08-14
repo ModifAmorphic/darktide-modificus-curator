@@ -31,12 +31,10 @@ public sealed class CuratorConfig
     public string RelayDir { get; set; } = AppPaths.DefaultRelayDir;
 
     /// <summary>
-    /// User-supplied discovery overrides. <c>SteamService.Discover()</c> reads
-    /// these live per call (via <see cref="General.IConfigLoader"/>), validates
-    /// each field's path on disk, heals the missing/non-existent ones from the
-    /// platform discoverer, and persists ONLY the healed fields back here so
-    /// the next call is a fast validation. See
-    /// <see cref="DiscoveryConfig"/> for the per-field semantics.
+    /// The Steam/Darktide discovery snapshot + mode. <c>SteamService.Discover()</c>
+    /// reads this live per call (via <see cref="General.IConfigLoader"/>) and
+    /// persists the automatic snapshot back here. See
+    /// <see cref="DiscoveryConfig"/> for the mode + per-field semantics.
     /// </summary>
     public DiscoveryConfig Discovery { get; set; } = new();
 

@@ -244,6 +244,7 @@ internal static class TestDoubles
         IntegrationsViewModel IntegrationsPage,
         PreferencesViewModel PreferencesPage,
         SettingsViewModel SettingsPage,
+        FakeSteamService Steam,
         DmfPromptService Dmf);
 
     /// <summary>
@@ -265,7 +266,8 @@ internal static class TestDoubles
         FakeNexusAuthService? auth = null,
         FakeNxmHandlerRegistrar? nxmRegistrar = null,
         LocalizationService? localization = null,
-        FakeModRepository? repo = null)
+        FakeModRepository? repo = null,
+        FakeSteamService? steam = null)
     {
         profiles ??= Profiles();
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
@@ -276,6 +278,7 @@ internal static class TestDoubles
         auth ??= new FakeNexusAuthService();
         localization ??= new LocalizationService();
         repo ??= new FakeModRepository();
+        steam ??= new FakeSteamService();
 
         var modsPage = BuildModList(
             profiles, session, repo,
@@ -301,7 +304,10 @@ internal static class TestDoubles
             new FakePreferencesService(), config, localization,
             isRelayConsoleToggleSupported: true);
         var settingsPage = new SettingsViewModel(
-            config, localization, appUpdate, dialogs,
+            config,
+            steam,
+            localization,
+            appUpdate, dialogs,
             invokeOnUi: static action => action(),
             NullLogger<SettingsViewModel>.Instance);
 
@@ -317,7 +323,7 @@ internal static class TestDoubles
         return new ShellParts(
             shell, profiles, session, dialogs, launch, appUpdate, config,
             auth, nxmRegistrar, profilesPage, modsPage, integrationsPage,
-            preferencesPage, settingsPage, dmf);
+            preferencesPage, settingsPage, steam, dmf);
     }
 }
 
@@ -1144,14 +1150,59 @@ internal sealed class FakeDialogService : IDialogService
 }
 
 /// <summary><see cref="ISteamService"/> with a configurable running flag +
-/// discovery result.</summary>
+/// discovery result, plus call counters for <see cref="Discover"/> +
+/// <see cref="Rediscover"/> (the discovery escape-hatch + Settings VM tests
+/// assert on these). <see cref="Discovery"/> is returned by both methods; tests
+/// that need the two to diverge set <see cref="RediscoverResult"/> (falls back
+/// to <see cref="Discovery"/>).</summary>
 internal sealed class FakeSteamService : ISteamService
 {
+    // A default complete result so tests that exercise Discover/Rediscover
+    // without configuring one get a sensible non-throwing answer (mirrors the
+    // relay-client test double's default). Tests that need a specific outcome
+    // or a side-effect (writing config) set Discovery/RediscoverResult/On*.
+    private static readonly DiscoveryResult DefaultComplete = new(
+        "/fake/steam", "/fake/darktide.exe", "/fake/compatdata", "/fake/proton",
+        "GE-Proton-test", DiscoveryStatus.Complete, Array.Empty<string>());
+
     public bool Running { get; set; }
-    public DiscoveryResult? Discovery { get; set; }
+
+    /// <summary>The result returned by <see cref="Discover"/>. Defaults to a
+    /// complete result so a bare Discover call does not throw.</summary>
+    public DiscoveryResult? Discovery { get; set; } = DefaultComplete;
+
+    /// <summary>The result returned by <see cref="Rediscover"/>; falls back to
+    /// <see cref="Discovery"/> when null.</summary>
+    public DiscoveryResult? RediscoverResult { get; set; }
+
+    public int DiscoverCalls { get; private set; }
+    public int RediscoverCalls { get; private set; }
+
+    /// <summary>An optional side-effect invoked after <see cref="Discover"/>
+    /// runs, so a test can simulate the service persisting the snapshot into
+    /// config (mirrors the real service's write through the config
+    /// loader).</summary>
+    public Action? OnDiscover { get; set; }
+
+    /// <summary>An optional side-effect invoked after <see cref="Rediscover"/>
+    /// runs.</summary>
+    public Action? OnRediscover { get; set; }
+
     public bool IsGameRunning() => Running;
-    public DiscoveryResult Discover() =>
-        Discovery ?? throw new NotImplementedException();
+
+    public DiscoveryResult Discover()
+    {
+        DiscoverCalls++;
+        OnDiscover?.Invoke();
+        return Discovery ?? DefaultComplete;
+    }
+
+    public DiscoveryResult Rediscover()
+    {
+        RediscoverCalls++;
+        OnRediscover?.Invoke();
+        return RediscoverResult ?? Discovery ?? DefaultComplete;
+    }
 }
 
 /// <summary>

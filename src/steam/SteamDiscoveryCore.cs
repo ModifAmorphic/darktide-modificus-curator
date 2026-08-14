@@ -119,23 +119,23 @@ internal sealed class SteamDiscoveryCore
     /// <summary>
     /// Computes the discovery status from the four nullable path fields for the
     /// given platform. This is the single source of truth for "what counts as
-    /// Complete", used by both discoverers (when building their result) and by
-    /// <see cref="SteamService"/> (when recomputing status after applying user
-    /// overrides from <c>CuratorConfig.Discovery</c>).
+    /// Complete", shared by the discoverers (building their result) and the
+    /// manual-mode path in <see cref="SteamService"/>.
     /// </summary>
     /// <remarks>
     /// <para>
     /// <b>Linux</b> requires all four fields (Steam + Darktide + compatdata +
-    /// Proton); <b>Windows</b> requires only Steam + Darktide (native: compatdata
-    /// and Proton are unused). Steam itself missing is <see cref="DiscoveryStatus.Failed"/>;
-    /// a present Steam with any other required field missing is
-    /// <see cref="DiscoveryStatus.Partial"/>; everything required present is
-    /// <see cref="DiscoveryStatus.Complete"/>.</para>
+    /// Proton): Steam missing is <see cref="DiscoveryStatus.Failed"/>, and any
+    /// other required field missing with Steam present is
+    /// <see cref="DiscoveryStatus.Partial"/>.</para>
     /// <para>
-    /// Consolidating the rule here (rather than duplicating it in each
-    /// discoverer + the overlay) guarantees the three call sites cannot diverge:
-    /// the overlay's recomputed status is, by construction, the same rule the
-    /// discoverer used.</para>
+    /// <b>Windows</b> requires only the Darktide binary. Steam is the
+    /// automatic-discovery anchor that locates Darktide, not a launch input
+    /// (no <c>STEAM_COMPAT_*</c> env is set on Windows), so a resolved Darktide
+    /// path is <see cref="DiscoveryStatus.Complete"/> with or without Steam.
+    /// Without Darktide, no Steam resolves <see cref="DiscoveryStatus.Failed"/>
+    /// while a present Steam with no game resolves
+    /// <see cref="DiscoveryStatus.Partial"/>.</para>
     /// </remarks>
     /// <param name="platform">The platform whose completeness rule applies.</param>
     /// <param name="steamInstallPath">Resolved Steam client dir (null = not found).</param>
@@ -149,21 +149,29 @@ internal sealed class SteamDiscoveryCore
         string? compatdataPath,
         string? protonBinaryPath)
     {
+        if (platform == DiscoveryPlatform.Windows)
+        {
+            // Native Windows launch is driven by the game binary alone; Steam is
+            // a discovery mechanism, not a launch input. Automatic discovery still
+            // anchors on Steam (it can only find Darktide by walking Steam's
+            // libraries), so an automatic pass never resolves a Darktide path
+            // without one -- the rule below matters for manual mode.
+            if (darktideGameBinaryPath is not null)
+            {
+                return DiscoveryStatus.Complete;
+            }
+            return steamInstallPath is null ? DiscoveryStatus.Failed : DiscoveryStatus.Partial;
+        }
+
+        // Linux requires all four (Steam + Darktide + compatdata + Proton).
         if (steamInstallPath is null)
         {
-            // No Steam at all: cannot launch. Both platforms agree on Failed.
             return DiscoveryStatus.Failed;
         }
 
-        if (darktideGameBinaryPath is null)
-        {
-            return DiscoveryStatus.Partial;
-        }
-
-        // Linux additionally requires compatdata + Proton; Windows is native and
-        // never uses them (they are null by design, not gaps).
-        if (platform == DiscoveryPlatform.Linux
-            && (compatdataPath is null || protonBinaryPath is null))
+        if (darktideGameBinaryPath is null
+            || compatdataPath is null
+            || protonBinaryPath is null)
         {
             return DiscoveryStatus.Partial;
         }

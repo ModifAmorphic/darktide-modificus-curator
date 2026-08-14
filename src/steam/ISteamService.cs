@@ -15,28 +15,36 @@ namespace Modificus.Curator.Steam;
 public interface ISteamService
 {
     /// <summary>
-    /// Validates + heals + selectively persists discovery, then returns the
-    /// result. Delegates the platform discoverer (selected from
-    /// <see cref="SteamDiscoveryOptions.Platform"/>) only when a field needs
-    /// healing; when every persisted override is valid (path exists on disk) the
-    /// discoverer is skipped entirely (fast path). Never throws on missing
-    /// pieces: those are reported via <see cref="DiscoveryResult.Status"/> + the
-    /// nullable fields (the escape hatch).
+    /// Runs Steam discovery and returns the result, honoring the configured
+    /// discovery mode (see <see cref="Config.DiscoveryConfig.OverrideAutomaticDiscovery"/>).
+    /// Never throws on missing pieces: those are reported via
+    /// <see cref="DiscoveryResult.Status"/> + the nullable fields.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Validate + heal + persist:</b> read the live
-    /// <see cref="DiscoveryConfig"/> user overrides, validate each
-    /// platform-relevant field's path on disk, heal the invalid ones from the
-    /// discoverer (one run), persist ONLY the healed fields back to config
-    /// (preserving valid fields + any hand-edit between the read + save), and
-    /// return a result with the final paths.</para>
+    /// <b>Automatic mode</b> (default, <c>OverrideAutomaticDiscovery = false</c>):
+    /// runs the platform discoverer every call and atomically replaces the
+    /// active-platform path snapshot in config with the result (including nulls
+    /// that clear stale values). On Windows only Steam + Darktide are written
+    /// (Linux-only fields are left untouched); on Linux all four fields are
+    /// written.</para>
     /// <para>
-    /// <b>Platform-gating:</b> on Windows only Steam install + Darktide binary
-    /// are checked + healed (compatdata + Proton are Linux-only and stay null).
-    /// On Linux all four are checked + healed.</para>
+    /// <b>Manual mode</b> (<c>OverrideAutomaticDiscovery = true</c>): the
+    /// discoverer is not invoked. The stored paths are validated on disk by kind
+    /// (directory for Steam + compatdata; file for Darktide + Proton); valid
+    /// values are returned and invalid/missing ones surface as null fields. The
+    /// stored input is never rewritten or cleared.
+    /// <see cref="DiscoveryResult.ProtonVersion"/> is null in manual mode.</para>
     /// </remarks>
     DiscoveryResult Discover();
+
+    /// <summary>
+    /// Forces one automatic discovery pass regardless of the configured mode,
+    /// replaces the active-platform path snapshot (including nulls), leaves
+    /// <see cref="Config.DiscoveryConfig.OverrideAutomaticDiscovery"/> unchanged,
+    /// and returns the discoverer's result.
+    /// </summary>
+    DiscoveryResult Rediscover();
 
     /// <summary>
     /// Whether Darktide is currently running. Cross-platform best-effort check
@@ -47,18 +55,24 @@ public interface ISteamService
 
 /// <summary>
 /// The outcome of a Steam discovery pass. Fields are nullable: a null means
-/// "couldn't resolve this -- the UI should prompt for it" (the escape hatch).
+/// "couldn't resolve this; the UI should prompt for it" (the escape hatch).
 /// <see cref="Status"/> summarizes whether everything critical for the current
 /// OS was found.
 /// </summary>
-/// <param name="SteamInstallPath">Steam client dir → <c>STEAM_COMPAT_CLIENT_INSTALL_PATH</c>.</param>
+/// <param name="SteamInstallPath">Steam client dir, the value for
+/// <c>STEAM_COMPAT_CLIENT_INSTALL_PATH</c>.</param>
 /// <param name="DarktideGameBinaryPath">Native path to <c>Darktide.exe</c>
 /// (Relay-client Z:\-translates on Linux for <c>--game-binary</c>).</param>
-/// <param name="CompatdataPath">Wine prefix → <c>STEAM_COMPAT_DATA_PATH</c> (Linux only).</param>
-/// <param name="ProtonBinaryPath">The <c>proton</c> script for <c>proton run</c> (Linux only).</param>
-/// <param name="ProtonVersion">Informational label (e.g. "Proton - Experimental").</param>
-/// <param name="Status">Complete / Partial / Failed -- see <see cref="DiscoveryStatus"/>.</param>
-/// <param name="Warnings">Non-fatal notes (e.g. "Flatpak Steam detected", Proton-selection reason).</param>
+/// <param name="CompatdataPath">Wine prefix, the value for
+/// <c>STEAM_COMPAT_DATA_PATH</c> (Linux only).</param>
+/// <param name="ProtonBinaryPath">The <c>proton</c> script for <c>proton run</c>
+/// (Linux only).</param>
+/// <param name="ProtonVersion">An informational label for the resolved Proton
+/// (the compatibility tool's display name, or its internal name). Null in manual
+/// mode.</param>
+/// <param name="Status">Complete / Partial / Failed, see <see cref="DiscoveryStatus"/>.</param>
+/// <param name="Warnings">Non-fatal notes (e.g. Flatpak detection, an unresolvable
+/// compatibility tool).</param>
 public sealed record DiscoveryResult(
     string? SteamInstallPath,
     string? DarktideGameBinaryPath,
@@ -72,9 +86,10 @@ public sealed record DiscoveryResult(
 /// Coarse status of a discovery pass:
 /// <list type="bullet">
 /// <item><term>Complete</term><description>Every critical field for the current OS is non-null.</description></item>
-/// <item><term>Partial</term><description>Steam was located but some critical fields are missing
-/// (the nullables indicate what the UI should prompt for).</description></item>
-/// <item><term>Failed</term><description>Could not even locate Steam (UI prompts for the Steam dir).</description></item>
+/// <item><term>Partial</term><description>Some critical field resolved but the result is not
+/// launchable (the nullables indicate what the UI should prompt for).</description></item>
+/// <item><term>Failed</term><description>No critical field resolved (the UI prompts for the
+/// entry-point field).</description></item>
 /// </list>
 /// </summary>
 public enum DiscoveryStatus

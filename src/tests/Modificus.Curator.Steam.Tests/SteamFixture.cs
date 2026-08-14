@@ -16,12 +16,12 @@ namespace Modificus.Curator.Steam.Tests;
 /// <remarks>
 /// Resolving via DI (rather than constructing the internal implementation
 /// directly) keeps tests black-box against <see cref="ISteamService"/> and
-/// proves the real registration path, the same approach the Profiles fixture
-/// uses. <see cref="SteamDiscoveryOptions"/> / <see cref="ISteamRegistryReader"/>
-/// / <see cref="IProcessLookup"/> / <see cref="IConfigLoader"/> are pre-registered
-/// so <c>AddSteam()</c>'s <c>TryAdd</c> defaults are skipped in favor of the
-/// fixture's fakes. <see cref="Config"/> exposes the live <see cref="CuratorConfig"/>
-/// so overlay tests can set <see cref="DiscoveryConfig"/> user overrides.
+/// proves the real registration path. <see cref="SteamDiscoveryOptions"/> /
+/// <see cref="ISteamRegistryReader"/> / <see cref="IProcessLookup"/> /
+/// <see cref="IConfigLoader"/> are pre-registered so <c>AddSteam()</c>'s
+/// <c>TryAdd</c> defaults are skipped in favor of the fixture's fakes.
+/// <see cref="Config"/> exposes the live <see cref="CuratorConfig"/> so overlay
+/// tests can set <see cref="DiscoveryConfig"/> fields.
 /// </remarks>
 internal sealed class SteamFixture : IDisposable
 {
@@ -31,7 +31,8 @@ internal sealed class SteamFixture : IDisposable
     public string TempRoot { get; }
     public string SteamRoot { get; }       // the "native" Linux / Windows fixture Steam install
     public string FlatpakRoot { get; }     // the Flatpak candidate
-    public string CompatToolsDir { get; }  // compatibilitytools.d candidate
+    public string CompatToolsDir { get; }  // compatibilitytools.d candidate (user root)
+    public string SystemCompatToolsDir { get; } // a system-wide compatibilitytools.d
     public FakeRegistryReader Registry { get; } = new();
     public FakeProcessLookup Processes { get; } = new();
     public FakeConfigLoader ConfigLoader { get; } = new();
@@ -47,6 +48,7 @@ internal sealed class SteamFixture : IDisposable
         SteamRoot = Path.Combine(TempRoot, "Steam");
         FlatpakRoot = Path.Combine(TempRoot, "flatpak-Steam");
         CompatToolsDir = Path.Combine(TempRoot, "compatibilitytools.d");
+        SystemCompatToolsDir = Path.Combine(TempRoot, "system-compatibilitytools.d");
 
         _options = new SteamDiscoveryOptions
         {
@@ -54,6 +56,8 @@ internal sealed class SteamFixture : IDisposable
             LinuxDefaultSteamRoot = SteamRoot,
             LinuxFlatpakSteamRoot = FlatpakRoot,
             LinuxCompatibilityToolsDir = CompatToolsDir,
+            // Point system roots at fixture paths so tests never touch host state.
+            LinuxSystemCompatibilityToolsDirs = new List<string> { SystemCompatToolsDir },
             // Reuse the fixture root for Windows tests (registry supplies it via
             // a fake rather than a real second path).
             WindowsDefaultSteamRoot = SteamRoot,
@@ -120,21 +124,124 @@ internal sealed class SteamFixture : IDisposable
         return this;
     }
 
-    /// <summary>Creates a <c>proton</c> file under <c>&lt;steamRoot&gt;/steamapps/common/&lt;dirName&gt;/</c>.</summary>
-    public SteamFixture WithProtonInCommon(string steamRoot, string dirName)
+    // ---- Proton (compatibility-tool) helpers ------------------------------
+
+    /// <summary>
+    /// Writes <c>config/config.vdf</c> under the given Steam root with a
+    /// CompatToolMapping entry for the Darktide app id selecting
+    /// <paramref name="toolName"/>. Pass <c>global: true</c> to write the
+    /// mapping under key <c>"0"</c> instead.
+    /// </summary>
+    public SteamFixture WithCompatToolMapping(string steamRoot, string toolName, bool global = false)
     {
-        var proton = Path.Combine(steamRoot, "steamapps", "common", dirName, "proton");
-        Directory.CreateDirectory(Path.GetDirectoryName(proton)!);
-        File.WriteAllText(proton, string.Empty);
+        var dir = Path.Combine(steamRoot, "config");
+        Directory.CreateDirectory(dir);
+        var key = global ? "0" : _options.DarktideAppId.ToString();
+        var sb = new StringBuilder();
+        sb.AppendLine("\"InstallConfigStore\"");
+        sb.AppendLine("{");
+        sb.AppendLine("    \"Software\"");
+        sb.AppendLine("    {");
+        sb.AppendLine("        \"Valve\"");
+        sb.AppendLine("        {");
+        sb.AppendLine("            \"Steam\"");
+        sb.AppendLine("            {");
+        sb.AppendLine("                \"CompatToolMapping\"");
+        sb.AppendLine("                {");
+        sb.AppendLine($"                    \"{key}\"");
+        sb.AppendLine("                    {");
+        sb.AppendLine($"                        \"name\"        \"{EscapeVdf(toolName)}\"");
+        sb.AppendLine("                    }");
+        sb.AppendLine("                }");
+        sb.AppendLine("            }");
+        sb.AppendLine("        }");
+        sb.AppendLine("    }");
+        sb.AppendLine("}");
+        File.WriteAllText(Path.Combine(dir, "config.vdf"), sb.ToString());
         return this;
     }
 
-    /// <summary>Creates a <c>proton</c> file under <c>compatibilitytools.d/&lt;dirName&gt;/</c>.</summary>
-    public SteamFixture WithProtonInCompatTools(string dirName)
+    /// <summary>
+    /// Scaffolds a custom Proton tool under <c>&lt;root&gt;/&lt;toolName&gt;/</c>
+    /// with a <c>compatibilitytool.vdf</c> manifest + a <c>proton</c> file.
+    /// </summary>
+    /// <param name="root">The compatibility-tools root (e.g. compatibilitytools.d).</param>
+    /// <param name="toolName">The tool's internal name (also the directory name).</param>
+    /// <param name="installPath">The <c>install_path</c> value in the manifest (<c>.</c> = same dir).</param>
+    /// <param name="displayName">Optional display name; defaults to <paramref name="toolName"/>.</param>
+    public SteamFixture WithCustomProtonTool(
+        string root, string toolName, string installPath = ".", string? displayName = null)
     {
-        var proton = Path.Combine(CompatToolsDir, dirName, "proton");
-        Directory.CreateDirectory(Path.GetDirectoryName(proton)!);
-        File.WriteAllText(proton, string.Empty);
+        var toolDir = Path.Combine(root, toolName);
+        Directory.CreateDirectory(toolDir);
+
+        var manifest = Path.Combine(toolDir, "compatibilitytool.vdf");
+        var display = displayName ?? toolName;
+        var sb = new StringBuilder();
+        sb.AppendLine("\"compatibilitytools\"");
+        sb.AppendLine("{");
+        sb.AppendLine("    \"compat_tools\"");
+        sb.AppendLine("    {");
+        sb.AppendLine($"        \"{EscapeVdf(toolName)}\"");
+        sb.AppendLine("        {");
+        sb.AppendLine($"            \"install_path\"   \"{EscapeVdf(installPath)}\"");
+        sb.AppendLine($"            \"display_name\"   \"{EscapeVdf(display)}\"");
+        sb.AppendLine("        }");
+        sb.AppendLine("    }");
+        sb.AppendLine("}");
+        File.WriteAllText(manifest, sb.ToString());
+
+        // Place the proton file at the resolved install path.
+        var resolvedInstall = installPath == "." ? toolDir : installPath;
+        var protonDir = Path.IsPathRooted(resolvedInstall)
+            ? resolvedInstall
+            : Path.Combine(toolDir, resolvedInstall);
+        Directory.CreateDirectory(protonDir);
+        File.WriteAllText(Path.Combine(protonDir, "proton"), string.Empty);
+        return this;
+    }
+
+    /// <summary>
+    /// Scaffolds a Valve-managed Proton tool: writes a synthetic binary
+    /// <c>appinfo.vdf</c> carrying <c>compat_tools</c>, writes the tool's
+    /// <c>appmanifest_&lt;appId&gt;.acf</c> under a library, and places the
+    /// <c>proton</c> file at <c>&lt;library&gt;/steamapps/common/&lt;installDir&gt;/</c>.
+    /// </summary>
+    public SteamFixture WithValveProtonTool(
+        string steamRoot,
+        string library,
+        string toolName,
+        int protonAppId,
+        string installDir,
+        string displayName,
+        string? aliases = null)
+    {
+        var appInfoDir = Path.Combine(steamRoot, "appcache");
+        Directory.CreateDirectory(appInfoDir);
+        var appInfoPath = Path.Combine(appInfoDir, "appinfo.vdf");
+        File.WriteAllBytes(appInfoPath, AppInfoFixture.Build(
+            appId: 891390,
+            toolName: toolName,
+            protonAppId: protonAppId,
+            displayName: displayName,
+            aliases: aliases));
+
+        // Write appmanifest under the library.
+        var steamapps = Path.Combine(library, "steamapps");
+        Directory.CreateDirectory(steamapps);
+        var manifestName = $"appmanifest_{protonAppId}.acf";
+        var manifest = new StringBuilder();
+        manifest.AppendLine("\"AppState\"");
+        manifest.AppendLine("{");
+        manifest.AppendLine($"    \"appid\"        \"{protonAppId}\"");
+        manifest.AppendLine($"    \"installdir\"   \"{EscapeVdf(installDir)}\"");
+        manifest.AppendLine("}");
+        File.WriteAllText(Path.Combine(steamapps, manifestName), manifest.ToString());
+
+        // Place the proton binary.
+        var commonDir = Path.Combine(steamapps, "common", installDir);
+        Directory.CreateDirectory(commonDir);
+        File.WriteAllText(Path.Combine(commonDir, "proton"), string.Empty);
         return this;
     }
 
@@ -147,11 +254,8 @@ internal sealed class SteamFixture : IDisposable
     public string ExpectedCompatdataPath(string steamRoot) => Path.Combine(
         steamRoot, "steamapps", "compatdata", _options.DarktideAppId.ToString());
 
-    public string ExpectedProtonPath(string parent, string dirName) =>
-        Path.Combine(parent, "steamapps", "common", dirName, "proton");
-
-    public string ExpectedCompatToolsProtonPath(string dirName) =>
-        Path.Combine(CompatToolsDir, dirName, "proton");
+    public string ExpectedCustomProtonPath(string root, string toolName) =>
+        Path.Combine(root, toolName, "proton");
 
     // ---- static VDF builder ------------------------------------------------
 
@@ -179,6 +283,9 @@ internal sealed class SteamFixture : IDisposable
 
     private static string EscapeVdfValue(string value) =>
         value.Replace("\\", "\\\\", StringComparison.Ordinal);
+
+    private static string EscapeVdf(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
 
     public void Dispose()
     {
@@ -209,7 +316,7 @@ internal sealed class FakeProcessLookup : IProcessLookup
 /// <summary>
 /// Minimal <see cref="IConfigLoader"/> double for the steam tests: serves a
 /// mutable <see cref="CuratorConfig"/> (so overlay tests can set
-/// <see cref="DiscoveryConfig"/> user overrides before calling
+/// <see cref="DiscoveryConfig"/> fields before calling
 /// <see cref="ISteamService.Discover"/>). <see cref="Save"/> mirrors the real
 /// loader's round-trip: it promotes the written config to the live snapshot, so
 /// the next <see cref="Load"/> returns what was saved (and a read-modify-save

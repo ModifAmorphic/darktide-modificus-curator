@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Modificus.Curator.Config;
 using Modificus.Curator.General;
+using Modificus.Curator.Steam;
 using Modificus.Curator.UI.Localization;
 using Modificus.Curator.UI.Settings;
 
@@ -14,23 +15,31 @@ namespace Modificus.Curator.UI.ViewModels;
 /// (<see cref="Views.DiscoveryEscapeHatchDialog"/>). Shown when a launch returns
 /// <c>LaunchStatus.DiscoveryIncomplete</c>: a focused form that prompts for
 /// <em>only</em> the missing fields (the ones <c>LaunchResult</c> listed), with
-/// the same shared <see cref="DiscoveryField"/> descriptor the Settings window
-/// uses. Submit does one read-modify-save through <see cref="IConfigLoader"/>
-/// writing all entered paths into <see cref="DiscoveryConfig"/>; then the dialog
-/// closes. There is <b>no auto-retry</b>: the user clicks Launch again to retry
-/// (avoids a loop if the entered paths still do not work). Cancel aborts.
+/// the same shared <see cref="DiscoveryField"/> descriptor the Settings
+/// destination uses. There is <b>no auto-retry</b>: the user clicks Launch again
+/// to retry (avoids a loop if the entered paths still do not work). Cancel
+/// aborts.
 /// </summary>
 /// <remarks>
-/// <para><b>Rows vs. write-through:</b> unlike the Settings VM (which writes
-/// each field immediately on change), this VM stages the entered values on the
-/// rows and writes them all on submit. A focused escape-hatch is one decision
-/// ("here are all the missing paths"), not a series of independent edits, so a
-/// single commit fits the UX better.</para>
-/// <para><b>Pre-fill:</b> each row is pre-filled with the current override from
-/// config (if any). For a missing field the auto-discovered value was null, so
-/// the override is usually empty too; but a previously-set override that turned
-/// out wrong is shown so the user can edit rather than re-type the whole
-/// path.</para>
+/// <para><b>Global mode + forced discover:</b> alongside the missing-field rows
+/// the dialog carries the same global <see cref="OverrideAutomaticDiscovery"/>
+/// checkbox + Discover button as Settings, with identical semantics. Both are
+/// write-through: the checkbox persists the mode (turning it off runs an
+/// ordinary <see cref="ISteamService.Discover"/> and refreshes the rows; turning
+/// it on preserves values and enables editing), and the Discover button forces a
+/// <see cref="ISteamService.Rediscover"/> and refreshes the rows. Cancel does
+/// NOT roll these already-applied global actions back; it only abandons any
+/// staged row edits that have not been submitted.</para>
+/// <para><b>Row editability follows the mode:</b> automatic mode keeps the
+/// missing-field rows read-only (Browse disabled) and shows the current invalid
+/// strings from config; manual mode makes them editable (Browse enabled).</para>
+/// <para><b>Submit depends on the mode, never infers it:</b> in manual mode it
+/// writes each staged row value + <c>OverrideAutomaticDiscovery = true</c> in
+/// one read-modify-save; in automatic mode it does not rewrite path values (the
+/// toggle's own write-through already persisted the mode). Both then close.</para>
+/// <para><b>Pre-fill:</b> each row is pre-filled with the current stored value
+/// from config so a previously-set path that turned out wrong is shown for
+/// correction rather than retyping.</para>
 /// <para><b>Unknown fields are dropped:</b> if <c>LaunchResult</c> ever lists a
 /// field name the catalog does not know (a future field), it is silently
 /// omitted; the dialog always renders the fields it knows how to label +
@@ -39,22 +48,33 @@ namespace Modificus.Curator.UI.ViewModels;
 public partial class DiscoveryEscapeHatchViewModel : ObservableObject
 {
     private readonly IConfigLoader _configLoader;
+    private readonly ISteamService _steam;
     private readonly LocalizationService _localization;
+
+    /// <summary>True while rehydrating the rows so the toggle handler + row
+    /// callbacks do not save. The values already match what is persisted.</summary>
+    private bool _suppressApply;
 
     /// <param name="missingFields">The discovery field names the launch result
     /// reported missing (the values of <c>LaunchResult.MissingDiscoveryFields</c>,
-    /// which match the <see cref="Steam.DiscoveryResult"/> property names).
+    /// which match the <see cref="DiscoveryResult"/> property names).
     /// Empty yields no rows (the dialog should not be shown then anyway).</param>
-    /// <param name="configLoader">The live config reader/writer. Submit does one
-    /// read-modify-save through this.</param>
+    /// <param name="configLoader">The live config reader/writer. Submit + the
+    /// toggle/Discover actions do read-modify-saves through this.</param>
+    /// <param name="steamService">The Steam discovery service. Turning override
+    /// off calls <see cref="ISteamService.Discover"/>; the Discover button calls
+    /// <see cref="ISteamService.Rediscover"/>. The mode policy lives in the
+    /// service; this VM only orchestrates user actions + display state.</param>
     /// <param name="localization">The localization service; handed to each row so
     /// its label resolves + refreshes on a culture change.</param>
     public DiscoveryEscapeHatchViewModel(
         IReadOnlyList<string> missingFields,
         IConfigLoader configLoader,
+        ISteamService steamService,
         LocalizationService localization)
     {
         _configLoader = configLoader;
+        _steam = steamService ?? throw new ArgumentNullException(nameof(steamService));
         _localization = localization;
 
         var discovery = _configLoader.Load().Discovery;
@@ -73,6 +93,20 @@ public partial class DiscoveryEscapeHatchViewModel : ObservableObject
                     field,
                     InitialValue(field, discovery),
                     _localization)));
+
+        _suppressApply = true;
+        try
+        {
+            OverrideAutomaticDiscovery = discovery.OverrideAutomaticDiscovery;
+            foreach (var row in Rows)
+            {
+                row.IsEditable = discovery.OverrideAutomaticDiscovery;
+            }
+        }
+        finally
+        {
+            _suppressApply = false;
+        }
 
         _localization.PropertyChanged += OnCultureChanged;
     }
@@ -93,9 +127,83 @@ public partial class DiscoveryEscapeHatchViewModel : ObservableObject
     public string RetryHint => _localization["EscapeHatch_RetryHint"];
 
     /// <summary>
-    /// The outcome of the dialog: <c>true</c> when the user submitted (the
-    /// entered paths are now persisted), <c>false</c> when they cancelled (no
-    /// writes). Read by the dialog service after <c>ShowDialog</c> returns.
+    /// The global discovery mode, identical to Settings. <c>false</c> = automatic
+    /// (rows read-only, Discover retries full automatic discovery);
+    /// <c>true</c> = manual (rows editable, Browse enabled). Write-through (see
+    /// <see cref="OnOverrideAutomaticDiscoveryChanged"/>). Cancel does not roll a
+    /// mode toggle back; it is already persisted.
+    /// </summary>
+    [ObservableProperty]
+    private bool _overrideAutomaticDiscovery;
+
+    /// <summary>
+    /// Persisted on every user toggle (write-through). Turning override off runs
+    /// <see cref="ISteamService.Discover"/> and refreshes the rows from the new
+    /// snapshot; turning it on preserves values and enables editing. Suppressed
+    /// during construction + row refresh.
+    /// </summary>
+    partial void OnOverrideAutomaticDiscoveryChanged(bool value)
+    {
+        if (_suppressApply)
+        {
+            return;
+        }
+
+        var config = _configLoader.Load();
+        config.Discovery.OverrideAutomaticDiscovery = value;
+        _configLoader.Save(config);
+
+        if (!value)
+        {
+            _steam.Discover();
+        }
+
+        RefreshRowsFromConfig();
+    }
+
+    /// <summary>
+    /// Forces one automatic discovery pass regardless of the current mode (calls
+    /// <see cref="ISteamService.Rediscover"/>), preserves the mode, and refreshes
+    /// the displayed rows from the resulting snapshot. Works in either mode.
+    /// Synchronous; no spinner or async plumbing. Cancel does not roll a Discover
+    /// back; it is already persisted.
+    /// </summary>
+    [RelayCommand]
+    private void Discover()
+    {
+        _steam.Rediscover();
+        RefreshRowsFromConfig();
+    }
+
+    /// <summary>
+    /// Re-reads the discovery snapshot from config + pushes the current values +
+    /// editability onto each existing row. Runs under <see cref="_suppressApply"/>
+    /// so the row Value setters do not fire a spurious save.
+    /// </summary>
+    private void RefreshRowsFromConfig()
+    {
+        var discovery = _configLoader.Load().Discovery;
+
+        _suppressApply = true;
+        try
+        {
+            foreach (var row in Rows)
+            {
+                row.Value = InitialValue(row.Field, discovery);
+                row.IsEditable = discovery.OverrideAutomaticDiscovery;
+            }
+        }
+        finally
+        {
+            _suppressApply = false;
+        }
+    }
+
+    /// <summary>
+    /// The outcome of the dialog: <c>true</c> when the user submitted, <c>false</c>
+    /// when they cancelled. Read by the dialog service after <c>ShowDialog</c>
+    /// returns. The toggle + Discover actions are write-through and persist
+    /// regardless of this value; only staged row edits are gated on Submit.
     /// </summary>
     public bool Result { get; private set; }
 
@@ -129,32 +237,40 @@ public partial class DiscoveryEscapeHatchViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Submit: one read-modify-save writing every row's value into the matching
-    /// <c>User*Path</c> in <see cref="DiscoveryConfig"/> (an empty value clears
-    /// the override -> auto-discover), then marks <see cref="Result"/> true. The
-    /// dialog closes on a true result (the view reads it after the command
-    /// runs). No auto-retry: the caller (the shell) does not re-launch; the user
-    /// clicks Launch again.
+    /// Submit: in manual mode, one read-modify-save writing every row's staged
+    /// value into the matching <see cref="DiscoveryConfig"/> property plus
+    /// <c>OverrideAutomaticDiscovery = true</c>, then marks <see cref="Result"/>
+    /// true. In automatic mode it does NOT rewrite path values (the toggle's
+    /// write-through already persisted the mode); it just marks Result true.
+    /// Submit never infers or flips the mode from the staged values. The dialog
+    /// closes on a true result. No auto-retry: the user clicks Launch again.
     /// </summary>
     [RelayCommand]
     private void Submit()
     {
-        var config = _configLoader.Load();
-        foreach (var row in Rows)
+        if (OverrideAutomaticDiscovery)
         {
-            var value = row.Value;
-            var written = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-            SetOverride(config.Discovery, row.Field.FieldName, written);
+            var config = _configLoader.Load();
+            foreach (var row in Rows)
+            {
+                var value = row.Value;
+                var written = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+                SetPath(config.Discovery, row.Field.FieldName, written);
+            }
+            config.Discovery.OverrideAutomaticDiscovery = true;
+            _configLoader.Save(config);
         }
-        _configLoader.Save(config);
 
         Result = true;
         OnPropertyChanged(nameof(Result));
     }
 
     /// <summary>
-    /// Cancel: marks <see cref="Result"/> false so the dialog closes without a
-    /// write. The shell sees <c>false</c> and aborts (no retry).
+    /// Cancel: marks <see cref="Result"/> false so the dialog closes. No staged
+    /// row edits are persisted. The mode toggle + Discover are write-through
+    /// actions and stay applied (they were already persisted when the user
+    /// pressed them); Cancel does not create a transaction across those service
+    /// calls.
     /// </summary>
     [RelayCommand]
     private void Cancel()
@@ -186,25 +302,25 @@ public partial class DiscoveryEscapeHatchViewModel : ObservableObject
     /// <summary>
     /// Maps a discovery field's canonical name to its setter on
     /// <see cref="DiscoveryConfig"/>. Mirrors the Settings VM's helper; kept
-    /// duplicated to keep the two VMs decoupled (the alternative, a shared
-    /// helper, would couple the escape-hatch to the Settings VM, which is a
-    /// worse trade than the small duplication).
+    /// duplicated to keep the two VMs decoupled (the field-name catalog is
+    /// already the shared source of truth; an abstraction coupling the
+    /// escape-hatch to Settings would be a worse trade than this small switch).
     /// </summary>
-    private static void SetOverride(DiscoveryConfig discovery, string fieldName, string? value)
+    private static void SetPath(DiscoveryConfig discovery, string fieldName, string? value)
     {
         switch (fieldName)
         {
             case "SteamInstallPath":
-                discovery.UserSteamInstallPath = value;
+                discovery.SteamInstallPath = value;
                 return;
             case "DarktideGameBinaryPath":
-                discovery.UserDarktideGameBinaryPath = value;
+                discovery.DarktideGameBinaryPath = value;
                 return;
             case "CompatdataPath":
-                discovery.UserCompatdataPath = value;
+                discovery.CompatdataPath = value;
                 return;
             case "ProtonBinaryPath":
-                discovery.UserProtonBinaryPath = value;
+                discovery.ProtonBinaryPath = value;
                 return;
             default:
                 return;
@@ -212,16 +328,16 @@ public partial class DiscoveryEscapeHatchViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Reads the current override value for a field from config (or empty when
-    /// it is null/whitespace). Mirrors the Settings VM's helper.
+    /// Reads the current stored value for a field from config (or empty when it
+    /// is null). Mirrors the Settings VM's helper.
     /// </summary>
     private static string InitialValue(DiscoveryField field, DiscoveryConfig discovery) =>
         field.FieldName switch
         {
-            "SteamInstallPath" => discovery.UserSteamInstallPath ?? string.Empty,
-            "DarktideGameBinaryPath" => discovery.UserDarktideGameBinaryPath ?? string.Empty,
-            "CompatdataPath" => discovery.UserCompatdataPath ?? string.Empty,
-            "ProtonBinaryPath" => discovery.UserProtonBinaryPath ?? string.Empty,
+            "SteamInstallPath" => discovery.SteamInstallPath ?? string.Empty,
+            "DarktideGameBinaryPath" => discovery.DarktideGameBinaryPath ?? string.Empty,
+            "CompatdataPath" => discovery.CompatdataPath ?? string.Empty,
+            "ProtonBinaryPath" => discovery.ProtonBinaryPath ?? string.Empty,
             _ => string.Empty,
         };
 }

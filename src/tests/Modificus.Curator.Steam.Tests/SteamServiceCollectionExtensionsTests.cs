@@ -89,6 +89,7 @@ public sealed class SteamServiceCollectionExtensionsTests
             Assert.NotNull(opts.LinuxDefaultSteamRoot);
             Assert.NotNull(opts.LinuxFlatpakSteamRoot);
             Assert.NotNull(opts.LinuxCompatibilityToolsDir);
+            Assert.NotEmpty(opts.LinuxSystemCompatibilityToolsDirs);
         }
         else
         {

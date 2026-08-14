@@ -5,28 +5,32 @@ using Modificus.Curator.UI.Localization;
 namespace Modificus.Curator.UI.ViewModels;
 
 /// <summary>
-/// One editable discovery-path row shared by the Settings window and the
-/// discovery escape-hatch. Carries the immutable <see cref="Field"/> metadata
-/// (from <see cref="Settings.DiscoveryField"/>), the localized <see cref="Label"/>
-/// (which refreshes on a culture change), and the editable <see cref="Value"/>
-/// string the TextBox two-way binds. The browse button (folder / file picker)
-/// lives in the view code-behind and sets <see cref="Value"/> directly after a
-/// pick; the parent VM decides what a change means: the Settings window writes
-/// through immediately (Preferences pattern), the escape-hatch stages the
-/// values and writes them all on submit.
+/// One discovery-path row shared by the Settings destination and the discovery
+/// escape-hatch. Carries the immutable <see cref="Field"/> metadata (from
+/// <see cref="Settings.DiscoveryField"/>), the localized <see cref="Label"/>
+/// (which refreshes on a culture change), the editable <see cref="Value"/>
+/// string the TextBox two-way binds, and <see cref="IsEditable"/> which drives
+/// both the TextBox's read-only state and the Browse button's enabled state.
+/// The browse button (folder / file picker) lives in the view code-behind and
+/// sets <see cref="Value"/> directly after a pick; the parent VM decides what a
+/// change means: Settings writes through immediately when in manual mode, the
+/// escape-hatch stages the values and writes them all on submit.
 /// </summary>
 /// <remarks>
 /// <para><b>Optional change callback:</b> when supplied, the row invokes it on
 /// every genuine Value change (after the initial restore). The Settings VM uses
-/// it for its write-through; the escape-hatch VM passes <c>null</c> and reads
-/// <see cref="Value"/> at submit time. Either is fine; the row has no opinion
-/// about persistence.</para>
+/// it for its write-through (it guards it on manual mode itself); the
+/// escape-hatch VM passes <c>null</c> and reads <see cref="Value"/> at submit
+/// time. Either is fine; the row has no opinion about persistence.</para>
+/// <para><b>IsEditable is owned by the parent VM:</b> the row never sets it. It
+/// reflects the current discovery mode (manual on, automatic off) and is pushed
+/// down by the parent whenever the mode toggles or the rows refresh.</para>
 /// <para><b>Localized label is live:</b> <see cref="Label"/> resolves through
 /// the <see cref="LocalizationService"/> and re-fires on a culture change so a
 /// language switch mid-dialog refreshes the field labels alongside the rest of
 /// the UI.</para>
 /// </remarks>
-public sealed class DiscoveryFieldRowViewModel : ObservableObject
+public sealed partial class DiscoveryFieldRowViewModel : ObservableObject
 {
     private readonly LocalizationService _localization;
     private readonly Action<DiscoveryFieldRowViewModel>? _onValueChanged;
@@ -66,9 +70,9 @@ public sealed class DiscoveryFieldRowViewModel : ObservableObject
     public string Label => _localization[Field.LabelResxKey];
 
     /// <summary>
-    /// The TextBox value. An empty / whitespace string clears the override
-    /// (the parent VM maps empty back to auto-discover by writing
-    /// <c>null</c> into <c>Discovery.User*Path</c>). Setting to a new value
+    /// The TextBox value. An empty / whitespace string clears the field (the
+    /// parent VM maps empty back to <c>null</c> on the matching
+    /// <see cref="Config.DiscoveryConfig"/> property). Setting to a new value
     /// invokes the optional change callback after the property-changed event
     /// fires.
     /// </summary>
@@ -83,6 +87,17 @@ public sealed class DiscoveryFieldRowViewModel : ObservableObject
             }
         }
     }
+
+    /// <summary>
+    /// Whether this row's TextBox is editable and its Browse button enabled.
+    /// Reflects the current discovery mode (manual on, automatic off); the
+    /// parent VM pushes it down whenever the mode toggles or the rows refresh.
+    /// Views bind <c>TextBox.IsReadOnly</c> to <c>!IsEditable</c> (read-only
+    /// paths stay selectable for copying) and the Browse button's
+    /// <c>IsEnabled</c> to <see cref="IsEditable"/>.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isEditable;
 
     /// <summary>
     /// Detaches the culture-change subscription so this short-lived row is

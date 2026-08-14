@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Modificus.Curator.General;
+using Modificus.Curator.Steam;
 using Modificus.Curator.UI.Localization;
 using Modificus.Curator.UI.ViewModels;
 using Modificus.Curator.UI.Views;
@@ -37,6 +38,7 @@ public sealed class DialogService : IDialogService
     private readonly Window _owner;
     private readonly LocalizationService _localization;
     private readonly IConfigLoader _configLoader;
+    private readonly ISteamService _steam;
 
     /// <param name="owner">The window dialog parents are shown over (the main
     /// window).</param>
@@ -44,15 +46,21 @@ public sealed class DialogService : IDialogService
     /// Welcome title, the import VM, and the escape-hatch VM (header + per-row
     /// labels).</param>
     /// <param name="configLoader">The live config reader/writer; handed to the
-    /// escape-hatch VM (one read-modify-save on submit).</param>
+    /// escape-hatch VM (its toggle + Discover + submit do read-modify-saves).</param>
+    /// <param name="steamService">The Steam discovery service; handed to the
+    /// escape-hatch VM so its global override toggle + Discover button drive the
+    /// same <see cref="ISteamService.Discover"/>/<see cref="ISteamService.Rediscover"/>
+    /// semantics as Settings.</param>
     public DialogService(
         Window owner,
         LocalizationService localization,
-        IConfigLoader configLoader)
+        IConfigLoader configLoader,
+        ISteamService steamService)
     {
         _owner = owner;
         _localization = localization;
         _configLoader = configLoader;
+        _steam = steamService ?? throw new ArgumentNullException(nameof(steamService));
     }
 
     /// <summary>
@@ -161,7 +169,7 @@ public sealed class DialogService : IDialogService
             return false;
         }
 
-        var viewModel = new DiscoveryEscapeHatchViewModel(missingFields, _configLoader, _localization);
+        var viewModel = new DiscoveryEscapeHatchViewModel(missingFields, _configLoader, _steam, _localization);
         var window = new DiscoveryEscapeHatchDialog
         {
             DataContext = viewModel,
