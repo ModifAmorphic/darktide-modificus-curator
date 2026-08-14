@@ -16,6 +16,10 @@ Target architecture:
 - **Microsoft.Extensions.Logging + Serilog** -- structured logging (console +
   file sinks), config-honored level/file.
 - **Microsoft.Extensions.Configuration** -- JSON config → `CuratorConfig`.
+- **ValveKeyValue** 0.70.0.499 (MIT) -- text + binary KV1 parsing for Steam's
+  `config.vdf`, `compatibilitytool.vdf`, `appmanifest_*.acf`, and the binary KV1
+  blobs inside `appinfo.vdf` (the `steam` library; the appinfo outer container is
+  parsed by the narrow internal `SteamAppInfoReader`).
 - **xUnit** -- tests.
 
 ## Project layout

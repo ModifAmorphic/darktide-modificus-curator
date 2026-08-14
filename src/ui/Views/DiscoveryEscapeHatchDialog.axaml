@@ -35,6 +35,22 @@
                      TextWrapping="Wrap"
                      FontWeight="SemiBold" />
 
+          <!--
+            The same global override toggle + forced Discover as Settings, with
+            identical semantics. Both are write-through; Cancel does not roll
+            them back. The toggle persists the mode (off runs ordinary Discover,
+            on enables editing); Discover forces a rediscover in either mode.
+            Row editability follows the mode through each row's IsEditable.
+          -->
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <CheckBox IsChecked="{Binding OverrideAutomaticDiscovery, Mode=TwoWay}"
+                      Content="{ReflectionBinding [Discovery_OverrideToggle], Source={StaticResource Loc}}"
+                      ToolTip.Tip="{ReflectionBinding [Discovery_OverrideToggleTooltip], Source={StaticResource Loc}}" />
+            <Button Content="{ReflectionBinding [Discovery_DiscoverButton], Source={StaticResource Loc}}"
+                    Command="{Binding DiscoverCommand}"
+                    VerticalAlignment="Center" />
+          </StackPanel>
+
           <ItemsControl ItemsSource="{Binding Rows}">
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="vm:DiscoveryFieldRowViewModel">
@@ -44,11 +60,13 @@
                              VerticalAlignment="Center" />
                   <TextBox Grid.Column="1"
                            Text="{Binding Value, Mode=TwoWay}"
+                           IsReadOnly="{Binding !IsEditable}"
                            Margin="8,0,0,0"
                            VerticalAlignment="Center" />
                   <Button Grid.Column="2"
                           Content="{ReflectionBinding [Discovery_BrowseButton], Source={StaticResource Loc}}"
                           Click="Browse_Click"
+                          IsEnabled="{Binding IsEditable}"
                           CommandParameter="{Binding Field.BrowseKind}"
                           MinWidth="80" Margin="8,0,0,0"
                           VerticalAlignment="Center" />

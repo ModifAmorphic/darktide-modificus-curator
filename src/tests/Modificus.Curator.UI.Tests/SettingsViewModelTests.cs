@@ -1,5 +1,6 @@
 using System.IO;
 using Modificus.Curator.Config;
+using Modificus.Curator.Steam;
 using Modificus.Curator.UI.Localization;
 using Modificus.Curator.UI.Settings;
 using Modificus.Curator.UI.ViewModels;
@@ -9,11 +10,10 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Modificus.Curator.UI.Tests;
 
 /// <summary>
-/// Tests for <see cref="SettingsViewModel"/>: discovery fields are pre-filled
-/// from config + written back via read-modify-save, and the two Storage
-/// section commands open the OS file manager at the Curator data root +
-/// profiles root (or surface a failure alert) via the injectable launcher
-/// seam.
+/// Tests for <see cref="SettingsViewModel"/>: the discovery section's global
+/// override mode + forced Discover, platform-gated rows + their editability,
+/// manual-mode write-through, the Storage section commands, and the rehydrate
+/// behavior. The app-update section has its own test file.
 /// </summary>
 public sealed class SettingsViewModelTests
 {
@@ -21,119 +21,76 @@ public sealed class SettingsViewModelTests
     private static readonly LocalizationService Localization = new();
 
     /// <summary>Builds a VM wired to the supplied (or default) fakes.</summary>
-    private static (SettingsViewModel vm, FakeConfigLoader loader, FakeDialogService dialogs) Build(
+    private static (SettingsViewModel vm, FakeConfigLoader loader, FakeDialogService dialogs, FakeSteamService steam) Build(
         DiscoveryConfig? discovery = null,
         string? profilesBaseFolder = null,
         FakeAppUpdateService? appUpdate = null,
         FakeDialogService? dialogs = null,
-        Func<string, bool>? launchExternalPath = null)
+        Func<string, bool>? launchExternalPath = null,
+        FakeSteamService? steam = null)
     {
         var config = CuratorConfig.CreateDefault();
         if (discovery is not null) config.Discovery = discovery;
         if (profilesBaseFolder is not null) config.ProfilesBaseFolder = profilesBaseFolder;
         var loader = new FakeConfigLoader { Config = config };
         dialogs ??= new FakeDialogService();
+        steam ??= new FakeSteamService();
         var vm = new SettingsViewModel(
-            loader, Localization,
+            loader, steam, Localization,
             appUpdate ?? new FakeAppUpdateService(),
             dialogs,
             invokeOnUi: static action => action(),
             Logger,
             launchExternalPath);
-        return (vm, loader, dialogs);
+        return (vm, loader, dialogs, steam);
+    }
+
+    private static DiscoveryConfig Manual(params Action<DiscoveryConfig>[] configure)
+    {
+        var d = new DiscoveryConfig { OverrideAutomaticDiscovery = true };
+        foreach (var c in configure) c(d);
+        return d;
     }
 
     private static DiscoveryFieldRowViewModel Row(SettingsViewModel vm, string fieldName) =>
         vm.DiscoveryRows.First(r => r.Field.FieldName == fieldName);
 
-    // ---- pre-fill from config --------------------------------------------
+    // ---- rows + editability by mode --------------------------------------
 
     [Fact]
-    public void Discovery_rows_are_pre_filled_from_config()
+    public void Default_automatic_mode_renders_platform_rows_all_read_only()
     {
-        var discovery = new DiscoveryConfig
-        {
-            UserSteamInstallPath = "/steam",
-            UserDarktideGameBinaryPath = "/darktide.exe",
-            UserCompatdataPath = "/compat",
-            UserProtonBinaryPath = "/proton",
-        };
+        var (vm, _, _, _) = Build();
 
-        var (vm, _, _) = Build(discovery);
-
-        // Steam + Darktide rows always render.
-        Assert.Equal("/steam", Row(vm, "SteamInstallPath").Value);
-        Assert.Equal("/darktide.exe", Row(vm, "DarktideGameBinaryPath").Value);
-        // Compatdata + Proton rows render on Linux only (platform-gated).
         if (OperatingSystem.IsLinux())
         {
-            Assert.Equal("/compat", Row(vm, "CompatdataPath").Value);
-            Assert.Equal("/proton", Row(vm, "ProtonBinaryPath").Value);
+            Assert.Equal(4, vm.DiscoveryRows.Count);
         }
+        else
+        {
+            Assert.Equal(2, vm.DiscoveryRows.Count);
+        }
+
+        Assert.False(vm.OverrideAutomaticDiscovery);
+        Assert.All(vm.DiscoveryRows, row => Assert.False(row.IsEditable));
     }
 
     [Fact]
-    public void Discovery_rows_are_empty_when_overrides_are_unset()
+    public void Manual_mode_renders_editable_rows()
     {
-        // All-null discovery (the default): every rendered row's TextBox starts
-        // empty.
-        var (vm, _, _) = Build();
+        var (vm, _, _, _) = Build(new DiscoveryConfig { OverrideAutomaticDiscovery = true });
 
-        Assert.Equal(string.Empty, Row(vm, "SteamInstallPath").Value);
-        Assert.Equal(string.Empty, Row(vm, "DarktideGameBinaryPath").Value);
-        if (OperatingSystem.IsLinux())
-        {
-            Assert.Equal(string.Empty, Row(vm, "CompatdataPath").Value);
-            Assert.Equal(string.Empty, Row(vm, "ProtonBinaryPath").Value);
-        }
-    }
-
-    [Fact]
-    public void Discovery_rows_are_pre_filled_after_startup_Discover_populates_config()
-    {
-        // End-to-end (no real Steam layout, just the persistence contract): the
-        // startup Discover populates the persisted overrides (simulating the
-        // composition root's startup call writing the healed values), and the
-        // Settings VM, which reads the live config, shows them rather than
-        // blanks. This is the "Settings shows non-blank fields" guarantee from
-        // the validate + heal + persist pipeline (Track C review fix).
-        var loader = new FakeConfigLoader { Config = CuratorConfig.CreateDefault() };
-
-        // Simulate the startup Discover having healed every field + persisted it
-        // (a single Save carrying the four writes). The persisted values are
-        // what the Settings VM should show.
-        var healed = new DiscoveryConfig
-        {
-            UserSteamInstallPath = "/resolved/steam",
-            UserDarktideGameBinaryPath = "/resolved/darktide.exe",
-            UserCompatdataPath = "/resolved/compatdata",
-            UserProtonBinaryPath = "/resolved/proton",
-        };
-        var persisted = CuratorConfig.CreateDefault();
-        persisted.Discovery = healed;
-        loader.Save(persisted);
-
-        var vm = new SettingsViewModel(loader, Localization,
-            new FakeAppUpdateService(), new FakeDialogService(),
-            invokeOnUi: static action => action(), Logger);
-
-        Assert.Equal("/resolved/steam", Row(vm, "SteamInstallPath").Value);
-        Assert.Equal("/resolved/darktide.exe", Row(vm, "DarktideGameBinaryPath").Value);
-        if (OperatingSystem.IsLinux())
-        {
-            Assert.Equal("/resolved/compatdata", Row(vm, "CompatdataPath").Value);
-            Assert.Equal("/resolved/proton", Row(vm, "ProtonBinaryPath").Value);
-        }
+        Assert.True(vm.OverrideAutomaticDiscovery);
+        Assert.All(vm.DiscoveryRows, row => Assert.True(row.IsEditable));
     }
 
     [Fact]
     public void Discovery_rows_match_the_platforms_expected_fields_in_catalog_order()
     {
         // Platform-gated: Windows renders only the Steam install + Darktide
-        // binary rows (the compatdata + Proton overrides are Linux-only:
-        // WindowsLaunchStrategy ignores them, so they would be silently
-        // ineffective rows). Linux renders all four, in catalog order.
-        var (vm, _, _) = Build();
+        // binary rows (the compatdata + Proton fields are Linux-only). Linux
+        // renders all four, in catalog order.
+        var (vm, _, _, _) = Build();
 
         if (OperatingSystem.IsLinux())
         {
@@ -151,113 +108,326 @@ public sealed class SettingsViewModelTests
         }
     }
 
-    // ---- write-through (discovery fields) --------------------------------
+    [Fact]
+    public void Discovery_rows_are_pre_filled_from_config()
+    {
+        var discovery = new DiscoveryConfig
+        {
+            SteamInstallPath = "/steam",
+            DarktideGameBinaryPath = "/darktide.exe",
+            CompatdataPath = "/compat",
+            ProtonBinaryPath = "/proton",
+        };
+
+        var (vm, _, _, _) = Build(discovery);
+
+        Assert.Equal("/steam", Row(vm, "SteamInstallPath").Value);
+        Assert.Equal("/darktide.exe", Row(vm, "DarktideGameBinaryPath").Value);
+        if (OperatingSystem.IsLinux())
+        {
+            Assert.Equal("/compat", Row(vm, "CompatdataPath").Value);
+            Assert.Equal("/proton", Row(vm, "ProtonBinaryPath").Value);
+        }
+    }
 
     [Fact]
-    public void Editing_a_discovery_field_writes_the_override_via_read_modify_save()
+    public void Discovery_rows_are_empty_when_paths_are_unset()
     {
-        var (vm, loader, _) = Build();
+        var (vm, _, _, _) = Build();
+
+        Assert.Equal(string.Empty, Row(vm, "SteamInstallPath").Value);
+        Assert.Equal(string.Empty, Row(vm, "DarktideGameBinaryPath").Value);
+        if (OperatingSystem.IsLinux())
+        {
+            Assert.Equal(string.Empty, Row(vm, "CompatdataPath").Value);
+            Assert.Equal(string.Empty, Row(vm, "ProtonBinaryPath").Value);
+        }
+    }
+
+    // ---- toggle: on ------------------------------------------------------
+    //
+    // Turning override on persists true, preserves the current snapshot, enables
+    // editing, and does NOT discover.
+
+    [Fact]
+    public void Toggling_override_on_persists_true_without_discovery()
+    {
+        var discovery = new DiscoveryConfig
+        {
+            SteamInstallPath = "/steam",
+            OverrideAutomaticDiscovery = false,
+        };
+        var (vm, loader, _, steam) = Build(discovery);
+
+        vm.OverrideAutomaticDiscovery = true;
+
+        Assert.Equal(1, loader.SaveCalls);
+        Assert.True(loader.LastSaved!.Discovery.OverrideAutomaticDiscovery);
+        // No discover/rediscover on the on path.
+        Assert.Equal(0, steam.DiscoverCalls);
+        Assert.Equal(0, steam.RediscoverCalls);
+        // Values preserved (not rediscovered, not cleared).
+        Assert.Equal("/steam", Row(vm, "SteamInstallPath").Value);
+    }
+
+    [Fact]
+    public void Toggling_override_on_enables_editing_on_existing_rows()
+    {
+        var (vm, _, _, _) = Build();
+        var row = Row(vm, "SteamInstallPath");
+        Assert.False(row.IsEditable);
+
+        vm.OverrideAutomaticDiscovery = true;
+
+        Assert.True(row.IsEditable);
+    }
+
+    // ---- toggle: off -----------------------------------------------------
+    //
+    // Turning override off persists false, runs ordinary Discover (automatic),
+    // and refreshes every row from the resulting snapshot.
+
+    [Fact]
+    public void Toggling_override_off_persists_false_and_invokes_discover_once()
+    {
+        var (vm, loader, _, steam) = Build(new DiscoveryConfig { OverrideAutomaticDiscovery = true });
+
+        vm.OverrideAutomaticDiscovery = false;
+
+        // At least one save for the toggle; the FakeSteamService does not write
+        // config (it is a passive double), so only the toggle's own save lands.
+        Assert.True(loader.SaveCalls >= 1);
+        Assert.False(loader.LastSaved!.Discovery.OverrideAutomaticDiscovery);
+        Assert.Equal(1, steam.DiscoverCalls);
+        Assert.Equal(0, steam.RediscoverCalls);
+    }
+
+    [Fact]
+    public void Toggling_override_off_refreshes_rows_from_config_after_discover()
+    {
+        // Simulate the service's Discover persisting a fresh snapshot into the
+        // live config (the real service does this; the fake side-effect mirrors
+        // it), so the refresh picks up the new values.
+        var loader = new FakeConfigLoader
+        {
+            Config = new CuratorConfig
+            {
+                Discovery = new DiscoveryConfig
+                {
+                    OverrideAutomaticDiscovery = true,
+                    SteamInstallPath = "/manual",
+                },
+            },
+        };
+        var steam = new FakeSteamService
+        {
+            OnDiscover = () =>
+            {
+                var c = loader.Load();
+                c.Discovery.SteamInstallPath = "/auto/steam";
+                c.Discovery.DarktideGameBinaryPath = "/auto/darktide";
+                loader.Save(c);
+            },
+        };
+        var vm = new SettingsViewModel(
+            loader, steam, Localization,
+            new FakeAppUpdateService(), new FakeDialogService(),
+            invokeOnUi: static action => action(), Logger);
+
+        vm.OverrideAutomaticDiscovery = false;
+
+        Assert.False(vm.OverrideAutomaticDiscovery);
+        Assert.Equal("/auto/steam", Row(vm, "SteamInstallPath").Value);
+        Assert.Equal("/auto/darktide", Row(vm, "DarktideGameBinaryPath").Value);
+        Assert.All(vm.DiscoveryRows, row => Assert.False(row.IsEditable));
+    }
+
+    // ---- Discover command ------------------------------------------------
+    //
+    // Discover forces a Rediscover regardless of mode, preserves the mode, and
+    // refreshes every row including cleared/null fields.
+
+    [Fact]
+    public void Discover_command_invokes_rediscover_and_preserves_mode()
+    {
+        var (vm, loader, _, steam) = Build(Manual());
+
+        vm.DiscoverCommand.Execute(null);
+
+        Assert.Equal(1, steam.RediscoverCalls);
+        Assert.Equal(0, steam.DiscoverCalls);
+        // Mode unchanged (the fake does not write config, so the live config +
+        // the VM still reflect the initial manual mode).
+        Assert.True(vm.OverrideAutomaticDiscovery);
+        Assert.True(loader.Config.Discovery.OverrideAutomaticDiscovery);
+        // Discover itself does not persist (the service owns the snapshot write;
+        // the passive fake writes nothing).
+        Assert.Equal(0, loader.SaveCalls);
+    }
+
+    [Fact]
+    public void Discover_command_refreshes_rows_including_cleared_fields()
+    {
+        // Start with a manual Steam path; the Rediscover side-effect clears it
+        // (a partial result). The row should reflect the cleared value.
+        var loader = new FakeConfigLoader
+        {
+            Config = new CuratorConfig
+            {
+                Discovery = new DiscoveryConfig
+                {
+                    OverrideAutomaticDiscovery = true,
+                    SteamInstallPath = "/stale",
+                },
+            },
+        };
+        var steam = new FakeSteamService
+        {
+            OnRediscover = () =>
+            {
+                var c = loader.Load();
+                c.Discovery.SteamInstallPath = null;
+                loader.Save(c);
+            },
+        };
+        var vm = new SettingsViewModel(
+            loader, steam, Localization,
+            new FakeAppUpdateService(), new FakeDialogService(),
+            invokeOnUi: static action => action(), Logger);
+
+        Assert.Equal("/stale", Row(vm, "SteamInstallPath").Value);
+
+        vm.DiscoverCommand.Execute(null);
+
+        Assert.Equal(string.Empty, Row(vm, "SteamInstallPath").Value);
+    }
+
+    // ---- write-through (manual mode only) --------------------------------
+
+    [Fact]
+    public void Editing_a_discovery_field_in_manual_mode_writes_neutral_property_via_read_modify_save()
+    {
+        var (vm, loader, _, _) = Build(Manual());
 
         Row(vm, "SteamInstallPath").Value = "/new/steam";
 
         Assert.Equal(1, loader.SaveCalls);
-        Assert.Equal("/new/steam", loader.LastSaved!.Discovery.UserSteamInstallPath);
+        Assert.Equal("/new/steam", loader.LastSaved!.Discovery.SteamInstallPath);
+        // Other discovery properties + config sections untouched (read-modify-save).
+        Assert.Null(loader.LastSaved.Discovery.DarktideGameBinaryPath);
+        Assert.Equal(CuratorConfig.CreateDefault().ProfilesBaseFolder, loader.LastSaved.ProfilesBaseFolder);
     }
 
     [Fact]
-    public void Clearing_a_discovery_field_writes_null_so_it_falls_back_to_auto()
+    public void Clearing_a_discovery_field_in_manual_mode_writes_null()
     {
-        var discovery = new DiscoveryConfig { UserSteamInstallPath = "/old" };
-        var (vm, loader, _) = Build(discovery);
+        var (vm, loader, _, _) = Build(Manual(d => d.SteamInstallPath = "/old"));
 
         Row(vm, "SteamInstallPath").Value = "";
 
         Assert.Equal(1, loader.SaveCalls);
-        Assert.Null(loader.LastSaved!.Discovery.UserSteamInstallPath);
+        Assert.Null(loader.LastSaved!.Discovery.SteamInstallPath);
     }
 
     [Fact]
-    public void Initial_restore_does_not_save_config()
+    public void Programmatic_row_changes_in_automatic_mode_do_not_persist()
     {
-        // Pre-filling the rows must NOT trigger a write (each value already
-        // matches what is persisted; re-writing would be a noisy no-op).
-        var (_, loader, _) = Build(new DiscoveryConfig { UserSteamInstallPath = "/x" });
+        // Defensive: even if a row write callback fires while in automatic mode
+        // (e.g. the view two-way binds during a refresh), nothing is saved.
+        var (vm, loader, _, _) = Build(); // automatic
+
+        Row(vm, "SteamInstallPath").Value = "/ignored";
 
         Assert.Equal(0, loader.SaveCalls);
     }
 
     [Fact]
-    public void Editing_each_field_persists_progressively_via_read_modify_save()
+    public void Editing_each_field_persists_progressively_in_manual_mode()
     {
-        // Each edit is its own read-modify-save: the second save picks up the
-        // first edit's persisted value (FakeConfigLoader mirrors the real
-        // loader's round-trip), so both overrides land.
-        var (vm, loader, _) = Build();
+        var (vm, loader, _, _) = Build(Manual());
 
         Row(vm, "DarktideGameBinaryPath").Value = "/darktide.exe";
         Row(vm, "SteamInstallPath").Value = "/new/steam";
 
         Assert.Equal(2, loader.SaveCalls);
-        Assert.Equal("/darktide.exe", loader.LastSaved!.Discovery.UserDarktideGameBinaryPath);
-        Assert.Equal("/new/steam", loader.LastSaved.Discovery.UserSteamInstallPath);
+        Assert.Equal("/darktide.exe", loader.LastSaved!.Discovery.DarktideGameBinaryPath);
+        Assert.Equal("/new/steam", loader.LastSaved.Discovery.SteamInstallPath);
     }
 
     // ---- RefreshFromConfig (hosted rehydrate) ----------------------------
     //
     // The hosted VM stays alive across navigation. When the discovery escape-
-    // hatch (or any other surface) writes new overrides + a new CheckOnStartup
-    // to config while Settings is away, RefreshFromConfig reflects them on the
-    // next visit without persisting.
+    // hatch (or any other surface) writes new paths + mode to config while
+    // Settings is away, RefreshFromConfig reflects them on the next visit
+    // without persisting.
 
     [Fact]
     public void RefreshFromConfig_reflects_external_changes_without_saving()
     {
-        var (vm, loader, _) = Build();
+        var (vm, loader, _, _) = Build();
         Assert.True(vm.CheckOnStartup); // default
 
-        // Simulate external writes to the live config (e.g. the escape-hatch).
         var external = CuratorConfig.CreateDefault();
         external.Discovery = new DiscoveryConfig
         {
-            UserSteamInstallPath = "/ext/steam",
-            UserDarktideGameBinaryPath = "/ext/darktide.exe",
-            UserCompatdataPath = "/ext/compat",
-            UserProtonBinaryPath = "/ext/proton",
+            OverrideAutomaticDiscovery = true,
+            SteamInstallPath = "/ext/steam",
+            DarktideGameBinaryPath = "/ext/darktide.exe",
+            CompatdataPath = "/ext/compat",
+            ProtonBinaryPath = "/ext/proton",
         };
         external.AppUpdates.CheckOnStartup = false;
         loader.Config = external;
 
         vm.RefreshFromConfig();
 
+        Assert.True(vm.OverrideAutomaticDiscovery);
         Assert.Equal("/ext/steam", Row(vm, "SteamInstallPath").Value);
         Assert.Equal("/ext/darktide.exe", Row(vm, "DarktideGameBinaryPath").Value);
-        // Compatdata + Proton are platform-gated rows; assert only on Linux.
-        if (OperatingSystem.IsLinux())
-        {
-            Assert.Equal("/ext/compat", Row(vm, "CompatdataPath").Value);
-            Assert.Equal("/ext/proton", Row(vm, "ProtonBinaryPath").Value);
-        }
+        Assert.All(vm.DiscoveryRows, row => Assert.True(row.IsEditable));
         Assert.False(vm.CheckOnStartup);
-        // Zero saves: rehydrating from config must not write back.
+        Assert.Equal(0, loader.SaveCalls);
+    }
+
+    [Fact]
+    public void RefreshFromConfig_rehydrates_mode_values_and_editability()
+    {
+        var (vm, loader, _, _) = Build(new DiscoveryConfig
+        {
+            OverrideAutomaticDiscovery = false,
+            SteamInstallPath = "/auto",
+        });
+        Assert.False(vm.OverrideAutomaticDiscovery);
+        Assert.False(Row(vm, "SteamInstallPath").IsEditable);
+
+        // External surface flips to manual + new values.
+        loader.Config = CuratorConfig.CreateDefault();
+        loader.Config.Discovery = new DiscoveryConfig
+        {
+            OverrideAutomaticDiscovery = true,
+            SteamInstallPath = "/manual/steam",
+        };
+
+        vm.RefreshFromConfig();
+
+        Assert.True(vm.OverrideAutomaticDiscovery);
+        Assert.Equal("/manual/steam", Row(vm, "SteamInstallPath").Value);
+        Assert.True(Row(vm, "SteamInstallPath").IsEditable);
         Assert.Equal(0, loader.SaveCalls);
     }
 
     [Fact]
     public void RefreshFromConfig_preserves_the_same_row_object_instances()
     {
-        // Rehydrating must update the existing rows' values in place rather than
-        // replacing the collection (which would re-bind + lose any per-row view
-        // state on a hosted page).
-        var (vm, loader, _) = Build();
+        var (vm, loader, _, _) = Build();
         var before = vm.DiscoveryRows.ToArray();
 
         var external = CuratorConfig.CreateDefault();
-        external.Discovery = new DiscoveryConfig { UserSteamInstallPath = "/new/steam" };
+        external.Discovery = new DiscoveryConfig { SteamInstallPath = "/new/steam" };
         loader.Config = external;
 
         vm.RefreshFromConfig();
 
-        // Same instances, same order (reference equality).
         Assert.True(before.SequenceEqual(vm.DiscoveryRows));
         Assert.Equal("/new/steam", Row(vm, "SteamInstallPath").Value);
         Assert.Equal(0, loader.SaveCalls);
@@ -266,8 +436,7 @@ public sealed class SettingsViewModelTests
     [Fact]
     public void RefreshFromConfig_is_safe_and_repeatable()
     {
-        // Idempotent + repeatable: calling it multiple times writes nothing.
-        var (vm, loader, _) = Build();
+        var (vm, loader, _, _) = Build();
 
         vm.RefreshFromConfig();
         vm.RefreshFromConfig();
@@ -277,18 +446,10 @@ public sealed class SettingsViewModelTests
     }
 
     [Fact]
-    public void RefreshFromConfig_does_not_save_when_clearing_an_override()
+    public void Construction_does_not_save_config()
     {
-        // Restoring an empty value (a cleared override) must not save either:
-        // the suppress guard covers the row callback regardless of direction.
-        var (vm, loader, _) = Build(new DiscoveryConfig { UserSteamInstallPath = "/old" });
-        Assert.Equal("/old", Row(vm, "SteamInstallPath").Value);
+        var (_, loader, _, _) = Build(new DiscoveryConfig { SteamInstallPath = "/x" });
 
-        loader.Config = CuratorConfig.CreateDefault(); // all overrides cleared
-
-        vm.RefreshFromConfig();
-
-        Assert.Equal(string.Empty, Row(vm, "SteamInstallPath").Value);
         Assert.Equal(0, loader.SaveCalls);
     }
 
@@ -309,7 +470,7 @@ public sealed class SettingsViewModelTests
     {
         Directory.CreateDirectory(AppPaths.AppDataDir);
         string? received = null;
-        var (vm, _, dialogs) = Build(
+        var (vm, _, dialogs, _) = Build(
             launchExternalPath: p => { received = p; return true; });
 
         await vm.OpenDataFolderCommand.ExecuteAsync(null);
@@ -322,7 +483,7 @@ public sealed class SettingsViewModelTests
     public async Task OpenDataFolder_alerts_when_the_launcher_returns_false()
     {
         Directory.CreateDirectory(AppPaths.AppDataDir);
-        var (vm, _, dialogs) = Build(launchExternalPath: _ => false);
+        var (vm, _, dialogs, _) = Build(launchExternalPath: _ => false);
 
         await vm.OpenDataFolderCommand.ExecuteAsync(null);
 
@@ -334,11 +495,8 @@ public sealed class SettingsViewModelTests
     [Fact]
     public async Task OpenDataFolder_alerts_and_does_not_propagate_when_the_launcher_throws()
     {
-        // The launcher seam's default only catches a narrow exception set; a VM
-        // that calls it must not let an unexpected throw escape to the UI. The
-        // command catches, logs, and surfaces the failure alert instead.
         Directory.CreateDirectory(AppPaths.AppDataDir);
-        var (vm, _, dialogs) = Build(
+        var (vm, _, dialogs, _) = Build(
             launchExternalPath: _ => throw new InvalidOperationException("boom"));
 
         await vm.OpenDataFolderCommand.ExecuteAsync(null);
@@ -354,7 +512,7 @@ public sealed class SettingsViewModelTests
     public async Task OpenProfilesFolder_is_a_no_op_when_ProfilesBaseFolder_is_empty()
     {
         var called = false;
-        var (vm, _, dialogs) = Build(
+        var (vm, _, dialogs, _) = Build(
             profilesBaseFolder: "",
             launchExternalPath: _ => called = true);
 
@@ -368,7 +526,7 @@ public sealed class SettingsViewModelTests
     public async Task OpenProfilesFolder_is_a_no_op_when_the_directory_does_not_exist()
     {
         var called = false;
-        var (vm, _, dialogs) = Build(
+        var (vm, _, dialogs, _) = Build(
             profilesBaseFolder: Path.Combine(Path.GetTempPath(), "curator-does-not-exist-" + Guid.NewGuid()),
             launchExternalPath: _ => called = true);
 
@@ -382,7 +540,7 @@ public sealed class SettingsViewModelTests
     public async Task OpenProfilesFolder_launches_the_seam_with_the_current_path()
     {
         string? received = null;
-        var (vm, _, dialogs) = Build(
+        var (vm, _, dialogs, _) = Build(
             profilesBaseFolder: Path.GetTempPath(),
             launchExternalPath: p => { received = p; return true; });
 
@@ -395,7 +553,7 @@ public sealed class SettingsViewModelTests
     [Fact]
     public async Task OpenProfilesFolder_alerts_when_the_launcher_returns_false()
     {
-        var (vm, _, dialogs) = Build(
+        var (vm, _, dialogs, _) = Build(
             profilesBaseFolder: Path.GetTempPath(),
             launchExternalPath: _ => false);
 
@@ -409,7 +567,7 @@ public sealed class SettingsViewModelTests
     [Fact]
     public async Task OpenProfilesFolder_alerts_and_does_not_propagate_when_the_launcher_throws()
     {
-        var (vm, _, dialogs) = Build(
+        var (vm, _, dialogs, _) = Build(
             profilesBaseFolder: Path.GetTempPath(),
             launchExternalPath: _ => throw new InvalidOperationException("boom"));
 

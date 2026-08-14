@@ -3,7 +3,7 @@ namespace Modificus.Curator.Steam;
 /// <summary>
 /// OS-specific inputs to Steam discovery. Carries the candidate Steam install
 /// roots + auxiliary paths so the discoverer never hardcodes
-/// <c>~/.local/share/Steam</c> -- production wires the real OS defaults via
+/// <c>~/.local/share/Steam</c>; production wires the real OS defaults via
 /// <see cref="CreateDefault"/>, tests inject fixture paths. <see cref="Platform"/>
 /// controls which fields are consulted and whether Proton/compatdata are
 /// discovered (Linux only).
@@ -32,10 +32,24 @@ public sealed class SteamDiscoveryOptions
     public string? LinuxFlatpakSteamRoot { get; set; }
 
     /// <summary>
-    /// The ProtonUp-GE / custom-builds dir probed as a Proton fallback
-    /// (typically <c>~/.local/share/Steam/compatibilitytools.d</c>). Linux only.
+    /// The primary user compatibility-tool root (typically
+    /// <c>~/.local/share/Steam/compatibilitytools.d</c>), searched for custom
+    /// Proton builds. Probed after the resolved Steam root's own
+    /// <c>compatibilitytools.d</c>. Linux only. Overridable for tests.
     /// </summary>
     public string? LinuxCompatibilityToolsDir { get; set; }
+
+    /// <summary>
+    /// System-wide compatibility-tool roots searched last for custom Proton
+    /// builds. Defaults to the two standard Steam system directories. Linux only.
+    /// Overridable for tests so they can point at fixture paths instead of host
+    /// state.
+    /// </summary>
+    public IList<string> LinuxSystemCompatibilityToolsDirs { get; set; } = new List<string>
+    {
+        "/usr/share/steam/compatibilitytools.d",
+        "/usr/local/share/steam/compatibilitytools.d",
+    };
 
     /// <summary>
     /// The Windows Steam install fallback path used when the registry yields

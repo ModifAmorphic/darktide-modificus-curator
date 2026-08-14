@@ -28,8 +28,10 @@ internal sealed class WindowsLaunchStrategy : IPlatformLaunchStrategy
     {
         var missing = new List<string>();
 
-        // Windows needs Steam + the game binary (compatdata/Proton are unused -- native).
-        if (discovery.SteamInstallPath is null) missing.Add(nameof(DiscoveryResult.SteamInstallPath));
+        // Windows launches from the Darktide binary alone: Steam is a discovery
+        // mechanism (the automatic anchor that locates Darktide), not a launch
+        // input. No STEAM_COMPAT_* env is set on Windows, so an absent or invalid
+        // Steam path never blocks a launch.
         if (discovery.DarktideGameBinaryPath is null) missing.Add(nameof(DiscoveryResult.DarktideGameBinaryPath));
 
         return missing;

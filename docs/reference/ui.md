@@ -362,10 +362,13 @@ linked-folder flow continues using `ShowAlertAsync` for its failures.
   three-choice unsaved-changes flow uses `ShowUnsavedChangesAsync` instead.
 - `ShowDiscoveryEscapeHatchAsync(missingFields)`: the discovery escape-hatch
   modal, focused on the missing discovery fields the launch reported. Inputs
-  are shown only for the fields in `missingFields`. Returns true when the
-  user submitted (the entered paths are now persisted), false when they
-  cancelled (no writes). No auto-retry: the caller does not re-launch on a
-  true return; the user clicks Launch again.
+  are shown only for the fields in `missingFields`. Alongside the rows the
+  dialog carries the same global `OverrideAutomaticDiscovery` toggle + Discover
+  button as Settings (both write-through: the toggle persists the mode and
+  turning it off runs an ordinary `ISteamService.Discover`; the Discover button
+  calls `ISteamService.Rediscover`; row editability follows the mode). Returns
+  true when the user submitted, false when they cancelled. No auto-retry: the
+  caller does not re-launch on a true return; the user clicks Launch again.
 - `ShowAlertAsync(title, message)`: a simple modal alert (a single OK
   button, no cancel). Used to surface a launch `Error`, a download failure,
   a linked-folder failure, or the DMF informational case where there is
@@ -1597,7 +1600,9 @@ No backend library references the UI (the dependency direction is one-way).
   (unknown name -> invariant), the `Item[]` event that refreshes every
   indexer binding.
 - **`SettingsViewModelTests`** + **`SettingsViewModelAppUpdateTests`**: the
-  Settings destination (discovery overrides + the open-folder Storage buttons),
+  Settings destination (the global discovery-mode toggle + the read-only
+  automatic / editable manual row contract, the Discover button forcing a
+  `Rediscover`, the platform-gated rows, and the open-folder Storage buttons),
   plus the Updates section (current version, manual check + inline status, the
   `UpdateStateChanged` marshal, Download and Restart, the unsupported-build
   disabled controls, and the startup-check toggle persist + pre-fill).
@@ -1609,7 +1614,10 @@ No backend library references the UI (the dependency direction is one-way).
   change-during-processing edge cases (finish-current/abort-rest and
   reset-on-failure).
 - **`DiscoveryEscapeHatchViewModelTests`**: the focused escape-hatch form
-  (only the missing fields shown).
+  (only the missing fields shown), the shared global mode toggle (turning it off
+  runs an ordinary Discover + refreshes the rows; turning it on enables editing)
+  and the Discover button (forces a `Rediscover`, preserves the mode), plus
+  submit/cancel behavior under each mode.
 - **`IntegrationsViewModelTests`**: the Nexus destination (OAuth
   login, API-key validate, sign-out), auth controls staying usable while
   Darktide runs, the "Nexus download links" section (status display, register

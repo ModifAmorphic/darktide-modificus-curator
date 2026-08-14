@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Modificus.Curator.Config;
 using Modificus.Curator.General;
+using Modificus.Curator.Steam;
 using Modificus.Curator.UI.AppUpdate;
 using Modificus.Curator.UI.Dialogs;
 using Modificus.Curator.UI.Localization;
@@ -16,21 +17,21 @@ namespace Modificus.Curator.UI.ViewModels;
 
 /// <summary>
 /// The view model behind the Settings destination content (hosted by
-/// <see cref="Views.SettingsView"/>). Three
-/// sections:
+/// <see cref="Views.SettingsView"/>). Three sections:
 /// <list type="bullet">
-/// <item><description><b>Discovery:</b> the user-override paths
-/// (<c>UserSteamInstallPath</c>, <c>UserDarktideGameBinaryPath</c>,
-/// <c>UserCompatdataPath</c>, <c>UserProtonBinaryPath</c>), platform-gated
-/// so Windows renders only the Steam install + Darktide binary rows (the
-/// compatdata + Proton rows are Linux-only: <c>WindowsLaunchStrategy</c>
-/// ignores them, so they would be silently ineffective on Windows). Each
-/// row's TextBox is pre-filled with the current override (or empty when the
-/// field is set to auto-discover). Editing writes the override immediately
-/// via a read-modify-save through <see cref="IConfigLoader"/> (apply + persist
-/// per change, mirroring the Preferences flow). An empty TextBox
-/// clears the override (writes <c>null</c>, so the field falls back to
-/// auto-discovery).</description></item>
+/// <item><description><b>Discovery:</b> the persisted Steam/Darktide ( +
+/// compatdata + Proton on Linux) paths plus the global
+/// <see cref="OverrideAutomaticDiscovery"/> mode. Platform-gated so Windows
+/// renders only the Steam install + Darktide binary rows (the compatdata +
+/// Proton rows are Linux-only). In automatic mode (off, the default) the rows
+/// are read-only and show the latest discovered snapshot; in manual mode (on)
+/// the rows are editable and Browse is enabled. Flipping the toggle is
+/// write-through: turning it on persists <c>true</c> and enables editing; turning
+/// it off persists <c>false</c>, runs <see cref="ISteamService.Discover"/>
+/// (automatic), and refreshes every row. The <see cref="DiscoverCommand"/>
+/// forces a <see cref="ISteamService.Rediscover"/> in either mode. A manual-mode
+/// row edit writes through immediately via a read-modify-save (Preferences
+/// pattern); row writes are ignored while in automatic mode.</description></item>
 /// <item><description><b>Storage:</b> two buttons, each opening the OS file
 /// manager at a Curator-owned path. <see cref="OpenDataFolderCommand"/>
 /// opens the Curator data root (<c>AppPaths.AppDataDir</c>, a static path)
@@ -53,6 +54,7 @@ namespace Modificus.Curator.UI.ViewModels;
 public partial class SettingsViewModel : ObservableObject
 {
     private readonly IConfigLoader _configLoader;
+    private readonly ISteamService _steam;
     private readonly LocalizationService _localization;
     private readonly IAppUpdateService _appUpdate;
     private readonly IDialogService _dialogs;
@@ -61,11 +63,11 @@ public partial class SettingsViewModel : ObservableObject
     private readonly ILogger<SettingsViewModel> _logger;
 
     /// <summary>
-    /// True while <see cref="RefreshFromConfig"/> rehydrates the bound controls
-    /// from a live config snapshot (the initial fill at construction + later
-    /// rehydrations on entering Settings), so the row change callbacks + the
-    /// toggle change handler do not save. The values already match what is
-    /// persisted, so re-writing would be a noisy no-op.
+    /// True while <see cref="RefreshFromConfig"/> or
+    /// <see cref="RefreshDiscoveryRows"/> rehydrates the bound controls from a
+    /// live config snapshot, so the row change callbacks + the toggle change
+    /// handler do not save. The values already match what is persisted, so
+    /// re-writing would be a noisy no-op.
     /// </summary>
     private bool _suppressApply;
 
@@ -93,6 +95,11 @@ public partial class SettingsViewModel : ObservableObject
     /// </summary>
     /// <param name="configLoader">The live config reader/writer. Each field change
     /// does a read-modify-save through this.</param>
+    /// <param name="steam">The Steam discovery service. Turning override off calls
+    /// <see cref="ISteamService.Discover"/> (automatic); the
+    /// <see cref="DiscoverCommand"/> calls <see cref="ISteamService.Rediscover"/>.
+    /// The mode policy itself lives in the service; this VM only orchestrates
+    /// user actions + display state.</param>
     /// <param name="localization">The localization service; handed to each
     /// discovery row so its label resolves + refreshes on a culture change.</param>
     /// <param name="appUpdate">The app self-update service; backs the Updates
@@ -111,6 +118,7 @@ public partial class SettingsViewModel : ObservableObject
     /// controllable delegate.</param>
     public SettingsViewModel(
         IConfigLoader configLoader,
+        ISteamService steam,
         LocalizationService localization,
         IAppUpdateService appUpdate,
         IDialogService dialogs,
@@ -119,6 +127,7 @@ public partial class SettingsViewModel : ObservableObject
         Func<string, bool>? launchExternalPath = null)
     {
         _configLoader = configLoader;
+        _steam = steam ?? throw new ArgumentNullException(nameof(steam));
         _localization = localization;
         _appUpdate = appUpdate;
         _dialogs = dialogs;
@@ -128,14 +137,13 @@ public partial class SettingsViewModel : ObservableObject
 
         // Build the platform-gated discovery rows once (each carries its
         // write-through callback + localization subscription). Initial values
-        // are populated by RefreshFromConfig below, so construction + later
-        // rehydrations share one restoration path.
+        // + editability are populated by RefreshFromConfig below, so
+        // construction + later rehydrations share one restoration path.
         //
-        // Platform-gated: on Windows the compatdata + Proton overrides are
-        // Linux-only (WindowsLaunchStrategy.ComputeStatus never reads them, so
-        // surfacing them would be silently ineffective rows). Only the Steam
-        // install + Darktide binary rows render on Windows. The escape-hatch is
-        // already correct (it renders only the names in
+        // Platform-gated: on Windows the compatdata + Proton fields are
+        // Linux-only, so surfacing them would be silently ineffective rows.
+        // Only the Steam install + Darktide binary rows render on Windows. The
+        // escape-hatch is already correct (it renders only the names in
         // LaunchResult.MissingDiscoveryFields, which on Windows never includes
         // the Linux-only ones).
         DiscoveryRows = new ObservableCollection<DiscoveryFieldRowViewModel>(
@@ -164,16 +172,17 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Rehydrates the discovery row values + the startup-update toggle from a
-    /// live config snapshot, then refreshes the app-update display/command
-    /// state. Idempotent and safe to call repeatedly (the constructor calls it
-    /// once for the initial fill; the host calls it when entering Settings so
-    /// changes made through the discovery escape-hatch are visible on a later
-    /// visit). Executes under <see cref="_suppressApply"/> so the row change
-    /// callbacks + the toggle change handler do not save. Does not replace
-    /// <see cref="DiscoveryRows"/> or re-subscribe: existing row object
-    /// instances are preserved (their Value setters fire the change callbacks,
-    /// which the suppress guard no-ops).
+    /// Rehydrates the discovery mode + row values/editability + the
+    /// startup-update toggle from a live config snapshot, then refreshes the
+    /// app-update display/command state. Idempotent and safe to call repeatedly
+    /// (the constructor calls it once for the initial fill; the host calls it
+    /// when entering Settings so changes made through the discovery escape-hatch
+    /// or the launch flow are visible on a later visit). Executes under
+    /// <see cref="_suppressApply"/> so the row change callbacks + the toggle
+    /// change handler do not save. Does not replace <see cref="DiscoveryRows"/>
+    /// or re-subscribe: existing row object instances are preserved (their Value
+    /// + IsEditable setters fire the change callbacks, which the suppress guard
+    /// no-ops).
     /// </summary>
     public void RefreshFromConfig()
     {
@@ -182,9 +191,11 @@ public partial class SettingsViewModel : ObservableObject
         _suppressApply = true;
         try
         {
+            OverrideAutomaticDiscovery = config.Discovery.OverrideAutomaticDiscovery;
             foreach (var row in DiscoveryRows)
             {
                 row.Value = InitialValue(row.Field, config.Discovery);
+                row.IsEditable = config.Discovery.OverrideAutomaticDiscovery;
             }
             CheckOnStartup = config.AppUpdates.CheckOnStartup;
         }
@@ -197,13 +208,104 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Re-reads the discovery snapshot from config + pushes the current values
+    /// + editability onto each existing row. Used after a toggle or forced
+    /// discover changes the persisted snapshot, so the rows reflect it without
+    /// rebuilding the collection. Runs under <see cref="_suppressApply"/> so the
+    /// row Value setters do not save.
+    /// </summary>
+    private void RefreshDiscoveryRows()
+    {
+        var discovery = _configLoader.Load().Discovery;
+
+        _suppressApply = true;
+        try
+        {
+            foreach (var row in DiscoveryRows)
+            {
+                row.Value = InitialValue(row.Field, discovery);
+                row.IsEditable = discovery.OverrideAutomaticDiscovery;
+            }
+        }
+        finally
+        {
+            _suppressApply = false;
+        }
+    }
+
+    /// <summary>
     /// The discovery-field rows (Steam install, Darktide binary, compatdata,
     /// Proton binary), platform-gated: Windows renders only the first two (the
     /// compatdata + Proton rows are Linux-only). Bound to an
     /// <c>ItemsControl</c> in the view; each row owns its TextBox value + Browse
-    /// button (the browse kind drives which picker opens).
+    /// button (the browse kind drives which picker opens) + its
+    /// <c>IsEditable</c> (which drives read-only + Browse enabled).
     /// </summary>
     public ObservableCollection<DiscoveryFieldRowViewModel> DiscoveryRows { get; }
+
+    /// <summary>
+    /// The global discovery mode. <c>false</c> (the default) is automatic:
+    /// <see cref="ISteamService.Discover"/> runs the platform discoverer and
+    /// owns the persisted snapshot, so the rows stay read-only. <c>true</c> is
+    /// manual: the rows are editable and the discoverer is not invoked on
+    /// launch. Flipping the toggle is write-through (see
+    /// <see cref="OnOverrideAutomaticDiscoveryChanged"/>): turning it off runs a
+    /// fresh automatic discovery and refreshes the rows; turning it on merely
+    /// enables editing without discovering.
+    /// </summary>
+    [ObservableProperty]
+    private bool _overrideAutomaticDiscovery;
+
+    /// <summary>
+    /// Persisted on every user toggle (write-through, read-modify-save of
+    /// <c>Discovery.OverrideAutomaticDiscovery</c>). Suppressed during
+    /// <see cref="RefreshFromConfig"/> + <see cref="RefreshDiscoveryRows"/> so
+    /// rehydrating the field does not trigger a redundant write-back. Turning
+    /// the override off additionally runs <see cref="ISteamService.Discover"/>
+    /// (automatic) and refreshes the rows from the resulting snapshot; turning
+    /// it on preserves the current snapshot and only enables editing (no
+    /// discover). The mode policy itself lives in the service; this handler only
+    /// persists the bool + orchestrates the refresh.
+    /// </summary>
+    partial void OnOverrideAutomaticDiscoveryChanged(bool value)
+    {
+        if (_suppressApply)
+        {
+            return;
+        }
+
+        var config = _configLoader.Load();
+        config.Discovery.OverrideAutomaticDiscovery = value;
+        _configLoader.Save(config);
+
+        if (!value)
+        {
+            // Turning override off: run a fresh automatic discovery so the rows
+            // immediately reflect the discoverer's snapshot rather than the
+            // stale manual strings. The service persists the snapshot.
+            _steam.Discover();
+        }
+
+        // Re-read the persisted snapshot (unchanged on the on path; just
+        // refreshed by an automatic pass on the off path) + push it onto the
+        // rows, flipping editability to match the new mode.
+        RefreshDiscoveryRows();
+    }
+
+    /// <summary>
+    /// Forces one automatic discovery pass regardless of the current mode (calls
+    /// <see cref="ISteamService.Rediscover"/>), then refreshes every row from
+    /// the resulting snapshot. Works in either mode + leaves the mode unchanged.
+    /// A partial result clears unresolved fields in the UI to match the
+    /// persisted config. Synchronous (the discovery API is synchronous); no
+    /// spinner or async plumbing is needed.
+    /// </summary>
+    [RelayCommand]
+    private void Discover()
+    {
+        _steam.Rediscover();
+        RefreshDiscoveryRows();
+    }
 
     /// <summary>
     /// The localized header for the discovery section. Re-resolves on a culture
@@ -535,14 +637,16 @@ public partial class SettingsViewModel : ObservableObject
 
     /// <summary>
     /// The write-through for a discovery field change: read-modify-save the
-    /// matching <c>User*Path</c> in <see cref="DiscoveryConfig"/>. An empty /
-    /// whitespace value writes <c>null</c> (clears the override -> auto-discover).
-    /// Suppressed during <see cref="RefreshFromConfig"/> (the initial fill +
-    /// later rehydrations).
+    /// matching property in <see cref="DiscoveryConfig"/>. An empty / whitespace
+    /// value writes <c>null</c> (clears the stored path). Only honored in manual
+    /// mode (override on); in automatic mode the discoverer owns the snapshot,
+    /// so row writes are ignored even if a callback fires programmatically.
+    /// Suppressed during <see cref="RefreshFromConfig"/> +
+    /// <see cref="RefreshDiscoveryRows"/> (the fills).
     /// </summary>
     private void WriteThroughDiscovery(DiscoveryFieldRowViewModel row)
     {
-        if (_suppressApply)
+        if (_suppressApply || !OverrideAutomaticDiscovery)
         {
             return;
         }
@@ -551,31 +655,35 @@ public partial class SettingsViewModel : ObservableObject
         var written = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
         var config = _configLoader.Load();
-        SetOverride(config.Discovery, row.Field.FieldName, written);
+        SetPath(config.Discovery, row.Field.FieldName, written);
         _configLoader.Save(config);
     }
 
     /// <summary>
     /// Maps a discovery field's canonical name to its setter on
     /// <see cref="DiscoveryConfig"/>. The name matches the property names of
-    /// <see cref="Steam.DiscoveryResult"/> (the same names that flow through
-    /// <c>LaunchResult.MissingDiscoveryFields</c>).
+    /// <see cref="DiscoveryResult"/> (the same names that flow through
+    /// <c>LaunchResult.MissingDiscoveryFields</c>). Kept duplicated with the
+    /// escape-hatch VM rather than extracted into a shared helper: it is a small
+    /// identity switch, the field-name catalog is already the shared source of
+    /// truth, and an abstraction here would couple two independent VMs for no
+    /// behavioral gain.
     /// </summary>
-    private static void SetOverride(DiscoveryConfig discovery, string fieldName, string? value)
+    private static void SetPath(DiscoveryConfig discovery, string fieldName, string? value)
     {
         switch (fieldName)
         {
             case "SteamInstallPath":
-                discovery.UserSteamInstallPath = value;
+                discovery.SteamInstallPath = value;
                 return;
             case "DarktideGameBinaryPath":
-                discovery.UserDarktideGameBinaryPath = value;
+                discovery.DarktideGameBinaryPath = value;
                 return;
             case "CompatdataPath":
-                discovery.UserCompatdataPath = value;
+                discovery.CompatdataPath = value;
                 return;
             case "ProtonBinaryPath":
-                discovery.UserProtonBinaryPath = value;
+                discovery.ProtonBinaryPath = value;
                 return;
             default:
                 return;
@@ -583,23 +691,21 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Reads the current override value for a field from config (or empty when
-    /// it is null/whitespace, i.e. set to auto-discover). Used to pre-fill each
-    /// row at construction.
+    /// Reads the current stored value for a field from config (or empty when it
+    /// is null). Used to fill each row at construction + on refresh.
     /// </summary>
     private static string InitialValue(DiscoveryField field, DiscoveryConfig discovery) =>
         field.FieldName switch
         {
-            "SteamInstallPath" => discovery.UserSteamInstallPath ?? string.Empty,
-            "DarktideGameBinaryPath" => discovery.UserDarktideGameBinaryPath ?? string.Empty,
-            "CompatdataPath" => discovery.UserCompatdataPath ?? string.Empty,
-            "ProtonBinaryPath" => discovery.UserProtonBinaryPath ?? string.Empty,
+            "SteamInstallPath" => discovery.SteamInstallPath ?? string.Empty,
+            "DarktideGameBinaryPath" => discovery.DarktideGameBinaryPath ?? string.Empty,
+            "CompatdataPath" => discovery.CompatdataPath ?? string.Empty,
+            "ProtonBinaryPath" => discovery.ProtonBinaryPath ?? string.Empty,
             _ => string.Empty,
         };
 
     /// <summary>
-    /// Whether a discovery field is Linux-only (the compatdata + Proton
-    /// overrides, which <c>WindowsLaunchStrategy</c> ignores). Used to
+    /// Whether a discovery field is Linux-only (compatdata + Proton). Used to
     /// platform-gate the Settings rows so Windows does not surface
     /// silently-ineffective rows. The catalog is the single source of truth for
     /// field identity; this helper is the only place that knows which of those

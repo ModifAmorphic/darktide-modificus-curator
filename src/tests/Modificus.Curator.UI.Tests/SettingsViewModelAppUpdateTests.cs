@@ -33,6 +33,7 @@ public sealed class SettingsViewModelAppUpdateTests
         configLoader ??= new FakeConfigLoader();
         return new SettingsViewModel(
             configLoader,
+            new FakeSteamService(),
             Localization,
             appUpdate,
             dialogs,

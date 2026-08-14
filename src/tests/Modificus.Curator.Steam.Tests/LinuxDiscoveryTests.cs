@@ -14,7 +14,8 @@ public sealed class LinuxDiscoveryTests
         fx.WithLibraryFoldersAtSteamRoot();
         fx.WithDarktide(fx.SteamRoot);
         fx.WithCompatdata(fx.SteamRoot);
-        fx.WithProtonInCommon(fx.SteamRoot, "Proton - Experimental");
+        fx.WithCompatToolMapping(fx.SteamRoot, "GE-Proton9-3");
+        fx.WithCustomProtonTool(fx.CompatToolsDir, "GE-Proton9-3");
 
         var result = fx.Service.Discover();
 
@@ -22,10 +23,9 @@ public sealed class LinuxDiscoveryTests
         Assert.Equal(fx.SteamRoot, result.SteamInstallPath);
         Assert.Equal(fx.ExpectedDarktidePath(fx.SteamRoot), result.DarktideGameBinaryPath);
         Assert.Equal(fx.ExpectedCompatdataPath(fx.SteamRoot), result.CompatdataPath);
-        Assert.Equal(fx.ExpectedProtonPath(fx.SteamRoot, "Proton - Experimental"), result.ProtonBinaryPath);
-        Assert.Equal("Proton - Experimental", result.ProtonVersion);
+        Assert.Equal(fx.ExpectedCustomProtonPath(fx.CompatToolsDir, "GE-Proton9-3"), result.ProtonBinaryPath);
+        Assert.Equal("GE-Proton9-3", result.ProtonVersion);
         Assert.NotNull(result.Warnings);
-        Assert.Contains(result.Warnings, w => w.Contains("Proton - Experimental", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -34,8 +34,9 @@ public sealed class LinuxDiscoveryTests
         using var fx = new SteamFixture();
         fx.WithLibraryFoldersAtSteamRoot();
         fx.WithDarktide(fx.SteamRoot);
-        fx.WithProtonInCommon(fx.SteamRoot, "Proton - Experimental");
-        // No compatdata → the only gap.
+        fx.WithCompatToolMapping(fx.SteamRoot, "GE-Proton9-3");
+        fx.WithCustomProtonTool(fx.CompatToolsDir, "GE-Proton9-3");
+        // No compatdata -> the only gap.
 
         var result = fx.Service.Discover();
 
@@ -52,7 +53,8 @@ public sealed class LinuxDiscoveryTests
         using var fx = new SteamFixture();
         fx.WithLibraryFoldersAtSteamRoot();
         fx.WithCompatdata(fx.SteamRoot);
-        fx.WithProtonInCommon(fx.SteamRoot, "Proton - Experimental");
+        fx.WithCompatToolMapping(fx.SteamRoot, "GE-Proton9-3");
+        fx.WithCustomProtonTool(fx.CompatToolsDir, "GE-Proton9-3");
 
         var result = fx.Service.Discover();
 
@@ -68,15 +70,14 @@ public sealed class LinuxDiscoveryTests
         fx.WithLibraryFoldersAtSteamRoot();
         fx.WithDarktide(fx.SteamRoot);
         fx.WithCompatdata(fx.SteamRoot);
-        // No Proton anywhere.
+        // No Proton mapping at all.
 
         var result = fx.Service.Discover();
 
         Assert.Equal(DiscoveryStatus.Partial, result.Status);
         Assert.Null(result.ProtonBinaryPath);
         Assert.Null(result.ProtonVersion);
-        // Escape-hatch warning surfaces so the UI knows to prompt.
-        Assert.Contains(result.Warnings, w => w.Contains("No Proton build found", StringComparison.Ordinal));
+        Assert.Contains(result.Warnings, w => w.Contains("No Steam compatibility tool mapping", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -105,7 +106,8 @@ public sealed class LinuxDiscoveryTests
         fx.WithLibraryFoldersAtSteamRoot(fx.SteamRoot, secondary);
         fx.WithDarktide(secondary);
         fx.WithCompatdata(fx.SteamRoot);
-        fx.WithProtonInCommon(fx.SteamRoot, "Proton - Experimental");
+        fx.WithCompatToolMapping(fx.SteamRoot, "GE-Proton9-3");
+        fx.WithCustomProtonTool(fx.CompatToolsDir, "GE-Proton9-3");
 
         var result = fx.Service.Discover();
 
@@ -120,16 +122,16 @@ public sealed class LinuxDiscoveryTests
     {
         // The Proton prefix (compatdata) is created on whichever drive Steam
         // chose at install time -- frequently a Steam *library* drive rather than
-        // the main install (e.g. /games/steamapps/compatdata/<appid>/). Discovery
-        // must probe each library, not just the main install, or it reports
-        // CompatdataPath missing → DiscoveryIncomplete and blocks the launch.
+        // the main install. Discovery must probe each library, not just the main
+        // install, or it reports CompatdataPath missing.
         using var fx = new SteamFixture();
         var secondary = Path.Combine(fx.TempRoot, "secondary-lib");
         Directory.CreateDirectory(secondary);
         fx.WithLibraryFoldersAtSteamRoot(fx.SteamRoot, secondary);
         fx.WithDarktide(fx.SteamRoot);
         fx.WithCompatdata(secondary); // prefix only under the secondary library
-        fx.WithProtonInCommon(fx.SteamRoot, "Proton - Experimental");
+        fx.WithCompatToolMapping(fx.SteamRoot, "GE-Proton9-3");
+        fx.WithCustomProtonTool(fx.CompatToolsDir, "GE-Proton9-3");
 
         var result = fx.Service.Discover();
 
@@ -140,13 +142,14 @@ public sealed class LinuxDiscoveryTests
     [Fact]
     public void Missing_steam_root_falls_back_to_flatpak_when_valid()
     {
-        // Native root absent; flatpak root is a valid Steam install → resolves there
+        // Native root absent; flatpak root is a valid Steam install -> resolves there
         // (and flags Flatpak -- covered explicitly in FlatpakDiscoveryTests too).
         using var fx = new SteamFixture();
         fx.WithLibraryFoldersAtFlatpakRoot();
         fx.WithDarktide(fx.FlatpakRoot);
         fx.WithCompatdata(fx.FlatpakRoot);
-        fx.WithProtonInCommon(fx.FlatpakRoot, "Proton - Experimental");
+        fx.WithCompatToolMapping(fx.FlatpakRoot, "GE-Proton9-3");
+        fx.WithCustomProtonTool(fx.CompatToolsDir, "GE-Proton9-3");
 
         var result = fx.Service.Discover();
 
@@ -167,7 +170,8 @@ public sealed class LinuxDiscoveryTests
         fx.WithLibraryFoldersAtSteamRoot(secondary); // VDF omits fx.SteamRoot
         fx.WithDarktide(fx.SteamRoot);               // Darktide is at the Steam root
         fx.WithCompatdata(fx.SteamRoot);
-        fx.WithProtonInCommon(fx.SteamRoot, "Proton - Experimental");
+        fx.WithCompatToolMapping(fx.SteamRoot, "GE-Proton9-3");
+        fx.WithCustomProtonTool(fx.CompatToolsDir, "GE-Proton9-3");
 
         var result = fx.Service.Discover();
 

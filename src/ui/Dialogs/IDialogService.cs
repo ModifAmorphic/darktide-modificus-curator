@@ -81,8 +81,8 @@ public interface IDialogService
     /// Shows the discovery escape-hatch modal, focused on the missing discovery
     /// fields the launch reported. Inputs are shown <em>only</em> for the fields
     /// in <paramref name="missingFields"/>. Returns <c>true</c> when the user
-    /// submitted (the entered paths are now persisted into the
-    /// <c>Discovery.User*Path</c> section), <c>false</c> when they cancelled (no
+    /// submitted (the entered paths are now persisted into
+    /// <c>CuratorConfig.Discovery</c>), <c>false</c> when they cancelled (no
     /// writes). There is no auto-retry: the caller does not re-launch on a
     /// <c>true</c> return; the user clicks Launch again.
     /// </summary>

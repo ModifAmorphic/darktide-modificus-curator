@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Modificus.Curator.Profiles;
 using Modificus.Curator.Steam;
 
@@ -284,6 +285,75 @@ public sealed class RelayLaunchServiceTests
         Assert.Equal(
             new[] { nameof(DiscoveryResult.DarktideGameBinaryPath) },
             result.MissingDiscoveryFields);
+    }
+
+    // ---- Windows: Steam is not a launch input --------------------------------
+
+    [Fact]
+    public void Windows_required_fields_with_valid_darktide_and_null_steam_is_empty()
+    {
+        // Steam is a discovery mechanism, not a Windows launch input: a resolved
+        // Darktide binary is enough, so the missing-field list is empty even with
+        // Steam null.
+        var strategy = new WindowsLaunchStrategy(
+            new FakeProcessLauncher(), NullLogger<WindowsLaunchStrategy>.Instance);
+        var discovery = FakeDiscovery.CompleteWindows with { SteamInstallPath = null };
+
+        var missing = strategy.RequiredDiscoveryFields(discovery);
+
+        Assert.Empty(missing);
+    }
+
+    [Fact]
+    public void Windows_required_fields_reports_darktide_missing_regardless_of_steam()
+    {
+        // Only the Darktide binary is required on Windows. Whether Steam is present
+        // or absent, a missing Darktide binary is the sole missing field.
+        var strategy = new WindowsLaunchStrategy(
+            new FakeProcessLauncher(), NullLogger<WindowsLaunchStrategy>.Instance);
+
+        var withSteam = FakeDiscovery.CompleteWindows with { DarktideGameBinaryPath = null };
+        Assert.Equal(
+            new[] { nameof(DiscoveryResult.DarktideGameBinaryPath) },
+            strategy.RequiredDiscoveryFields(withSteam));
+
+        var noSteam = withSteam with { SteamInstallPath = null };
+        Assert.Equal(
+            new[] { nameof(DiscoveryResult.DarktideGameBinaryPath) },
+            strategy.RequiredDiscoveryFields(noSteam));
+    }
+
+    [Fact]
+    public void Windows_launch_proceeds_with_valid_darktide_and_null_steam()
+    {
+        // End-to-end: with a resolved Darktide binary and no Steam path, the
+        // Windows launch is not blocked (no DiscoveryIncomplete) and reaches the
+        // launcher directly.
+        using var fx = new RelayFixture();
+        fx.Steam.Result = FakeDiscovery.CompleteWindows with { SteamInstallPath = null };
+        fx.Launcher.Returns = true;
+        var svc = fx.BuildWindowsService();
+
+        var result = svc.Launch(Guid.NewGuid());
+
+        Assert.Equal(LaunchStatus.Launched, result.Status);
+        Assert.Equal(fx.LauncherPath, fx.Launcher.FilePath);
+        Assert.Contains(FakeDiscovery.WindowsGameBinary, fx.Launcher.Arguments!);
+    }
+
+    [Fact]
+    public void Linux_required_fields_still_requires_steam()
+    {
+        // Regression: Linux still requires Steam (a launch input via
+        // STEAM_COMPAT_CLIENT_INSTALL_PATH). Removing it must surface Steam as
+        // missing even when everything else resolves.
+        var strategy = new LinuxLaunchStrategy(
+            new FakeProcessLauncher(), NullLogger<LinuxLaunchStrategy>.Instance);
+
+        var noSteam = FakeDiscovery.CompleteLinux with { SteamInstallPath = null };
+        var missing = strategy.RequiredDiscoveryFields(noSteam);
+
+        Assert.Contains(nameof(DiscoveryResult.SteamInstallPath), missing);
     }
 
     [Fact]

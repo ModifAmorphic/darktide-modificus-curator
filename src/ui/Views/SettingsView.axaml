@@ -19,9 +19,26 @@
     <StackPanel Spacing="20" Margin="24,16">
 
       <!-- ============== Discovery section ============== -->
+      <!--
+        Global override toggle + forced Discover above the rows, then the
+        platform-gated rows. The toggle is write-through: on enables editing,
+        off runs automatic discovery. Discover forces a rediscover in either
+        mode. Each row binds its TextBox read-only state + Browse enabled state
+        to its own IsEditable (pushed down from the mode), so automatic mode
+        keeps paths selectable-but-not-editable while manual mode enables both
+        editing and Browse.
+      -->
       <StackPanel Spacing="8">
         <TextBlock Text="{Binding DiscoverySectionHeader}"
                    FontWeight="SemiBold" />
+        <CheckBox IsChecked="{Binding OverrideAutomaticDiscovery, Mode=TwoWay}"
+                  Content="{ReflectionBinding [Discovery_OverrideToggle], Source={StaticResource Loc}}"
+                  ToolTip.Tip="{ReflectionBinding [Discovery_OverrideToggleTooltip], Source={StaticResource Loc}}"
+                  Margin="0,4" />
+        <Button Content="{ReflectionBinding [Discovery_DiscoverButton], Source={StaticResource Loc}}"
+                Command="{Binding DiscoverCommand}"
+                HorizontalAlignment="Left"
+                Margin="0,0,0,4" />
         <ItemsControl ItemsSource="{Binding DiscoveryRows}">
           <ItemsControl.ItemTemplate>
             <DataTemplate x:DataType="vm:DiscoveryFieldRowViewModel">
@@ -31,11 +48,13 @@
                            VerticalAlignment="Center" />
                 <TextBox Grid.Column="1"
                          Text="{Binding Value, Mode=TwoWay}"
+                         IsReadOnly="{Binding !IsEditable}"
                          Margin="8,0,0,0"
                          VerticalAlignment="Center" />
                 <Button Grid.Column="2"
                         Content="{ReflectionBinding [Discovery_BrowseButton], Source={StaticResource Loc}}"
                         Click="BrowseDiscovery_Click"
+                        IsEnabled="{Binding IsEditable}"
                         CommandParameter="{Binding Field.BrowseKind}"
                         MinWidth="80" Margin="8,0,0,0"
                         VerticalAlignment="Center" />

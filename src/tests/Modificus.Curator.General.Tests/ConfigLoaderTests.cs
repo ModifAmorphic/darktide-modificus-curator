@@ -370,8 +370,8 @@ public sealed class ConfigLoaderTests
     [Fact]
     public void Load_yields_default_discovery_when_section_is_absent()
     {
-        // Absent Discovery section: all four override fields are null (the
-        // "auto-discover everything" default).
+        // Absent Discovery section: the mode bool is false (automatic) and all
+        // four path fields are null.
         var dir = Path.Combine(Path.GetTempPath(), "curator-cfg-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
         var configPath = Path.Combine(dir, "config.json");
@@ -381,10 +381,11 @@ public sealed class ConfigLoaderTests
         {
             var discovery = new ConfigLoader(configPath).Load().Discovery;
 
-            Assert.Null(discovery.UserSteamInstallPath);
-            Assert.Null(discovery.UserDarktideGameBinaryPath);
-            Assert.Null(discovery.UserCompatdataPath);
-            Assert.Null(discovery.UserProtonBinaryPath);
+            Assert.False(discovery.OverrideAutomaticDiscovery);
+            Assert.Null(discovery.SteamInstallPath);
+            Assert.Null(discovery.DarktideGameBinaryPath);
+            Assert.Null(discovery.CompatdataPath);
+            Assert.Null(discovery.ProtonBinaryPath);
         }
         finally
         {
@@ -401,10 +402,11 @@ public sealed class ConfigLoaderTests
         File.WriteAllText(configPath, """
             {
               "Discovery": {
-                "UserSteamInstallPath": "/custom/steam",
-                "UserDarktideGameBinaryPath": "/custom/darktide.exe",
-                "UserCompatdataPath": "/custom/compatdata",
-                "UserProtonBinaryPath": "/custom/proton"
+                "OverrideAutomaticDiscovery": true,
+                "SteamInstallPath": "/custom/steam",
+                "DarktideGameBinaryPath": "/custom/darktide.exe",
+                "CompatdataPath": "/custom/compatdata",
+                "ProtonBinaryPath": "/custom/proton"
               }
             }
             """);
@@ -413,10 +415,11 @@ public sealed class ConfigLoaderTests
         {
             var discovery = new ConfigLoader(configPath).Load().Discovery;
 
-            Assert.Equal("/custom/steam", discovery.UserSteamInstallPath);
-            Assert.Equal("/custom/darktide.exe", discovery.UserDarktideGameBinaryPath);
-            Assert.Equal("/custom/compatdata", discovery.UserCompatdataPath);
-            Assert.Equal("/custom/proton", discovery.UserProtonBinaryPath);
+            Assert.True(discovery.OverrideAutomaticDiscovery);
+            Assert.Equal("/custom/steam", discovery.SteamInstallPath);
+            Assert.Equal("/custom/darktide.exe", discovery.DarktideGameBinaryPath);
+            Assert.Equal("/custom/compatdata", discovery.CompatdataPath);
+            Assert.Equal("/custom/proton", discovery.ProtonBinaryPath);
         }
         finally
         {
@@ -428,8 +431,7 @@ public sealed class ConfigLoaderTests
     public void Save_round_trips_discovery_through_a_subsequent_Load()
     {
         // A partially-populated Discovery section round-trips: set fields
-        // persist; null fields stay null (no defaulting to empty strings, which
-        // would change the overlay semantics).
+        // persist; null fields stay null.
         var dir = Path.Combine(Path.GetTempPath(), "curator-cfg-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
         var configPath = Path.Combine(dir, "config.json");
@@ -438,17 +440,19 @@ public sealed class ConfigLoaderTests
         {
             var loader = new ConfigLoader(configPath);
             var config = CuratorConfig.CreateDefault();
-            config.Discovery.UserSteamInstallPath = "/persisted/steam";
-            config.Discovery.UserProtonBinaryPath = "/persisted/proton";
+            config.Discovery.OverrideAutomaticDiscovery = true;
+            config.Discovery.SteamInstallPath = "/persisted/steam";
+            config.Discovery.ProtonBinaryPath = "/persisted/proton";
             // Leave the other two null.
 
             loader.Save(config);
             var reloaded = loader.Load().Discovery;
 
-            Assert.Equal("/persisted/steam", reloaded.UserSteamInstallPath);
-            Assert.Null(reloaded.UserDarktideGameBinaryPath);
-            Assert.Null(reloaded.UserCompatdataPath);
-            Assert.Equal("/persisted/proton", reloaded.UserProtonBinaryPath);
+            Assert.True(reloaded.OverrideAutomaticDiscovery);
+            Assert.Equal("/persisted/steam", reloaded.SteamInstallPath);
+            Assert.Null(reloaded.DarktideGameBinaryPath);
+            Assert.Null(reloaded.CompatdataPath);
+            Assert.Equal("/persisted/proton", reloaded.ProtonBinaryPath);
         }
         finally
         {
@@ -475,14 +479,14 @@ public sealed class ConfigLoaderTests
         {
             var loader = new ConfigLoader(configPath);
             var config = loader.Load();
-            config.Discovery.UserSteamInstallPath = "/override/steam";
+            config.Discovery.SteamInstallPath = "/override/steam";
 
             loader.Save(config);
             var reloaded = loader.Load();
 
             Assert.Equal("Warning", reloaded.Logging.Level);
             Assert.Equal("/custom/runtime", reloaded.RelayDir);
-            Assert.Equal("/override/steam", reloaded.Discovery.UserSteamInstallPath);
+            Assert.Equal("/override/steam", reloaded.Discovery.SteamInstallPath);
         }
         finally
         {

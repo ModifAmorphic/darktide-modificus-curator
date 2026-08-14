@@ -14,24 +14,30 @@
 public interface ISteamService
 {
     DiscoveryResult Discover();
+    DiscoveryResult Rediscover();
     bool IsGameRunning();
 }
 ```
 
-- `Discover()`: runs the **validate + heal + persist** pipeline. Reads the
-  live `CuratorConfig.Discovery` user overrides (via `IConfigLoader`), checks
-  each platform-relevant field's path on disk (a directory for Steam install +
-  compatdata; a file for the Darktide binary + Proton script), and treats an
-  existing override as **valid** (kept as-is). A null / whitespace / non-
-  existent override **needs healing**: if any field needs healing the platform
-  `ISteamDiscoverer` runs once and each healing field picks up the discoverer's
-  value (which may itself be null, the "still missing" case). Healed fields are
-  then persisted back to `Discovery.User*Path` (a single read-modify-save
-  carrying only the healed writes; valid fields + any concurrent hand-edit are
-  preserved). When every field is valid the discoverer is skipped entirely
-  (fast path). **Never throws on missing pieces**; those are reported via
-  `DiscoveryResult.Status` and the nullable fields (the escape hatch the UI
-  prompts against). `SteamService` itself contains no platform dispatch.
+- `Discover()`: honors the configured discovery mode
+  (`CuratorConfig.Discovery.OverrideAutomaticDiscovery`). **Automatic mode**
+  (the default, `false`) runs the platform discoverer every call and atomically
+  replaces the active-platform path snapshot in config with the result
+  (including nulls that clear stale values); on Windows only Steam + Darktide
+  are written (Linux-only fields are left untouched), on Linux all four fields
+  are written. **Manual mode** (`true`) does not invoke the discoverer: the
+  stored paths are validated by kind on disk (directory for Steam + compatdata;
+  file for Darktide + Proton), valid values pass through, and invalid/missing
+  ones surface as null result fields without rewriting the stored input
+  (`ProtonVersion` is null in manual mode). **Never throws on missing pieces**;
+  those are reported via `DiscoveryResult.Status` and the nullable fields (the
+  escape hatch the UI prompts against). `SteamService` itself contains no
+  platform dispatch.
+- `Rediscover()`: forces one automatic discovery pass regardless of the
+  configured mode, replaces the active-platform snapshot (including nulls),
+  leaves `OverrideAutomaticDiscovery` unchanged, and returns the discoverer's
+  result. The Discover-button affordance in Settings and the escape hatch both
+  call this.
 - `IsGameRunning()` -- cross-platform best-effort check against Darktide's process
   name. Delegates to the platform `IProcessLookup`; never throws -- enumeration
   failures degrade to "not running."
@@ -63,9 +69,9 @@ public enum DiscoveryPlatform { Linux, Windows }
 ```
 
 - **Complete** -- every critical field for the current OS is non-null.
-- **Partial** -- Steam located but some critical field is missing (the nullables
-  indicate what to prompt for).
-- **Failed** -- could not even locate Steam (prompt for the Steam dir).
+- **Partial** -- some critical field resolved but the result is not launchable
+  (the nullables indicate what to prompt for).
+- **Failed** -- no critical field resolved (prompt for the entry-point field).
 
 `DiscoveryPlatform` is the platform discovery runs against; production detects it
 from the runtime OS, tests can force it to exercise cross-platform logic on one
@@ -80,8 +86,10 @@ every OS-specific input + platform seam is injected:
   discoverer never hardcodes `~/.local/share/Steam`) and `Platform`. Production
   wires the real OS defaults via `CreateDefault()`; tests inject fixture paths.
   Notable fields: `LinuxDefaultSteamRoot`, `LinuxFlatpakSteamRoot`,
-  `LinuxCompatibilityToolsDir`, `WindowsDefaultSteamRoot`, `DarktideAppId`
-  (`1361210`), `DarktideCommonDir`, `GameBinaryName`, `GameProcessName`.
+  `LinuxCompatibilityToolsDir`, `LinuxSystemCompatibilityToolsDirs` (the two
+  standard Steam system directories, defaulting so `/usr/share/steam/compatibilitytools.d`
+  is searched), `WindowsDefaultSteamRoot`, `DarktideAppId` (`1361210`),
+  `DarktideCommonDir`, `GameBinaryName`, `GameProcessName`.
 - `ISteamDiscoverer` (internal) -- `Discover() → DiscoveryResult`. The
   platform-specific discovery strategy. Two implementations
   (`LinuxSteamDiscoverer`, `WindowsSteamDiscoverer`), selected once at DI time
@@ -89,14 +97,27 @@ every OS-specific input + platform seam is injected:
 - `SteamDiscoveryCore` (internal) -- the shared, platform-agnostic mechanics
   (root resolution, `libraryfolders.vdf` reading, Darktide probing, the all-null
   failure result) that both discoverers compose, **plus the single completeness
-  rule** `ComputeStatus(platform, steam, darktide, compatdata, proton)` used by
-  both discoverers (when building their result) and by `SteamService` (when
-  computing `Status` from the final post-validate + post-heal field values).
-  Consolidating the rule here guarantees the recomputed status is, by
-  construction, the same rule the discoverer used; the discoverers' per-platform
-  `StatusForLinux` / `StatusForWindows` helpers were extracted into it. This is
+  rule** `ComputeStatus(platform, steam, darktide, compatdata, proton)`. The
+  discoverers call it when building their result and `SteamService` calls it
+  when computing `Status` from the manual-mode validation, so the recomputed
+  status is, by construction, the same rule the discoverer used. This is
   composition, not inheritance -- each discoverer injects the core and layers its
   own platform steps on top.
+- `ProtonResolver` (internal) -- the Linux Proton compatibility-tool resolver,
+  constructed by `LinuxSteamDiscoverer`. Reads Steam's `CompatToolMapping` from
+  `config.vdf`, then resolves the selected tool name to a `proton` binary as a
+  custom tool (a `compatibilitytool.vdf` manifest) or a Valve-managed tool
+  (appinfo + appmanifest). See [Linux Proton resolution](#linux-proton-resolution).
+- `SteamAppInfoReader` (internal) -- parses Steam's binary `appinfo.vdf`
+  container (versions 39-41) and extracts the first app entry carrying a
+  `compat_tools` collection. Used by `ProtonResolver` for Valve-managed tool
+  resolution. Has an internal `ReadCompatTools(Stream)` overload so tests feed a
+  synthetic binary fixture.
+- `SteamTextVdf` (internal static) -- the single entry point for Steam text KV1
+  parsing (`config.vdf`, `compatibilitytool.vdf`, `appmanifest_*.acf`). Wraps
+  ValveKeyValue with `HasEscapeSequences = true` always on (Steam files
+  routinely contain C-style escapes, and ValveKeyValue defaults that flag to
+  `false`). Visible to tests via `InternalsVisibleTo`.
 - `ISteamRegistryReader` -- reads the Windows registry for the Steam install path
   (`GetSteamPath()` → `HKCU\Software\Valve\Steam\SteamPath`, or null if
   unreadable) and **normalizes it at the read boundary**: Steam's cross-platform
@@ -114,48 +135,69 @@ every OS-specific input + platform seam is injected:
 
 ## Discovery behavior
 
-`SteamService.Discover()` runs a four-step **validate + heal + persist** pipeline
-per call (all platform logic lives in the discoverer + the shared
-`SteamDiscoveryCore` it composes):
+`SteamService.Discover()` branches on `CuratorConfig.Discovery.OverrideAutomaticDiscovery`
+(read live via one `IConfigLoader.Load()` per call). All platform logic lives in
+the discoverer + the shared `SteamDiscoveryCore` it composes; the service itself
+holds only the mode policy.
 
-1. **Validate** -- read the live `CuratorConfig.Discovery` user overrides (one
-   `IConfigLoader.Load()` per call). For each platform-relevant field, check the
-   override's path on disk: `Directory.Exists` for Steam install + compatdata;
-   `File.Exists` for the Darktide binary + Proton script. An existing override
-   is **valid** (kept as-is); a null / whitespace / non-existent override
-   **needs healing**. On Windows the compatdata + Proton fields are Linux-only
-   and are neither validated nor healed (they stay null in the result; any
-   leftover config values are preserved untouched).
-2. **Heal** -- if any field needs healing, run the platform discoverer once and
-   let each healing field pick up the discoverer's value for it. A field the
-   discoverer also cannot resolve stays null ("still missing"). **Fast path:**
-   when every platform-relevant field is valid, the discoverer is skipped
-   entirely (no I/O beyond the existence checks).
-3. **Selectively persist** -- if any field was healed to a non-null value,
-   re-read the config fresh and write **only the healed fields'** `User*Path`
-   back through `IConfigLoader.Save`. Valid fields are NOT overwritten
-   (preserving the user's choice), and a hand-edit on disk between the
-   top-of-call read and the save is preserved too (the read-modify-save starts
-   from the current file, not the stale snapshot).
-4. **Return** -- build a `DiscoveryResult` with the final paths (valid + healed)
-   and a status computed via `SteamDiscoveryCore.ComputeStatus` (the same rule
-   the discoverer used). `ProtonVersion` is carried only when Proton was healed
-   from the discoverer (the auto label describes the discoverer's path); a
-   valid user override drops the label (it may not describe the user-chosen
-   path).
+### Automatic mode (default, `OverrideAutomaticDiscovery = false`)
+
+Runs the platform discoverer every call and atomically replaces the
+active-platform snapshot in config with the result:
+
+1. **Discover** -- run the platform `ISteamDiscoverer`, which probes the
+   platform-appropriate Steam install locations and resolves the Steam install,
+   Darktide install, and (Linux) compatdata + Proton.
+2. **Replace active-platform fields** -- a read-modify-save starting from the
+   current config (so the mode bool + the inactive-platform fields survive
+   untouched) overwrites only the active-platform fields with the discoverer's
+   snapshot. Windows writes Steam + Darktide and leaves the Linux-only compatdata
+   + Proton fields untouched; Linux writes all four. Nulls are written too, so a
+   field the discoverer could not resolve clears a stale value rather than
+   leaving a path that no longer reflects reality. The save is skipped when the
+   snapshot already matches what is persisted (no churn on a steady-state call).
+3. **Return** -- the discoverer's `DiscoveryResult`, with `Status` computed by
+   `SteamDiscoveryCore.ComputeStatus` (the same rule the discoverer used).
+
+### Manual mode (`OverrideAutomaticDiscovery = true`)
+
+The discoverer is not invoked. The stored paths are validated by kind on disk:
+
+- Steam install + compatdata must be existing directories.
+- Darktide binary + Proton script must be existing files.
+
+Valid values pass through unchanged; invalid/missing ones surface as null result
+fields. The stored input is **never rewritten or cleared**, so an invalid manual
+value stays in config exactly as the user typed it (the UI keeps showing it for
+correction). `ProtonVersion` is null (no discoverer label is available). On
+Windows the compatdata + Proton fields are Linux-only and are not validated;
+they stay null in the result. `Status` is computed via the same
+`SteamDiscoveryCore.ComputeStatus` rule, so on Windows a valid Darktide binary
+alone yields `Complete` and an optional valid Steam path is returned for display
+only (an absent/invalid one surfaces null in the result while the stored string
+is preserved).
+
+### `Rediscover()`
+
+Forces one automatic pass regardless of the configured mode, replaces the
+active-platform snapshot (including nulls), leaves `OverrideAutomaticDiscovery`
+unchanged, and returns the discoverer's result. The Settings and escape-hatch
+Discover buttons call this so a user can refresh the snapshot without first
+flipping the mode.
 
 **Caller contract:**
 
 - The composition root calls `Discover()` at startup (non-blocking). A missing-
   fields result is logged as a warning so the user can still use the app; they
-  just cannot launch until resolved (the launch-time `Discover()` re-checks and
+  just cannot launch until resolved (the launch-time `Discover()` re-runs and
   surfaces the escape-hatch when incomplete).
 - [relay-client](relay-client.md)'s `RelayLaunchService.Launch()`
-  calls `Discover()` at launch (blocking). A missing-fields result yields
+  calls `Discover()` at launch (blocking). Because automatic mode re-runs the
+  discoverer every call, a launch follows changes to the Steam/Darktide/Proton
+  layout live; a missing-fields result yields
   `LaunchResult.Status = DiscoveryIncomplete`, surfacing the escape-hatch modal.
-- The Settings destination reads `DiscoveryConfig` directly (now populated by the
-  startup `Discover()`), so the discovery fields show the current paths rather
-  than blanks.
+- The Settings destination reads `DiscoveryConfig` directly, which automatic
+  mode keeps populated with the latest snapshot.
 
 ### Linux (`LinuxSteamDiscoverer`)
 
@@ -172,30 +214,72 @@ per call (all platform logic lives in the discoverer + the shared
 4. **Compatdata** -- `steamapps/compatdata/<DarktideAppId>/` probed on the main
    install first, then each library in VDF order (the prefix frequently lives on
    a library drive, not the main install); first existing dir wins.
-5. **Proton** (heuristic -- deep Steam per-game config parsing is out of v1):
-    1. `Proton - Experimental` in `steamapps/common` (common default).
-   2. The highest-versioned `Proton X.Y` in `steamapps/common`.
-   3. The highest-versioned build in `compatibilitytools.d` (ProtonUp-GE).
-   4. Nothing → `null` (escape hatch; UI prompts).
+5. **Proton** -- resolves the effective compatibility tool from Steam's
+   `CompatToolMapping` (see [Linux Proton resolution](#linux-proton-resolution)).
 
-   The chosen source is recorded in `Warnings`. Status is `Complete` only if
-   Steam + Darktide + compatdata + Proton all resolve.
+   Status is `Complete` only if Steam + Darktide + compatdata + Proton all
+   resolve.
+
+### Linux Proton resolution
+
+`ProtonResolver` reads the tool Steam actually selected for Darktide, rather
+than guessing from directory names. The steps are best-effort: a missing or
+unreadable file degrades to an unresolved Proton (warning), never a throw.
+
+1. **Selected tool name** -- `<steamRoot>/config/config.vdf` →
+   `Software > Valve > Steam > CompatToolMapping`. The app-specific mapping for
+   Darktide's app id (`1361210`) is authoritative when present; its `name` is
+   used as-is, and an empty or malformed name fails resolution without falling
+   through. The global `"0"` mapping is consulted only when the app-specific
+   mapping is absent. No mapping at all → unresolved.
+2. **Custom tool** -- a `compatibilitytool.vdf` manifest whose `compat_tools`
+   collection defines the selected name, searched across every
+   compatibility-tool root in order: the resolved Steam root's
+   `compatibilitytools.d`, the configured user root, then the system roots
+   (including `/usr/share/steam/compatibilitytools.d`). Each root is checked
+   root-level first (Valve permits a manifest directly at the root with a
+   relative or absolute `install_path`), then its per-tool subdirectories. The
+   resolved `install_path`'s `proton` file must exist.
+3. **Valve-managed tool** -- the `compat_tools` entry in
+   `<steamRoot>/appcache/appinfo.vdf` (binary; parsed by
+   `SteamAppInfoReader`) whose key or comma-separated alias matches the selected
+   name, then `appmanifest_<appid>.acf` across the libraries, parsing its
+   `installdir`, requiring
+   `<library>/steamapps/common/<installdir>/proton` to exist.
+4. Nothing resolves → `null` (escape hatch; UI prompts). A reason is appended to
+   `Warnings`.
+
+`ProtonVersion` carries the tool's `display_name` when present (the custom
+manifest's, or the appinfo entry's), otherwise the internal tool name.
 
 ### Windows (`WindowsSteamDiscoverer`)
 
 Registry first (`ISteamRegistryReader` -- authoritative when present), then the
 default path (`C:\Program Files (x86)\Steam`); the resolved source is recorded.
 Same multi-library `libraryfolders.vdf` parse + Darktide probe (shared core).
-Compatdata/Proton are null (native -- unused). Status is `Complete` only if Steam
-+ Darktide resolve.
+Compatdata/Proton are null (native -- unused). Steam is the discovery anchor:
+the discoverer locates Darktide by walking Steam's libraries, so a missing Steam
+yields `Failed` before Darktide is even probed (the automatic pass never resolves
+a Darktide binary without one). The completeness rule (`ComputeStatus`) requires
+only the Darktide binary on Windows, which is what lets a manual Darktide path
+count as `Complete` without Steam.
 
-### VDF parsing (`LibraryFoldersVdf`, internal)
+### Text KV1 parsing
 
-A minimal regex parser for Steam's `libraryfolders.vdf` -- extracts the library
-root `"path"` values in document order (enough to drive multi-library discovery
-without a heavyweight VDF dependency). Unescapes `\\` → `\` and `\"` → `"`
-(Windows VDF uses C-style escapes; Linux Steam writes forward slashes). Visible
-to tests via `InternalsVisibleTo`.
+Steam text KeyValues1 files (`config.vdf`, `compatibilitytool.vdf`,
+`appmanifest_*.acf`) are deserialized through `SteamTextVdf`, which always
+enables `KVSerializerOptions.HasEscapeSequences`. ValveKeyValue defaults that
+flag to `false`, but Steam files routinely contain C-style escapes (`\"`, `\\`),
+so centralizing the option here keeps every caller correct. The binary KV1 blobs
+inside `appinfo.vdf` are delegated to ValveKeyValue's binary serializer by
+`SteamAppInfoReader`; the outer appinfo container (magic/version/string
+table/app entries) is parsed by the narrow internal reader.
+
+`LibraryFoldersVdf` (internal) is a minimal regex parser for Steam's
+`libraryfolders.vdf` -- it extracts the library root `"path"` values in document
+order (enough to drive multi-library discovery without routing that one file
+through the ValveKeyValue dependency), unescaping `\\` → `\` and `\"` → `"`.
+Visible to tests via `InternalsVisibleTo`.
 
 ## Cross-platform notes
 
@@ -279,13 +363,12 @@ selection so the Windows path runs on Linux CI). `ISteamService` is `AddSingleto
 
 Note: `AddSteam()` does **not** register `IConfigLoader` itself. `SteamService`
 depends on `IConfigLoader` (it reads + writes `CuratorConfig.Discovery` live on
-each `Discover()` call so a Settings / escape-hatch / hand-edit write is visible
-immediately), so an `IConfigLoader` must be registered externally before
-resolving `ISteamService`. In production that is [General](general.md)'s
-`AddGeneral()` (which `TryAdd`s `ConfigLoader`); tests register a fake (e.g. the
-validate + heal + persist tests register a `FakeConfigLoader` whose `Save`
-mirrors the real loader's round-trip so a subsequent `Load` sees the saved
-state).
+each `Discover()` / `Rediscover()` call so a Settings / escape-hatch / hand-edit
+write is visible immediately), so an `IConfigLoader` must be registered externally
+before resolving `ISteamService`. In production that is [General](general.md)'s
+`AddGeneral()` (which `TryAdd`s `ConfigLoader`); tests register a fake whose
+`Save` mirrors the real loader's round-trip so a subsequent `Load` sees the saved
+state.
 
 `SteamRegistryReader` is Windows-only: no `Microsoft.Win32.Registry` package is
 required (on `net10.0` the `Registry` type is in the reference assembly, gated
@@ -298,33 +381,46 @@ no-op).
 
 ## Dependencies
 
-- **Curator libraries:** [config](config.md) (`DiscoveryConfig`, the user-override
-  section of `CuratorConfig` validated + healed + persisted by `Discover()`) +
-  [general](general.md) (`IConfigLoader`, the live reader/writer `SteamService`
-  reads `Discovery` from and writes the healed fields back to on each `Discover()`
-  call).
+- **Curator libraries:** [config](config.md) (`DiscoveryConfig`, the
+  discovery-mode + path-snapshot section of `CuratorConfig` that automatic mode
+  rewrites and manual mode validates) + [general](general.md) (`IConfigLoader`,
+  the live reader/writer `SteamService` reads `Discovery` from and writes the
+  active-platform snapshot back to on each `Discover()` / `Rediscover()` call).
 - **NuGet:** `Microsoft.Extensions.DependencyInjection.Abstractions`,
-  `Microsoft.Extensions.Logging.Abstractions`.
+  `Microsoft.Extensions.Logging.Abstractions`, and `ValveKeyValue` 0.70.0.499
+  (MIT, `net10.0`) for text + binary KV1 parsing of `config.vdf`,
+  `compatibilitytool.vdf`, `appmanifest_*.acf`, and the binary KV1 blobs inside
+  `appinfo.vdf`. The appinfo outer container (magic/version/string table/app
+  entries) is parsed by the narrow internal `SteamAppInfoReader`; ValveKeyValue
+  is not used for the outer container.
 
 ## Testing
 
 `Modificus.Curator.Steam.Tests` covers Linux discovery (`LinuxDiscoveryTests`,
 `FlatpakDiscoveryTests`), Windows discovery (`WindowsDiscoveryTests`), Proton
-selection (`ProtonSelectionTests`), the `libraryfolders.vdf` parser
+compatibility-tool selection (`ProtonSelectionTests`, `ProtonResolverTests` --
+app-specific vs global mapping, custom vs Valve-managed tool resolution, root-
+level vs subdirectory custom manifests, system roots), the binary
+`appinfo.vdf` reader (`SteamAppInfoReaderTests`, against a compact synthetic v41
+fixture with a string table), the `SteamTextVdf` escape-semantics helper
+(`SteamTextVdfTests`, including a sanitized realistic `config.vdf` fixture with
+an escaped JSON scalar), the `libraryfolders.vdf` parser
 (`LibraryFoldersVdfTests`), game-running detection (`GameRunningTests`,
 `ArgvMatchTests` -- the latter pinning the `MatchesArgv0` backslash normalization),
 the `SteamPathNormalizer` pure helper (`SteamPathNormalizationTests`),
-the `AddSteam` DI wiring (the `TryAdd` overrides, the `ISteamDiscoverer`
-selection by `SteamDiscoveryOptions.Platform`, and the platform `IProcessLookup`
-selection), and the `SteamService.Discover()` validate + heal + persist
-pipeline (`SteamServiceOverlayTests`: every field valid skips the discoverer
-entirely; missing fields are healed from the discoverer + persisted; the
-selective save writes only the healed fields while preserving valid fields +
-concurrent hand-edits; unresolvable fields stay null and flag `Status =
-Partial`; on Windows only Steam + Darktide are checked + healed; the
-`ProtonVersion` side-effect when a valid override takes the Proton field; and
-the live-read contract that makes a config write between calls visible on the
-next `Discover()`). `WindowsDiscoveryTests` force `Platform = Windows` + a fake
+the `AddSteam` DI wiring (`SteamServiceCollectionExtensionsTests`: the `TryAdd`
+overrides, the `ISteamDiscoverer` selection by `SteamDiscoveryOptions.Platform`,
+and the platform `IProcessLookup` selection), and the discovery-mode policy
+(`SteamServiceOverlayTests`: automatic mode runs the discoverer + persists the
+full active-platform snapshot including nulls that clear stale values, skips the
+save when the snapshot is unchanged, follows a changed Darktide library location,
+and on Windows writes only Steam + Darktide while preserving leftover Linux
+fields; manual mode validates stored paths by kind, returns null for invalid
+fields without rewriting the stored input, skips compatdata/Proton on Windows,
+and yields null `ProtonVersion`; `Rediscover` forces an automatic pass even in
+manual mode, replaces active fields including nulls, and preserves the mode; the
+live-read contract makes a mode change between calls visible on the next
+`Discover()`). `WindowsDiscoveryTests` force `Platform = Windows` + a fake
 registry reader so the Windows discoverer path runs on Linux CI -- the
 load-bearing proof that discoverer selection follows `Platform`, not the runtime
 OS.
