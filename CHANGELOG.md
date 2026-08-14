@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.28.0...v0.29.0) (2026-08-14)
+
+
+### Features
+
+* improve DMF setup and launch feedback ([#195](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/195)) ([30c656d](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/30c656dd5f98e92012ac5916da98eec9d902d56c))
+
 ## [0.28.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.27.1...v0.28.0) (2026-08-14)
 
 
