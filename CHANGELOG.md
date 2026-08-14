@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.27.1...v0.28.0) (2026-08-14)
+
+
+### Features
+
+* **steam:** follow Steam compatibility tool selection ([#192](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/192)) ([1c1c298](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/1c1c298664b9b03b8430a7e9e10800e32de13dab))
+
 ## [0.27.1](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.27.0...v0.27.1) (2026-08-13)
 
 
