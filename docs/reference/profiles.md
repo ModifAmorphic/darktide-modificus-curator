@@ -109,11 +109,25 @@ Method behavior:
   implies no staged-game change (the staged root is regenerated on the next
   `PrepareModRoot`). Throws `KeyNotFoundException` if the profile or the
   container is not in its list.
-- `AddMod(id, containerId, policy)` -- appends a mod entry (`Enabled = true`,
-  `OrderLocked = false`) at the end and renumbers `Order` dense across the list.
-  **List entry only: does NOT fetch or install mod files** (the repository holds
-  the files; staging symlinks to them). Idempotent: re-adding a `containerId`
-  already in the list is a strict no-op (order/enabled/policy/lock untouched).
+- `AddMod(id, containerId, policy)` -- adds a mod entry (`Enabled = true`)
+  and renumbers `Order` dense across the list. A fresh add of DMF (Darktide
+  Mod Framework, recognized by a deliberately small rule: the container's
+  source is Nexus mod 8, or the content the given policy would stage resolves
+  to the canonical lower-case `dmf` base folder containing `dmf.mod`) is
+  inserted at rank 0 with `OrderLocked = true`, shifting existing entries down
+  one rank while preserving their relative order + all metadata (including
+  lock bits); the shifted indexes are the new structural baseline, consistent
+  with remove compaction. Every other add appends at the end
+  (`OrderLocked = false`). One persistence write either way; the rule lives in
+  this boundary so every acquisition path (the DMF prompt, Premium download,
+  nxm handler, local import, linked folder) inherits it without caller
+  choreography. **List entry only: does NOT fetch or install mod files** (the
+  repository holds the files; staging symlinks to them). Idempotent: re-adding
+  a `containerId` already in the list is a strict no-op
+  (order/enabled/policy/lock untouched), so a DMF update or re-import never
+  overrides the user's current arrangement (unlock, reorder, disable, remove
+  are all the user's to make; the lock is a fresh-add default, not a protected
+  state).
 - `SetModPolicy(id, containerId, policy)` -- records the new policy. Resolution
   happens at stage time, so there is no on-disk transition (the policy is just
   metadata; `PrepareModRoot` re-resolves on the next launch). A `PinnedPolicy` is
@@ -405,8 +419,10 @@ reported as a collision. No dedupe, no last-wins, no disambiguation.
 staging-link projection (an NTFS junction on Windows, a symlink on Linux). For a
 linked mod the link points directly at the external folder; the external folder
 is the user's and is never modified.
-`mods.lst` lists exactly what got staged, in `Order`: no
-DMF-first enforcement, no auto-sort (those are higher-layer concerns).
+`mods.lst` lists exactly what got staged, in `Order`: staging itself enforces
+no placement (the fresh-add DMF-first + lock default lives in `AddMod`, and
+auto-sort is a higher-layer concern), so the file is a faithful projection of
+the profile's list.
 
 ### Moving `IsLatest` requires zero profile-entry changes
 
@@ -443,16 +459,23 @@ read normalization, `UpdateProfile` preserving
 identity/mods/order/enabled/policies, name + description normalization and
 rejection, launch-settings validation through the shared validator, no-partial-write
 atomicity, and `ListProfiles`/`ProfileCreated` projecting description), mod
-list ordering/enable/policy + the base-name collision hard-block
-(`ModListTests`, including the legacy-Name-entry drop + null-Policy coercion +
-`GetBaseNameCollision` over all/none/disabled/excluded/corrupted cases), the
-profile-scoped load-order locks (`ModOrderLockTests`: `OrderLocked` persistence
-+ the older-profile-json backward-compatible load, the `SetModOrder` lock
-projection over locked-first/multiple/all-locked/partial/unknown/duplicate/
-no-lock-regression cases, `SetModOrderLocked` true/false + unknown-mod
-behavior, `AddMod` append-unlocked + compaction + idempotent re-add preserving
-lock, and `RemoveMod` compaction/re-baselining permitting a locked row's
-removal), the
+  list ordering/enable/policy + the base-name collision hard-block
+  (`ModListTests`, including the legacy-Name-entry drop + null-Policy coercion +
+  `GetBaseNameCollision` over all/none/disabled/excluded/corrupted cases), the
+  profile-scoped load-order locks (`ModOrderLockTests`: `OrderLocked` persistence
+  + the older-profile-json backward-compatible load, the `SetModOrder` lock
+  projection over locked-first/multiple/all-locked/partial/unknown/duplicate/
+  no-lock-regression cases, `SetModOrderLocked` true/false + unknown-mod
+  behavior, ordinary `AddMod` append-unlocked + compaction + idempotent re-add
+  preserving lock, and `RemoveMod` compaction/re-baselining permitting a locked
+  row's removal), the DMF fresh-add rule (`DmfAddTests`: Nexus mod 8 first +
+  locked on an empty profile + prepended after ordinary mods with survivor
+  metadata intact, the canonical `dmf`/`dmf.mod` content recognition for
+  untracked + linked containers, lookalikes staying ordinary (wrong-case base
+  folder, non-matching descriptor, other Nexus ids), the unknown-container-id
+  append allowance, idempotent re-add after the user unlocks/reorders/disables,
+  remove-then-re-add reapplying first + locked, and the prepend lock's
+  interplay with later reorders + unlocking), the
 launch-settings model + service (`LaunchSettingsTests`: round-trip across a
 fresh instance, old-JSON-loads-empty + explicit-null normalization, order +
 duplicate preservation, the full validation surface -- empty / `=` / NUL name,

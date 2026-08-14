@@ -819,6 +819,19 @@
   </data>
 
   <!-- ============================================================ -->
+  <!-- Launch overlay (in-window blocking progress)                 -->
+  <!-- ============================================================ -->
+
+  <data name="Launch_OverlayTitle" xml:space="preserve">
+    <value>Launching Darktide</value>
+    <comment>Title on the centered progress card of the full-client launch overlay, shown while a launch attempt is in progress.</comment>
+  </data>
+  <data name="Launch_OverlayMessage" xml:space="preserve">
+    <value>Preparing your modded game…</value>
+    <comment>Message under the launch overlay title (a real ellipsis character, matching the repo localization style). The overlay blocks the client area until Darktide is detected or the bounded wait times out.</comment>
+  </data>
+
+  <!-- ============================================================ -->
   <!-- Integrations dialog (IntegrationsWindow / VM)                -->
   <!-- ============================================================ -->
 

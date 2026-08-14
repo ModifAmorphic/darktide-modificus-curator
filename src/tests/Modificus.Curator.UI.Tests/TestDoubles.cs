@@ -60,6 +60,7 @@ internal static class TestDoubles
         // SAFETY: an omitted launcher seam defaults to the harmless no-op
         // recorder (never the production Process.Start fallback).
         launchExternal ??= TestLauncher.NoOp;
+        profiles.RepoLookup = repo;
         return new DmfPromptService(
             profiles,
             session,
@@ -134,6 +135,7 @@ internal static class TestDoubles
         updateState ??= new FakeUpdateStateStore(profiles, repo);
         coordinator ??= new UpdateCoordinator();
         automaticUpdates ??= new FakeAutomaticUpdateService();
+        profiles.RepoLookup = repo;
         // The inline import-workflow child VM: constructed over the SAME
         // profile/session/repo/import/localization fakes so a test that drives
         // StartBatch sees the imported mod land in the profile the mod-list VM
@@ -256,6 +258,13 @@ internal static class TestDoubles
     /// seed state + assert on call counts (RefreshAsync calls, IsRegistered
     /// probes, reload side effects, launch calls).
     /// </summary>
+    /// <param name="yieldForLaunchRender">The pre-launch render-yield seam.
+    /// When omitted, completes immediately (a real Avalonia dispatcher yield
+    /// would hang a unit test). Launch-attempt tests pass a
+    /// TaskCompletionSource-backed task to hold the attempt at the yield.</param>
+    /// <param name="launchHandoffTimeout">The post-spawn handoff timeout seam.
+    /// When omitted, elapses immediately (no real 30-second wait), so a
+    /// Launched result resolves its handoff via timeout by default.</param>
     public static ShellParts BuildShell(
         FakeProfileService? profiles = null,
         FakeProfileSession? session = null,
@@ -267,7 +276,9 @@ internal static class TestDoubles
         FakeNxmHandlerRegistrar? nxmRegistrar = null,
         LocalizationService? localization = null,
         FakeModRepository? repo = null,
-        FakeSteamService? steam = null)
+        FakeSteamService? steam = null,
+        Func<Task>? yieldForLaunchRender = null,
+        Func<Task>? launchHandoffTimeout = null)
     {
         profiles ??= Profiles();
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
@@ -279,6 +290,9 @@ internal static class TestDoubles
         localization ??= new LocalizationService();
         repo ??= new FakeModRepository();
         steam ??= new FakeSteamService();
+        profiles.RepoLookup = repo;
+        yieldForLaunchRender ??= static () => Task.CompletedTask;
+        launchHandoffTimeout ??= static () => Task.CompletedTask;
 
         var modsPage = BuildModList(
             profiles, session, repo,
@@ -318,7 +332,9 @@ internal static class TestDoubles
             dmf,
             invokeOnUi: static action => action(),
             NullLogger<ShellViewModel>.Instance,
-            config, nxmRegistrar);
+            config, nxmRegistrar,
+            yieldForLaunchRender,
+            launchHandoffTimeout);
 
         return new ShellParts(
             shell, profiles, session, dialogs, launch, appUpdate, config,
@@ -478,6 +494,14 @@ internal sealed class FakeProfileService : IProfileService
 
     /// <summary>Per-profile mod lists (in stored order); tests seed directly.</summary>
     public Dictionary<Guid, List<ModListEntry>> ModLists => _modLists;
+
+    /// <summary>
+    /// Optional repository lookup used to mirror production's source-based DMF
+    /// recognition in <see cref="AddMod"/>. When <c>null</c> (a bare fake),
+    /// every fresh add appends at the end (the content-based DMF rule needs
+    /// the real on-disk resolver regardless).
+    /// </summary>
+    public IModRepository? RepoLookup { get; set; }
 
     public IReadOnlyList<(Guid Id, Guid ContainerId, bool Enabled)> SetModEnabledCalls { get; } = new List<(Guid, Guid, bool)>();
     public IReadOnlyList<(Guid Id, Guid ContainerId, bool OrderLocked)> SetModOrderLockedCalls { get; } = new List<(Guid, Guid, bool)>();
@@ -745,22 +769,23 @@ internal sealed class FakeProfileService : IProfileService
             return;
         }
 
-        // Mirror production: compact survivor Order dense by stable Order sort
-        // (lock metadata travels with each entry), then append the new entry
-        // unlocked at the end.
-        var compacted = list
-            .OrderBy(m => m.Order)
-            .Select((m, i) => m with { Order = i })
-            .ToList();
-        compacted.Add(new ModListEntry
+        // Mirror production: stable Order sort, then insert. A fresh DMF add
+        // goes to rank 0 + locked (shifting survivors down one rank); any other
+        // add appends at the end unlocked. The fake recognizes DMF by source
+        // only (Nexus mod 8); the content-based rule needs the real on-disk
+        // resolver and is exercised against the real service in
+        // Profiles.Tests (same posture as GetBaseNameCollision).
+        var dmf = RepoLookup?.Get(containerId)?.Source is NexusSource { ModId: 8 };
+        var entries = list.OrderBy(m => m.Order).ToList();
+        entries.Insert(dmf ? 0 : entries.Count, new ModListEntry
         {
             ContainerId = containerId,
             Enabled = true,
-            Order = compacted.Count,
+            OrderLocked = dmf,
             Policy = policy,
         });
         list.Clear();
-        list.AddRange(compacted);
+        list.AddRange(entries.Select((m, i) => m with { Order = i }));
     }
 
     public void SetModPolicy(Guid id, Guid containerId, ModVersionPolicy policy)
@@ -1070,6 +1095,15 @@ internal sealed class FakeDialogService : IDialogService
     /// </summary>
     public bool EscapeHatchResult { get; set; }
 
+    /// <summary>
+    /// Optional task the next <see cref="ShowDiscoveryEscapeHatchAsync"/> call
+    /// awaits before recording its result, so a test can hold the dialog open
+    /// and observe in-flight state (e.g. the launch-attempt state staying set
+    /// while a failure dialog is showing). Consumed (reset to <c>null</c>) by
+    /// that call. Default <c>null</c> = returns immediately.
+    /// </summary>
+    public Task? NextEscapeHatchGate { get; set; }
+
     /// <summary>The missing-field lists the shell asked the escape-hatch to show,
     /// in call order. Tests assert on this to verify which fields the launch
     /// reported missing.</summary>
@@ -1092,10 +1126,15 @@ internal sealed class FakeDialogService : IDialogService
         return Task.FromResult(WelcomeResult);
     }
 
-    public Task<bool> ShowDiscoveryEscapeHatchAsync(IReadOnlyList<string> missingFields)
+    public async Task<bool> ShowDiscoveryEscapeHatchAsync(IReadOnlyList<string> missingFields)
     {
         ((List<IReadOnlyList<string>>)EscapeHatchCalls).Add(missingFields);
-        return Task.FromResult(EscapeHatchResult);
+        if (NextEscapeHatchGate is { } gate)
+        {
+            NextEscapeHatchGate = null;
+            await gate;
+        }
+        return EscapeHatchResult;
     }
 
     public Task ShowAlertAsync(string title, string message)
@@ -1298,6 +1337,15 @@ internal sealed class FakeProfileSession : ObservableObject, IProfileSession
     public Action? OnRefresh { get; set; }
 
     /// <summary>
+    /// Raises <see cref="INotifyPropertyChanged.PropertyChanged"/> for
+    /// <see cref="IsRunning"/> without changing the value, simulating a false
+    /// polling notification (the real polling timer re-checks the detector and
+    /// the session only raises a change when the value actually flips, but the
+    /// launch-attempt wait must tolerate any notification shape).
+    /// </summary>
+    public void RaiseIsRunningPropertyChanged() => OnPropertyChanged(nameof(IsRunning));
+
+    /// <summary>
     /// Records the call + runs the optional <see cref="OnRefresh"/> callback so a
     /// test can simulate the running-state change a real Refresh would observe.
     /// </summary>
@@ -1312,7 +1360,8 @@ internal sealed class FakeProfileSession : ObservableObject, IProfileSession
 /// Configurable <see cref="IRelayLaunchService"/> for shell-VM launch tests.
 /// <see cref="NextResult"/> is returned for every Launch call (default:
 /// Launched). <see cref="LaunchCalls"/> records the ids the shell asked to
-/// launch.
+/// launch. <see cref="LaunchThrows"/> (when set) makes the next call throw
+/// after recording, for the launch-attempt exception path.
 /// </summary>
 internal sealed class FakeLaunchService : IRelayLaunchService
 {
@@ -1321,9 +1370,19 @@ internal sealed class FakeLaunchService : IRelayLaunchService
 
     public IReadOnlyList<Guid> LaunchCalls { get; } = new List<Guid>();
 
+    /// <summary>
+    /// When set, <see cref="Launch"/> throws this exception after recording the
+    /// call. Default <c>null</c> = no throw.
+    /// </summary>
+    public Exception? LaunchThrows { get; set; }
+
     public LaunchResult Launch(Guid profileId)
     {
         ((List<Guid>)LaunchCalls).Add(profileId);
+        if (LaunchThrows is not null)
+        {
+            throw LaunchThrows;
+        }
         return NextResult;
     }
 }

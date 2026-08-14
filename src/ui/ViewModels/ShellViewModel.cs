@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Modificus.Curator.Config;
@@ -20,8 +21,8 @@ namespace Modificus.Curator.UI.ViewModels;
 /// and the deferred DMF install-prompt trigger (consumed on a real navigation
 /// into Mods). The active profile is owned by <see cref="IProfileSession"/>;
 /// launch availability derives directly from
-/// <see cref="IProfileSession.ActiveProfileId"/> + <see cref="IsGameRunning"/>,
-/// never a cached snapshot.
+/// <see cref="IProfileSession.ActiveProfileId"/> + <see cref="IsGameRunning"/>
+/// + the shell's own launch-attempt state, never a cached snapshot.
 /// </summary>
 /// <remarks>
 /// <para><b>Navigation lifecycle:</b> a real destination change runs the current
@@ -55,6 +56,18 @@ namespace Modificus.Curator.UI.ViewModels;
 /// from <see cref="IProfileSession.IsRunning"/>, which a polling timer
 /// refreshes, so the status strip + launch-availability react within a few
 /// seconds of Darktide starting or stopping.</para>
+/// <para><b>Launch-attempt state is the shell's, distinct from
+/// running-state:</b> <see cref="IsLaunchAttemptInProgress"/> covers the whole
+/// launch attempt (the render yield, the synchronous discovery/staging/spawn
+/// call, failure-dialog handling, and the post-spawn wait for the session's
+/// detector to notice Darktide). An executable launch sets it before anything
+/// else; a successful spawn keeps it until the session's live running-state
+/// signal observes the game or a bounded timeout elapses, so the
+/// process-detection gap after a spawn can never double-launch and a detector
+/// that never sees the game can never wedge the button. This is signal
+/// observation, not process supervision: Relay and Darktide stay
+/// fire-and-forget (no process handle, no wait, no lifetime management).
+/// </para>
 /// <para><b>Localizable text is live:</b> the status strings + the current page
 /// title re-resolve from <see cref="LocalizationService"/> on a culture
 /// change.</para>
@@ -76,6 +89,8 @@ public partial class ShellViewModel : ObservableObject
     private readonly INxmHandlerRegistrar? _nxmRegistrar;
     private readonly DmfPromptService _dmfPrompt;
     private readonly ILogger<ShellViewModel> _logger;
+    private readonly Func<Task> _yieldForLaunchRender;
+    private readonly Func<Task> _launchHandoffTimeout;
 
     // Whether the automatic startup self-update check is enabled
     // (CuratorConfig.AppUpdates.CheckOnStartup). The status-strip update notice
@@ -100,7 +115,9 @@ public partial class ShellViewModel : ObservableObject
         Action<Action> invokeOnUi,
         ILogger<ShellViewModel> logger,
         IConfigLoader configLoader,
-        INxmHandlerRegistrar? nxmRegistrar = null)
+        INxmHandlerRegistrar? nxmRegistrar = null,
+        Func<Task>? yieldForLaunchRender = null,
+        Func<Task>? launchHandoffTimeout = null)
     {
         _session = session;
         _launchService = launchService;
@@ -117,6 +134,13 @@ public partial class ShellViewModel : ObservableObject
         _logger = logger;
         _configLoader = configLoader ?? throw new ArgumentNullException(nameof(configLoader));
         _nxmRegistrar = nxmRegistrar;
+        // Timing seams for the launch attempt: production defaults yield once
+        // to the Avalonia dispatcher (Loaded priority) and bound the post-spawn
+        // handoff with a real 30s delay; tests inject completed or
+        // TaskCompletionSource-backed tasks for deterministic control (a real
+        // dispatcher yield would hang a unit test).
+        _yieldForLaunchRender = yieldForLaunchRender ?? YieldForLaunchRender;
+        _launchHandoffTimeout = launchHandoffTimeout ?? (static () => Task.Delay(LaunchHandoffTimeout));
         _autoUpdateChecksEnabled = _configLoader.Load().AppUpdates.CheckOnStartup;
 
         _isGameRunning = _session.IsRunning;
@@ -629,14 +653,51 @@ public partial class ShellViewModel : ObservableObject
     // ---- launch -----------------------------------------------------------
 
     /// <summary>
+    /// How long a successful launch keeps the attempt state while waiting for
+    /// the session's running-state signal to observe Darktide. Bounds the
+    /// process-detection handoff so a detector that never sees the game (a
+    /// spawn that died silently) still re-enables Launch. Starts after
+    /// <see cref="IRelayLaunchService"/> returns
+    /// <see cref="LaunchStatus.Launched"/>, never during
+    /// discovery/staging/spawn.
+    /// </summary>
+    internal static readonly TimeSpan LaunchHandoffTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// The production render yield: one Avalonia dispatcher yield at
+    /// <see cref="DispatcherPriority.Loaded"/> (after layout + render, before
+    /// subsequent input), so the freshly-disabled Launch button paints its
+    /// disabled style before the synchronous launch work resumes.
+    /// </summary>
+    private static async Task YieldForLaunchRender() => await Dispatcher.Yield(DispatcherPriority.Loaded);
+
+    /// <summary>
+    /// Whether a launch attempt is executing: from the executable launch
+    /// request, through the render yield + the synchronous launch call +
+    /// failure-dialog handling, until the post-spawn handoff resolves (the
+    /// session's running-state signal observing Darktide, or the bounded
+    /// timeout). Gates <see cref="LaunchCommand"/> alongside the active-profile
+    /// + running gates. Shell-owned and distinct from
+    /// <see cref="IsGameRunning"/> (the session's process-detected state): the
+    /// attempt covers the gap a detector cannot yet see.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(LaunchCommand))]
+    private bool _isLaunchAttemptInProgress;
+
+    /// <summary>
     /// Launches the active profile modded. Resolves the active id from the
-    /// session at execution time and branches on
+    /// session at execution time, sets the launch-attempt state (disabling the
+    /// button) before anything else, yields once so the disabled style paints,
+    /// then calls the launch service and branches on
     /// <see cref="LaunchResult.Status"/>:
     /// <list type="bullet">
     /// <item><term><see cref="LaunchStatus.Launched"/></term><description>an
     /// immediate <see cref="IsGameRunning"/> refresh so the indicator +
     /// CanLaunch react at once, and clearing the pending-changes flag (the
-    /// successful stage re-staged the mod tree).</description></item>
+    /// successful stage re-staged the mod tree); then the attempt state stays
+    /// set until the session's running-state signal observes Darktide or
+    /// <see cref="LaunchHandoffTimeout"/> elapses.</description></item>
     /// <item><term><see cref="LaunchStatus.DiscoveryIncomplete"/></term>
     /// <description>opens the escape-hatch dialog with the missing fields. No
     /// retry.</description></item>
@@ -646,56 +707,125 @@ public partial class ShellViewModel : ObservableObject
     /// <item><term><see cref="LaunchStatus.Error"/></term><description>shows a
     /// modal alert with the result's message.</description></item>
     /// </list>
+    /// The attempt state stays set while a failure dialog is open and clears
+    /// after the dialog handling (and on any exception path), so retry becomes
+    /// possible exactly then.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanLaunch))]
     private async Task Launch()
     {
-        if (_session.ActiveProfileId is not Guid profileId)
+        if (_session.ActiveProfileId is not Guid profileId || IsLaunchAttemptInProgress)
         {
+            // No active profile: nothing to launch. An attempt already in
+            // progress: refuse. CanExecute gates the button; this guards
+            // direct/programmatic Execute calls that bypass it.
             return;
         }
 
-        var result = _launchService.Launch(profileId);
-        switch (result.Status)
+        IsLaunchAttemptInProgress = true;
+        try
         {
-            case LaunchStatus.Launched:
-                // The successful stage+spawn just re-staged the active profile's
-                // mod tree, so any prior pending edits are now reflected: clear
-                // the pending-changes flag (the dirty indicator drops), then
-                // refresh running-state so the indicator + CanLaunch react at
-                // once rather than on the next poll.
-                _session.HasPendingChanges = false;
-                _session.Refresh();
-                _logger.LogInformation("Launched profile {Id}.", profileId);
-                break;
+            // One render yield: the attempt state just flipped CanExecute to
+            // false; letting layout + render run first paints the disabled
+            // button before the synchronous launch work resumes.
+            await _yieldForLaunchRender();
 
-            case LaunchStatus.DiscoveryIncomplete:
-                // No retry: the user explicitly clicks Launch again after
-                // submitting.
-                await _dialogs.ShowDiscoveryEscapeHatchAsync(result.MissingDiscoveryFields);
-                _logger.LogInformation(
-                    "Discovery incomplete on launch of {Id}; showed escape-hatch for fields: {Fields}.",
-                    profileId, string.Join(", ", result.MissingDiscoveryFields));
-                break;
+            var result = _launchService.Launch(profileId);
+            switch (result.Status)
+            {
+                case LaunchStatus.Launched:
+                    // The successful stage+spawn just re-staged the active profile's
+                    // mod tree, so any prior pending edits are now reflected: clear
+                    // the pending-changes flag (the dirty indicator drops), then
+                    // refresh running-state so the indicator + CanLaunch react at
+                    // once rather than on the next poll.
+                    _session.HasPendingChanges = false;
+                    _session.Refresh();
+                    _logger.LogInformation("Launched profile {Id}.", profileId);
 
-            case LaunchStatus.StagingFailed:
-                await _dialogs.ShowAlertAsync(
-                    _localization["Launch_StagingFailedTitle"],
-                    _localization["Launch_StagingFailedMessage"] + " " + (result.Message ?? string.Empty));
-                _logger.LogWarning("Staging failed on launch of {Id}.", profileId);
-                break;
+                    // Fire-and-forget spawn: the detector needs time to notice
+                    // Darktide. Keep the attempt state until it does (or the
+                    // bounded timeout elapses) so the gap cannot double-launch.
+                    await WaitForRunningStateHandoffAsync();
+                    break;
 
-            case LaunchStatus.Error:
-                await _dialogs.ShowAlertAsync(
-                    _localization["Launch_ErrorTitle"],
-                    result.Message ?? string.Empty);
-                _logger.LogWarning("Launch of {Id} failed: {Message}.", profileId, result.Message);
-                break;
+                case LaunchStatus.DiscoveryIncomplete:
+                    // No retry: the user explicitly clicks Launch again after
+                    // submitting.
+                    await _dialogs.ShowDiscoveryEscapeHatchAsync(result.MissingDiscoveryFields);
+                    _logger.LogInformation(
+                        "Discovery incomplete on launch of {Id}; showed escape-hatch for fields: {Fields}.",
+                        profileId, string.Join(", ", result.MissingDiscoveryFields));
+                    break;
+
+                case LaunchStatus.StagingFailed:
+                    await _dialogs.ShowAlertAsync(
+                        _localization["Launch_StagingFailedTitle"],
+                        _localization["Launch_StagingFailedMessage"] + " " + (result.Message ?? string.Empty));
+                    _logger.LogWarning("Staging failed on launch of {Id}.", profileId);
+                    break;
+
+                case LaunchStatus.Error:
+                    await _dialogs.ShowAlertAsync(
+                        _localization["Launch_ErrorTitle"],
+                        result.Message ?? string.Empty);
+                    _logger.LogWarning("Launch of {Id} failed: {Message}.", profileId, result.Message);
+                    break;
+            }
+        }
+        finally
+        {
+            // The single clear point: after failure-dialog handling, after the
+            // post-spawn handoff resolves (signal or timeout), and on any
+            // exception path. When Darktide was observed, IsGameRunning keeps
+            // Launch disabled; on timeout, retry becomes possible.
+            IsLaunchAttemptInProgress = false;
         }
     }
 
-    /// <summary>An active profile must exist and the game must not be running.
-    /// Derived directly from the session so a live active-id change re-evaluates
-    /// at once.</summary>
-    private bool CanLaunch() => _session.ActiveProfileId is not null && !IsGameRunning;
+    /// <summary>
+    /// Waits out the process-detection handoff after a successful launch:
+    /// resolves when the session's live running-state signal observes Darktide,
+    /// or when the bounded timeout elapses. Observes the existing session
+    /// signal only (never a process handle; the session's polling detector
+    /// owns noticing the game). A false polling result never resolves the wait;
+    /// the temporary subscription is removed deterministically.
+    /// </summary>
+    private async Task WaitForRunningStateHandoffAsync()
+    {
+        var observed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        PropertyChangedEventHandler handler = (_, e) =>
+        {
+            if (e.PropertyName == nameof(IProfileSession.IsRunning) && _session.IsRunning)
+            {
+                observed.TrySetResult();
+            }
+        };
+
+        // Subscribe before the initial check so a flip between the eager
+        // refresh and this wait cannot be missed.
+        _session.PropertyChanged += handler;
+        try
+        {
+            if (_session.IsRunning
+                || await Task.WhenAny(observed.Task, _launchHandoffTimeout()) == observed.Task)
+            {
+                return;
+            }
+
+            _logger.LogInformation(
+                "Launch handoff timed out without observing Darktide; re-enabling Launch.");
+        }
+        finally
+        {
+            _session.PropertyChanged -= handler;
+        }
+    }
+
+    /// <summary>An active profile must exist, the game must not be running,
+    /// and no launch attempt may be in progress. Derived directly from the
+    /// session + the shell's attempt state so a live active-id change
+    /// re-evaluates at once.</summary>
+    private bool CanLaunch() =>
+        _session.ActiveProfileId is not null && !IsGameRunning && !IsLaunchAttemptInProgress;
 }

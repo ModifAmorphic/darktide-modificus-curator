@@ -7,7 +7,8 @@ namespace Modificus.Curator.Profiles.Tests;
 /// persistence + backward compatibility, <see cref="IProfileService.SetModOrderLocked"/>,
 /// the <see cref="IProfileService.SetModOrder"/> lock projection (locked entries keep their
 /// exact zero-based index; unlocked rows fill the open slots in the caller's desired
-/// relative order), <see cref="IProfileService.AddMod"/> (appends unlocked + compacts), and
+/// relative order), <see cref="IProfileService.AddMod"/> (ordinary adds append unlocked +
+/// compact; the DMF fresh-add prepend is covered by <see cref="DmfAddTests"/>), and
 /// <see cref="IProfileService.RemoveMod"/> (compacts survivors and re-baselines surviving
 /// locks). Existing profile files load unlocked.
 /// </summary>

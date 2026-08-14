@@ -328,28 +328,30 @@ internal sealed class ProfileService : IProfileService
         // Idempotent: re-adding an existing container is a strict no-op (keeps
         // its order, enabled state, policy, AND lock). Prevents duplicate
         // entries from re-entrancy and is evaluated before any compaction so a
-        // re-add never disturbs existing entries.
+        // re-add never disturbs existing entries. This also means a DMF
+        // update/re-import never overrides the user's current arrangement.
         if (profile.Mods.Any(m => m.ContainerId == containerId))
         {
             return;
         }
 
-        // Compact existing Order dense 0..n-1 (stable by current Order), then
-        // append the new entry unlocked at the end. The dense renumber
-        // establishes a fresh baseline (a hand-edited profile.json with gaps
-        // tightens here); survivor lock metadata travels with each entry.
-        var compacted = profile.Mods
-            .OrderBy(m => m.Order)
-            .Select((m, i) => m with { Order = i })
-            .ToList();
-        compacted.Add(new ModListEntry
+        // Stable sort by current Order, then insert the new entry and renumber
+        // dense 0..n-1 in one pass. A fresh DMF add goes to rank 0 + locked,
+        // shifting survivors down one rank with their relative order + all
+        // metadata (including lock bits) intact; the shifted indexes are the
+        // new structural baseline, consistent with remove compaction. Any
+        // other add appends at the end unlocked. One persistence write either
+        // way.
+        var entries = profile.Mods.OrderBy(m => m.Order).ToList();
+        var isDmf = IsDmfAdd(containerId, policy);
+        entries.Insert(isDmf ? 0 : entries.Count, new ModListEntry
         {
             ContainerId = containerId,
             Enabled = true,
-            Order = compacted.Count,
+            OrderLocked = isDmf,
             Policy = policy,
         });
-        profile.Mods = compacted;
+        profile.Mods = entries.Select((m, i) => m with { Order = i }).ToList();
         WriteProfileFile(profile, baseFolder);
     }
 
@@ -466,6 +468,60 @@ internal sealed class ProfileService : IProfileService
         WriteModList(stagedNames, mods);
         _logger.LogInformation("Staged {Count} mod(s) for profile {Id} at {Path}", stagedNames.Count, id, staged);
         return staged;
+    }
+
+    // ---- DMF fresh-add recognition ------------------------------------------
+
+    /// <summary>
+    /// The Nexus mod id of DMF (Darktide Mod Framework). Most Darktide mods
+    /// depend on it loading first, so a fresh profile add of DMF is inserted at
+    /// rank 0 + order-locked; the user remains free to unlock, reorder,
+    /// disable, or remove it afterwards.
+    /// </summary>
+    private const int DmfNexusModId = 8;
+
+    /// <summary>
+    /// The canonical DMF base folder name (ordinal, lower-case) for the
+    /// content-based recognition fallback; the folder must contain the matching
+    /// <c>dmf.mod</c> descriptor.
+    /// </summary>
+    private const string DmfBaseFolderName = "dmf";
+
+    /// <summary>
+    /// Whether a fresh add of <paramref name="containerId"/> under
+    /// <paramref name="policy"/> is DMF: (1) the container's source is Nexus
+    /// mod <see cref="DmfNexusModId"/>, or (2) the content the policy would
+    /// stage resolves to the canonical lower-case <c>dmf</c> base folder
+    /// containing <c>dmf.mod</c>. Deliberately small: no name-based fuzzy
+    /// matching, no persisted history. An unknown container id (or content
+    /// that resolves to nothing stageable) is not DMF and follows ordinary
+    /// append behavior.
+    /// </summary>
+    private bool IsDmfAdd(Guid containerId, ModVersionPolicy policy)
+    {
+        var container = _repo.Get(containerId);
+        if (container is null)
+        {
+            return false;
+        }
+
+        if (container.Source is NexusSource { ModId: DmfNexusModId })
+        {
+            return true;
+        }
+
+        // Content rule: reuse the staging-target resolution (the same pure
+        // resolver staging + the collision check use) so the recognized base
+        // folder is exactly what a launch would stage under this policy.
+        var (baseName, target, _) = ResolveStagingTarget(new ModListEntry
+        {
+            ContainerId = containerId,
+            Enabled = true,
+            Policy = policy,
+        });
+        return baseName == DmfBaseFolderName
+            && target is not null
+            && File.Exists(Path.Combine(target, DmfBaseFolderName + ".mod"));
     }
 
     // ---- staging helpers ----------------------------------------------------

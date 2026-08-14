@@ -43,6 +43,13 @@
                     <SolidColorBrush x:Key="CuratorUpdateNoticeForegroundBrush" Color="#004B53" />
                     <SolidColorBrush x:Key="CuratorUpdateNoticeBorderBrush" Color="#007C89" />
                     <SolidColorBrush x:Key="CuratorUpdateNoticeFocusBrush" Color="#004B53" />
+                    <!--
+                      Full-client launch overlay scrim: a semi-opaque black dim
+                      over the shell while a launch attempt is in progress.
+                      Theme-dependent only in opacity (the dark shell needs a
+                      heavier coat to read as blocked).
+                    -->
+                    <SolidColorBrush x:Key="CuratorLaunchOverlayScrimBrush" Color="#8C000000" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SolidColorBrush x:Key="CuratorCautionBrush" Color="#E2C019" />
@@ -53,6 +60,7 @@
                     <SolidColorBrush x:Key="CuratorUpdateNoticeForegroundBrush" Color="#D7FAFD" />
                     <SolidColorBrush x:Key="CuratorUpdateNoticeBorderBrush" Color="#42D3DF" />
                     <SolidColorBrush x:Key="CuratorUpdateNoticeFocusBrush" Color="#72E4EC" />
+                    <SolidColorBrush x:Key="CuratorLaunchOverlayScrimBrush" Color="#D9000000" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
             <!--
@@ -72,6 +80,19 @@
             <SolidColorBrush x:Key="CuratorLaunchRustDisabledBrush" Color="#5A4036" />
             <SolidColorBrush x:Key="CuratorLaunchTextDisabledBrush" Color="#8C8F92" />
             <SolidColorBrush x:Key="CuratorLaunchFocusBrush" Color="#57E8F6" />
+            <!--
+              Full-client launch overlay card. The same iron-and-rust family as
+              the Launch action (theme-independent, never the platform accent):
+              a gunmetal card face with a rust lower edge, off-white title, and
+              a rust indeterminate bar on a darker track. The scrim is
+              theme-dependent (ThemeDictionaries above).
+            -->
+            <SolidColorBrush x:Key="CuratorLaunchOverlayCardFaceBrush" Color="#30383F" />
+            <SolidColorBrush x:Key="CuratorLaunchOverlayCardBorderBrush" Color="#D86638" />
+            <SolidColorBrush x:Key="CuratorLaunchOverlayTitleBrush" Color="#F4EEE9" />
+            <SolidColorBrush x:Key="CuratorLaunchOverlayMessageBrush" Color="#C6CDD2" />
+            <SolidColorBrush x:Key="CuratorLaunchOverlayBarBrush" Color="#D86638" />
+            <SolidColorBrush x:Key="CuratorLaunchOverlayTrackBrush" Color="#242B31" />
             <!--
               The LocalizationService is exposed app-wide as a resource so every
               view binds localized strings through one source + one instance:
