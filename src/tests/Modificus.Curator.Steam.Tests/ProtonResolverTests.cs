@@ -568,7 +568,7 @@ public sealed class ProtonResolverTests
 
         // Manifest directly at the root, install_path relative to the root.
         var root = opts.LinuxCompatibilityToolsDir!;
-        WriteCustomManifest(root, "root-manifest-tool", "subdir/proton-install");
+        WriteCustomManifest(root, "root-manifest-tool", Path.Combine("subdir", "proton-install"));
         PlaceProton(Path.Combine(root, "subdir", "proton-install"));
 
         var resolver = new ProtonResolver(opts, NullLogger.Instance);
