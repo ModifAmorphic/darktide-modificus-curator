@@ -12,10 +12,23 @@ namespace Modificus.Curator.Steam;
 internal sealed record CompatToolEntry(int AppId, string DisplayName, IReadOnlyList<string> Aliases);
 
 /// <summary>
-/// Reads Steam's binary <c>appinfo.vdf</c> container (versions 39-41) and
-/// extracts the first app entry carrying a nested <c>compat_tools</c> collection.
-/// This is the narrow format mechanic for Valve-managed Proton resolution; the
-/// binary KV1 blobs inside the container are delegated to ValveKeyValue.
+/// The pieces one <c>appinfo.vdf</c> scan collects: the first valid
+/// <c>compat_tools</c> registry (Valve-managed tool resolution) and the
+/// requested app's recommended runtime. Either may be null when the file
+/// carries no such data.
+/// </summary>
+internal sealed record SteamAppInfoSnapshot(
+    IReadOnlyDictionary<string, CompatToolEntry>? CompatTools,
+    string? RecommendedRuntime);
+
+/// <summary>
+/// Reads Steam's binary <c>appinfo.vdf</c> container (versions 39-41) in a
+/// single scan that collects the first app entry carrying a nested
+/// <c>compat_tools</c> collection and the requested app entry's recommended
+/// runtime (the <c>steam_deck_compatibility</c> metadata Steam maintains).
+/// This is the narrow format mechanic for Valve-managed Proton resolution +
+/// the no-user-mapping runtime fallback; the binary KV1 blobs inside the
+/// container are delegated to ValveKeyValue.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -43,19 +56,21 @@ internal sealed class SteamAppInfoReader
     }
 
     /// <summary>
-    /// Reads <c>appinfo.vdf</c> at <paramref name="appInfoPath"/> and returns the
-    /// <c>compat_tools</c> map from the first app entry that has one. Returns
-    /// null when the file is missing, malformed, or no compat_tools collection
-    /// is found. Opens with <see cref="FileShare.ReadWrite"/> so a running Steam
-    /// client's lock does not block the read.
+    /// Reads <c>appinfo.vdf</c> at <paramref name="appInfoPath"/> and returns
+    /// the scan snapshot for <paramref name="requestedAppId"/>. Returns null
+    /// when the file is missing, malformed, or unreadable. Pass 0 as
+    /// <paramref name="requestedAppId"/> to skip the recommended-runtime
+    /// lookup (the scan then stops at the first <c>compat_tools</c> registry).
+    /// Opens with <see cref="FileShare.ReadWrite"/> so a running Steam client's
+    /// lock does not block the read.
     /// </summary>
-    public IReadOnlyDictionary<string, CompatToolEntry>? ReadCompatTools(string appInfoPath)
+    public SteamAppInfoSnapshot? ReadSnapshot(string appInfoPath, uint requestedAppId)
     {
         try
         {
             using var stream = new FileStream(
                 appInfoPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            return ReadCompatTools(stream);
+            return ReadSnapshot(stream, requestedAppId);
         }
         catch (FileNotFoundException)
         {
@@ -78,16 +93,16 @@ internal sealed class SteamAppInfoReader
     }
 
     /// <summary>
-    /// Reads the appinfo container from <paramref name="input"/> and returns the
-    /// first app's <c>compat_tools</c> map, or null on malformed input. Internal
-    /// so tests can feed a synthetic binary fixture.
+    /// Reads the appinfo container from <paramref name="input"/> and returns
+    /// the scan snapshot, or null on malformed input. Internal so tests can
+    /// feed a synthetic binary fixture.
     /// </summary>
-    internal IReadOnlyDictionary<string, CompatToolEntry>? ReadCompatTools(Stream input)
+    internal SteamAppInfoSnapshot? ReadSnapshot(Stream input, uint requestedAppId)
     {
         try
         {
             using var reader = new BinaryReader(input, Encoding.UTF8, leaveOpen: true);
-            return ReadCompatToolsCore(reader);
+            return ReadSnapshotCore(reader, requestedAppId);
         }
         catch (InvalidDataException ex)
         {
@@ -111,7 +126,7 @@ internal sealed class SteamAppInfoReader
         }
     }
 
-    private IReadOnlyDictionary<string, CompatToolEntry>? ReadCompatToolsCore(BinaryReader reader)
+    private SteamAppInfoSnapshot? ReadSnapshotCore(BinaryReader reader, uint requestedAppId)
     {
         var stream = reader.BaseStream;
 
@@ -143,6 +158,10 @@ internal sealed class SteamAppInfoReader
         var options = new KVSerializerOptions();
         var headerSize = version >= 40 ? HeaderSizeV40Plus : HeaderSizeV39;
 
+        // For v41 the entry region ends at the string-table offset (the table
+        // trails the entries); for v39/v40 it ends at the stream end.
+        var entryRegionEnd = streamLength;
+
         if (version >= 41)
         {
             var stringTableOffset = reader.ReadInt64();
@@ -155,6 +174,8 @@ internal sealed class SteamAppInfoReader
                     $"Invalid appinfo string-table offset: {stringTableOffset}.");
             }
 
+            entryRegionEnd = stringTableOffset;
+
             var returnOffset = stream.Position;
             stream.Position = stringTableOffset;
             options.StringTable = new StringTable(ReadStringTable(reader, streamLength));
@@ -163,7 +184,11 @@ internal sealed class SteamAppInfoReader
 
         var serializer = KVSerializer.Create(KVSerializationFormat.KeyValues1Binary);
 
-        while (stream.Position < streamLength)
+        IReadOnlyDictionary<string, CompatToolEntry>? compatTools = null;
+        string? recommendedRuntime = null;
+        var wantRecommendedRuntime = requestedAppId != 0;
+
+        while (stream.Position < entryRegionEnd)
         {
             var appId = reader.ReadUInt32();
             if (appId == 0)
@@ -187,25 +212,33 @@ internal sealed class SteamAppInfoReader
             // Read the fixed header, verifying the fixed-length reads complete.
             ReadAppHeader(reader, version);
 
-            // Deserialize the binary KV1 blob and extract compat_tools within
-            // the same recoverable-exception boundary: a corrupt blob, a bad
-            // string-table index, or a pathological compat_tools shape all skip
+            // Deserialize the binary KV1 blob and extract both scan targets
+            // within the same recoverable-exception boundary: a corrupt blob, a
+            // bad string-table index, or a pathological payload shape all skip
             // this entry and continue scanning. OutOfMemoryException is never
             // caught (it signals a fatal runtime condition).
-            IReadOnlyDictionary<string, CompatToolEntry>? entryMap = null;
             try
             {
                 var doc = serializer.Deserialize(stream, options);
-                var compatTools = FindCompatTools(doc.Root);
-                if (compatTools is not null)
+
+                if (compatTools is null && FindCompatTools(doc.Root) is { } tools)
                 {
-                    entryMap = BuildCompatToolMap(compatTools);
+                    var map = BuildCompatToolMap(tools);
+                    if (map.Count > 0)
+                    {
+                        compatTools = map;
+                    }
+                }
+
+                if (wantRecommendedRuntime && recommendedRuntime is null && appId == requestedAppId)
+                {
+                    recommendedRuntime = FindRecommendedRuntime(doc.Root);
                 }
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // A corrupt blob, bad string-table index, or pathological
-                // compat_tools shape skips this entry. The declared end is
+                // payload shape skips this entry. The declared end is
                 // validated, so we can safely skip forward.
             }
 
@@ -216,13 +249,15 @@ internal sealed class SteamAppInfoReader
                 stream.Position = end;
             }
 
-            if (entryMap is not null && entryMap.Count > 0)
+            // App entries may appear in either order, so the scan continues
+            // until every wanted piece is in hand (or the region ends).
+            if (compatTools is not null && (!wantRecommendedRuntime || recommendedRuntime is not null))
             {
-                return entryMap;
+                return new SteamAppInfoSnapshot(compatTools, recommendedRuntime);
             }
         }
 
-        return null;
+        return new SteamAppInfoSnapshot(compatTools, recommendedRuntime);
     }
 
     private const int HeaderSizeV39 = 4 + 4 + 8 + 20 + 4;         // 40 bytes
@@ -309,6 +344,24 @@ internal sealed class SteamAppInfoReader
         if (TryGetChild(appData, "extended") is { } ext && ext.TryGetValue("compat_tools", out var extTools)) return extTools;
         if (TryGetChild(appData, "common") is { } common && common.TryGetValue("compat_tools", out var commonTools)) return commonTools;
         return null;
+    }
+
+    /// <summary>
+    /// Locates the app's recommended runtime at
+    /// <c>common/steam_deck_compatibility/configuration/recommended_runtime</c>.
+    /// Returns null when absent or not a string.
+    /// </summary>
+    private static string? FindRecommendedRuntime(KVObject appData)
+    {
+        if (TryGetChild(appData, "common") is not { } common
+            || TryGetChild(common, "steam_deck_compatibility") is not { } deckCompatibility
+            || TryGetChild(deckCompatibility, "configuration") is not { } configuration
+            || !configuration.TryGetValue("recommended_runtime", out var runtime))
+        {
+            return null;
+        }
+
+        return runtime.ValueType == KVValueType.String ? (string)runtime : null;
     }
 
     private IReadOnlyDictionary<string, CompatToolEntry> BuildCompatToolMap(KVObject compatTools)

@@ -88,8 +88,12 @@ every OS-specific input + platform seam is injected:
   Notable fields: `LinuxDefaultSteamRoot`, `LinuxFlatpakSteamRoot`,
   `LinuxCompatibilityToolsDir`, `LinuxSystemCompatibilityToolsDirs` (the two
   standard Steam system directories, defaulting so `/usr/share/steam/compatibilitytools.d`
-  is searched), `WindowsDefaultSteamRoot`, `DarktideAppId` (`1361210`),
-  `DarktideCommonDir`, `GameBinaryName`, `GameProcessName`.
+  is searched), `IsSteamDeck` (a platform identity input: whether the host is a
+  Steam Deck; `CreateDefault()` detects it from OS release metadata --
+  `ID=steamos` + `VARIANT_ID=steamdeck`, reading `/run/host/os-release` before
+  `/etc/os-release`; tests can inject a fixed value), `WindowsDefaultSteamRoot`,
+  `DarktideAppId` (`1361210`), `DarktideCommonDir`, `GameBinaryName`,
+  `GameProcessName`.
 - `ISteamDiscoverer` (internal) -- `Discover() → DiscoveryResult`. The
   platform-specific discovery strategy. Two implementations
   (`LinuxSteamDiscoverer`, `WindowsSteamDiscoverer`), selected once at DI time
@@ -104,15 +108,24 @@ every OS-specific input + platform seam is injected:
   composition, not inheritance -- each discoverer injects the core and layers its
   own platform steps on top.
 - `ProtonResolver` (internal) -- the Linux Proton compatibility-tool resolver,
-  constructed by `LinuxSteamDiscoverer`. Reads Steam's `CompatToolMapping` from
-  `config.vdf`, then resolves the selected tool name to a `proton` binary as a
-  custom tool (a `compatibilitytool.vdf` manifest) or a Valve-managed tool
-  (appinfo + appmanifest). See [Linux Proton resolution](#linux-proton-resolution).
+  constructed by `LinuxSteamDiscoverer`. Reads Steam's tool selection (the
+  app-specific `CompatToolMapping` entry, then the global `"0"` entry, then the
+  appinfo recommended runtime when both mappings are absent), then resolves the
+  selected name to a `proton` binary as a custom tool (a
+  `compatibilitytool.vdf` manifest) or a Valve-managed tool (appinfo +
+  appmanifest). See [Linux Proton resolution](#linux-proton-resolution).
 - `SteamAppInfoReader` (internal) -- parses Steam's binary `appinfo.vdf`
-  container (versions 39-41) and extracts the first app entry carrying a
-  `compat_tools` collection. Used by `ProtonResolver` for Valve-managed tool
-  resolution. Has an internal `ReadCompatTools(Stream)` overload so tests feed a
+  container (versions 39-41) in one scan that collects the first app entry
+  carrying a `compat_tools` collection and the requested app's recommended
+  runtime (either may be absent; a requested app id of 0 skips the runtime
+  lookup so the scan stops at the first registry). Used by `ProtonResolver` for
+  Valve-managed tool resolution + the no-user-mapping runtime fallback. Has an
+  internal `ReadSnapshot(Stream, requestedAppId)` overload so tests feed a
   synthetic binary fixture.
+- `SteamDeckDetector` (internal static) -- the production Steam Deck detection
+  behind the `SteamDiscoveryOptions.IsSteamDeck` platform identity input (see
+  above). Quoted values are tolerated; IO/access failures degrade to "not a
+  Deck".
 - `SteamTextVdf` (internal static) -- the single entry point for Steam text KV1
   parsing (`config.vdf`, `compatibilitytool.vdf`, `appmanifest_*.acf`). Wraps
   ValveKeyValue with `HasEscapeSequences = true` always on (Steam files
@@ -222,32 +235,52 @@ flipping the mode.
 
 ### Linux Proton resolution
 
-`ProtonResolver` reads the tool Steam actually selected for Darktide, rather
+`ProtonResolver` resolves the tool Steam actually selected for Darktide, rather
 than guessing from directory names. The steps are best-effort: a missing or
 unreadable file degrades to an unresolved Proton (warning), never a throw.
 
 1. **Selected tool name** -- `<steamRoot>/config/config.vdf` →
-   `Software > Valve > Steam > CompatToolMapping`. The app-specific mapping for
-   Darktide's app id (`1361210`) is authoritative when present; its `name` is
-   used as-is, and an empty or malformed name fails resolution without falling
-   through. The global `"0"` mapping is consulted only when the app-specific
-   mapping is absent. No mapping at all → unresolved.
+    `Software > Valve > Steam > CompatToolMapping`, with this precedence:
+    - The app-specific mapping for Darktide's app id (`1361210`) is
+      authoritative when present; its `name` is used as-is.
+    - The global `"0"` mapping is considered only when the app-specific mapping
+      is absent, and is authoritative when present.
+    - Only when both are absent, Darktide's appinfo
+      `common/steam_deck_compatibility/configuration/recommended_runtime` is
+      Steam's non-user default and supplies the name on any Linux host; host
+      identity (Steam Deck or not) is not consulted for this decision.
+    - A present mapping whose `name` is missing, non-string, empty, or
+      whitespace is **invalid**: resolution fails without falling through (this
+      covers both the app-specific and the global entry, and an invalid
+      app-specific entry blocks the global entry too). Likewise, a selected
+      mapping whose named tool cannot be resolved stays authoritative and never
+      falls through to the recommendation, and a `config.vdf` that exists but
+      cannot be read or parsed fails unresolved rather than bypassing a
+      possible user choice. A missing config file, or a valid config with
+      neither key, counts as no user mapping and permits the recommended-runtime
+      fallback.
+    - A missing, empty, whitespace, `native`, or unresolvable recommendation
+      yields unresolved with a warning; no other runtime is guessed.
 2. **Custom tool** -- a `compatibilitytool.vdf` manifest whose `compat_tools`
-   collection defines the selected name, searched across every
-   compatibility-tool root in order: the resolved Steam root's
-   `compatibilitytools.d`, the configured user root, then the system roots
-   (including `/usr/share/steam/compatibilitytools.d`). Each root is checked
-   root-level first (Valve permits a manifest directly at the root with a
-   relative or absolute `install_path`), then its per-tool subdirectories. The
-   resolved `install_path`'s `proton` file must exist.
+    collection defines the selected name, searched across every
+    compatibility-tool root in order: the resolved Steam root's
+    `compatibilitytools.d`, the configured user root, then the system roots
+    (including `/usr/share/steam/compatibilitytools.d`). Each root is checked
+    root-level first (Valve permits a manifest directly at the root with a
+    relative or absolute `install_path`), then its per-tool subdirectories. The
+    resolved `install_path`'s `proton` file must exist. This runs first for any
+    selected name, including the recommended runtime.
 3. **Valve-managed tool** -- the `compat_tools` entry in
-   `<steamRoot>/appcache/appinfo.vdf` (binary; parsed by
-   `SteamAppInfoReader`) whose key or comma-separated alias matches the selected
-   name, then `appmanifest_<appid>.acf` across the libraries, parsing its
-   `installdir`, requiring
-   `<library>/steamapps/common/<installdir>/proton` to exist.
+    `<steamRoot>/appcache/appinfo.vdf` (binary; parsed by
+    `SteamAppInfoReader`) whose key or comma-separated alias matches the selected
+    name, then `appmanifest_<appid>.acf` across the libraries, parsing its
+    `installdir`, requiring
+    `<library>/steamapps/common/<installdir>/proton` to exist. One `Resolve`
+    call parses `appinfo.vdf` at most once: when the recommended runtime
+    supplies the name, the snapshot already read for the recommendation is
+    reused here.
 4. Nothing resolves → `null` (escape hatch; UI prompts). A reason is appended to
-   `Warnings`.
+    `Warnings`.
 
 `ProtonVersion` carries the tool's `display_name` when present (the custom
 manifest's, or the appinfo entry's), otherwise the internal tool name.
@@ -399,10 +432,15 @@ no-op).
 `Modificus.Curator.Steam.Tests` covers Linux discovery (`LinuxDiscoveryTests`,
 `FlatpakDiscoveryTests`), Windows discovery (`WindowsDiscoveryTests`), Proton
 compatibility-tool selection (`ProtonSelectionTests`, `ProtonResolverTests` --
-app-specific vs global mapping, custom vs Valve-managed tool resolution, root-
-level vs subdirectory custom manifests, system roots), the binary
-`appinfo.vdf` reader (`SteamAppInfoReaderTests`, against a compact synthetic v41
-fixture with a string table), the `SteamTextVdf` escape-semantics helper
+app-specific vs global mapping vs the appinfo recommended-runtime fallback
+(identical regardless of Deck identity) and every blocking rule around it,
+custom vs Valve-managed tool resolution, root-level vs subdirectory custom
+manifests, system roots), the binary
+`appinfo.vdf` reader (`SteamAppInfoReaderTests`, against compact synthetic v41
+fixtures plus a realistic multi-entry fixture matching the live appinfo shape --
+Darktide's `recommended_runtime` + the Steam Play manifest's `compat_tools` in
+both entry orders), the Steam Deck OS-release detector (`SteamDeckDetectorTests`), the
+`SteamTextVdf` escape-semantics helper
 (`SteamTextVdfTests`, including a sanitized realistic `config.vdf` fixture with
 an escaped JSON scalar), the `libraryfolders.vdf` parser
 (`LibraryFoldersVdfTests`), game-running detection (`GameRunningTests`,

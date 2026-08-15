@@ -5,13 +5,41 @@ using ValveKeyValue;
 namespace Modificus.Curator.Steam;
 
 /// <summary>
-/// Resolves the effective Linux Proton from Steam's compatibility-tool mapping.
-/// Reads the selected tool name from <c>config.vdf</c>'s
-/// <c>CompatToolMapping</c>, then resolves it to a concrete <c>proton</c>
-/// binary either as a custom tool (a <c>compatibilitytool.vdf</c> manifest at or
-/// under a compatibility-tools root) or a Valve-managed tool (the
-/// <c>compat_tools</c> alias table in <c>appinfo.vdf</c> plus an
-/// <c>appmanifest</c>).
+/// The three-state outcome of reading Steam's CompatToolMapping for Darktide:
+/// a selected tool name (authoritative), a definitive absence of any mapping,
+/// or an invalid/unreadable mapping that must fail resolution without falling
+/// through.
+/// </summary>
+internal enum CompatToolSelectionKind
+{
+    Selected,
+    Absent,
+    Invalid,
+}
+
+internal sealed record CompatToolSelection(CompatToolSelectionKind Kind, string? ToolName, string? Reason)
+{
+    public static CompatToolSelection Selected(string toolName) =>
+        new(CompatToolSelectionKind.Selected, toolName, null);
+
+    public static CompatToolSelection Absent { get; } =
+        new(CompatToolSelectionKind.Absent, null, null);
+
+    public static CompatToolSelection Invalid(string reason) =>
+        new(CompatToolSelectionKind.Invalid, null, reason);
+}
+
+/// <summary>
+/// Resolves the effective Linux Proton from Steam's compatibility-tool
+/// selection: the app-specific <c>CompatToolMapping</c> entry in
+/// <c>config.vdf</c> is authoritative, the global <c>"0"</c> entry is the
+/// fallback, and when both are absent, Darktide's appinfo recommended runtime
+/// (the <c>steam_deck_compatibility</c> metadata Steam maintains) is Steam's
+/// non-user default on any Linux host. The selected name resolves to a concrete
+/// <c>proton</c> binary either as a custom tool (a
+/// <c>compatibilitytool.vdf</c> manifest at or under a compatibility-tools
+/// root) or a Valve-managed tool (the <c>compat_tools</c> alias table in
+/// <c>appinfo.vdf</c> plus an <c>appmanifest</c>).
 /// </summary>
 /// <remarks>
 /// All Steam-metadata access is best-effort: a missing or unreadable file
@@ -31,31 +59,65 @@ internal sealed class ProtonResolver
     }
 
     /// <summary>
-    /// Resolves the Proton binary + version label for the configured Darktide app
-    /// id. Returns null when no mapping exists or the selected tool cannot be
-    /// resolved; a reason is appended to <paramref name="warnings"/> in those
-    /// cases.
+    /// Resolves the Proton binary + version label for the configured Darktide
+    /// app id. The selected tool name comes from Steam's CompatToolMapping
+    /// (app-specific, then global); when both are absent, Darktide's appinfo
+    /// recommended runtime supplies the name. An invalid or unreadable mapping,
+    /// or one whose named tool cannot be resolved, fails without falling
+    /// through. Returns null when no tool resolves; a reason is appended to
+    /// <paramref name="warnings"/> in those cases.
     /// </summary>
     public (string Path, string Version)? Resolve(
         string steamRoot,
         IReadOnlyList<string> libraries,
         List<string> warnings)
     {
-        var selected = ReadSelectedToolName(steamRoot);
-        if (string.IsNullOrWhiteSpace(selected))
+        var selection = ReadSelectedTool(steamRoot);
+
+        string selected;
+        SteamAppInfoSnapshot? appInfo = null;
+
+        switch (selection.Kind)
         {
-            warnings.Add("No Steam compatibility tool mapping for Darktide; Proton unresolved.");
-            return null;
+            case CompatToolSelectionKind.Selected:
+                selected = selection.ToolName!;
+                break;
+
+            case CompatToolSelectionKind.Invalid:
+                warnings.Add(selection.Reason!);
+                return null;
+
+            default:
+                // Both mappings are definitively absent, so appinfo cannot
+                // bypass a user choice: read it once here and reuse the
+                // snapshot for Valve-managed resolution below.
+                appInfo = ReadAppInfoSnapshot(steamRoot, (uint)_options.DarktideAppId);
+                var recommendation = appInfo?.RecommendedRuntime?.Trim();
+                if (string.IsNullOrEmpty(recommendation))
+                {
+                    warnings.Add(
+                        "No Steam compatibility tool mapping for Darktide and no usable recommended runtime in appinfo.vdf; Proton unresolved.");
+                    return null;
+                }
+
+                if (string.Equals(recommendation, "native", StringComparison.OrdinalIgnoreCase))
+                {
+                    warnings.Add("Darktide's appinfo recommended runtime is native; Proton unresolved.");
+                    return null;
+                }
+
+                selected = recommendation;
+                break;
         }
 
         var roots = BuildCompatibilityToolRoots(steamRoot);
 
-        if (ResolveCustomTool(selected!, roots) is { } custom)
+        if (ResolveCustomTool(selected, roots) is { } custom)
         {
             return custom;
         }
 
-        if (ResolveValveTool(selected!, steamRoot, libraries) is { } valve)
+        if (ResolveValveTool(selected, steamRoot, libraries, appInfo) is { } valve)
         {
             return valve;
         }
@@ -66,13 +128,16 @@ internal sealed class ProtonResolver
 
     /// <summary>
     /// Reads <c>&lt;steamRoot&gt;/config/config.vdf</c>, locates
-    /// <c>CompatToolMapping</c>, and returns the tool <c>name</c> for the
+    /// <c>CompatToolMapping</c>, and classifies the tool selection for the
     /// Darktide app id. The app-specific mapping is authoritative: when present,
-    /// its name is used as-is (an empty or malformed name fails resolution
-    /// without falling through). The global <c>"0"</c> mapping is used only when
-    /// the app-specific mapping is absent. Returns null when no mapping applies.
+    /// its name is used as-is (a missing, non-string, empty, or whitespace name
+    /// is invalid and fails resolution without falling through). The global
+    /// <c>"0"</c> mapping is considered only when the app-specific mapping is
+    /// absent. A missing config file, or a valid config with neither key, is
+    /// definitively absent; an unreadable or unparseable config is invalid so a
+    /// possible user choice is never bypassed.
     /// </summary>
-    private string? ReadSelectedToolName(string steamRoot)
+    private CompatToolSelection ReadSelectedTool(string steamRoot)
     {
         var configVdf = Path.Combine(steamRoot, "config", "config.vdf");
         KVDocument doc;
@@ -83,67 +148,84 @@ internal sealed class ProtonResolver
         }
         catch (FileNotFoundException)
         {
-            return null;
+            return CompatToolSelection.Absent;
         }
         catch (DirectoryNotFoundException)
         {
-            return null;
+            return CompatToolSelection.Absent;
         }
         catch (IOException ex)
         {
             _logger.LogWarning(ex, "Could not read config.vdf at {Path}.", configVdf);
-            return null;
+            return CompatToolSelection.Invalid(
+                $"Steam config.vdf at '{configVdf}' could not be read; Proton unresolved.");
         }
         catch (UnauthorizedAccessException ex)
         {
             _logger.LogWarning(ex, "Permission denied reading config.vdf at {Path}.", configVdf);
-            return null;
+            return CompatToolSelection.Invalid(
+                $"Steam config.vdf at '{configVdf}' could not be read (permission denied); Proton unresolved.");
         }
         catch (InvalidDataException ex)
         {
             _logger.LogWarning(ex, "Malformed config.vdf at {Path}.", configVdf);
-            return null;
+            return CompatToolSelection.Invalid(
+                $"Steam config.vdf at '{configVdf}' could not be parsed; Proton unresolved without bypassing a possible tool mapping.");
         }
         catch (InvalidOperationException ex)
         {
             _logger.LogWarning(ex, "Malformed config.vdf at {Path}.", configVdf);
-            return null;
+            return CompatToolSelection.Invalid(
+                $"Steam config.vdf at '{configVdf}' could not be parsed; Proton unresolved without bypassing a possible tool mapping.");
         }
 
         var mapping = TryGetChild(TryGetChild(TryGetChild(TryGetChild(
             doc.Root, "Software"), "Valve"), "Steam"), "CompatToolMapping");
         if (mapping is null)
         {
-            return null;
+            return CompatToolSelection.Absent;
         }
 
         var appId = _options.DarktideAppId.ToString(CultureInfo.InvariantCulture);
 
-        // App-specific mapping is authoritative when present: an empty/malformed
-        // name fails here (null return) and does NOT fall through to global.
+        // App-specific mapping is authoritative when present: an invalid name
+        // fails here and does NOT fall through to global or the
+        // recommended-runtime fallback.
         if (mapping.TryGetValue(appId, out var appEntry))
         {
-            return ReadName(appEntry);
+            return ReadEntrySelection(appEntry);
         }
 
         if (mapping.TryGetValue("0", out var globalEntry))
         {
-            return ReadName(globalEntry);
+            return ReadEntrySelection(globalEntry);
         }
 
-        return null;
+        return CompatToolSelection.Absent;
     }
 
-    private static string? ReadName(KVObject entry)
+    private static CompatToolSelection ReadEntrySelection(KVObject entry)
     {
         if (!entry.TryGetValue("name", out var nameObj))
         {
-            return null;
+            return CompatToolSelection.Invalid(
+                "Steam compatibility tool mapping for Darktide has no tool name; Proton unresolved.");
         }
 
-        return nameObj.ValueType == KVValueType.String
-            ? (string)nameObj
-            : null;
+        if (nameObj.ValueType != KVValueType.String)
+        {
+            return CompatToolSelection.Invalid(
+                "Steam compatibility tool mapping for Darktide has a non-string tool name; Proton unresolved.");
+        }
+
+        var name = (string)nameObj;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return CompatToolSelection.Invalid(
+                "Steam compatibility tool mapping for Darktide has an empty tool name; Proton unresolved.");
+        }
+
+        return CompatToolSelection.Selected(name);
     }
 
     /// <summary>
@@ -336,11 +418,20 @@ internal sealed class ProtonResolver
     /// <c>installdir</c>, and requires
     /// <c>&lt;library&gt;/steamapps/common/&lt;installdir&gt;/proton</c> to exist.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="snapshot"/> reuses an appinfo read already made for the
+    /// recommended runtime so one Resolve call parses the file at most
+    /// once; it is read here only when null (with the runtime lookup
+    /// skipped, since only the compat_tools registry is needed).
+    /// </remarks>
     private (string Path, string Version)? ResolveValveTool(
-        string toolName, string steamRoot, IReadOnlyList<string> libraries)
+        string toolName,
+        string steamRoot,
+        IReadOnlyList<string> libraries,
+        SteamAppInfoSnapshot? snapshot)
     {
-        var appInfoPath = Path.Combine(steamRoot, "appcache", "appinfo.vdf");
-        var compatTools = _appInfoReader.ReadCompatTools(appInfoPath);
+        snapshot ??= ReadAppInfoSnapshot(steamRoot, requestedAppId: 0);
+        var compatTools = snapshot?.CompatTools;
         if (compatTools is null)
         {
             return null;
@@ -377,6 +468,11 @@ internal sealed class ProtonResolver
 
         return null;
     }
+
+    private SteamAppInfoSnapshot? ReadAppInfoSnapshot(string steamRoot, uint requestedAppId) =>
+        _appInfoReader.ReadSnapshot(
+            Path.Combine(steamRoot, "appcache", "appinfo.vdf"),
+            requestedAppId);
 
     private static bool TryResolveToolEntry(
         IReadOnlyDictionary<string, CompatToolEntry> compatTools,

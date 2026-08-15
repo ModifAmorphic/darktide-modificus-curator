@@ -52,8 +52,10 @@ Do not force a Proton compatibility tool on the Curator shortcut. Curator is a
 native Linux app. It launches Darktide through the game's own Proton
 environment: in automatic discovery mode (the default), Curator reads the
 Proton tool Steam has selected for Darktide and uses that, so changing Darktide's
-compatibility tool in Steam is all you need to do. The Curator shortcut itself
-always stays native.
+compatibility tool in Steam is all you need to do. If Steam has no explicit
+selection for Darktide, Curator follows the runtime Steam records as recommended
+for Darktide in its app metadata. The Curator shortcut itself always stays
+native.
 
 Because the installer writes one stable AppImage path, the Steam shortcut stays
 valid across Curator's in-app updates.
