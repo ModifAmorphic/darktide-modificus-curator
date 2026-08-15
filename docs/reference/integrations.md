@@ -604,6 +604,57 @@ A rejection carries a short machine-readable reason ("removed from profile",
 logging. The evaluator is pure: no services, no I/O, no clock; everything
 arrives as arguments.
 
+## Mod-update installer
+
+`IModUpdateInstaller` is the single Premium install path, shared by the manual
+per-row update action (the UI's Update command) and the automatic Premium batch
+(the UI's `IAutomaticUpdateService`). Routing both through one service is what
+enforces the global one-install-at-a-time guarantee and gives both paths one
+acknowledge + progress contract.
+
+```csharp
+public interface IModUpdateInstaller
+{
+    bool IsBusy { get; }
+    event EventHandler? BusyChanged;
+    event EventHandler<ModUpdateProgressEventArgs>? ModUpdateProgress;
+
+    Task<ModInstallOutcome> TryInstallLatestAsync(   // MANUAL: refuses politely when gated
+        Guid profileId, Guid containerId, int modId, string expectedVersion,
+        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default);
+    Task<ModInstallOutcome> InstallLatestAsync(      // AUTOMATIC: awaits its turn
+        Guid profileId, Guid containerId, int modId, string expectedVersion,
+        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default);
+}
+
+public sealed record ModInstallOutcome(
+    ModInstallStatus Status,    // Installed / Busy / NotEligible / Failed
+    string Reason = "",
+    Exception? Exception = null);   // only on Failed
+```
+
+- `UpdateCoordinator` (this library) is the gate: a single-slot semaphore held
+  for the install's duration. `TryInstallLatestAsync` uses its non-blocking
+  acquire (a held gate -> `Busy`, nothing touched); `InstallLatestAsync` awaits
+  it (a sequential batch waits its turn behind a manual install).
+- Eligibility is revalidated INSIDE the gate via `UpdateEligibility` against
+  the caller's candidates: a stale flag (removed / re-pinned / source-changed /
+  version-changed since the flag was recorded) -> `NotEligible` + the reason,
+  nothing installed. The manual caller passes the row's resolved version as
+  `expectedVersion`; the automatic caller passes the check result's recorded
+  `CurrentVersion`.
+- On success the installer acquires the latest MAIN release
+  (`IModAcquisitionService.AcquireLatestNexusAsync` over the Darktide domain)
+  and calls `IUpdateStateStore.AcknowledgeInstall` exactly once, so the flag
+  clears without an extra API check. Busy / NotEligible / Failed / cancelled
+  attempts never acknowledge.
+- `ModUpdateProgress` brackets every attempt (active=true after the gate is
+  acquired, active=false in the finally) so a subscriber's spinner can never
+  get stuck; `BusyChanged` / `IsBusy` mirror the coordinator.
+- A non-cancellation failure -> `Failed` carrying the exception (the manual
+  alert keeps its exact message body); `OperationCanceledException` propagates
+  so each caller keeps its own cancellation posture.
+
 ### UI wiring (`UpdateCheckRunner`)
 
 The triggers that fire the checks live in `UpdateCheckRunner` in `ui/Session/`,
@@ -782,6 +833,11 @@ Registers:
 - `IUpdateStateStore` -> `UpdateStateStore` (singleton; the profile-scoped
   known-update persistence rules over `IKnownUpdateState.KnownUpdates` + the
   caller's candidates + the repository for hydration self-heal).
+- `UpdateCoordinator` (singleton; the global one-install-at-a-time gate, a
+  single-slot semaphore held for the app lifetime).
+- `IModUpdateInstaller` -> `ModUpdateInstaller` (singleton; the single Premium
+  install path over `IModAcquisitionService` + `IUpdateStateStore` +
+  `IModRepository` + `UpdateCoordinator`).
 
 The OAuth factory's token store + the service's token store are the SAME
 `NexusOAuthTokenStore` instance (matches production wiring). The store depends
@@ -799,10 +855,11 @@ view. No construction-time cycle.
   gate),
   `mods` (`IModImportService`, `NexusSource`, `IModRepository` /
   `ModContainer` / `ModVersion` / `ModVersionPolicy` for the acquisition +
-  update-check services, `ModDisplayMetadata` for the acquisition capture + the
-  metadata backfill). Integrations references no Profiles library: the update
-  family takes the profile's mod-list entries as `ModListCandidate` call
-  parameters, mapped by the UI layer (which references both libraries).
+  update-check + update-install services, `ModDisplayMetadata` for the
+  acquisition capture + the metadata backfill). Integrations references no
+  Profiles library: the update family takes the profile's mod-list entries as
+  `ModListCandidate` call parameters, mapped by the UI layer (which references
+  both libraries).
 - **NuGet:** `Microsoft.Extensions.Http` (`AddHttpClient<TClient,TImpl>` +
   `IHttpClientFactory`), `Microsoft.Extensions.DependencyInjection.Abstractions`,
   `Microsoft.Extensions.Logging.Abstractions`, `Duende.IdentityModel.OidcClient`
@@ -871,6 +928,13 @@ view. No construction-time cycle.
   baseline, each rejection reason (removed / re-pinned / container gone /
   source changed by id + by source type / version changed), and the
   case-insensitive version match.
+- **`ModUpdateInstaller`** against fakes: the success path (acquire over the
+  Darktide domain + acknowledge exactly once + the progress bracket), the gate
+  (Try refuses politely + touches nothing when held; InstallLatest awaits its
+  turn; IsBusy/BusyChanged mirror the coordinator), the in-gate revalidation
+  (removed / version-changed / re-pinned -> NotEligible with the reason,
+  nothing installed), the failure outcome (the exception preserved, no
+  acknowledge), and cancellation (propagates, no acknowledge, spinner closed).
 - **`NexusModMetadataService`** against a fake `INexusClient` + a fake
   `IModRepository` + the `FakeConfigLoader` + a fake/real backfill state:
   the auth gate (None returns empty, no API call), the persisted 24-hour gate

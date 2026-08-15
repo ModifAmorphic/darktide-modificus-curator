@@ -124,11 +124,17 @@ stays fixed-width.
 
 ### Click behavior by account tier
 
-- **Premium click:** the command acquires the global `UpdateCoordinator` (one
-  install at a time, shared with the automatic updater), re-downloads the mod's
-  latest MAIN release via `IModAcquisitionService.AcquireLatestNexusAsync` (the
-  auth-only / premium path), acknowledges the install (clearing the persisted
-  known-update entry immediately, with no extra API check), and reloads.
+- **Premium click:** the command hands the install to
+  `IModUpdateInstaller.TryInstallLatestAsync` (Integrations; the single install
+  path shared with the automatic batch). The installer acquires the global
+  `UpdateCoordinator` (one install at a time), revalidates eligibility inside
+  the gate, re-downloads the mod's latest MAIN release via
+  `IModAcquisitionService.AcquireLatestNexusAsync` (the auth-only / premium
+  path), acknowledges the install on success (clearing the persisted
+  known-update entry immediately, with no extra API check), and raises the
+  per-row progress that drives the spinner. The VM reloads on Installed,
+  surfaces the localized alert with the exception's message on Failed, and
+  treats Busy / NotEligible as silent no-ops.
 - **Regular or unknown click:** the command opens the mod's Nexus files page in
   the user's browser via a testable external-launcher seam. The user picks a
   file on Nexus and the registered `nxm://` handler acquires it through the
@@ -144,7 +150,10 @@ The Premium in-app install runs only when all of these conditions hold:
 - the row uses `LatestPolicy`, not a pinned version;
 - the profile-scoped known-update state flags the row as having an update;
 - the row is not already updating;
-- the global `UpdateCoordinator` is free (no other install in flight).
+- the shared install gate is free (no other install in flight; a busy gate is
+  a silent no-op) and the installer's in-gate eligibility revalidation still
+  passes (membership / policy / source / version unchanged since the flag was
+  recorded).
 
 `ModListViewModel.Update` repeats the important conditions as command-level
 defenses, so a programmatic invocation cannot bypass them.
@@ -156,7 +165,8 @@ Relevant implementation:
 - `src/ui/ViewModels/ModListViewModel.cs`, `IsPremiumUser`, `Update`,
   `UpdatePremiumAsync`, and `OpenFilesPage`
 - `src/ui/Views/ModListView.axaml`, the per-row update-action cell
-- `src/ui/Session/UpdateCoordinator.cs`
+- `src/integrations/IModUpdateInstaller.cs` + `ModUpdateInstaller.cs` +
+  `UpdateCoordinator.cs` (the single install path + the shared gate)
 
 ### Regular-user discovery
 
@@ -206,13 +216,15 @@ after a check completes (the runner captures the exact result). It runs only
 when all of these hold: the result's outcome is authoritative `Success` with
 updates, `AutomaticUpdatesEnabled` is on, the active profile still matches, and
 a fresh `GetCurrentStateAsync` returns `IsPremium == true` (the Premium request
-fires ONLY when the gates pass). Then it installs sequentially, one at a time
-under the shared `UpdateCoordinator`. Per-mod revalidation gates each entry
-(membership / policy / source / version still match); a profile switch stops the
-whole batch; per-mod failures are isolated and aggregated into one summary
-alert. A successful install acknowledges/clears its known-update entry
-immediately; a fully successful batch is silent. `ModListViewModel` reloads
-after the batch via the service's `UpdatesApplied` event.
+fires ONLY when the gates pass). Then it installs sequentially through the
+shared `IModUpdateInstaller`, one at a time under the global `UpdateCoordinator`
+(the awaiting install semantics: each batch entry waits its turn behind a
+manual install). The installer's in-gate revalidation gates each entry
+(membership / policy / source / version still match) + acknowledges on success;
+a profile switch stops the whole batch; per-mod failures are isolated and
+aggregated into one summary alert; a fully successful batch is silent.
+`ModListViewModel` reloads after the batch via the service's `UpdatesApplied`
+event, and the per-row spinners come from the installer's progress events.
 
 This is independent of `AutoUpdateCheckEnabled`: periodic checking being off
 never disables automatic installation (startup + switch + manual checks still
@@ -221,7 +233,8 @@ drive it).
 Relevant implementation:
 
 - `src/ui/Session/IAutomaticUpdateService.cs` + `AutomaticUpdateService.cs`
-- `src/ui/Session/UpdateCoordinator.cs`
+- `src/integrations/IModUpdateInstaller.cs` + `ModUpdateInstaller.cs` +
+  `UpdateCoordinator.cs` (the single install path + the shared gate)
 - `src/ui/Session/UpdateCheckRunner.cs` (the chaining)
 - `src/config/NexusConfig.cs`, `AutomaticUpdatesEnabled`
 

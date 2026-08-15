@@ -481,7 +481,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           window shows);
                           `IModAcquisitionService` (download + extract + place
                           orchestrator in Integrations) + the real `NxmModDownloadHandler` (in UI,
-                          coordinating IDialogService + IProfileSession + Dispatcher.UIThread) that
+                          coordinating IDialogService + IProfileSession + Dispatcher.UIThread,
+                          acknowledging a successful acquisition via IUpdateStateStore + reloading
+                          the list via the one-member `IModListRefresh` (ui/Session/) implemented by
+                          ModListViewModel + forwarded by the composition root) that
                           replaces the no-op default via DI last-registration-wins, registered after
                           AddNxm() in CuratorComposition;
                           the shared `INxmRegistrationState` (ui/Session/, an
@@ -625,18 +628,26 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            regular/unverified flagged row's update action +
                            tooltip carry Desktop Mode guidance instead of the
                            files-page launch; Premium rows keep the in-app
-                           install path). The `UpdateCoordinator` (ui/Session/) is the
-                           single one-install-at-a-time gate shared with the
-                           `IAutomaticUpdateService` (ui/Session/), the opt-in
-                           Premium automatic installer chained after each check from
-                           `UpdateCheckRunner` (captures the exact result, gates on
-                           authoritative Success + updates + AutomaticUpdatesEnabled
-                           + active profile + a fresh Premium verify, installs
-                           sequentially under the coordinator, isolates per-mod
-                           failures into one summary alert, acknowledges on success,
-                           stops on profile switch, raises UpdatesApplied so the list
-                           VM reloads, raises ModUpdateProgress per mod so the
-                           row-level spinner tracks the currently installing row).
+                           install path). The `IModUpdateInstaller`
+                           (Integrations, holding the `UpdateCoordinator`: the
+                           single one-install-at-a-time gate) is the one
+                           Premium install path for both the manual row action
+                           + the automatic batch (in-gate eligibility
+                           revalidation via UpdateEligibility, acquire,
+                           acknowledge-on-success exactly once, per-attempt
+                           ModUpdateProgress events driving the row spinner
+                           for both paths). The `IAutomaticUpdateService`
+                           (ui/Session/) is the opt-in Premium automatic batch
+                           chained after each check from `UpdateCheckRunner`
+                           (captures the exact result, gates on authoritative
+                           Success + updates + AutomaticUpdatesEnabled + active
+                           profile + a fresh Premium verify, then runs the
+                           sequential batch through
+                           `installer.InstallLatestAsync` with per-iteration
+                           candidate re-pull + active-profile re-check,
+                           isolates per-mod failures into one summary alert,
+                           stops on profile switch, raises UpdatesApplied so
+                           the list VM reloads).
                            The check is split by trigger:
                            `IUpdateCheckService.CheckAsync` (the v2 GraphQL
                            `modsByUid` batch query, 1 API call for all mods)
@@ -1126,6 +1137,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           + the UpdateEligibility evaluator (the four
                                           rules + every rejection reason + the
                                           case-insensitive version match)
+                                          + the ModUpdateInstaller (gate semantics
+                                          Try-Busy vs awaiting, in-gate revalidation,
+                                          acknowledge-on-success-only, the progress
+                                          bracket, the Failed outcome shape,
+                                          cancellation propagation)
                                           + the NexusModMetadataService (stable-v1
                                           display-metadata backfill: the 24-hour gate,
                                           the 25-attempt cap, active-profile-priority
@@ -1219,10 +1235,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             accent, Premium install, regular/unknown files-page
                                             open, launcher failure alert, unsupported rows),
                                             UpdateCommand premium/regular branches + one-at-a-time
-                                            via the UpdateCoordinator + acknowledgement + the
-                                            automatic-update setting + the AutomaticUpdateService
-                                            gating/sequencing/isolation/concurrency/profile-switch
-                                            + SourceUrl resolution; + the linked-folder flow
+                                            + the Busy/NotEligible silent no-ops + the Failed alert
+                                            via the installer outcome + the automatic-update setting
+                                            + the AutomaticUpdateService
+                                            gating/sequencing/isolation/profile-switch/mid-batch-
+                                            profile-deletion/cancellation + the installer-driven
+                                            progress + busy push-down + SourceUrl resolution; + the
+                                            linked-folder flow
                                             (LinkModsCommand peek/collision-refusal/re-link +
                                             LatestPolicy add, the linked badge two-state available/
                                             broken, OpenFolderCommand launch + failure alert, the

@@ -76,19 +76,22 @@ public static class CuratorComposition
         // IPC router, by which point all dependencies including IProfileSession,
         // IDialogService, and MainWindow are registered). It coordinates the
         // acquisition service (Integrations) with the active-profile session,
-        // profile service, and the UI-thread alert dialog. Registered with a
-        // factory so the UI-thread marshaling seam
-        // (Dispatcher.UIThread.InvokeAsync) is wired explicitly.
+        // the profile service, and the UI-thread alert dialog, acknowledges the
+        // install through the update-state store, and reloads the list through
+        // the narrow IModListRefresh seam. Registered with a factory so the
+        // UI-thread marshaling seam (Dispatcher.UIThread.InvokeAsync) is wired
+        // explicitly.
         services.AddSingleton<INxmModDownloadHandler>(sp => new NxmModDownloadHandler(
             invokeOnUi: action => Dispatcher.UIThread.InvokeAsync(action),
             sp.GetRequiredService<IModAcquisitionService>(),
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IConfigLoader>(),
+            sp.GetRequiredService<IUpdateStateStore>(),
+            sp.GetRequiredService<IModListRefresh>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),
-            sp.GetRequiredService<ILogger<NxmModDownloadHandler>>(),
-            refreshModList: containerId => sp.GetRequiredService<ModListViewModel>().AcknowledgeUpdateAndReload(containerId)));
+            sp.GetRequiredService<ILogger<NxmModDownloadHandler>>()));
 
         // UI surface. MainWindow is a singleton: the desktop lifetime installs
         // the resolved instance as desktop.MainWindow, and DialogService resolves
@@ -127,6 +130,10 @@ public static class CuratorComposition
         // (the event fires on a threadpool thread; the handler iterates the
         // UI-bound Mods collection). Production wires Dispatcher.UIThread.Post.
         services.AddSingleton<Action<Action>>(_ => action => Dispatcher.UIThread.Post(action));
+        // The narrow "reload the mod list" seam consumed by the nxm download
+        // handler: a plain interface forward to the list VM singleton (resolved
+        // lazily, so the registration introduces no construction-time cycle).
+        services.AddSingleton<IModListRefresh>(sp => sp.GetRequiredService<ModListViewModel>());
         // The shared last-known OS nxm:// registration state. Its deliberate
         // probe points: one seed refresh at shell construction, one refresh on
         // each Nexus-enter, one after each register/release action. Every other
@@ -137,15 +144,14 @@ public static class CuratorComposition
             sp.GetService<INxmHandlerRegistrar>(),
             sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<NxmRegistrationState>>()));
-        // The global install coordinator: shared between the manual per-row update
-        // action and the automatic Premium updater so only one install runs at a
-        // time. Singleton: holds the single-slot semaphore for the app lifetime.
-        services.AddSingleton<UpdateCoordinator>();
         // The opt-in Premium automatic mod-update installer. Chained from the
-        // update-check runner after each check; independent of ModListViewModel
-        // (to avoid the ModListViewModel -> UpdateCheckRunner dependency becoming
-        // circular) but raises UpdatesApplied so the list VM reloads after a
-        // batch.
+        // update-check runner after each check; each install routes through the
+        // shared IModUpdateInstaller (registered by AddIntegrations together
+        // with the UpdateCoordinator it holds, the global one-install-at-a-time
+        // gate shared with the manual per-row action). Independent of
+        // ModListViewModel (to avoid the ModListViewModel ->
+        // UpdateCheckRunner dependency becoming circular) but raises
+        // UpdatesApplied so the list VM reloads after a batch.
         services.AddSingleton<IAutomaticUpdateService, AutomaticUpdateService>();
 
         // The mod-thumbnail disk/in-memory cache + download orchestrator. A UI-
@@ -217,11 +223,13 @@ public static class CuratorComposition
                 sp.GetRequiredService<IDialogService>(),
                 sp.GetRequiredService<LocalizationService>(),
                 sp.GetRequiredService<IUpdateCheckService>(),
-                sp.GetRequiredService<IModAcquisitionService>(),
+                // The single install path for the manual Premium update action:
+                // coordinator-gated, revalidating, acknowledging, progress-
+                // reporting (shared with the automatic batch).
+                sp.GetRequiredService<IModUpdateInstaller>(),
                 sp.GetRequiredService<INexusAuthService>(),
                 sp.GetRequiredService<IUpdateStateStore>(),
                 sp.GetRequiredService<UpdateCheckRunner>(),
-                sp.GetRequiredService<UpdateCoordinator>(),
                 sp.GetRequiredService<IAutomaticUpdateService>(),
                 sp.GetRequiredService<ImportWorkflowViewModel>(),
                 sp.GetRequiredService<DetailedModRowsViewModel>(),

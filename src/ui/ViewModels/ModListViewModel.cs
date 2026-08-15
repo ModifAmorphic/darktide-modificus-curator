@@ -100,7 +100,7 @@ public enum ModAddMode
 /// <see cref="ModVersionPolicy.Latest"/> (inert for linked). No modal; the folder
 /// is linked, not copied.</para>
 /// </remarks>
-public partial class ModListViewModel : ObservableObject
+public partial class ModListViewModel : ObservableObject, IModListRefresh
 {
     /// <summary>
     /// The Nexus Mods games page for Darktide (the "Add Nexus Mods" flyout item's
@@ -125,11 +125,10 @@ public partial class ModListViewModel : ObservableObject
     private readonly IDialogService _dialogs;
     private readonly LocalizationService _localization;
     private readonly IUpdateCheckService _updateCheck;
-    private readonly IModAcquisitionService _acquisition;
+    private readonly IModUpdateInstaller _installer;
     private readonly INexusAuthService _auth;
     private readonly IUpdateStateStore _updateState;
     private readonly UpdateCheckRunner _updateCheckRunner;
-    private readonly UpdateCoordinator _updateCoordinator;
     private readonly IAutomaticUpdateService _automaticUpdates;
     private readonly ILogger<ModListViewModel> _logger;
     private readonly Action<Action> _invokeOnUi;
@@ -160,10 +159,11 @@ public partial class ModListViewModel : ObservableObject
     /// <summary>
     /// Creates the list VM, subscribes to the session (reload on active-profile
     /// change), the update-check service (badge refresh on
-    /// <see cref="IUpdateCheckService.CheckCompleted"/>), the update coordinator
-    /// (push the global busy flag down to rows), the automatic-update service
-    /// (reload after a batch installs mods), and localization (culture refresh),
-    /// loads the current profile's mods, and reads the Nexus premium state once
+    /// <see cref="IUpdateCheckService.CheckCompleted"/>), the mod-update
+    /// installer (per-row spinner via progress + the global busy flag pushed
+    /// down to rows), the automatic-update service (reload after a batch
+    /// installs mods), and localization (culture refresh), loads the current
+    /// profile's mods, and reads the Nexus premium state once
     /// (fire-and-forget; flips <see cref="IsPremiumUser"/> when it lands).
     /// </summary>
     public ModListViewModel(
@@ -174,11 +174,10 @@ public partial class ModListViewModel : ObservableObject
         IDialogService dialogs,
         LocalizationService localization,
         IUpdateCheckService updateCheck,
-        IModAcquisitionService acquisition,
+        IModUpdateInstaller installer,
         INexusAuthService auth,
         IUpdateStateStore updateState,
         UpdateCheckRunner updateCheckRunner,
-        UpdateCoordinator updateCoordinator,
         IAutomaticUpdateService automaticUpdates,
         ImportWorkflowViewModel importWorkflow,
         DetailedModRowsViewModel detailedRows,
@@ -198,11 +197,10 @@ public partial class ModListViewModel : ObservableObject
         _dialogs = dialogs;
         _localization = localization;
         _updateCheck = updateCheck;
-        _acquisition = acquisition;
+        _installer = installer ?? throw new ArgumentNullException(nameof(installer));
         _auth = auth;
         _updateState = updateState;
         _updateCheckRunner = updateCheckRunner;
-        _updateCoordinator = updateCoordinator ?? throw new ArgumentNullException(nameof(updateCoordinator));
         _automaticUpdates = automaticUpdates ?? throw new ArgumentNullException(nameof(automaticUpdates));
         ImportWorkflow = importWorkflow ?? throw new ArgumentNullException(nameof(importWorkflow));
         DetailedRows = detailedRows ?? throw new ArgumentNullException(nameof(detailedRows));
@@ -218,9 +216,9 @@ public partial class ModListViewModel : ObservableObject
         _session.PropertyChanged += OnSessionPropertyChanged;
         _localization.PropertyChanged += OnCultureChanged;
         _updateCheck.CheckCompleted += OnUpdateCheckCompleted;
-        _updateCoordinator.BusyChanged += OnCoordinatorBusyChanged;
+        _installer.BusyChanged += OnInstallerBusyChanged;
+        _installer.ModUpdateProgress += OnModUpdateProgress;
         _automaticUpdates.UpdatesApplied += OnAutomaticUpdatesApplied;
-        _automaticUpdates.ModUpdateProgress += OnAutomaticUpdateProgress;
         ImportWorkflow.ItemImported += OnItemImported;
         // The Add split button's enabled state combines the workflow's activity
         // with the Gaming Mode gate, so the workflow's own IsActive flips must
@@ -268,20 +266,21 @@ public partial class ModListViewModel : ObservableObject
         });
 
     /// <summary>
-    /// The automatic-update service reports per-mod progress: a container's
-    /// install started (active=true) or finished (active=false). Marshal to the
-    /// UI thread, find the row by ContainerId, and set its
-    /// <see cref="ModItemViewModel.IsUpdating"/> so the row-level spinner (left
-    /// of the Nexus badge) tracks the currently installing mod. An event for a
-    /// row no longer present (after a profile switch / reload) is ignored, so a
-    /// switch mid-batch never leaves a stale spinner on a now-absent row.
+    /// The mod-update installer reports per-install progress (a container's
+    /// install attempt started or finished, for BOTH the manual Premium path
+    /// and the automatic batch). Marshal to the UI thread, find the row by
+    /// ContainerId, and set its <see cref="ModItemViewModel.IsUpdating"/> so
+    /// the row-level spinner (left of the Nexus badge) tracks the currently
+    /// installing mod. An event for a row no longer present (after a profile
+    /// switch / reload) is ignored, so a switch mid-batch never leaves a stale
+    /// spinner on a now-absent row.
     /// </summary>
-    private void OnAutomaticUpdateProgress(object? sender, ModUpdateProgressEventArgs e) =>
+    private void OnModUpdateProgress(object? sender, ModUpdateProgressEventArgs e) =>
         _invokeOnUi(() => ApplyModUpdateProgress(e.ContainerId, e.IsActive));
 
     /// <summary>
-    /// Applies a per-mod automatic-update progress signal to the matching row.
-    /// Finds the row by ContainerId; sets its <see cref="ModItemViewModel.IsUpdating"/>
+    /// Applies a per-mod install progress signal to the matching row. Finds the
+    /// row by ContainerId; sets its <see cref="ModItemViewModel.IsUpdating"/>
     /// to <paramref name="isActive"/>. Ignores a container id with no matching
     /// row (the row may have been removed by a profile switch / reload between
     /// the event + this UI-thread callback).
@@ -455,11 +454,12 @@ public partial class ModListViewModel : ObservableObject
     private bool _isRateLimitActive;
 
     /// <summary>
-    /// Whether the update coordinator reports an install in flight (manual or
-    /// automatic). Set from <see cref="OnCoordinatorBusyChanged"/>; pushed down
+    /// Whether the mod-update installer reports an install in flight (manual or
+    /// automatic; the coordinator-backed busy flag). Set from
+    /// <see cref="OnInstallerBusyChanged"/>; pushed down
     /// to each row so the per-row enabled state reflects the global "one install
     /// at a time" coordination. The manual Update command no longer sets this
-    /// directly; acquiring the coordinator is the single source of truth.
+    /// directly; the installer behind its shared gate is the single source of truth.
     /// </summary>
     [ObservableProperty]
     private bool _anyRowUpdating;
@@ -765,16 +765,15 @@ public partial class ModListViewModel : ObservableObject
     }
 
     /// <summary>
-    /// The global install-coordinator's busy flag changed (a manual row update or
-    /// the automatic updater acquired or released it). Mirror it to
+    /// The installer's busy flag changed (a manual row update or the automatic
+    /// batch acquired or released the shared coordinator). Mirror it to
     /// <see cref="AnyRowUpdating"/> + push the new value down to every row so the
     /// per-row enabled state recomputes (Premium clicks stay disabled while
-    /// another install runs; regular/unknown clicks stay enabled). Fires on a
-    /// threadpool thread when the automatic updater acquires/releases, so marshal
-    /// to the UI thread.
+    /// another install runs; regular/unknown clicks stay enabled). Fires on the
+    /// acquiring/releasing thread, so marshal to the UI thread.
     /// </summary>
-    private void OnCoordinatorBusyChanged(object? sender, EventArgs e) =>
-        _invokeOnUi(() => AnyRowUpdating = _updateCoordinator.IsBusy);
+    private void OnInstallerBusyChanged(object? sender, EventArgs e) =>
+        _invokeOnUi(() => AnyRowUpdating = _installer.IsBusy);
 
     /// <summary>
     /// Pushes the current <see cref="IsPremiumUser"/>, <see cref="AnyRowUpdating"/>,
@@ -928,37 +927,6 @@ public partial class ModListViewModel : ObservableObject
         // hydration + metadata backfill on Detailed. Fire-and-forget: the
         // coordinator catches/logs all failures internally.
         _ = DetailedRows.SetRowsAsync(Mods.ToArray());
-    }
-
-    /// <summary>
-    /// Acknowledges a successful version change for <paramref name="containerId"/>
-    /// in the active profile (removing its persisted known-update entry
-    /// immediately, without an extra API check), then reloads so the new version
-    /// shows and the flag clears. Called after a successful nxm
-    /// install/reinstall: the prior known-update state (recorded before the
-    /// version change) would otherwise re-apply the flag via
-    /// <see cref="ApplyKnownUpdateState"/>. The next authoritative check
-    /// reconciles naturally (the mod is re-evaluated against the new version).
-    /// </summary>
-    public void AcknowledgeUpdateAndReload(Guid containerId)
-    {
-        if (_session.ActiveProfileId is Guid profileId)
-        {
-            try
-            {
-                _updateState.AcknowledgeInstall(profileId, containerId);
-            }
-            catch (Exception ex)
-            {
-                // Defensive: AcknowledgeInstall should not throw, but a
-                // persistence failure must not block the reload.
-                _logger.LogWarning(ex,
-                    "Acknowledging update for container {Container} failed; the next check reconciles.",
-                    containerId);
-            }
-        }
-
-        Reload();
     }
 
     /// <summary>
@@ -1391,40 +1359,37 @@ public partial class ModListViewModel : ObservableObject
 
     /// <summary>
     /// The stable per-row update action. Branches on the verified Premium state:
-    /// <b>Premium</b> re-downloads the mod's latest MAIN release via
-    /// <see cref="IModAcquisitionService.AcquireLatestNexusAsync"/> (the
-    /// auth-only / premium path) under the global install coordinator, then
-    /// acknowledges the install (clearing the persisted known-update entry
-    /// immediately, with no extra API check) + reloads (works identically
-    /// inside Gaming Mode); <b>regular / unknown</b> opens the mod's Nexus
-    /// files page in the user's browser via the injectable external-launcher
-    /// seam, surfacing a fallback alert on launch failure, except inside a
-    /// Steam Deck Gaming Mode session where the browser flow cannot complete
-    /// and Desktop Mode guidance is shown instead.
+    /// <b>Premium</b> installs the mod's latest MAIN release in-app via
+    /// <see cref="IModUpdateInstaller.TryInstallLatestAsync"/> (the shared
+    /// install path: coordinator-gated one-install-at-a-time, in-gate
+    /// eligibility revalidation, acknowledge-on-success, per-row progress; works
+    /// identically inside Gaming Mode); <b>regular / unknown</b> opens the mod's
+    /// Nexus files page in the user's browser via the injectable
+    /// external-launcher seam, surfacing a fallback alert on launch failure,
+    /// except inside a Steam Deck Gaming Mode session where the browser flow
+    /// cannot complete and Desktop Mode guidance is shown instead.
     /// </summary>
     /// <remarks>
     /// <para><b>Defense.</b> No-op when: there is no active profile; the row is
     /// not Nexus+Latest (<see cref="ModItemViewModel.IsNexusLatest"/>); no update
     /// is flagged (<see cref="ModItemViewModel.UpdateAvailable"/>); or the row
     /// has no <see cref="ModItemViewModel.NexusModId"/>. The Premium install path
-    /// additionally no-ops when the global coordinator is already busy (one
-    /// install at a time, shared with the automatic updater).</para>
-    /// <para><b>One install at a time, globally.</b> The Premium path acquires
-    /// the shared <see cref="UpdateCoordinator"/>; the automatic updater acquires
-    /// the same coordinator per mod, so a manual click and an automatic batch can
-    /// never install the same mod concurrently. The coordinator's busy flag drives
+    /// additionally no-ops when the installer reports another install in flight
+    /// (one install at a time, shared with the automatic batch).</para>
+    /// <para><b>One install at a time, globally.</b> The installer's shared
+    /// coordinator is the single mutual-exclusion point across the manual click
+    /// + the automatic batch. Its busy flag drives
     /// <see cref="AnyRowUpdating"/> (pushed to rows), which disables other
-    /// Premium rows' actions while an install runs.</para>
+    /// Premium rows' actions while an install runs; its progress events drive
+    /// this row's spinner (<see cref="ModItemViewModel.IsUpdating"/>).</para>
     /// <para><b>Transactional extraction.</b> The mod repository's
     /// <c>AddVersion</c> extracts into a sibling temp + atomically swaps on
     /// success, so a mid-update failure leaves the existing version intact (the
     /// user keeps the version they had). On Premium-install failure the command
-    /// surfaces a user-facing alert; on success (or failure) the finally block
-    /// clears <see cref="ModItemViewModel.IsUpdating"/> + releases the
-    /// coordinator so the row's other controls re-enable.</para>
+    /// surfaces a user-facing alert with the exception's message.</para>
     /// <para><b>No ConfigureAwait(false)</b> on the Premium path: the continuation
     /// must stay on the UI thread so Reload + ShowAlertAsync run on the UI thread
-    /// (the UI-layer convention). The acquisition's own I/O runs on the threadpool
+    /// (the UI-layer convention). The installer's own I/O runs on the threadpool
     /// internally; awaiting it does not block the UI thread.</para>
     /// </remarks>
     [RelayCommand]
@@ -1463,38 +1428,35 @@ public partial class ModListViewModel : ObservableObject
     }
 
     /// <summary>
-    /// The Premium install branch of the update action: acquires the global
-    /// coordinator (no-op if busy), runs the acquisition, acknowledges the
-    /// install, and reloads. Surfaces a user-facing alert on failure.
+    /// The Premium install branch of the update action: hands the install to
+    /// the shared installer (a Busy outcome when another install is in flight is
+    /// a silent no-op) and renders the outcome. On <see cref="ModInstallStatus.Installed"/>
+    /// the installer has already acquired the latest release + acknowledged the
+    /// flag, so this marks the session pending + reloads (the new version + the
+    /// cleared flag show). On <see cref="ModInstallStatus.Failed"/> the localized
+    /// alert carries the exception's message. Busy + NotEligible are silent (a
+    /// second click while busy is a no-op; an ineligible target means the flag
+    /// was stale + the next hydration clears it). Cancellation propagates out of
+    /// the installer + is swallowed here (not a failure).
     /// </summary>
     private async Task UpdatePremiumAsync(Guid profileId, ModItemViewModel row, int modId)
     {
-        // One install at a time, globally: a second click while another install
-        // is in flight is a no-op. The coordinator is shared with the automatic
-        // updater, so the two paths can never install the same mod concurrently.
-        if (!_updateCoordinator.TryAcquire(out var scope))
-        {
-            return;
-        }
-
-        row.IsUpdating = true;
+        ModInstallOutcome outcome;
         try
         {
             // No ConfigureAwait(false): the continuation must stay on the UI
-            // thread so AcknowledgeUpdateAndReload (mutates the UI-bound Mods
-            // collection) + the failure-path ShowAlertAsync below run on the UI
-            // thread (the UI-layer convention).
-            await _acquisition.AcquireLatestNexusAsync(NexusGameIdentity.DarktideDomain, modId);
-
-            // Acknowledge the install: remove this container's known-update entry
-            // immediately (no extra API check), then reload so the new version
-            // shows + the flag clears. The persisted state was the source of the
-            // flag, so clearing it is enough; ApplyKnownUpdateState (inside
-            // Reload) reads the cleared state.
-            AcknowledgeUpdateAndReload(row.ContainerId);
-            _session.HasPendingChanges = true;
-
-            _logger.LogInformation("Updated mod {Container} to the latest Nexus release.", row.ContainerId);
+            // thread so Reload + the failure-path ShowAlertAsync below run on
+            // the UI thread (the UI-layer convention). The expected version is
+            // the row's resolved version (what the row was built from); the
+            // installer revalidates it against the container's current state
+            // inside the gate. The candidates are the entries the last Reload
+            // loaded.
+            outcome = await _installer.TryInstallLatestAsync(
+                profileId,
+                row.ContainerId,
+                modId,
+                row.ActualVersion,
+                _loadedEntries.ToCandidates());
         }
         catch (OperationCanceledException)
         {
@@ -1502,18 +1464,31 @@ public partial class ModListViewModel : ObservableObject
             // no alert. Re-throwing would surface as an unobserved exception on
             // the fire-and-forget AsyncRelayCommand, so swallow instead.
             _logger.LogInformation("Update of mod {Container} was cancelled.", row.ContainerId);
+            return;
         }
-        catch (Exception ex)
+
+        switch (outcome.Status)
         {
-            _logger.LogError(ex, "Update of mod {Container} failed.", row.ContainerId);
-            await _dialogs.ShowAlertAsync(
-                _localization["Update_FailedTitle"],
-                _localization.Format("Update_FailedMessage", row.Name) + " " + ex.Message);
-        }
-        finally
-        {
-            row.IsUpdating = false;
-            scope?.Dispose();
+            case ModInstallStatus.Installed:
+                _session.HasPendingChanges = true;
+                Reload();
+                _logger.LogInformation("Updated mod {Container} to the latest Nexus release.", row.ContainerId);
+                break;
+
+            case ModInstallStatus.Failed:
+                _logger.LogError(
+                    outcome.Exception, "Update of mod {Container} failed.", row.ContainerId);
+                await _dialogs.ShowAlertAsync(
+                    _localization["Update_FailedTitle"],
+                    _localization.Format("Update_FailedMessage", row.Name) + " "
+                        + (outcome.Exception?.Message ?? outcome.Reason));
+                break;
+
+            default:
+                // Busy (another install is in flight: a clean no-op) +
+                // NotEligible (a stale flag; the installer logged the reason +
+                // the next hydration self-heals it out). Silent.
+                break;
         }
     }
 

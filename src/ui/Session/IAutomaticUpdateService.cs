@@ -6,9 +6,10 @@ namespace Modificus.Curator.UI.Session;
 /// The opt-in Premium automatic mod-update installer. Chained directly from the
 /// update-check runner after a check completes, it sequentially installs flagged
 /// updates for the active profile's Nexus Latest mods when the user has enabled
-/// it AND a fresh Premium verification passes. Shares the global
-/// <see cref="UpdateCoordinator"/> with the manual update action so the two
-/// paths never install the same mod concurrently.
+/// it AND a fresh Premium verification passes. Each install routes through the
+/// shared <see cref="IModUpdateInstaller"/>, so the manual update action and an
+/// automatic batch never install the same mod concurrently and the per-row
+/// spinner tracks both paths from one progress source.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -32,21 +33,20 @@ namespace Modificus.Curator.UI.Session;
 /// being off never disables automatic installation (startup + switch + manual
 /// checks still drive it).</para>
 /// <para>
-/// <b>Per-mod revalidation + isolation.</b> Before each install, the service
-/// revalidates the active profile, the mod's membership + policy, its source +
-/// mod id, and that the installed version still matches the result snapshot. A
-/// profile switch stops the whole batch; any other mismatch skips that mod. A
-/// per-mod failure is caught + recorded; it does not abort later mods. A
-/// successful install acknowledges/clears its known-update entry immediately.</para>
+/// <b>Sequential batch with per-iteration re-pull.</b> The batch processes the
+/// result's updates one at a time. Each iteration re-checks the active profile
+/// (a switch mid-batch stops scheduling further entries) and re-pulls the
+/// profile's candidates, feeding them to the installer's in-gate eligibility
+/// revalidation. Per-mod failures are caught + recorded; they do not abort
+/// later mods.</para>
 /// <para>
 /// <b>Feedback.</b> A fully successful batch is silent. A batch with one or more
 /// failures surfaces a single aggregated, localized summary alert after the
 /// batch. <see cref="UpdatesApplied"/> is raised when at least one install
 /// succeeded so a subscriber can reload the list (the new versions + cleared
-/// flags). <see cref="ModUpdateProgress"/> is raised per mod (active=true before
-/// the acquisition, active=false from the per-mod finally) so a subscriber can
-/// show the spinner on the currently installing row; the spinner moves row by
-/// row as the sequential batch advances.</para>
+/// flags). Per-row spinners come from the installer's
+/// <see cref="IModUpdateInstaller.ModUpdateProgress"/> event (raised per
+/// attempt), not from this service.</para>
 /// </remarks>
 public interface IAutomaticUpdateService
 {
@@ -58,25 +58,13 @@ public interface IAutomaticUpdateService
     event EventHandler? UpdatesApplied;
 
     /// <summary>
-    /// Raised (on the caller's thread) per mod during an automatic batch:
-    /// <see cref="ModUpdateProgressEventArgs.IsActive"/> == <c>true</c>
-    /// immediately before the per-mod acquisition attempt, <c>false</c> from the
-    /// per-mod finally block (success, failure, or cancellation). Deterministic
-    /// start/stop ordering per sequential item. A subscriber can marshal to the
-    /// UI thread, find the row by
-    /// <see cref="ModUpdateProgressEventArgs.ContainerId"/>, and set its spinner
-    /// state to reflect the currently installing mod. An event for a row no
-    /// longer present (after a profile switch / reload) is ignored.
-    /// </summary>
-    event EventHandler<ModUpdateProgressEventArgs>? ModUpdateProgress;
-
-    /// <summary>
     /// Runs the automatic-install batch for <paramref name="result"/> scoped to
     /// <paramref name="profileId"/>, after the gates (authoritative success,
     /// updates present, automatic updates enabled, profile still active, fresh
-    /// Premium verification). Sequential, one install at a time under the global
-    /// <see cref="UpdateCoordinator"/>. Per-mod failures are isolated; the
-    /// aggregated summary alert (if any) is shown after the batch.
+    /// Premium verification). Sequential; each install goes through the shared
+    /// <see cref="IModUpdateInstaller"/> (one install at a time, shared with the
+    /// manual path). Per-mod failures are isolated; the aggregated summary alert
+    /// (if any) is shown after the batch.
     /// </summary>
     /// <param name="result">The exact result captured from the check invocation
     /// (not <see cref="IUpdateCheckService.LastResult"/>).</param>
@@ -85,14 +73,3 @@ public interface IAutomaticUpdateService
     /// <param name="ct">Cancellation token.</param>
     Task RunAfterCheckAsync(UpdateCheckResult result, Guid profileId, CancellationToken ct = default);
 }
-
-/// <summary>
-/// Event payload for <see cref="IAutomaticUpdateService.ModUpdateProgress"/>:
-/// which container is being installed and whether the install is active
-/// (starting) or inactive (done, whatever the outcome). Immutable.
-/// </summary>
-/// <param name="ContainerId">The container id of the mod being installed.</param>
-/// <param name="IsActive"><c>true</c> when the install is starting (raised before
-/// the acquisition attempt); <c>false</c> when it finished (raised from the
-/// per-mod finally block, regardless of success, failure, or cancellation).</param>
-public sealed record ModUpdateProgressEventArgs(Guid ContainerId, bool IsActive);

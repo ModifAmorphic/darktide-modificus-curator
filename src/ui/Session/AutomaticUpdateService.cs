@@ -11,17 +11,20 @@ namespace Modificus.Curator.UI.Session;
 
 /// <summary>
 /// Default <see cref="IAutomaticUpdateService"/>. Registered as a singleton.
-/// See the interface remarks for the gating, revalidation, isolation, and
-/// feedback rules.
+/// See the interface remarks for the gating, batch, isolation, and feedback
+/// rules. The installs themselves route through <see cref="IModUpdateInstaller"/>
+/// (which owns the coordinator, the eligibility revalidation, the
+/// acknowledgement, and the per-row progress events); this service owns only
+/// the gates + the sequential batch + the aggregated failure alert.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <b>No UI-thread affinity required.</b> Invoked by the runner after it returns
 /// to the UI context; the service's awaits (the Premium check, the per-mod
-/// acquisitions, the coordinator) yield without blocking the UI thread, and the
-/// aggregated alert + the <see cref="UpdatesApplied"/> event fire on the UI
-/// thread (the runner's context). No <c>ConfigureAwait(false)</c> is used
-/// (UI-layer convention: stay on the captured context).</para>
+/// installs) yield without blocking the UI thread, and the aggregated alert +
+/// the <see cref="UpdatesApplied"/> event fire on the UI thread (the runner's
+/// context). No <c>ConfigureAwait(false)</c> is used (UI-layer convention: stay
+/// on the captured context).</para>
 /// <para>
 /// <b>The fresh Premium check is conditional.</b> It fires only when the
 /// gating passed (authoritative success with updates + auto-update enabled +
@@ -32,12 +35,9 @@ internal sealed class AutomaticUpdateService : IAutomaticUpdateService
 {
     private readonly IProfileSession _session;
     private readonly IProfileService _profiles;
-    private readonly IModRepository _repository;
-    private readonly IModAcquisitionService _acquisition;
+    private readonly IModUpdateInstaller _installer;
     private readonly INexusAuthService _auth;
     private readonly IConfigLoader _configLoader;
-    private readonly IUpdateStateStore _updateState;
-    private readonly UpdateCoordinator _coordinator;
     private readonly IDialogService _dialogs;
     private readonly LocalizationService _localization;
     private readonly ILogger<AutomaticUpdateService> _logger;
@@ -45,24 +45,18 @@ internal sealed class AutomaticUpdateService : IAutomaticUpdateService
     public AutomaticUpdateService(
         IProfileSession session,
         IProfileService profiles,
-        IModRepository repository,
-        IModAcquisitionService acquisition,
+        IModUpdateInstaller installer,
         INexusAuthService auth,
         IConfigLoader configLoader,
-        IUpdateStateStore updateState,
-        UpdateCoordinator coordinator,
         IDialogService dialogs,
         LocalizationService localization,
         ILogger<AutomaticUpdateService> logger)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
-        _repository = repository ?? throw new ArgumentNullException(nameof(repository));
-        _acquisition = acquisition ?? throw new ArgumentNullException(nameof(acquisition));
+        _installer = installer ?? throw new ArgumentNullException(nameof(installer));
         _auth = auth ?? throw new ArgumentNullException(nameof(auth));
         _configLoader = configLoader ?? throw new ArgumentNullException(nameof(configLoader));
-        _updateState = updateState ?? throw new ArgumentNullException(nameof(updateState));
-        _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
         _localization = localization ?? throw new ArgumentNullException(nameof(localization));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -70,9 +64,6 @@ internal sealed class AutomaticUpdateService : IAutomaticUpdateService
 
     /// <inheritdoc />
     public event EventHandler? UpdatesApplied;
-
-    /// <inheritdoc />
-    public event EventHandler<ModUpdateProgressEventArgs>? ModUpdateProgress;
 
     /// <inheritdoc />
     public async Task RunAfterCheckAsync(UpdateCheckResult result, Guid profileId, CancellationToken ct = default)
@@ -126,9 +117,13 @@ internal sealed class AutomaticUpdateService : IAutomaticUpdateService
             return;
         }
 
-        // 5. The sequential install batch. Per-mod revalidation gates each entry;
-        //    a profile switch stops the whole batch. Per-mod failures are caught
-        //    + recorded; they do not abort later mods.
+        // 5. The sequential install batch. The installer owns the coordinator,
+        //    the in-gate eligibility revalidation, the acknowledge-on-success,
+        //    and the per-row progress events; this loop owns the scheduling.
+        //    Per-iteration: re-check the active profile (a switch stops the
+        //    whole batch) + re-pull the candidates (the installer revalidates
+        //    against them). Per-mod failures are recorded; they do not abort
+        //    later mods.
         var installed = 0;
         var failed = new List<(ModUpdateInfo Info, string Error)>();
         foreach (var info in result.Updates)
@@ -142,42 +137,54 @@ internal sealed class AutomaticUpdateService : IAutomaticUpdateService
                 break;
             }
 
-            // Re-validate membership / policy / source / version for this entry.
-            // A mismatch (removed, re-pinned, source-changed, or already-updated)
-            // skips this entry but does not stop the batch.
-            if (!IsStillEligible(profileId, info, out var reason))
+            IReadOnlyList<ModListCandidate> candidates;
+            try
             {
-                _logger.LogDebug(
-                    "Automatic update skipped container {Container}: {Reason}.",
-                    info.ContainerId, reason);
-                continue;
+                candidates = _profiles.GetModList(profileId).ToCandidates();
+            }
+            catch (KeyNotFoundException)
+            {
+                // The profile was deleted mid-batch; there is nowhere left to
+                // install. Stop the batch (the session's reconcile clears the
+                // active id, so the next iteration's profile gate would stop
+                // it too; this catches the gap).
+                _logger.LogInformation(
+                    "Automatic update batch stopped: profile {Profile} is gone.", profileId);
+                break;
             }
 
             try
             {
-                // Signal row-level progress: the install for this container is
-                // starting. Raised before the acquisition so the list VM can show
-                // the spinner on this row. The matching active=false is in the
-                // finally below (deterministic start/stop per sequential item).
-                RaiseProgress(info.ContainerId, active: true);
+                // The awaiting install semantics: the batch waits its turn
+                // behind a manual install under the shared gate, one mod at a
+                // time. Cancellation propagates (rethrown below).
+                var outcome = await _installer.InstallLatestAsync(
+                    profileId, info.ContainerId, info.ModId, info.CurrentVersion, candidates, ct);
 
-                // Acquire the global coordinator per mod: one install at a time,
-                // shared with the manual update action. The runner serializes the
-                // batch, so this await is uncontended in practice, but the
-                // coordinator is the single mutual-exclusion point across both
-                // paths. No ConfigureAwait(false): stay on the captured UI context.
-                using (await _coordinator.AcquireAsync(ct))
+                switch (outcome.Status)
                 {
-                    await _acquisition.AcquireLatestNexusAsync(NexusGameIdentity.DarktideDomain, info.ModId, ct: ct);
+                    case ModInstallStatus.Installed:
+                        installed++;
+                        break;
+                    case ModInstallStatus.NotEligible:
+                        // The installer already revalidated + logged the
+                        // reason; skipping one entry never stops the batch.
+                        break;
+                    case ModInstallStatus.Failed:
+                        failed.Add((info, outcome.Reason));
+                        _logger.LogError(
+                            "Automatic update of container {Container} (mod {Mod}) failed ({Reason}); continuing the batch.",
+                            info.ContainerId, info.ModId, outcome.Reason);
+                        break;
+                    default:
+                        // Busy cannot occur on the awaiting path (it waits its
+                        // turn); treat any unexpected shape as a skip so a
+                        // future status never wedges the batch.
+                        _logger.LogWarning(
+                            "Automatic update of container {Container} returned {Status}; continuing the batch.",
+                            info.ContainerId, outcome.Status);
+                        break;
                 }
-
-                // Acknowledge immediately so the flag clears without an extra API
-                // check. The next authoritative check reconciles naturally.
-                _updateState.AcknowledgeInstall(profileId, info.ContainerId);
-                installed++;
-                _logger.LogInformation(
-                    "Automatic update installed container {Container} (mod {Mod}).",
-                    info.ContainerId, info.ModId);
             }
             catch (OperationCanceledException)
             {
@@ -186,21 +193,6 @@ internal sealed class AutomaticUpdateService : IAutomaticUpdateService
                 // sees the cancellation.
                 _logger.LogInformation("Automatic update batch cancelled.");
                 throw;
-            }
-            catch (Exception ex)
-            {
-                failed.Add((info, ex.Message));
-                _logger.LogError(ex,
-                    "Automatic update of container {Container} (mod {Mod}) failed; continuing the batch.",
-                    info.ContainerId, info.ModId);
-            }
-            finally
-            {
-                // Always clear this row's progress: success, failure, or
-                // cancellation. This is the deterministic stop that pairs with
-                // the active=true above; it cannot be skipped, so a failed or
-                // cancelled install never leaves the spinner stuck on.
-                RaiseProgress(info.ContainerId, active: false);
             }
         }
 
@@ -222,43 +214,4 @@ internal sealed class AutomaticUpdateService : IAutomaticUpdateService
             UpdatesApplied?.Invoke(this, EventArgs.Empty);
         }
     }
-
-    /// <summary>
-    /// Re-validates that <paramref name="info"/> is still an eligible automatic
-    /// target in <paramref name="profileId"/>, delegating the four rules
-    /// (membership / policy / source / version) to the shared
-    /// <see cref="UpdateEligibility"/> evaluator. Returns <c>false</c> (with a
-    /// short <paramref name="reason"/>) on any mismatch; the caller skips the
-    /// entry but continues the batch.
-    /// </summary>
-    private bool IsStillEligible(Guid profileId, ModUpdateInfo info, out string reason)
-    {
-        ModListCandidate? candidate;
-        try
-        {
-            candidate = _profiles.GetModList(profileId).ToCandidates()
-                .FirstOrDefault(c => c.ContainerId == info.ContainerId);
-        }
-        catch (KeyNotFoundException)
-        {
-            reason = "profile not found";
-            return false;
-        }
-
-        return UpdateEligibility.IsEligible(
-            candidate,
-            _repository.Get(info.ContainerId),
-            info.ModId,
-            info.CurrentVersion,
-            out reason);
-    }
-
-    /// <summary>
-    /// Raises <see cref="ModUpdateProgress"/> for <paramref name="containerId"/>.
-    /// Called immediately before the acquisition attempt (active=true) and from
-    /// the per-mod finally block (active=false). Subscribers marshal to the UI
-    /// thread; this method fires on the caller's (runner's) thread.
-    /// </summary>
-    private void RaiseProgress(Guid containerId, bool active) =>
-        ModUpdateProgress?.Invoke(this, new ModUpdateProgressEventArgs(containerId, active));
 }

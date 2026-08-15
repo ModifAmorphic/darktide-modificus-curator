@@ -110,12 +110,11 @@ internal static class TestDoubles
         FakeDialogService? dialogs = null,
         LocalizationService? localization = null,
         FakeUpdateCheckService? updateCheck = null,
-        FakeModAcquisitionService? acquisition = null,
+        FakeModUpdateInstaller? installer = null,
         FakeNexusAuthService? auth = null,
         FakeConfigLoader? configLoader = null,
         FakeAppStateStore? appState = null,
         FakeUpdateStateStore? updateState = null,
-        UpdateCoordinator? coordinator = null,
         FakeAutomaticUpdateService? automaticUpdates = null,
         ImportWorkflowViewModel? importWorkflow = null,
         Action<Action>? invokeOnUi = null,
@@ -133,12 +132,11 @@ internal static class TestDoubles
         dialogs ??= new FakeDialogService();
         localization ??= new LocalizationService();
         updateCheck ??= new FakeUpdateCheckService();
-        acquisition ??= new FakeModAcquisitionService();
+        updateState ??= new FakeUpdateStateStore(repo);
+        installer ??= new FakeModUpdateInstaller { StateStore = updateState };
         auth ??= new FakeNexusAuthService();
         configLoader ??= new FakeConfigLoader();
         appState ??= new FakeAppStateStore();
-        updateState ??= new FakeUpdateStateStore(repo);
-        coordinator ??= new UpdateCoordinator();
         automaticUpdates ??= new FakeAutomaticUpdateService();
         profiles.RepoLookup = repo;
         // The inline import-workflow child VM: constructed over the SAME
@@ -215,11 +213,10 @@ internal static class TestDoubles
             dialogs,
             localization,
             updateCheck,
-            acquisition,
+            installer,
             auth,
             updateState,
             runner,
-            coordinator,
             automaticUpdates,
             importWorkflow,
             detailedRows,
@@ -1052,16 +1049,14 @@ internal sealed class FakeUpdateStateStore : IUpdateStateStore
 /// No-op <see cref="IAutomaticUpdateService"/> for the UI tests. Records
 /// <see cref="RunAfterCheckAsync"/> calls so the runner tests can assert the
 /// service was chained after a check; raises <see cref="UpdatesApplied"/> only
-/// when a test calls <see cref="RaiseUpdatesApplied"/>; raises
-/// <see cref="ModUpdateProgress"/> only when a test calls
-/// <see cref="RaiseModUpdateProgress"/>. Never installs anything.
+/// when a test calls <see cref="RaiseUpdatesApplied"/>. Never installs anything
+/// (per-row progress comes from the <see cref="FakeModUpdateInstaller"/>).
 /// </summary>
 internal sealed class FakeAutomaticUpdateService : IAutomaticUpdateService
 {
     public IReadOnlyList<(UpdateCheckResult Result, Guid ProfileId)> Calls { get; } = new List<(UpdateCheckResult, Guid)>();
 
     public event EventHandler? UpdatesApplied;
-    public event EventHandler<ModUpdateProgressEventArgs>? ModUpdateProgress;
 
     public Task RunAfterCheckAsync(UpdateCheckResult result, Guid profileId, CancellationToken ct = default)
     {
@@ -1070,14 +1065,113 @@ internal sealed class FakeAutomaticUpdateService : IAutomaticUpdateService
     }
 
     public void RaiseUpdatesApplied() => UpdatesApplied?.Invoke(this, EventArgs.Empty);
+}
+
+/// <summary>
+/// Configurable <see cref="IModUpdateInstaller"/> for the UI tests. Records
+/// every install call (both the Try + awaiting shapes) with its arguments;
+/// answers with the configured outcome (Installed by default, acknowledging
+/// through the wired state store like the real installer), a settable busy
+/// refusal for the Try shape, or a thrown exception (cancellation posture).
+/// Raises progress active/inactive around each simulated attempt + exposes
+/// <see cref="RaiseBusyChanged"/> for the busy push-down tests.
+/// </summary>
+internal sealed class FakeModUpdateInstaller : IModUpdateInstaller
+{
+    /// <summary>The install calls made through either method, in order
+    /// (profileId, containerId, modId, expectedVersion, method).</summary>
+    public IReadOnlyList<(Guid ProfileId, Guid ContainerId, int ModId, string ExpectedVersion, string Method)> Calls { get; }
+        = new List<(Guid, Guid, int, string, string)>();
+
+    /// <summary>The outcome returned by the next non-busy install call.
+    /// Default <see cref="ModInstallStatus.Installed"/>. Per-call overrides:
+    /// <see cref="OutcomeQueue"/>.</summary>
+    public ModInstallOutcome NextOutcome { get; set; } = new(ModInstallStatus.Installed);
+
+    /// <summary>Outcomes returned one per install call, in order (dequeued
+    /// before falling back to <see cref="NextOutcome"/>), so a test can script
+    /// a batch where specific entries fail + others succeed.</summary>
+    public Queue<ModInstallOutcome> OutcomeQueue { get; } = new();
+
+    /// <summary>When true, the next <see cref="TryInstallLatestAsync"/> call
+    /// answers <see cref="ModInstallStatus.Busy"/> without recording progress
+    /// or acknowledging (the manual no-op).</summary>
+    public bool NextTryIsBusy { get; set; }
+
+    /// <summary>When set, thrown from the next install attempt (after progress
+    /// active=true), so a test can drive the caller-side cancellation or
+    /// exception posture.</summary>
+    public Exception? ThrowNext { get; set; }
+
+    /// <summary>
+    /// Optional state store acknowledged on an Installed outcome, mirroring the
+    /// real installer's acknowledge-on-success so the VM-level flag-clearing
+    /// assertions observe the persisted state the way production does.
+    /// </summary>
+    public IUpdateStateStore? StateStore { get; set; }
+
+    /// <summary>The value reported by <see cref="IsBusy"/>; settable so a test
+    /// can simulate an install in flight without holding a real gate.</summary>
+    public bool IsBusy { get; set; }
+
+    public event EventHandler? BusyChanged;
+    public event EventHandler<ModUpdateProgressEventArgs>? ModUpdateProgress;
+
+    /// <summary>Raises <see cref="BusyChanged"/> (an installer's busy flag
+    /// flipped somewhere else).</summary>
+    public void RaiseBusyChanged() => BusyChanged?.Invoke(this, EventArgs.Empty);
 
     /// <summary>
     /// Raises <see cref="ModUpdateProgress"/> for <paramref name="containerId"/>
     /// with the given <paramref name="isActive"/> state, simulating the
-    /// production service's per-mod progress signal.
+    /// installer's per-attempt progress signal.
     /// </summary>
     public void RaiseModUpdateProgress(Guid containerId, bool isActive) =>
         ModUpdateProgress?.Invoke(this, new ModUpdateProgressEventArgs(containerId, isActive));
+
+    public async Task<ModInstallOutcome> TryInstallLatestAsync(
+        Guid profileId, Guid containerId, int modId, string expectedVersion,
+        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default)
+    {
+        ((List<(Guid, Guid, int, string, string)>)Calls).Add(
+            (profileId, containerId, modId, expectedVersion, nameof(TryInstallLatestAsync)));
+        if (NextTryIsBusy)
+        {
+            return new ModInstallOutcome(ModInstallStatus.Busy);
+        }
+        return await RunAsync(profileId, containerId);
+    }
+
+    public async Task<ModInstallOutcome> InstallLatestAsync(
+        Guid profileId, Guid containerId, int modId, string expectedVersion,
+        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default)
+    {
+        ((List<(Guid, Guid, int, string, string)>)Calls).Add(
+            (profileId, containerId, modId, expectedVersion, nameof(InstallLatestAsync)));
+        return await RunAsync(profileId, containerId);
+    }
+
+    private async Task<ModInstallOutcome> RunAsync(Guid profileId, Guid containerId)
+    {
+        RaiseModUpdateProgress(containerId, isActive: true);
+        try
+        {
+            if (ThrowNext is not null)
+            {
+                await Task.FromException(ThrowNext);
+            }
+            var outcome = OutcomeQueue.Count > 0 ? OutcomeQueue.Dequeue() : NextOutcome;
+            if (outcome.Status == ModInstallStatus.Installed)
+            {
+                StateStore?.AcknowledgeInstall(profileId, containerId);
+            }
+            return outcome;
+        }
+        finally
+        {
+            RaiseModUpdateProgress(containerId, isActive: false);
+        }
+    }
 }
 
 /// <summary>
