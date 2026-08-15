@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.1](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.29.0...v0.29.1) (2026-08-15)
+
+
+### Bug Fixes
+
+* **steam:** follow recommended Proton runtime ([#198](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/198)) ([16745c2](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/16745c20a34cb296f039b6c9ebcef11fa95ea01b))
+
 ## [0.29.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.28.0...v0.29.0) (2026-08-14)
 
 
