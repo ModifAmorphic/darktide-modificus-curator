@@ -106,6 +106,12 @@ public static class CuratorComposition
             sp.GetRequiredService<IAppStateStore>(),
             StartRunningStatePolling));
         services.AddSingleton<LocalizationService>();
+        // Whether the app runs inside a Steam Deck Gaming Mode session,
+        // captured once here (the session cannot change without restarting
+        // Curator). The theme application reads it: the System preference
+        // resolves to Dark inside Gaming Mode, where no usable OS
+        // color-scheme preference exists.
+        services.AddSingleton<IGamingModeState>(new GamingModeState());
         services.AddSingleton<IPreferencesService, PreferencesService>();
         // MainWindow is a singleton resolved as desktop.MainWindow + the modal
         // dialog owner. Built through an explicit factory that supplies
@@ -226,6 +232,9 @@ public static class CuratorComposition
                 // The shared last-known nxm registration state feeds the
                 // empty-state Nexus hint; the mod list never probes the OS.
                 sp.GetRequiredService<INxmRegistrationState>(),
+                // Gaming Mode gates the Add split button's picker paths + the
+                // linked-row open-folder badge.
+                sp.GetRequiredService<IGamingModeState>(),
                 startCountdownTimer,
                 stopCountdownTimer);
         });
@@ -277,6 +286,9 @@ public static class CuratorComposition
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<IAppUpdateService>(),
             sp.GetRequiredService<IDialogService>(),
+            // Gaming Mode gates the discovery Browse buttons + the Storage
+            // open-folder buttons; manual path entry stays available.
+            sp.GetRequiredService<IGamingModeState>(),
             sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<SettingsViewModel>>()));
 
@@ -291,7 +303,9 @@ public static class CuratorComposition
         // existing/Premium DMF add. Singleton: owns the event subscription for
         // the app lifetime. Takes the shared nxm registration state so the
         // download confirm can tailor its message to the last-known handler
-        // ownership (manager-download vs. manual-import guidance; no probe).
+        // ownership (manager-download vs. manual-import guidance; no probe),
+        // and the Gaming Mode state so the case-2 browser branch can divert to
+        // Desktop Mode guidance there (Premium keeps the in-app download).
         // Registered BEFORE ShellViewModel so ShellViewModel's factory can
         // resolve it eagerly.
         services.AddSingleton(sp => new DmfPromptService(
@@ -303,7 +317,8 @@ public static class CuratorComposition
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<ILogger<DmfPromptService>>(),
-            sp.GetRequiredService<INxmRegistrationState>()));
+            sp.GetRequiredService<INxmRegistrationState>(),
+            sp.GetRequiredService<IGamingModeState>()));
 
         // ShellViewModel owns navigation + the deferred DMF trigger (consumed on
         // a real Mods entry). The concrete DmfPromptService is injected (not a
@@ -333,7 +348,8 @@ public static class CuratorComposition
                 sp.GetRequiredService<MainWindow>(),
                 sp.GetRequiredService<LocalizationService>(),
                 sp.GetRequiredService<IConfigLoader>(),
-                sp.GetRequiredService<ISteamService>()));
+                sp.GetRequiredService<ISteamService>(),
+                sp.GetRequiredService<IGamingModeState>()));
 
         // The UI-layer glue that fires an update check
         // (IUpdateCheckService, registered above via AddIntegrations) on the

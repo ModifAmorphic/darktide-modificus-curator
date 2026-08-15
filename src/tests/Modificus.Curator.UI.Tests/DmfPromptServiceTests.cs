@@ -41,6 +41,8 @@ public sealed class DmfPromptServiceTests
     /// <param name="nxmRegistration">The shared registration state the
     /// download-confirm wording follows (last-known; the prompt never probes
     /// the OS).</param>
+    /// <param name="gamingMode">The Gaming Mode state. When omitted, a
+    /// non-gaming session (the ordinary desktop flow).</param>
     private static (DmfPromptService Service, FakeProfileService Profiles, FakeProfileSession Session,
         FakeModRepository Repo, FakeModAcquisitionService Acquisition, FakeNexusAuthService Auth,
         FakeDialogService Dialogs) Build(
@@ -51,6 +53,7 @@ public sealed class DmfPromptServiceTests
             FakeNexusAuthService? auth = null,
             FakeDialogService? dialogs = null,
             FakeNxmRegistrationState? nxmRegistration = null,
+            GamingModeState? gamingMode = null,
             Func<Uri, bool>? launchExternal = null)
     {
         profiles ??= TestDoubles.Profiles();
@@ -60,12 +63,14 @@ public sealed class DmfPromptServiceTests
         auth ??= new FakeNexusAuthService();
         dialogs ??= new FakeDialogService();
         nxmRegistration ??= new FakeNxmRegistrationState();
+        gamingMode ??= new GamingModeState(false);
         // SAFETY: an omitted launcher seam defaults to a local no-op that
         // returns success without touching the OS shell or any shared static
         // state. Tests that assert on opens pass their own per-test spy.
         var service = new DmfPromptService(
             profiles, session, repo, acquisition, auth, dialogs,
             Localization, NullLogger<DmfPromptService>.Instance, nxmRegistration,
+            gamingMode,
             launchExternal ?? LocalNoOpLauncher);
         return (service, profiles, session, repo, acquisition, auth, dialogs);
     }
@@ -441,7 +446,8 @@ public sealed class DmfPromptServiceTests
         Func<Uri, bool> failingLauncher = _ => false; // shell-open failed
 
         var (service, _, _, _, _, _, _) =
-            Build(profiles, session, repo, acquisition, auth, dialogs, nxmRegistration, failingLauncher);
+            Build(profiles, session, repo, acquisition, auth, dialogs, nxmRegistration,
+                launchExternal: failingLauncher);
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
@@ -456,6 +462,151 @@ public sealed class DmfPromptServiceTests
             alert.Message);
         // No in-app download.
         Assert.Empty(acquisition.LatestNexusCalls);
+    }
+
+    // ---- case 2: Gaming Mode (Steam Deck) ---------------------------------
+
+    /// <summary>
+    /// Drives the case-2 prompt once (DMF not in the repo, new active profile)
+    /// under the supplied Gaming Mode + auth states, returning the fakes the
+    /// guidance assertions read.
+    /// </summary>
+    private static async Task<(FakeDialogService Dialogs, FakeModAcquisitionService Acquisition,
+        FakeProfileService Profiles, List<Uri> Launched)> RunCase2Async(
+            FakeNexusAuthService auth, GamingModeState gamingMode)
+    {
+        var profiles = TestDoubles.Profiles();
+        var session = new FakeProfileSession(() => profiles.ListProfiles());
+        var repo = new FakeModRepository(); // no DMF
+        var acquisition = new FakeModAcquisitionService();
+        var dialogs = new FakeDialogService();
+        var launched = new List<Uri>();
+
+        var (service, _, _, _, _, _, _) = Build(
+            profiles, session, repo, acquisition, auth, dialogs,
+            gamingMode: gamingMode,
+            launchExternal: NewRecordingSpy(launched));
+
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
+        session.ActiveProfileId = created.Id;
+
+        await service.ProcessPendingAsync();
+        return (dialogs, acquisition, profiles, launched);
+    }
+
+    [Fact]
+    public async Task Gaming_case2_regular_user_gets_guidance_instead_of_the_browser()
+    {
+        var auth = new FakeNexusAuthService
+        {
+            State = new NexusAuthState(NexusAuthMethod.ApiKey, "free", IsPremium: false),
+        };
+
+        var (dialogs, acquisition, profiles, launched) =
+            await RunCase2Async(auth, new GamingModeState(true));
+
+        // An informational guidance alert (not a Yes/No confirm): there is no
+        // action that could run inside Gaming Mode to confirm.
+        Assert.Equal(0, dialogs.ConfirmCalls);
+        var alert = Assert.Single(dialogs.AlertCalls);
+        Assert.Equal(Localization["Dmf_DownloadTitle"], alert.Title);
+        Assert.Equal(Localization["Dmf_DownloadMessageGamingMode"], alert.Message);
+        // No browser launch, no acquisition, no add, no spinner.
+        Assert.Empty(launched);
+        Assert.Empty(acquisition.LatestNexusCalls);
+        Assert.Empty(profiles.AddModCalls);
+        Assert.Empty(dialogs.ProgressCalls);
+    }
+
+    [Fact]
+    public async Task Gaming_case2_unverified_premium_state_gets_guidance()
+    {
+        // IsPremium null (the verify call failed): treated as not premium, so
+        // the guidance alert (not the in-app download, which would 403).
+        var auth = new FakeNexusAuthService
+        {
+            State = new NexusAuthState(NexusAuthMethod.ApiKey, "name", IsPremium: null),
+        };
+
+        var (dialogs, acquisition, _, launched) =
+            await RunCase2Async(auth, new GamingModeState(true));
+
+        Assert.Equal(0, dialogs.ConfirmCalls);
+        var alert = Assert.Single(dialogs.AlertCalls);
+        Assert.Equal(Localization["Dmf_DownloadMessageGamingMode"], alert.Message);
+        Assert.Empty(launched);
+        Assert.Empty(acquisition.LatestNexusCalls);
+    }
+
+    [Fact]
+    public async Task Gaming_case2_no_auth_gets_guidance()
+    {
+        // Not signed in at all (state null): same guidance as regular users.
+        var auth = new FakeNexusAuthService { State = null };
+
+        var (dialogs, acquisition, _, launched) =
+            await RunCase2Async(auth, new GamingModeState(true));
+
+        Assert.Equal(0, dialogs.ConfirmCalls);
+        var alert = Assert.Single(dialogs.AlertCalls);
+        Assert.Equal(Localization["Dmf_DownloadMessageGamingMode"], alert.Message);
+        Assert.Empty(launched);
+        Assert.Empty(acquisition.LatestNexusCalls);
+    }
+
+    [Fact]
+    public async Task Gaming_case2_premium_user_keeps_the_in_app_download()
+    {
+        // The in-app API download works in Gaming Mode, so Premium users get
+        // the ordinary confirm + download flow there, with no guidance alert.
+        var auth = new FakeNexusAuthService
+        {
+            State = new NexusAuthState(NexusAuthMethod.OAuth, "premium", IsPremium: true),
+        };
+
+        var (dialogs, acquisition, profiles, launched) =
+            await RunCase2Async(auth, new GamingModeState(true));
+
+        // The ordinary download confirm fired and was accepted (the wording
+        // still follows the shared last-known handler state, unchanged by the
+        // gaming gate).
+        Assert.Equal(1, dialogs.ConfirmCalls);
+        // The in-app download ran to completion + DMF was added.
+        var acquireCall = Assert.Single(acquisition.LatestNexusCalls);
+        Assert.Equal(DmfPromptService.DmfModId, acquireCall.ModId);
+        Assert.Single(dialogs.ProgressCalls);
+        var add = Assert.Single(profiles.AddModCalls);
+        Assert.Equal(acquisition.NextResult.ContainerId, add.ContainerId);
+        // No browser, no guidance alert.
+        Assert.Empty(launched);
+        Assert.Empty(dialogs.AlertCalls);
+    }
+
+    [Fact]
+    public async Task Gaming_case1_dmf_in_repo_still_offers_the_instant_add()
+    {
+        // Gaming Mode gates only the browser branch: DMF already in the repo
+        // adds instantly on confirm regardless of the session type.
+        var profiles = TestDoubles.Profiles();
+        var session = new FakeProfileSession(() => profiles.ListProfiles());
+        var repo = new FakeModRepository();
+        var dmf = repo.Seed(new NexusSource { ModId = DmfPromptService.DmfModId }, "DMF", "1.0");
+        var dialogs = new FakeDialogService();
+
+        var (service, _, _, _, _, _, _) =
+            Build(profiles, session, repo, dialogs: dialogs,
+                gamingMode: new GamingModeState(true));
+
+        var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
+        session.ActiveProfileId = created.Id;
+
+        await service.ProcessPendingAsync();
+
+        Assert.Equal(1, dialogs.ConfirmCalls);
+        Assert.Equal(Localization["Dmf_AddMessage"], dialogs.LastConfirmMessage);
+        var add = Assert.Single(profiles.AddModCalls);
+        Assert.Equal(dmf.Id, add.ContainerId);
+        Assert.Empty(dialogs.AlertCalls);
     }
 
     // ---- DMF already in the profile -> no prompt --------------------------

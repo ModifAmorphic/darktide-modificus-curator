@@ -10,7 +10,8 @@ namespace Modificus.Curator.UI.ViewModels;
 /// <see cref="Settings.DiscoveryField"/>), the localized <see cref="Label"/>
 /// (which refreshes on a culture change), the editable <see cref="Value"/>
 /// string the TextBox two-way binds, and <see cref="IsEditable"/> which drives
-/// both the TextBox's read-only state and the Browse button's enabled state.
+/// the TextBox's read-only state (the Browse button binds to
+/// <see cref="IsBrowseEnabled"/> instead, which also gates on Gaming Mode).
 /// The browse button (folder / file picker) lives in the view code-behind and
 /// sets <see cref="Value"/> directly after a pick; the parent VM decides what a
 /// change means: Settings writes through immediately when in manual mode, the
@@ -93,11 +94,43 @@ public sealed partial class DiscoveryFieldRowViewModel : ObservableObject
     /// Reflects the current discovery mode (manual on, automatic off); the
     /// parent VM pushes it down whenever the mode toggles or the rows refresh.
     /// Views bind <c>TextBox.IsReadOnly</c> to <c>!IsEditable</c> (read-only
-    /// paths stay selectable for copying) and the Browse button's
-    /// <c>IsEnabled</c> to <see cref="IsEditable"/>.
+    /// paths stay selectable for copying); the Browse button binds to
+    /// <see cref="IsBrowseEnabled"/> instead (editability plus the Gaming
+    /// Mode gate).
     /// </summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsBrowseEnabled))]
+    [NotifyPropertyChangedFor(nameof(BrowseTooltip))]
     private bool _isEditable;
+
+    /// <summary>
+    /// Whether the app runs inside a Steam Deck Gaming Mode session (where
+    /// file/folder pickers are unusable). Pushed down by the parent VM
+    /// alongside <see cref="IsEditable"/>; constant for the process lifetime,
+    /// but settable so parents share one push path with the mode.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsBrowseEnabled))]
+    [NotifyPropertyChangedFor(nameof(BrowseTooltip))]
+    private bool _isGamingMode;
+
+    /// <summary>
+    /// Whether this row's Browse button is enabled: the row must be editable
+    /// (manual discovery mode) AND the app must not be in a Steam Deck Gaming
+    /// Mode session (pickers are unusable there). The TextBox stays editable
+    /// either way; manual path entry keeps working in Gaming Mode.
+    /// </summary>
+    public bool IsBrowseEnabled => IsEditable && !IsGamingMode;
+
+    /// <summary>
+    /// The Browse button's tooltip: the localized Gaming Mode guidance while
+    /// gaming (shown on the disabled button), or <c>null</c> in normal mode so
+    /// an ordinary working button carries no tooltip. Re-resolves on a culture
+    /// change.
+    /// </summary>
+    public string? BrowseTooltip => IsGamingMode
+        ? _localization["GamingMode_PickerGuidance"]
+        : null;
 
     /// <summary>
     /// Detaches the culture-change subscription so this short-lived row is
@@ -112,6 +145,7 @@ public sealed partial class DiscoveryFieldRowViewModel : ObservableObject
         if (e.PropertyName is nameof(LocalizationService.Culture) or "Item[]")
         {
             OnPropertyChanged(nameof(Label));
+            OnPropertyChanged(nameof(BrowseTooltip));
         }
     }
 }

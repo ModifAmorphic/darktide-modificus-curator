@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Modificus.Curator.General;
 using Modificus.Curator.Steam;
 using Modificus.Curator.UI.Localization;
+using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.ViewModels;
 using Modificus.Curator.UI.Views;
 
@@ -39,6 +40,7 @@ public sealed class DialogService : IDialogService
     private readonly LocalizationService _localization;
     private readonly IConfigLoader _configLoader;
     private readonly ISteamService _steam;
+    private readonly IGamingModeState _gamingMode;
 
     /// <param name="owner">The window dialog parents are shown over (the main
     /// window).</param>
@@ -51,16 +53,21 @@ public sealed class DialogService : IDialogService
     /// escape-hatch VM so its global override toggle + Discover button drive the
     /// same <see cref="ISteamService.Discover"/>/<see cref="ISteamService.Rediscover"/>
     /// semantics as Settings.</param>
+    /// <param name="gamingMode">Whether the app runs inside a Steam Deck Gaming
+    /// Mode session; handed to the escape-hatch VM so its Browse buttons gate
+    /// (manual path entry + Submit stay available).</param>
     public DialogService(
         Window owner,
         LocalizationService localization,
         IConfigLoader configLoader,
-        ISteamService steamService)
+        ISteamService steamService,
+        IGamingModeState gamingMode)
     {
         _owner = owner;
         _localization = localization;
         _configLoader = configLoader;
         _steam = steamService ?? throw new ArgumentNullException(nameof(steamService));
+        _gamingMode = gamingMode ?? throw new ArgumentNullException(nameof(gamingMode));
     }
 
     /// <summary>
@@ -169,7 +176,8 @@ public sealed class DialogService : IDialogService
             return false;
         }
 
-        var viewModel = new DiscoveryEscapeHatchViewModel(missingFields, _configLoader, _steam, _localization);
+        var viewModel = new DiscoveryEscapeHatchViewModel(
+            missingFields, _configLoader, _steam, _localization, _gamingMode);
         var window = new DiscoveryEscapeHatchDialog
         {
             DataContext = viewModel,

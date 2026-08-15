@@ -259,6 +259,7 @@ jobs:
 
       - name: Shell syntax checks
         run: |
+          sh -n ../scripts/build-appimage.sh
           sh -n ../scripts/install.sh
           sh -n ../scripts/install-standalone.sh
           sh -n ../scripts/uninstall.sh

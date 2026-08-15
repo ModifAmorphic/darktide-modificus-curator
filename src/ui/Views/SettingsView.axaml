@@ -39,6 +39,17 @@
                 Command="{Binding DiscoverCommand}"
                 HorizontalAlignment="Left"
                 Margin="0,0,0,4" />
+        <!--
+          Gaming Mode guidance (Steam Deck): file/folder pickers are unusable
+          there, so the Browse buttons disable and this inline hint explains
+          why in a touch/controller-reachable form (no hover required). The
+          TextBoxes stay editable: manual path entry + submission keep working.
+        -->
+        <TextBlock Text="{ReflectionBinding [GamingMode_PickerGuidance], Source={StaticResource Loc}}"
+                   IsVisible="{Binding IsGamingMode}"
+                   FontSize="11"
+                   Opacity="0.6"
+                   TextWrapping="Wrap" />
         <ItemsControl ItemsSource="{Binding DiscoveryRows}">
           <ItemsControl.ItemTemplate>
             <DataTemplate x:DataType="vm:DiscoveryFieldRowViewModel">
@@ -54,7 +65,9 @@
                 <Button Grid.Column="2"
                         Content="{ReflectionBinding [Discovery_BrowseButton], Source={StaticResource Loc}}"
                         Click="BrowseDiscovery_Click"
-                        IsEnabled="{Binding IsEditable}"
+                        IsEnabled="{Binding IsBrowseEnabled}"
+                        ToolTip.Tip="{Binding BrowseTooltip}"
+                        ToolTip.ShowOnDisabled="True"
                         CommandParameter="{Binding Field.BrowseKind}"
                         MinWidth="80" Margin="8,0,0,0"
                         VerticalAlignment="Center" />
@@ -69,18 +82,31 @@
         Two buttons that open the OS file manager at the Curator data root +
         profiles root. The profiles path is read live from config in the VM
         command; the data-root path is the static AppPaths.AppDataDir. Nothing
-        here is editable.
+        here is editable. Both buttons disable inside a Steam Deck Gaming Mode
+        session (file-manager opens depend on a desktop shell); the tooltip +
+        inline hint explain why.
       -->
       <StackPanel Spacing="8">
         <TextBlock Text="{Binding StorageSectionHeader}"
                    FontWeight="SemiBold" />
+        <TextBlock Text="{ReflectionBinding [GamingMode_FileManagerGuidance], Source={StaticResource Loc}}"
+                   IsVisible="{Binding IsGamingMode}"
+                   FontSize="11"
+                   Opacity="0.6"
+                   TextWrapping="Wrap" />
         <StackPanel Orientation="Horizontal"
                     Spacing="8"
                     Margin="0,4">
           <Button Content="{ReflectionBinding [Settings_OpenDataFolderButton], Source={StaticResource Loc}}"
-                  Command="{Binding OpenDataFolderCommand}" />
+                  Command="{Binding OpenDataFolderCommand}"
+                  IsEnabled="{Binding !IsGamingMode}"
+                  ToolTip.Tip="{Binding StorageButtonsTooltip}"
+                  ToolTip.ShowOnDisabled="True" />
           <Button Content="{ReflectionBinding [Settings_OpenProfilesFolderButton], Source={StaticResource Loc}}"
-                  Command="{Binding OpenProfilesFolderCommand}" />
+                  Command="{Binding OpenProfilesFolderCommand}"
+                  IsEnabled="{Binding !IsGamingMode}"
+                  ToolTip.Tip="{Binding StorageButtonsTooltip}"
+                  ToolTip.ShowOnDisabled="True" />
         </StackPanel>
       </StackPanel>
 

@@ -3,6 +3,7 @@ using Avalonia.Styling;
 using Modificus.Curator.Config;
 using Modificus.Curator.General;
 using Modificus.Curator.UI.Localization;
+using Modificus.Curator.UI.Session;
 using Microsoft.Extensions.Logging;
 
 namespace Modificus.Curator.UI.Preferences;
@@ -32,7 +33,11 @@ public interface IPreferencesService
 
 /// <summary>
 /// Default <see cref="IPreferencesService"/>. Applies the theme via
-/// <see cref="Application.RequestedThemeVariant"/>, the font scale via
+/// <see cref="Application.RequestedThemeVariant"/> (through
+/// <see cref="ResolveThemeVariant"/>: the System preference follows the OS,
+/// except inside a Steam Deck Gaming Mode session where Dark is the
+/// effective variant because no usable OS color-scheme preference exists
+/// there; the stored preference stays System), the font scale via
 /// application-level <c>AppFontSize</c> + <c>AppStatusFontSize</c> resources
 /// that a Window style / the status TextBlock bind to (cascading to all controls
 /// through inheritance + DynamicResource), and the language via
@@ -61,15 +66,18 @@ public sealed class PreferencesService : IPreferencesService
 
     private readonly IConfigLoader _configLoader;
     private readonly LocalizationService _localization;
+    private readonly IGamingModeState _gamingMode;
     private readonly ILogger<PreferencesService> _logger;
 
     public PreferencesService(
         IConfigLoader configLoader,
         LocalizationService localization,
+        IGamingModeState gamingMode,
         ILogger<PreferencesService> logger)
     {
         _configLoader = configLoader;
         _localization = localization;
+        _gamingMode = gamingMode;
         _logger = logger;
     }
 
@@ -105,23 +113,35 @@ public sealed class PreferencesService : IPreferencesService
     }
 
     /// <summary>
-    /// Sets <see cref="Application.RequestedThemeVariant"/> from
-    /// <see cref="ThemeMode"/>. <see cref="ThemeMode.System"/> maps to
-    /// <see cref="ThemeVariant.Default"/> (follow the OS).
+    /// Maps <see cref="ThemeMode"/> to the effective
+    /// <see cref="ThemeVariant"/>. Dark and Light are authoritative;
+    /// <see cref="ThemeMode.System"/> follows the OS
+    /// (<see cref="ThemeVariant.Default"/>) except inside a Steam Deck
+    /// Gaming Mode session, where Dark is the effective variant because no
+    /// usable OS color-scheme preference exists there. Pure so the mapping
+    /// is testable without a running <see cref="Application"/>.
     /// </summary>
-    private static void ApplyTheme(ThemeMode theme)
+    internal static ThemeVariant ResolveThemeVariant(ThemeMode theme, bool isGamingMode) =>
+        theme switch
+        {
+            ThemeMode.Dark => ThemeVariant.Dark,
+            ThemeMode.Light => ThemeVariant.Light,
+            _ => isGamingMode ? ThemeVariant.Dark : ThemeVariant.Default,
+        };
+
+    /// <summary>
+    /// Sets <see cref="Application.RequestedThemeVariant"/> from
+    /// <see cref="ThemeMode"/> via <see cref="ResolveThemeVariant"/>. No-op
+    /// when no <see cref="Application"/> exists (unit tests).
+    /// </summary>
+    private void ApplyTheme(ThemeMode theme)
     {
         if (Application.Current is null)
         {
             return;
         }
 
-        Application.Current.RequestedThemeVariant = theme switch
-        {
-            ThemeMode.Dark => ThemeVariant.Dark,
-            ThemeMode.Light => ThemeVariant.Light,
-            _ => ThemeVariant.Default,
-        };
+        Application.Current.RequestedThemeVariant = ResolveThemeVariant(theme, _gamingMode.IsGamingMode);
     }
 
     /// <summary>

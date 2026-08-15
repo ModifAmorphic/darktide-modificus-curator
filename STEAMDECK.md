@@ -126,15 +126,22 @@ Darktide directly from Steam remains vanilla.
 
 ## Current limitations and guidance
 
-- **Light theme under System:** with the theme preference set to **System**,
-  Curator falls back to Light in Gaming Mode. Select **Dark** in **Preferences**
-  if you want a dark interface (#180).
+- **Theme:** with the theme preference set to **System**, Curator applies the
+  dark theme while running in Gaming Mode (the Gaming Mode session reports no
+  desktop appearance preference). Explicit **Light** and **Dark** choices are
+  honored as-is, and **System** follows the normal desktop appearance outside
+  Gaming Mode.
 - **File and folder pickers and open-folder actions:** these desktop workflows
-  are impractical in Gaming Mode. Return to Desktop Mode to add, import, or
-  update mods, link an external folder, or open a mod's folder (#182).
-- **Nexus setup and downloads:** Steam's built-in Gaming Mode browser does not
-  hand `nxm://` links back to Curator. Do all Nexus sign-in, download-link
-  registration, and mod acquisition in Desktop Mode (#183).
+  are unavailable in Gaming Mode; the controls are disabled and Curator
+  explains that they require Desktop Mode. Return to Desktop Mode to add,
+  import, or update mods from files, link an external folder, or open a mod's
+  folder. Typing discovery paths by hand in Settings still works.
+- **Nexus browsing and downloads:** Steam's built-in Gaming Mode browser does
+  not hand `nxm://` links back to Curator, so browsing Nexus for new mods,
+  manual (non-Premium) downloads, and the DMF download prompt direct you to
+  Desktop Mode instead of opening the browser. Premium users can install
+  flagged updates and DMF directly in Curator in Gaming Mode. Nexus sign-in
+  still requires Desktop Mode.
 
 ## Troubleshooting
 
@@ -153,6 +160,3 @@ The following open issues track Gaming Mode improvements:
 
 - [#178, D-pad and stick navigation](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/178)
 - [#179, virtual keyboard](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/179)
-- [#180, System theme fallback](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/180)
-- [#182, desktop file and picker gating](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/182)
-- [#183, Nexus Desktop Mode guidance](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/183)

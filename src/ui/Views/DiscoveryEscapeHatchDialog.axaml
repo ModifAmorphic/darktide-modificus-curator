@@ -36,6 +36,18 @@
                      FontWeight="SemiBold" />
 
           <!--
+            Gaming Mode guidance (Steam Deck): the row Browse buttons disable
+            there, and this inline hint explains why in a form reachable by
+            touch/controller (no hover). The TextBoxes + Submit are untouched:
+            manual path entry + submission keep working.
+          -->
+          <TextBlock Text="{Binding PickerGatingHint}"
+                     IsVisible="{Binding IsGamingMode}"
+                     FontSize="11"
+                     Opacity="0.6"
+                     TextWrapping="Wrap" />
+
+          <!--
             The same global override toggle + forced Discover as Settings, with
             identical semantics. Both are write-through; Cancel does not roll
             them back. The toggle persists the mode (off runs ordinary Discover,
@@ -66,7 +78,9 @@
                   <Button Grid.Column="2"
                           Content="{ReflectionBinding [Discovery_BrowseButton], Source={StaticResource Loc}}"
                           Click="Browse_Click"
-                          IsEnabled="{Binding IsEditable}"
+                          IsEnabled="{Binding IsBrowseEnabled}"
+                          ToolTip.Tip="{Binding BrowseTooltip}"
+                          ToolTip.ShowOnDisabled="True"
                           CommandParameter="{Binding Field.BrowseKind}"
                           MinWidth="80" Margin="8,0,0,0"
                           VerticalAlignment="Center" />

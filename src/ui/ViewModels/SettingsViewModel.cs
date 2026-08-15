@@ -10,6 +10,7 @@ using Modificus.Curator.Steam;
 using Modificus.Curator.UI.AppUpdate;
 using Modificus.Curator.UI.Dialogs;
 using Modificus.Curator.UI.Localization;
+using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.Settings;
 using Microsoft.Extensions.Logging;
 
@@ -58,6 +59,7 @@ public partial class SettingsViewModel : ObservableObject
     private readonly LocalizationService _localization;
     private readonly IAppUpdateService _appUpdate;
     private readonly IDialogService _dialogs;
+    private readonly IGamingModeState _gamingMode;
     private readonly Action<Action> _invokeOnUi;
     private readonly Func<string, bool> _launchExternalPath;
     private readonly ILogger<SettingsViewModel> _logger;
@@ -107,6 +109,9 @@ public partial class SettingsViewModel : ObservableObject
     /// <param name="dialogs">The dialog service; the download + restart flow runs
     /// the download under its modal spinner and surfaces failures as an alert.
     /// Also used by the open-folder actions' failure alert.</param>
+    /// <param name="gamingMode">Whether the app runs inside a Steam Deck Gaming
+    /// Mode session (pickers + file-manager opens are gated there; manual path
+    /// entry + submission stay available).</param>
     /// <param name="invokeOnUi">Marshals the off-thread
     /// <see cref="IAppUpdateService.UpdateStateChanged"/> handler's refresh onto
     /// the UI thread. Production wires <c>Dispatcher.UIThread.Post</c>; tests
@@ -122,6 +127,7 @@ public partial class SettingsViewModel : ObservableObject
         LocalizationService localization,
         IAppUpdateService appUpdate,
         IDialogService dialogs,
+        IGamingModeState gamingMode,
         Action<Action> invokeOnUi,
         ILogger<SettingsViewModel> logger,
         Func<string, bool>? launchExternalPath = null)
@@ -131,6 +137,7 @@ public partial class SettingsViewModel : ObservableObject
         _localization = localization;
         _appUpdate = appUpdate;
         _dialogs = dialogs;
+        _gamingMode = gamingMode ?? throw new ArgumentNullException(nameof(gamingMode));
         _invokeOnUi = invokeOnUi ?? throw new ArgumentNullException(nameof(invokeOnUi));
         _logger = logger;
         _launchExternalPath = launchExternalPath ?? LaunchExternalPathDefault;
@@ -196,6 +203,7 @@ public partial class SettingsViewModel : ObservableObject
             {
                 row.Value = InitialValue(row.Field, config.Discovery);
                 row.IsEditable = config.Discovery.OverrideAutomaticDiscovery;
+                row.IsGamingMode = IsGamingMode;
             }
             CheckOnStartup = config.AppUpdates.CheckOnStartup;
         }
@@ -225,6 +233,7 @@ public partial class SettingsViewModel : ObservableObject
             {
                 row.Value = InitialValue(row.Field, discovery);
                 row.IsEditable = discovery.OverrideAutomaticDiscovery;
+                row.IsGamingMode = IsGamingMode;
             }
         }
         finally
@@ -318,6 +327,25 @@ public partial class SettingsViewModel : ObservableObject
     /// change.
     /// </summary>
     public string StorageSectionHeader => _localization["Settings_StorageSection"];
+
+    /// <summary>
+    /// Whether the app runs inside a Steam Deck Gaming Mode session. Gates the
+    /// Storage section's open-folder buttons (file-manager opens depend on a
+    /// desktop shell) and the discovery rows' Browse buttons (via each row's
+    /// <see cref="DiscoveryFieldRowViewModel.IsGamingMode"/>). Fixed for the
+    /// process lifetime, so a plain get-only property is enough for bindings.
+    /// </summary>
+    public bool IsGamingMode => _gamingMode.IsGamingMode;
+
+    /// <summary>
+    /// The Storage buttons' shared tooltip: the localized Gaming Mode guidance
+    /// while gaming (shown on the disabled buttons), or <c>null</c> in normal
+    /// mode so the working buttons carry no tooltip. Re-resolves on a culture
+    /// change.
+    /// </summary>
+    public string? StorageButtonsTooltip => IsGamingMode
+        ? _localization["GamingMode_FileManagerGuidance"]
+        : null;
 
     // ---- Updates section ---------------------------------------------------
 
@@ -414,6 +442,7 @@ public partial class SettingsViewModel : ObservableObject
 
         OnPropertyChanged(nameof(DiscoverySectionHeader));
         OnPropertyChanged(nameof(StorageSectionHeader));
+        OnPropertyChanged(nameof(StorageButtonsTooltip));
         OnPropertyChanged(nameof(UpdatesSectionHeader));
         OnPropertyChanged(nameof(CurrentVersionLabel));
         OnPropertyChanged(nameof(CurrentVersionDisplay));
@@ -424,21 +453,39 @@ public partial class SettingsViewModel : ObservableObject
     /// the Curator data root (<c>AppPaths.AppDataDir</c>, which contains
     /// <c>mods/</c>, <c>profiles/</c>, <c>logs/</c>, <c>config.json</c>, etc.)
     /// via the injectable path-launcher seam. Delegates to
-    /// <see cref="OpenFolderAsync"/> for the no-op + alert handling.
+    /// <see cref="OpenFolderAsync"/> for the no-op + alert handling. No-op in a
+    /// Steam Deck Gaming Mode session (file-manager opens depend on a desktop
+    /// shell; the disabled button is the first gate, this is the programmatic
+    /// one).
     /// </summary>
     [RelayCommand]
-    private async Task OpenDataFolder() =>
+    private async Task OpenDataFolder()
+    {
+        if (IsGamingMode)
+        {
+            return;
+        }
+
         await OpenFolderAsync(AppPaths.AppDataDir);
+    }
 
     /// <summary>
     /// Opens the OS file manager at the current profiles root
     /// (<c>ProfilesBaseFolder</c>, read live from config) via the injectable
     /// path-launcher seam. Delegates to <see cref="OpenFolderAsync"/> for the
-    /// no-op + alert handling.
+    /// no-op + alert handling. No-op in a Steam Deck Gaming Mode session (same
+    /// gate as <see cref="OpenDataFolder"/>).
     /// </summary>
     [RelayCommand]
-    private async Task OpenProfilesFolder() =>
+    private async Task OpenProfilesFolder()
+    {
+        if (IsGamingMode)
+        {
+            return;
+        }
+
         await OpenFolderAsync(_configLoader.Load().ProfilesBaseFolder);
+    }
 
     /// <summary>
     /// Shared body of the two open-folder commands: no-op when

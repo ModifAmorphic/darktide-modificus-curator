@@ -123,6 +123,28 @@
   </data>
 
   <!-- ============================================================ -->
+  <!-- Steam Deck Gaming Mode gating (picker + file-manager         -->
+  <!--  affordances disabled while inside a Gaming Mode session)    -->
+  <!-- ============================================================ -->
+
+  <data name="GamingMode_GuidanceTitle" xml:space="preserve">
+    <value>Desktop Mode required</value>
+    <comment>Short title for the Gaming Mode guidance: the operation the user attempted is only available in Steam Deck Desktop Mode.</comment>
+  </data>
+  <data name="GamingMode_PickerGuidance" xml:space="preserve">
+    <value>File and folder pickers are only available in Steam Deck Desktop Mode. Exit Gaming Mode, then use this from Desktop Mode.</value>
+    <comment>Guidance shown next to (and as the tooltip on) picker-dependent controls while a Steam Deck Gaming Mode session is detected.</comment>
+  </data>
+  <data name="GamingMode_FileManagerGuidance" xml:space="preserve">
+    <value>Opening folders is only available in Steam Deck Desktop Mode.</value>
+    <comment>Guidance shown next to (and as the tooltip on) file-manager-dependent controls while a Steam Deck Gaming Mode session is detected.</comment>
+  </data>
+  <data name="GamingMode_BrowserGuidance" xml:space="preserve">
+    <value>Browsing and downloading from Nexus Mods is only available in Steam Deck Desktop Mode. Exit Gaming Mode to add mods from Nexus.</value>
+    <comment>Guidance alert (with GamingMode_GuidanceTitle) + tooltip shown instead of launching the browser for Nexus download flows while a Steam Deck Gaming Mode session is detected.</comment>
+  </data>
+
+  <!-- ============================================================ -->
   <!-- App self-update (ShellViewModel status-strip notice +        -->
   <!--  download flow; SettingsViewModel manual check + version)    -->
   <!-- ============================================================ -->
@@ -354,6 +376,10 @@
     <value>Add a mod to this profile</value>
     <comment>Tooltip on the Add split button in the mod list header (the primary click runs the current mode's action).</comment>
   </data>
+  <data name="ModList_AddGamingModeHint" xml:space="preserve">
+    <value>Adding mods requires Steam Deck Desktop Mode.</value>
+    <comment>Inline toolbar hint (and the Add split button's tooltip) while a Steam Deck Gaming Mode session is detected: the picker-based add paths are disabled there.</comment>
+  </data>
   <data name="ModList_AddNexusMods" xml:space="preserve">
     <value>Add Nexus Mods</value>
     <comment>The first flyout item on the Add split button: opens the Darktide Nexus Mods games page in the browser so the user can browse/download mods (nxm:// links route back into Curator when it owns the OS handler).</comment>
@@ -373,6 +399,10 @@
   <data name="ModList_NxmDownloadHint" xml:space="preserve">
     <value>On Nexus, click the 'Vortex' or 'Mod manager download' button.</value>
     <comment>Secondary hint shown in the no-mods empty state ONLY when Curator is the registered OS handler for nxm:// links, so the user knows those Nexus download buttons route the mod straight into the app.</comment>
+  </data>
+  <data name="ModList_EmptyGamingModeHint" xml:space="preserve">
+    <value>Adding mods from Nexus Mods requires Steam Deck Desktop Mode.</value>
+    <comment>Secondary hint shown in the no-mods empty state while a Steam Deck Gaming Mode session is detected (it replaces the nxm download hint, whose instruction cannot be followed there).</comment>
   </data>
   <data name="ModList_AutoSort" xml:space="preserve">
     <value>Auto-sort</value>
@@ -1053,6 +1083,10 @@
   <data name="Dmf_DownloadMessageManual" xml:space="preserve">
     <value>DMF (Darktide Mod Framework) is required for most Darktide mods. Download and add it to this profile? On the next screen, download the DMF archive, then import it into Curator.</value>
     <comment>Body of the case-2 confirm when Curator is not the nxm:// handler (manual-import guidance: the user downloads the archive and imports it via the normal add flow).</comment>
+  </data>
+  <data name="Dmf_DownloadMessageGamingMode" xml:space="preserve">
+    <value>DMF (Darktide Mod Framework) must be downloaded from Nexus Mods, which requires Steam Deck Desktop Mode. Exit Gaming Mode, then add DMF from Curator in Desktop Mode.</value>
+    <comment>Body of the informational alert shown instead of the download confirm while a Steam Deck Gaming Mode session is detected and the account cannot use the in-app download (not signed in, or not Premium).</comment>
   </data>
   <data name="Dmf_Downloading" xml:space="preserve">
     <value>Downloading DMF…</value>
