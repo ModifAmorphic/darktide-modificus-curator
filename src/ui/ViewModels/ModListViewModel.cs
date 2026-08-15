@@ -103,18 +103,11 @@ public enum ModAddMode
 public partial class ModListViewModel : ObservableObject
 {
     /// <summary>
-    /// The Darktide Nexus game domain. Fixed: Curator supports only Darktide, so
-    /// there is no config key for it (mirrors <c>UpdateCheckService</c> +
-    /// <c>ModAcquisitionService</c>).
-    /// </summary>
-    private const string GameDomain = "warhammer40kdarktide";
-
-    /// <summary>
     /// The Nexus Mods games page for Darktide (the "Add Nexus Mods" flyout item's
-    /// target). Built from <see cref="GameDomain"/> so the domain literal lives
-    /// in one place.
+    /// target). Built from <see cref="NexusGameIdentity.DarktideDomain"/> so the
+    /// domain literal lives in one place.
     /// </summary>
-    private const string NexusModsGamesUrl = "https://www.nexusmods.com/games/" + GameDomain;
+    private const string NexusModsGamesUrl = "https://www.nexusmods.com/games/" + NexusGameIdentity.DarktideDomain;
 
     /// <summary>
     /// The client-side cooldown applied when a rate-limited check did not carry
@@ -1478,7 +1471,7 @@ public partial class ModListViewModel : ObservableObject
             // thread so AcknowledgeUpdateAndReload (mutates the UI-bound Mods
             // collection) + the failure-path ShowAlertAsync below run on the UI
             // thread (the UI-layer convention).
-            await _acquisition.AcquireLatestNexusAsync(GameDomain, modId);
+            await _acquisition.AcquireLatestNexusAsync(NexusGameIdentity.DarktideDomain, modId);
 
             // Acknowledge the install: remove this container's known-update entry
             // immediately (no extra API check), then reload so the new version

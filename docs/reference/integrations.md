@@ -483,8 +483,8 @@ the `Thorough` flag on the result).
     not called). A profile with only Pinned Nexus mods still runs the batch (for
     the name sync).
 4. **Query Nexus v2 GraphQL (1 call for ALL Nexus mods).**
-   `INexusClient.CheckUpdatesGraphQlAsync(GameId, modIds, ct)` where `GameId`
-   is the Darktide constant `4943` + `modIds` is EVERY Nexus mod's id (Latest +
+   `INexusClient.CheckUpdatesGraphQlAsync(NexusGameIdentity.DarktideGameId, modIds, ct)`
+   + `modIds` is EVERY Nexus mod's id (Latest +
    Pinned), so Pinned ids ride along for the name sync. The client computes UIDs
    (`uid = game_id * 2^32 + mod_id`), builds the `modsByUid` GraphQL query, and
    POSTs to `/v2/graphql`. A `NexusRateLimitException` is caught + surfaces as a
@@ -655,7 +655,7 @@ semaphore, so the service is registered as a singleton (see
    `Get` re-checks that the metadata is still `null` (an optimization; the
    correctness boundary is the atomic `TryInitializeDisplayMetadata` below).
    When the 25-attempt cap is reached, the pass stops. Otherwise it calls
-   `INexusClient.GetModInfoAsync("warhammer40kdarktide", modId, ct)`.
+   `INexusClient.GetModInfoAsync(NexusGameIdentity.DarktideDomain, modId, ct)`.
    - `NexusApiException` (a per-mod API failure, e.g. one removed mod) is
      logged and the pass **continues** with the next candidate.
    - `NexusRateLimitException` sets `RateLimited = true`, resolves the reset via

@@ -770,7 +770,7 @@ Two cases on a trigger:
    `IDialogService.ShowProgressAsync` plus
    `IModAcquisitionService.AcquireLatestNexusAsync`); everyone else (no auth,
    regular, or unknown premium state) gets the DMF Nexus files page
-   (`https://www.nexusmods.com/warhammer40kdarktide/mods/8?tab=files`) opened in
+   (`https://www.nexusmods.com/<darktide-domain>/mods/8?tab=files`) opened in
    the default browser via the OS shell-open (`UseShellExecute = true`),
    regardless of `nxm://` setup. When Curator owns the handler the user clicks
    Download on the page and the handler picks up the URL; otherwise the user

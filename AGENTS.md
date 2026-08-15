@@ -764,6 +764,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         config loader, the shared OS shell-open launcher
                         (IExternalLauncher/ShellExternalLauncher: browser for a
                         URL, file manager for a folder, narrow failure filter),
+                        the NexusGameIdentity constants (the Darktide game
+                        domain + game id),
                         app-state store (active profile id +
                         last update-check timestamp + manual-refresh throttle
                         window + profile-scoped known-update snapshots +
@@ -915,7 +917,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         atomic TryInitializeDisplayMetadata); IUpdateCheckService the Nexus-only
                         update-check service (1 v2 GraphQL `modsByUid` batch
                         query per check, 1 API call for all mods; computes UIDs
-                        from game_id * 2^32 + mod_id, Darktide game_id = 4943;
+                        from game_id * 2^32 + mod_id, the Darktide game id in
+                        General's NexusGameIdentity.DarktideGameId;
                         the server-computed `viewerUpdateAvailable` field
                         replaces the v1 Month-endpoint intersect, timestamp
                         tolerance, per-mod reconciliation, + reconciliation

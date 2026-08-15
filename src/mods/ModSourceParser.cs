@@ -1,3 +1,4 @@
+using Modificus.Curator.General;
 using System.Globalization;
 
 namespace Modificus.Curator.Mods;
@@ -12,8 +13,10 @@ namespace Modificus.Curator.Mods;
 /// <remarks>
 /// <para>Accepted shapes:</para>
 /// <list type="bullet">
-/// <item><c>TryParseNexus</c>: <c>https://www.nexusmods.com/warhammer40kdarktide/mods/{id}</c>
-/// (with/without trailing slash + query string) or a plain integer string
+/// <item><c>TryParseNexus</c>:
+/// <c>https://www.nexusmods.com/{game}/mods/{id}</c> where <c>{game}</c> is the
+/// Darktide domain (<see cref="NexusGameIdentity.DarktideDomain"/>), with or
+/// without a trailing slash + query string, or a plain integer string
 /// (<c>"12345"</c>).</item>
 /// </list>
 /// <para>
@@ -28,9 +31,9 @@ public static class ModSourceParser
     /// </summary>
     /// <example>
     /// <code>
-    /// // https://www.nexusmods.com/warhammer40kdarktide/mods/12345  -> NexusSource(12345)
-    /// // https://www.nexusmods.com/warhammer40kdarktide/mods/12345/  -> NexusSource(12345)
-    /// // https://www.nexusmods.com/warhammer40kdarktide/mods/12345?tab=files -> NexusSource(12345)
+    /// // https://www.nexusmods.com/&lt;darktide-domain&gt;/mods/12345  -> NexusSource(12345)
+    /// // https://www.nexusmods.com/&lt;darktide-domain&gt;/mods/12345/  -> NexusSource(12345)
+    /// // https://www.nexusmods.com/&lt;darktide-domain&gt;/mods/12345?tab=files -> NexusSource(12345)
     /// // 12345  -> NexusSource(12345)
     /// </code>
     /// </example>
@@ -65,7 +68,7 @@ public static class ModSourceParser
             return false;
         }
 
-        // Segments: "/", "warhammer40kdarktide/", "mods/", "12345" (or "12345/").
+        // Segments: "/", "{game}/", "mods/", "12345" (or "12345/").
         // We need: the Darktide game slug at index 1, "mods" at index 2, + the
         // id at index 3. Validating the game slug rejects a pasted URL for the
         // wrong game (the model is Darktide-only).
@@ -75,8 +78,7 @@ public static class ModSourceParser
             return false;
         }
 
-        const string darktideSlug = "warhammer40kdarktide";
-        if (!string.Equals(Uri.UnescapeDataString(segments[1]).TrimEnd('/'), darktideSlug, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(Uri.UnescapeDataString(segments[1]).TrimEnd('/'), NexusGameIdentity.DarktideDomain, StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }

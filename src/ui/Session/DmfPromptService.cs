@@ -62,13 +62,6 @@ public sealed class DmfPromptService
     public const int DmfModId = 8;
 
     /// <summary>
-    /// The Darktide Nexus game domain. Fixed: Curator supports only Darktide
-    /// (mirrors <c>ModListViewModel.GameDomain</c> +
-    /// <c>ModAcquisitionService</c>).
-    /// </summary>
-    private const string GameDomain = "warhammer40kdarktide";
-
-    /// <summary>
     /// The Nexus files page for DMF. Opened in the user's browser when DMF is
     /// not in the repository and the user is not premium (the Nexus
     /// <c>download_link</c> endpoint is premium-only, so non-premium users
@@ -78,7 +71,7 @@ public sealed class DmfPromptService
     /// Curator does not own the handler the user downloads the archive and
     /// imports it via the normal add flow.
     /// </summary>
-    private const string DmfFilesUrl = "https://www.nexusmods.com/warhammer40kdarktide/mods/8?tab=files";
+    private const string DmfFilesUrl = "https://www.nexusmods.com/" + NexusGameIdentity.DarktideDomain + "/mods/8?tab=files";
 
     private readonly IProfileService _profiles;
     private readonly IProfileSession _session;
@@ -363,7 +356,7 @@ public sealed class DmfPromptService
             var (id, _) = await _dialogs.ShowProgressAsync(
                 _localization["Dmf_Downloading"],
                 _localization["Dmf_DownloadingMessage"],
-                () => _acquisition.AcquireLatestNexusAsync(GameDomain, DmfModId));
+                () => _acquisition.AcquireLatestNexusAsync(NexusGameIdentity.DarktideDomain, DmfModId));
             containerId = id;
         }
         catch (Exception ex)

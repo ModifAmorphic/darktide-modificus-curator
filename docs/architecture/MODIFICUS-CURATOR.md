@@ -478,7 +478,8 @@ placement, and OS registration) is in
 The `IUpdateCheckService` (Integrations) is the Nexus-only update check.
 On profile load it calls the v2 GraphQL `modsByUid` batch query once (1 API call
 for all checkable mods), passing the UIDs of the active profile's `LatestPolicy` +
-`NexusSource` mods (uid = `game_id * 2^32 + mod_id`, Darktide game_id = 4943).
+`NexusSource` mods (uid = `game_id * 2^32 + mod_id`, the Darktide game id in
+`NexusGameIdentity.DarktideGameId`).
 The server returns the `viewerUpdateAvailable` field for each mod: a
 server-computed Boolean that is true if the mod has been updated since the viewer
 (current user) last downloaded it. This eliminates the v1 approach's

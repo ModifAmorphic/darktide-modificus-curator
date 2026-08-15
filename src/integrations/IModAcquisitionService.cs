@@ -1,3 +1,4 @@
+using Modificus.Curator.General;
 using Modificus.Curator.Mods;
 
 namespace Modificus.Curator.Integrations;
@@ -38,7 +39,7 @@ public interface IModAcquisitionService
     /// <c>IProfileService.AddMod</c>.
     /// </summary>
     /// <param name="gameDomain">The Nexus game domain (the host of the
-    /// <c>nxm://</c> URL, e.g. <c>warhammer40kdarktide</c>).</param>
+    /// <c>nxm://</c> URL; see <see cref="NexusGameIdentity.DarktideDomain"/>).</param>
     /// <param name="modId">The Nexus mod id.</param>
     /// <param name="fileId">The Nexus file id (the specific release to
     /// download).</param>
@@ -86,7 +87,7 @@ public interface IModAcquisitionService
     /// not, and the current release should be picked.
     /// </summary>
     /// <param name="gameDomain">The Nexus game domain (e.g.
-    /// <c>warhammer40kdarktide</c>).</param>
+    /// the Darktide domain; see <see cref="NexusGameIdentity.DarktideDomain"/>).</param>
     /// <param name="modId">The Nexus mod id.</param>
     /// <param name="progress">Optional cumulative-bytes progress receiver.</param>
     /// <param name="ct">Cancellation token.</param>

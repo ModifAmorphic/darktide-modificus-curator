@@ -398,7 +398,7 @@ throws: malformed input returns `false`.
 ```csharp
 public static class ModSourceParser
 {
-    // "https://www.nexusmods.com/warhammer40kdarktide/mods/12345"  -> NexusSource(12345)
+    // "https://www.nexusmods.com/<darktide-domain>/mods/12345"  -> NexusSource(12345)
     public static bool TryParseNexus(string input, out NexusSource source);
 }
 ```

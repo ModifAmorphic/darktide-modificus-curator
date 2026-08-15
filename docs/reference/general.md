@@ -128,6 +128,23 @@ public sealed class ShellExternalLauncher : IExternalLauncher
   `UseShellExecute = true` (the OS routes a URL to the browser, a folder to
   the file manager). Stateless; registered as a singleton.
 
+### `NexusGameIdentity`
+
+The Nexus Mods identity of the game Curator manages, as shared constants:
+the game domain (the URL slug + the v1 API path segment) and the game id (the
+v2 GraphQL UID high bits, `uid = game_id * 2^32 + mod_id`). Curator is
+Darktide-only by design, so these are fixed facts, not configuration; every
+surface (the update check, the acquisition paths, the mod-page URLs, the nxm
+domain check, the URL parser) reads them from here.
+
+```csharp
+public static class NexusGameIdentity
+{
+    public const string DarktideDomain = "warhammer40kdarktide";
+    public const int DarktideGameId = 4943;
+}
+```
+
 ### `IAppStateStore` / `AppStateStore`
 
 Persists **runtime application state**: values that capture "where the app left

@@ -27,7 +27,8 @@ public abstract record NxmUrl
 /// page produces one of these.
 /// </summary>
 /// <param name="Raw">The verbatim URL string.</param>
-/// <param name="Game">The Nexus game domain (e.g. <c>warhammer40kdarktide</c>).</param>
+/// <param name="Game">The Nexus game domain (e.g. the Darktide domain in
+/// <c>NexusGameIdentity.DarktideDomain</c>).</param>
 /// <param name="ModId">The numeric mod id (positive).</param>
 /// <param name="FileId">The numeric file id (positive).</param>
 /// <param name="Key">The download key, or null when absent / empty.</param>

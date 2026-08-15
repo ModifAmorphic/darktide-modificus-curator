@@ -81,7 +81,6 @@ internal sealed class NxmModDownloadHandler : INxmModDownloadHandler
     /// <c>nxm://</c> link for another game is rejected before auth / profile /
     /// acquisition with a localized alert.
     /// </summary>
-    private const string GameDomain = "warhammer40kdarktide";
 
     public NxmModDownloadHandler(
         Func<Func<Task>, Task> invokeOnUi,
@@ -120,7 +119,7 @@ internal sealed class NxmModDownloadHandler : INxmModDownloadHandler
         //    Nexus downloads. Reject any other game before auth / profile /
         //    acquisition so the user gets a clear reason and we do not attempt
         //    a download that cannot land. Case-insensitive domain match.
-        if (!string.Equals(url.Game, GameDomain, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(url.Game, NexusGameIdentity.DarktideDomain, StringComparison.OrdinalIgnoreCase))
         {
             _logger.LogWarning(
                 "nxm download refused: link is for game '{Game}'; Curator only handles Darktide.",
