@@ -149,6 +149,15 @@ public partial class ModListViewModel : ObservableObject
     private readonly IGamingModeState _gamingMode;
 
     /// <summary>
+    /// The profile entries the last <see cref="Reload"/> loaded (the raw
+    /// <see cref="IProfileService.GetModList"/> snapshot for the active
+    /// profile, empty with no active profile). Kept so the update family's
+    /// candidate-taking reads (<see cref="ApplyKnownUpdateState"/>) pass the
+    /// entries the rows were built from, not a second, racy re-pull.
+    /// </summary>
+    private IReadOnlyList<ModListEntry> _loadedEntries = Array.Empty<ModListEntry>();
+
+    /// <summary>
     /// Creates the list VM, subscribes to the session (reload on active-profile
     /// change), the update-check service (badge refresh on
     /// <see cref="IUpdateCheckService.CheckCompleted"/>), the update coordinator
@@ -726,14 +735,15 @@ public partial class ModListViewModel : ObservableObject
 
     /// <summary>
     /// Reads the profile-scoped known-update container ids from the persisted
-    /// store (which self-heals stale entries against the live profile + repo) and
-    /// applies them to the rows by container id. This is the single source of
-    /// truth for the per-row <see cref="ModItemViewModel.UpdateAvailable"/> flag,
-    /// so a restart inside the interval gate shows prior flags before any API
-    /// call, and a result from one profile never bleeds into another. Called from
-    /// <see cref="ApplyCheckLanded"/> + <see cref="Reload"/> +
-    /// <see cref="AcknowledgeUpdateAndReload"/>. A no-op when no profile is
-    /// active.
+    /// store (which self-heals stale entries against the loaded candidates +
+    /// the repo) and applies them to the rows by container id. This is the
+    /// single source of truth for the per-row
+    /// <see cref="ModItemViewModel.UpdateAvailable"/> flag, so a restart inside
+    /// the interval gate shows prior flags before any API call, and a result
+    /// from one profile never bleeds into another. The candidates are the
+    /// entries the last <see cref="Reload"/> loaded (the rows were built from
+    /// them). Called from <see cref="ApplyCheckLanded"/> +
+    /// <see cref="Reload"/>. A no-op when no profile is active.
     /// </summary>
     private void ApplyKnownUpdateState()
     {
@@ -746,7 +756,8 @@ public partial class ModListViewModel : ObservableObject
             return;
         }
 
-        var flaggedIds = _updateState.GetKnownUpdateContainerIds(profileId);
+        var flaggedIds = _updateState.GetKnownUpdateContainerIds(
+            profileId, _loadedEntries.ToCandidates());
         foreach (var row in Mods)
         {
             row.UpdateAvailable = flaggedIds.Contains(row.ContainerId);
@@ -849,6 +860,7 @@ public partial class ModListViewModel : ObservableObject
             HasActiveProfile = false;
             HasMods = false;
             ModCount = 0;
+            _loadedEntries = Array.Empty<ModListEntry>();
             // Hand an empty snapshot so old work is cancelled.
             _ = DetailedRows.SetRowsAsync(Array.Empty<ModItemViewModel>());
             return;
@@ -857,6 +869,7 @@ public partial class ModListViewModel : ObservableObject
         HasActiveProfile = true;
 
         var entries = _profiles.GetModList(id);
+        _loadedEntries = entries;
         foreach (var entry in entries.OrderBy(e => e.Order, Comparer<int>.Default))
         {
             var container = _repo.Get(entry.ContainerId);

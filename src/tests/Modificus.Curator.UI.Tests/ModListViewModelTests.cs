@@ -719,7 +719,7 @@ public sealed class ModListViewModelTests
         var acquisition = new FakeModAcquisitionService();
         var effectiveAuth = auth ?? new FakeNexusAuthService(); // default premium
         var coordinator = new UpdateCoordinator();
-        var updateState = new FakeUpdateStateStore(profiles, repo);
+        var updateState = new FakeUpdateStateStore(repo);
         var vm = TestDoubles.BuildModList(profiles, session, repo,
             updateCheck: updateCheck, acquisition: acquisition, auth: effectiveAuth,
             coordinator: coordinator, updateState: updateState);
@@ -1483,7 +1483,7 @@ public sealed class ModListViewModelTests
         var session = new FakeProfileSession { ActiveProfileId = a.Id };
 
         var updateCheck = new FakeUpdateCheckService();
-        var updateState = new FakeUpdateStateStore(profiles, repo);
+        var updateState = new FakeUpdateStateStore(repo);
         var dialogs = new FakeDialogService();
         var launches = new List<Uri>();
         launcher ??= FakeExternalLauncher.RecordingUris(launches);
@@ -1644,7 +1644,7 @@ public sealed class ModListViewModelTests
             new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
         var session = new FakeProfileSession { ActiveProfileId = a.Id };
         var updateCheck = new FakeUpdateCheckService();
-        var updateState = new FakeUpdateStateStore(profiles, repo);
+        var updateState = new FakeUpdateStateStore(repo);
         // Seed the persisted flag directly (simulating app-state.json loaded at
         // startup). RecordProfileId is wired by BuildModList so a hydration read
         // scopes to the active profile.

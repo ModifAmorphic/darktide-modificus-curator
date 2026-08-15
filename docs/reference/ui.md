@@ -794,14 +794,20 @@ a real browser.
 
 The UI-layer glue between `IProfileSession` (the active-profile authority)
 and `IUpdateCheckService` (the Integrations update check). The check itself
-is backend-only; this runner owns when the UI fires it. After each check
-completes, the runner captures the exact result (not a potentially raced
-`LastResult`) and chains the `IAutomaticUpdateService` (the opt-in Premium
-automatic installer) on the captured UI context, so a manual CheckNow keeps
-its spinner active through the installations. The check flags mods via three
-tiers (the server's `viewerUpdateAvailable`, a mod-level version compare, and a
-latest-file-version confirmation that clears tier-2 false positives against the
-actual latest file); see
+is backend-only; this runner owns when the UI fires it. The runner also owns
+the candidate pull: each fire reads the profile's mod list through
+`IProfileService` inside its thread-pool task and maps the entries to
+`ModListCandidate` records (container id + policy, via one small internal UI
+extension) at the call site, so Integrations holds no Profiles dependency. A
+pull failure (a deleted or unreadable profile) is logged and the run skipped:
+no check call, no `LastResult` mutation. After each check completes, the
+runner captures the exact result (not a potentially raced `LastResult`) and
+chains the `IAutomaticUpdateService` (the opt-in Premium automatic installer)
+on the captured UI context, so a manual CheckNow keeps its spinner active
+through the installations. The check flags mods via three tiers (the server's
+`viewerUpdateAvailable`, a mod-level version compare, and a latest-file-version
+confirmation that clears tier-2 false positives against the actual latest
+file); see
 [the update-detection tiers](rate-limiting-strategy.md#update-detection-tiers).
 
 ```csharp
@@ -811,6 +817,7 @@ public sealed class UpdateCheckRunner
 
     public UpdateCheckRunner(
         IProfileSession session,
+        IProfileService profiles,           // the candidate pull
         IUpdateCheckService updateCheck,
         IConfigLoader configLoader,
         IUpdateCheckScheduleState appState,

@@ -3,8 +3,9 @@ using Modificus.Curator.Mods;
 namespace Modificus.Curator.Integrations;
 
 /// <summary>
-/// Checks a profile's Nexus-sourced mods for available updates. Both check
-/// shapes (<see cref="CheckAsync"/> + <see cref="CheckThoroughAsync"/>) run the
+/// Checks a caller-supplied set of mod-list candidates (the profile's entries,
+/// mapped at the call site) for available Nexus updates. Both check shapes
+/// (<see cref="CheckAsync"/> + <see cref="CheckThoroughAsync"/>) run the
 /// same v2 GraphQL <c>modsByUid</c> batch query (1 API call for all mods) and
 /// flag a mod via three tiers: tier 1 the server-computed
 /// <see cref="ModUpdateStatus.ViewerUpdateAvailable"/> field (true if the mod has
@@ -56,17 +57,25 @@ public interface IUpdateCheckService
     /// confirmation that clears tier-2-only false positives). The result has
     /// <see cref="UpdateCheckResult.Thorough"/> = <c>false</c>.
     /// </summary>
-    /// <param name="profileId">The profile whose mods to check.</param>
+    /// <param name="profileId">The profile the check is scoped to. Used only as
+    /// the update-state key (the persisted known-update snapshot + the recorded
+    /// result are per-profile); the check set itself comes entirely from
+    /// <paramref name="candidates"/>. The caller owns profile validity.</param>
+    /// <param name="candidates">The mod-list entries to check (each container id
+    /// + its current policy). An empty list short-circuits to the
+    /// <see cref="CheckOutcome.NoNexusMods"/> outcome (the local truth that no
+    /// applicable Nexus update can exist), never a failure.</param>
     /// <param name="ct">Cancellation token. Honored during the Nexus API call;
     /// <see cref="OperationCanceledException"/> propagates (cancellation is not
     /// a "no updates" result). Other exceptions are caught and surfaced as an
     /// empty result.</param>
     /// <returns>The check result. Never throws for non-cancellation failures:
     /// an empty result is returned instead, and <see cref="CheckCompleted"/> is
-    /// raised. A <see cref="KeyNotFoundException"/> from
-    /// <c>IProfileService.GetModList</c> propagates (the caller owns passing a
-    /// valid profile id).</returns>
-    Task<UpdateCheckResult> CheckAsync(Guid profileId, CancellationToken ct = default);
+    /// raised.</returns>
+    Task<UpdateCheckResult> CheckAsync(
+        Guid profileId,
+        IReadOnlyList<ModListCandidate> candidates,
+        CancellationToken ct = default);
 
     /// <summary>
     /// The thorough check. Runs the same v2 GraphQL <c>modsByUid</c> batch
@@ -74,11 +83,18 @@ public interface IUpdateCheckService
     /// <see cref="UpdateCheckResult.Thorough"/> = <c>true</c>. Both paths run
     /// the same query, so the flag signals no coverage difference.
     /// </summary>
-    /// <param name="profileId">The profile whose mods to check.</param>
+    /// <param name="profileId">The profile the check is scoped to (the
+    /// update-state key only; see <see cref="CheckAsync"/>).</param>
+    /// <param name="candidates">The mod-list entries to check (see
+    /// <see cref="CheckAsync"/>; empty yields
+    /// <see cref="CheckOutcome.NoNexusMods"/>).</param>
     /// <param name="ct">Cancellation token. <see cref="OperationCanceledException"/>
     /// propagates; other exceptions are caught + surfaced as an empty result.</param>
     /// <returns>The check result. Never throws for non-cancellation failures.</returns>
-    Task<UpdateCheckResult> CheckThoroughAsync(Guid profileId, CancellationToken ct = default);
+    Task<UpdateCheckResult> CheckThoroughAsync(
+        Guid profileId,
+        IReadOnlyList<ModListCandidate> candidates,
+        CancellationToken ct = default);
 
     /// <summary>
     /// The last check result, or <c>null</c> before the first check completes.

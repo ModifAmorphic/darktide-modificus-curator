@@ -137,7 +137,7 @@ internal static class TestDoubles
         auth ??= new FakeNexusAuthService();
         configLoader ??= new FakeConfigLoader();
         appState ??= new FakeAppStateStore();
-        updateState ??= new FakeUpdateStateStore(profiles, repo);
+        updateState ??= new FakeUpdateStateStore(repo);
         coordinator ??= new UpdateCoordinator();
         automaticUpdates ??= new FakeAutomaticUpdateService();
         profiles.RepoLookup = repo;
@@ -195,9 +195,11 @@ internal static class TestDoubles
         // The runner wires the manual CheckNow path; constructed with the
         // test's fakes + no periodic timer (the manual trigger does not depend
         // on the timer being started). An optional getNow lets the throttle
-        // tests drive the sliding window deterministically.
+        // tests drive the sliding window deterministically. The profiles fake
+        // backs the runner's candidate pull.
         var runner = new UpdateCheckRunner(
             session,
+            profiles,
             updateCheck,
             configLoader,
             appState,
@@ -676,7 +678,23 @@ internal sealed class FakeProfileService : IProfileService
 
     // ---- mod-list surface --------------------------------------------------
 
-    public IReadOnlyList<ModListEntry> GetModList(Guid id) => EnsureList(id).ToArray();
+    /// <summary>
+    /// When set, <see cref="GetModList"/> throws this exception, simulating an
+    /// unreadable or deleted profile (the production service surfaces
+    /// KeyNotFoundException for an unknown id). Default <c>null</c> = no throw.
+    /// Used by the update-check runner tests to verify the candidate-pull
+    /// failure posture (log + skip, no check call, no LastResult mutation).
+    /// </summary>
+    public Exception? GetModListThrows { get; set; }
+
+    public IReadOnlyList<ModListEntry> GetModList(Guid id)
+    {
+        if (GetModListThrows is not null)
+        {
+            throw GetModListThrows;
+        }
+        return EnsureList(id).ToArray();
+    }
 
     public void SetModOrder(Guid id, IReadOnlyList<Guid> containerIdsInOrder)
     {
@@ -962,18 +980,16 @@ internal sealed class FakeAppStateStore :
 /// replacement + acknowledge + hydrate semantics over a per-profile set of
 /// flagged container ids so the mod-list VM tests can drive the persisted
 /// known-update state. The real store's self-healing filter is covered by the
-/// Integrations-layer tests; this fake does the simplest equivalent (return
-/// whatever was recorded for the profile).
+/// Integrations-layer tests; this fake does the simplest equivalent (drop
+/// entries absent from the caller's candidates or whose container is gone).
 /// </summary>
 internal sealed class FakeUpdateStateStore : IUpdateStateStore
 {
     private readonly Dictionary<Guid, HashSet<Guid>> _flagged = new();
-    private readonly FakeProfileService? _profiles;
     private readonly FakeModRepository? _repository;
 
-    public FakeUpdateStateStore(FakeProfileService? profiles = null, FakeModRepository? repository = null)
+    public FakeUpdateStateStore(FakeModRepository? repository = null)
     {
-        _profiles = profiles;
         _repository = repository;
     }
 
@@ -1007,21 +1023,19 @@ internal sealed class FakeUpdateStateStore : IUpdateStateStore
         }
     }
 
-    public IReadOnlyCollection<Guid> GetKnownUpdateContainerIds(Guid profileId)
+    public IReadOnlyCollection<Guid> GetKnownUpdateContainerIds(
+        Guid profileId, IReadOnlyList<ModListCandidate> candidates)
     {
         if (!_flagged.TryGetValue(profileId, out var set))
         {
             return Array.Empty<Guid>();
         }
 
-        // Light self-heal: drop entries no longer in the profile or whose
-        // container is gone, mirroring the real store's filter closely enough
-        // for the VM tests that exercise it.
-        if (_profiles is not null)
-        {
-            var members = _profiles.GetModList(profileId).Select(e => e.ContainerId).ToHashSet();
-            set.RemoveWhere(id => !members.Contains(id));
-        }
+        // Light self-heal: drop entries no longer among the caller's
+        // candidates or whose container is gone, mirroring the real store's
+        // filter closely enough for the VM tests that exercise it.
+        var members = candidates.Select(c => c.ContainerId).ToHashSet();
+        set.RemoveWhere(id => !members.Contains(id));
         if (_repository is not null)
         {
             set.RemoveWhere(id => _repository.Get(id) is null);
@@ -1855,6 +1869,7 @@ internal sealed class FakeUpdateCheckService : IUpdateCheckService
 {
     private readonly ConcurrentQueue<Guid> _calls = new();
     private readonly ConcurrentQueue<Guid> _thoroughCalls = new();
+    private readonly ConcurrentQueue<IReadOnlyList<ModListCandidate>> _candidateBatches = new();
 
     /// <summary>
     /// Optional state store wired so <see cref="RaiseCheckCompleted"/> +
@@ -1892,6 +1907,14 @@ internal sealed class FakeUpdateCheckService : IUpdateCheckService
     public IReadOnlyList<Guid> ThoroughCalls => _thoroughCalls.ToArray();
 
     /// <summary>
+    /// The candidate lists passed to <see cref="CheckAsync"/> /
+    /// <see cref="CheckThoroughAsync"/> (both shapes record into the same
+    /// queue), in call order, so tests can assert the runner's entry-to-
+    /// candidate mapping.
+    /// </summary>
+    public IReadOnlyList<IReadOnlyList<ModListCandidate>> CandidateCalls => _candidateBatches.ToArray();
+
+    /// <summary>
     /// When set, thrown synchronously from every <see cref="CheckAsync"/> +
     /// <see cref="CheckThoroughAsync"/> call, after the call is recorded. Lets
     /// the exception-safety test assert the call was made AND that the runner
@@ -1910,9 +1933,11 @@ internal sealed class FakeUpdateCheckService : IUpdateCheckService
 
     public event EventHandler<UpdateCheckResult?>? CheckCompleted;
 
-    public Task<UpdateCheckResult> CheckAsync(Guid profileId, CancellationToken ct = default)
+    public Task<UpdateCheckResult> CheckAsync(
+        Guid profileId, IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default)
     {
         _calls.Enqueue(profileId);
+        _candidateBatches.Enqueue(candidates);
 
         if (ThrowOnCheck is not null)
         {
@@ -1931,9 +1956,11 @@ internal sealed class FakeUpdateCheckService : IUpdateCheckService
         return Task.FromResult(LastResult);
     }
 
-    public Task<UpdateCheckResult> CheckThoroughAsync(Guid profileId, CancellationToken ct = default)
+    public Task<UpdateCheckResult> CheckThoroughAsync(
+        Guid profileId, IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default)
     {
         _thoroughCalls.Enqueue(profileId);
+        _candidateBatches.Enqueue(candidates);
 
         if (ThrowOnCheck is not null)
         {

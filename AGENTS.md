@@ -518,20 +518,27 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           unverified update action, non-Premium DMF prompt,
                           the Mods empty-state Nexus hint swaps to Desktop
                           Mode guidance);
-                          `UpdateCheckRunner` (ui/Session/) the
-                          UI-layer glue that fires `IUpdateCheckService.CheckAsync`
-                          fire-and-forget on the three automatic triggers
-                          (startup-with-restored-id + active-profile switch via
-                          IProfileSession.PropertyChanged filtered to
-                          ActiveProfileId + a periodic timer), all interval-gated
-                          via a shared last-check persisted to
-                          `IUpdateCheckScheduleState.LastUpdateCheckUtc` (so a close/reopen
-                          loop does not fire a call per launch); the
-                          `AutoUpdateCheckEnabled` toggle gates ONLY the periodic
-                          timer, and the manual `CheckNowAsync` carries its own
-                          sliding-window throttle (10 free/hour then 1/2min,
-                          independent of the interval gate); registered + started
-                          best-effort from CuratorComposition);
+                           `UpdateCheckRunner` (ui/Session/) the
+                           UI-layer glue that fires `IUpdateCheckService.CheckAsync`
+                           fire-and-forget on the three automatic triggers
+                           (startup-with-restored-id + active-profile switch via
+                           IProfileSession.PropertyChanged filtered to
+                           ActiveProfileId + a periodic timer), all interval-gated
+                           via a shared last-check persisted to
+                           `IUpdateCheckScheduleState.LastUpdateCheckUtc` (so a close/reopen
+                           loop does not fire a call per launch); owns the
+                           candidate pull: each fire reads the profile's mod
+                           list through IProfileService inside its thread-pool
+                           task + maps the entries to `ModListCandidate`s at
+                           the call site (one small internal UI extension), so
+                           Integrations holds no Profiles reference + a pull
+                           failure (a deleted/unreadable profile) is logged +
+                           skipped without mutating LastResult; the
+                           `AutoUpdateCheckEnabled` toggle gates ONLY the periodic
+                           timer, and the manual `CheckNowAsync` carries its own
+                           sliding-window throttle (10 free/hour then 1/2min,
+                           independent of the interval gate); registered + started
+                           best-effort from CuratorComposition);
                           the mod-list update UI per-row update
                           signal + per-mod update action. `ModListViewModel` subscribes
                           to `IUpdateCheckService.CheckCompleted` and reads the
@@ -963,8 +970,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         version-changed entries, AcknowledgeInstall clears a
                         single entry on a successful version change);
                         LastResult + CheckCompleted event for the mod-list;
-                        Integrations references Profiles, acyclic, for
-                        IProfileService.GetModList)
+                        the update family takes the profile's mod list as
+                        caller-mapped `ModListCandidate` records
+                        (ContainerId + Policy), so Integrations holds no
+                        Profiles reference)
   steam/                Modificus.Curator.Steam -- Steam + Darktide + Proton discovery
                         (multi-library + compatdata; Linux Proton resolves from Steam's
                         CompatToolMapping in config.vdf, app-specific entry first then
@@ -1101,7 +1110,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           incl. the display-metadata capture from the shared mapper)
                                           + the UpdateCheckService (Nexus-only
                                           update check against a fake INexusClient +
-                                          fake IProfileService + fake IModRepository)
+                                          caller-built ModListCandidate batches +
+                                          fake IModRepository)
                                           + the UpdateStateStore (the profile-scoped
                                           known-update persistence rules: success
                                           replaces/clears, failed/no-auth/rate-limited
@@ -1191,10 +1201,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             case-insensitive duplicate, reserved name -- + a Logging
                                             toggle (EnableLuaLogs emits Relay's bare --log-lua flag) +
                                             a SkipSplash toggle (SkipSplash emits Relay's bare
-                                            --skip-splash flag)) + the
+                                             --skip-splash flag)) + the
                                             NxmModDownloadHandler auth/profile gates + error
                                             wiring + the mod-list update flow: profile-scoped
-                                            known-update persistence/hydration, the stable
+                                            known-update persistence/hydration, the
+                                            UpdateCheckRunner candidate pull + the
+                                            unreadable-profile skip, the stable
                                             per-row update action (no-update disabled, flagged
                                             accent, Premium install, regular/unknown files-page
                                             open, launcher failure alert, unsupported rows),

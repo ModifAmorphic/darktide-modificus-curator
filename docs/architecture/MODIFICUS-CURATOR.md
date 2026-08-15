@@ -519,7 +519,12 @@ with per-mod `ModUpdateInfo`) is published via `LastResult` + a
 `CheckCompleted` event for the mod-list badges to consume without re-awaiting.
 The check is fired fire-and-forget by `UpdateCheckRunner` (UI), which subscribes
 to `IProfileSession.PropertyChanged` filtered to `ActiveProfileId`
-(startup-with-restored-id + active-profile switch). The service itself has no
+(startup-with-restored-id + active-profile switch). The runner owns the
+candidate pull: each fire reads the profile's mod list through
+`IProfileService` and maps the entries to `ModListCandidate` records
+(container id + policy) at the call site, so Integrations holds no Profiles
+dependency and an unreadable profile surfaces at the pull (logged + skipped,
+never a failed check). The service itself has no
 UI; the mod-list UI consumes `LastResult` / `CheckCompleted` to render per-row
 "update available" badges + the per-mod Update button (which calls
 `IModAcquisitionService`). The public surface is in

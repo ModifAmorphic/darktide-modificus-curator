@@ -1,7 +1,6 @@
 using Modificus.Curator.Config;
 using Modificus.Curator.General;
 using Modificus.Curator.Mods;
-using Modificus.Curator.Profiles;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -67,19 +66,16 @@ public sealed class UpdateCheckServiceTests
         repository.Containers[thirdContainer] =
             NexusContainer(thirdContainer, PinnedModId, "Pinned Mod", "3.0");
 
-        var profiles = new FakeProfileService
-        {
-            Mods = new[]
+        var candidates = new ModListCandidate[]
             {
-                Entry(NexusLatestContainer, new LatestPolicy()),
-                Entry(secondContainer, new LatestPolicy()),
-                Entry(thirdContainer, new LatestPolicy()),
-            },
-        };
+                Candidate(NexusLatestContainer),
+                Candidate(secondContainer),
+                Candidate(thirdContainer),
+            };
 
-        var service = CreateService(nexus, profiles, repository);
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.Equal(2, result.Updates.Count);
         Assert.Contains(result.Updates, u => u.ContainerId == NexusLatestContainer && u.ModId == UpdatedModId);
@@ -114,17 +110,14 @@ public sealed class UpdateCheckServiceTests
         var secondContainer = Guid.NewGuid();
         repository.Containers[secondContainer] =
             NexusContainer(secondContainer, UnlistedModId, "Mod 2", "2.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[]
+        var candidates = new ModListCandidate[]
             {
-                Entry(NexusLatestContainer, new LatestPolicy()),
-                Entry(secondContainer, new LatestPolicy()),
-            },
-        };
-        var service = CreateService(nexus, profiles, repository);
+                Candidate(NexusLatestContainer),
+                Candidate(secondContainer),
+            };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.Empty(result.Updates);
         Assert.False(result.RateLimited);
@@ -144,13 +137,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.Empty(result.Updates);
     }
@@ -171,13 +161,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         var flagged = Assert.Single(result.Updates);
         Assert.Equal(NexusLatestContainer, flagged.ContainerId);
@@ -197,13 +184,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.Empty(result.Updates);
     }
@@ -224,17 +208,14 @@ public sealed class UpdateCheckServiceTests
             NexusContainer(NexusLatestContainer, UpdatedModId, "Found Mod", "1.0");
         repository.Containers[NexusUnlistedContainer] =
             NexusContainer(NexusUnlistedContainer, UnlistedModId, "Missing Mod", "2.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[]
+        var candidates = new ModListCandidate[]
             {
-                Entry(NexusLatestContainer, new LatestPolicy()),
-                Entry(NexusUnlistedContainer, new LatestPolicy()),
-            },
-        };
-        var service = CreateService(nexus, profiles, repository);
+                Candidate(NexusLatestContainer),
+                Candidate(NexusUnlistedContainer),
+            };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         var flagged = Assert.Single(result.Updates);
         Assert.Equal(NexusLatestContainer, flagged.ContainerId);
@@ -256,13 +237,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         var flagged = Assert.Single(result.Updates);
         Assert.Equal(updatedAt, flagged.LatestUpdateAt);
@@ -286,13 +264,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository, authMethod: NexusAuthMethod.None);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository, authMethod: NexusAuthMethod.None);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.Empty(result.Updates);
         Assert.False(result.RateLimited);
@@ -309,16 +284,13 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[UntrackedContainer] =
             NonNexusContainer(UntrackedContainer, new UntrackedSource(), "Untracked Mod");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[]
+        var candidates = new ModListCandidate[]
             {
-                Entry(UntrackedContainer, new LatestPolicy()),
-            },
-        };
-        var service = CreateService(nexus, profiles, repository);
+                Candidate(UntrackedContainer),
+            };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.Empty(result.Updates);
         Assert.False(result.RateLimited);
@@ -352,18 +324,15 @@ public sealed class UpdateCheckServiceTests
             NexusContainer(NexusPinnedContainer, PinnedModId, "Mod 300", "1.0");
         repository.Containers[UntrackedContainer] =
             NonNexusContainer(UntrackedContainer, new UntrackedSource(), "Untracked Mod");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[]
+        var candidates = new ModListCandidate[]
             {
-                Entry(NexusLatestContainer, new LatestPolicy()),
-                Entry(NexusPinnedContainer, new PinnedPolicy("v1")),
-                Entry(UntrackedContainer, new LatestPolicy()),
-            },
-        };
-        var service = CreateService(nexus, profiles, repository);
+                Candidate(NexusLatestContainer),
+                Candidate(NexusPinnedContainer, new PinnedPolicy("v1")),
+                Candidate(UntrackedContainer),
+            };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         var flagged = Assert.Single(result.Updates);
         Assert.Equal(NexusLatestContainer, flagged.ContainerId);
@@ -401,17 +370,14 @@ public sealed class UpdateCheckServiceTests
             Name = "ExternalMod",
             Versions = Array.Empty<ModVersion>(), // linked: zero versions
         };
-        var profiles = new FakeProfileService
-        {
-            Mods = new[]
+        var candidates = new ModListCandidate[]
             {
-                Entry(NexusLatestContainer, new LatestPolicy()),
-                Entry(linkedContainer, new LatestPolicy()),
-            },
-        };
-        var service = CreateService(nexus, profiles, repository);
+                Candidate(NexusLatestContainer),
+                Candidate(linkedContainer),
+            };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         // Only the Nexus mod is in the batch; the linked mod is excluded.
         Assert.Equal(new[] { UpdatedModId }, nexus.LastModIds);
@@ -435,13 +401,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.True(result.RateLimited);
         Assert.Empty(result.Updates);
@@ -463,13 +426,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.True(result.RateLimited);
         Assert.Empty(result.Updates);
@@ -490,13 +450,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.True(result.RateLimited);
         Assert.Empty(result.Updates);
@@ -517,13 +474,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.False(result.RateLimited);
         var flagged = Assert.Single(result.Updates);
@@ -546,13 +500,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.True(result.RateLimited);
         Assert.Equal(reset, result.RateLimitResetsAt);
@@ -575,13 +526,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.True(result.RateLimited);
         Assert.Equal(reset, result.RateLimitResetsAt);
@@ -607,13 +555,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.True(result.RateLimited);
         Assert.Equal(hourlyReset, result.RateLimitResetsAt);
@@ -633,13 +578,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.True(result.RateLimited);
         Assert.Null(result.RateLimitResetsAt);
@@ -664,13 +606,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.True(result.RateLimited);
         Assert.Null(result.RateLimitResetsAt);
@@ -690,13 +629,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.False(result.RateLimited);
         Assert.Null(result.RateLimitResetsAt);
@@ -718,16 +654,13 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
         var received = new List<UpdateCheckResult?>();
         service.CheckCompleted += (_, r) => received.Add(r);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.Empty(result.Updates);
         Assert.False(result.RateLimited);
@@ -752,18 +685,15 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
         Assert.Null(service.LastResult);
 
         var received = new List<UpdateCheckResult?>();
         service.CheckCompleted += (_, r) => received.Add(r);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.Same(result, service.LastResult);
         var single = Assert.Single(received);
@@ -783,13 +713,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.False(result.Thorough);
     }
@@ -805,13 +732,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckThoroughAsync(ProfileId);
+        var result = await service.CheckThoroughAsync(ProfileId, candidates);
 
         Assert.True(result.Thorough);
     }
@@ -831,14 +755,11 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[NexusLatestContainer] =
             NexusContainer(NexusLatestContainer, UpdatedModId, "Nexus Mod", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(NexusLatestContainer, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(NexusLatestContainer) };
+        var service = CreateService(nexus, repository);
 
-        var checkResult = await service.CheckAsync(ProfileId);
-        var thoroughResult = await service.CheckThoroughAsync(ProfileId);
+        var checkResult = await service.CheckAsync(ProfileId, candidates);
+        var thoroughResult = await service.CheckThoroughAsync(ProfileId, candidates);
 
         Assert.Single(checkResult.Updates);
         Assert.Single(thoroughResult.Updates);
@@ -873,13 +794,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[container] =
             NexusContainer(container, modId, "Laggy Header Mod", "1.9.2");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(container, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(container) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.Empty(result.Updates);
         Assert.False(result.RateLimited);
@@ -908,13 +826,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[container] =
             NexusContainer(container, modId, "Real Update Mod", "1.9.1");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(container, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(container) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         var flagged = Assert.Single(result.Updates);
         Assert.Equal(container, flagged.ContainerId);
@@ -944,13 +859,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[container] =
             NexusContainer(container, modId, "Tier1 Mod", "1.9.1");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(container, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(container) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         var flagged = Assert.Single(result.Updates);
         Assert.Equal(container, flagged.ContainerId);
@@ -980,14 +892,11 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[container] =
             NexusContainer(container, modId, "Cached Mod", "1.9.2");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(container, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(container) };
+        var service = CreateService(nexus, repository);
 
-        await service.CheckAsync(ProfileId);
-        await service.CheckAsync(ProfileId);
+        await service.CheckAsync(ProfileId, candidates);
+        await service.CheckAsync(ProfileId, candidates);
 
         Assert.Equal(1, nexus.ListModFilesCallCount[modId]);
     }
@@ -1012,23 +921,20 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[container] =
             NexusContainer(container, modId, "Cache Invalidate Mod", "1.9.2");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(container, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(container) };
+        var service = CreateService(nexus, repository);
 
         nexus.GraphQlResponse = new Response<ModUpdateStatus[]>(
             new[] { Status(modId, viewerUpdateAvailable: false, updatedAt, version: "1.9.1") },
             NexusRateLimits.Unknown);
-        await service.CheckAsync(ProfileId);
+        await service.CheckAsync(ProfileId, candidates);
         Assert.Equal(1, nexus.ListModFilesCallCount[modId]);
 
         // Page version changed -> cache key differs -> re-resolve.
         nexus.GraphQlResponse = new Response<ModUpdateStatus[]>(
             new[] { Status(modId, viewerUpdateAvailable: false, updatedAt, version: "1.9.0") },
             NexusRateLimits.Unknown);
-        await service.CheckAsync(ProfileId);
+        await service.CheckAsync(ProfileId, candidates);
         Assert.Equal(2, nexus.ListModFilesCallCount[modId]);
     }
 
@@ -1058,16 +964,13 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[container] =
             NexusContainer(container, modId, "TTL Backstop Mod", "1.9.2");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(container, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository, getNow: () => now);
+        var candidates = new ModListCandidate[] { Candidate(container) };
+        var service = CreateService(nexus, repository, getNow: () => now);
 
         // First check: tier 2 flags (installed 1.9.2 != page 1.9.1); tier 3
         // resolves the latest MAIN file (1.9.2) and clears the flag, caching the
         // verdict at the injected clock's "now".
-        await service.CheckAsync(ProfileId);
+        await service.CheckAsync(ProfileId, candidates);
         Assert.Equal(1, nexus.ListModFilesCallCount[modId]);
 
         // Advance the injected clock past the 24h TTL. The cache key (modId,
@@ -1076,7 +979,7 @@ public sealed class UpdateCheckServiceTests
 
         // Second check: same key, but the entry is now older than the TTL, so
         // tier 3 re-resolves despite the unchanged key.
-        await service.CheckAsync(ProfileId);
+        await service.CheckAsync(ProfileId, candidates);
         Assert.Equal(2, nexus.ListModFilesCallCount[modId]);
     }
 
@@ -1101,13 +1004,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[container] =
             NexusContainer(container, modId, "Tier3 Failure Mod", "1.9.1");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(container, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(container) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         var flagged = Assert.Single(result.Updates);
         Assert.Equal(container, flagged.ContainerId);
@@ -1139,13 +1039,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[container] =
             NexusContainer(container, modId, "Tier3 Rate-Limited Mod", "1.9.1");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(container, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(container) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         var flagged = Assert.Single(result.Updates);
         Assert.Equal(container, flagged.ContainerId);
@@ -1171,13 +1068,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[container] =
             NexusContainer(container, modId, "Old Stale Name", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(container, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(container) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.True(result.NamesChanged);
         Assert.Empty(result.Updates); // version matches -> not flagged
@@ -1204,13 +1098,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[container] =
             NexusContainer(container, modId, "Same Name", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(container, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(container) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.False(result.NamesChanged);
         Assert.Empty(repository.RenameCalls);
@@ -1237,13 +1128,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[container] =
             NexusContainer(container, modId, "Old Name", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(container, new PinnedPolicy("v1")) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(container, new PinnedPolicy("v1")) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         // NOT flagged (Pinned), but the batch ran (1 call) + the name synced.
         Assert.Empty(result.Updates);
@@ -1268,13 +1156,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[container] =
             NexusContainer(container, modId, "Existing Name", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(container, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(container) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.False(result.NamesChanged);
         Assert.Empty(repository.RenameCalls);
@@ -1296,13 +1181,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[container] =
             NexusContainer(container, modId, "Kept Name", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(container, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(container) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         Assert.False(result.NamesChanged);
         Assert.Empty(repository.RenameCalls);
@@ -1327,13 +1209,10 @@ public sealed class UpdateCheckServiceTests
         var repository = new FakeModRepository();
         repository.Containers[container] =
             NexusContainer(container, modId, "Old Name", "1.0");
-        var profiles = new FakeProfileService
-        {
-            Mods = new[] { Entry(container, new LatestPolicy()) },
-        };
-        var service = CreateService(nexus, profiles, repository);
+        var candidates = new ModListCandidate[] { Candidate(container) };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         // Flagged (installed 1.0 vs server 2.0 + viewerUpdateAvailable=true) AND
         // renamed. The flagged ModName is the PRE-sync name; the container's
@@ -1373,17 +1252,14 @@ public sealed class UpdateCheckServiceTests
             NexusContainer(secondContainer, secondModId, "Second Old", "1.0");
         // The first rename throws (the container was removed before the call).
         repository.ThrowOnRenameOf = firstContainer;
-        var profiles = new FakeProfileService
-        {
-            Mods = new[]
+        var candidates = new ModListCandidate[]
             {
-                Entry(firstContainer, new LatestPolicy()),
-                Entry(secondContainer, new LatestPolicy()),
-            },
-        };
-        var service = CreateService(nexus, profiles, repository);
+                Candidate(firstContainer),
+                Candidate(secondContainer),
+            };
+        var service = CreateService(nexus, repository);
 
-        var result = await service.CheckAsync(ProfileId);
+        var result = await service.CheckAsync(ProfileId, candidates);
 
         // The check did not throw; the second rename landed; NamesChanged is
         // true (at least one rename succeeded).
@@ -1407,12 +1283,10 @@ public sealed class UpdateCheckServiceTests
         // getNow: null explicitly (the UpdateCheckRunner registration pattern).
         var nexus = new FakeNexusClient();
         var repository = new FakeModRepository();
-        var profiles = new FakeProfileService();
         var configLoader = new FakeConfigLoader { Config = CuratorConfig.CreateDefault() };
 
         var services = new ServiceCollection();
         services.AddSingleton<INexusClient>(nexus);
-        services.AddSingleton<IProfileService>(profiles);
         services.AddSingleton<IModRepository>(repository);
         services.AddSingleton<IConfigLoader>(configLoader);
         services.AddSingleton<ILogger<UpdateCheckService>>(NullLogger<UpdateCheckService>.Instance);
@@ -1494,8 +1368,8 @@ public sealed class UpdateCheckServiceTests
             },
         };
 
-    private static ModListEntry Entry(Guid containerId, ModVersionPolicy policy) =>
-        new() { ContainerId = containerId, Enabled = true, Order = 0, Policy = policy };
+    private static ModListCandidate Candidate(Guid containerId, ModVersionPolicy? policy = null) =>
+        new(containerId, policy ?? new LatestPolicy());
 
     /// <summary>
     /// Computes the UID the way the service + the client do:
@@ -1542,7 +1416,6 @@ public sealed class UpdateCheckServiceTests
     /// </summary>
     private UpdateCheckService CreateService(
         FakeNexusClient nexus,
-        FakeProfileService profiles,
         FakeModRepository repository,
         NexusAuthMethod authMethod = NexusAuthMethod.ApiKey,
         Func<DateTimeOffset>? getNow = null)
@@ -1552,10 +1425,10 @@ public sealed class UpdateCheckServiceTests
         var configLoader = new FakeConfigLoader { Config = config };
         var appState = new FakeAppStateStore();
         var stateStore = new UpdateStateStore(
-            appState, profiles, repository, NullLogger<UpdateStateStore>.Instance);
+            appState, repository, NullLogger<UpdateStateStore>.Instance);
         _lastAppState = appState;
         return new UpdateCheckService(
-            nexus, profiles, repository, configLoader, stateStore,
+            nexus, repository, configLoader, stateStore,
             NullLogger<UpdateCheckService>.Instance, getNow);
     }
 
@@ -1628,48 +1501,6 @@ public sealed class UpdateCheckServiceTests
 
             return Task.FromResult(new Response<ModFile[]>(files, NexusRateLimits.Unknown));
         }
-    }
-
-    /// <summary>
-    /// A configurable <see cref="IProfileService"/> stub. Only
-    /// <see cref="GetModList"/> is exercised by the service; the other members
-    /// throw.
-    /// </summary>
-    private sealed class FakeProfileService : IProfileService
-    {
-        public IReadOnlyList<ModListEntry> Mods { get; set; } = Array.Empty<ModListEntry>();
-
-        // Unused stub; only GetModList is exercised. Required by the interface.
-        public event EventHandler<ProfileSummary>? ProfileCreated
-        {
-            add { }
-            remove { }
-        }
-
-        public IReadOnlyList<ModListEntry> GetModList(Guid id) => Mods;
-
-        public IReadOnlyList<ProfileSummary> ListProfiles()
-            => throw new NotImplementedException();
-        public Profile GetProfile(Guid id) => throw new NotImplementedException();
-        public Profile CreateProfile(string name, string description, LaunchSettings launchSettings) => throw new NotImplementedException();
-        public void UpdateProfile(Guid id, string name, string description, LaunchSettings launchSettings) => throw new NotImplementedException();
-        public void DeleteProfile(Guid id) => throw new NotImplementedException();
-        public void SetModOrder(Guid id, IReadOnlyList<Guid> containerIdsInOrder)
-            => throw new NotImplementedException();
-        public void SetModEnabled(Guid id, Guid containerId, bool enabled)
-            => throw new NotImplementedException();
-        public void SetModOrderLocked(Guid id, Guid containerId, bool orderLocked)
-            => throw new NotImplementedException();
-        public void AddMod(Guid id, Guid containerId, ModVersionPolicy policy)
-            => throw new NotImplementedException();
-        public void SetModPolicy(Guid id, Guid containerId, ModVersionPolicy policy)
-            => throw new NotImplementedException();
-        public void RemoveMod(Guid id, Guid containerId)
-            => throw new NotImplementedException();
-        public ModListEntry? GetBaseNameCollision(Guid id, string baseName, Guid? excludeContainerId)
-            => throw new NotImplementedException();
-        public LaunchSettings GetLaunchSettings(Guid id) => throw new NotImplementedException();
-        public string PrepareModRoot(Guid id) => throw new NotImplementedException();
     }
 
     /// <summary>
@@ -1758,15 +1589,14 @@ public sealed class UpdateCheckServiceTests
     /// Builds a <see cref="UpdateStateStore"/> over fresh fakes + returns them
     /// so each test drives the persistence rules directly.
     /// </summary>
-    private static (UpdateStateStore Store, FakeAppStateStore AppState, FakeProfileService Profiles, FakeModRepository Repo)
+    private static (UpdateStateStore Store, FakeAppStateStore AppState, FakeModRepository Repo)
         CreateStateStore()
     {
         var appState = new FakeAppStateStore();
-        var profiles = new FakeProfileService();
         var repo = new FakeModRepository();
         var store = new UpdateStateStore(
-            appState, profiles, repo, NullLogger<UpdateStateStore>.Instance);
-        return (store, appState, profiles, repo);
+            appState, repo, NullLogger<UpdateStateStore>.Instance);
+        return (store, appState, repo);
     }
 
     /// <summary>
@@ -1794,79 +1624,78 @@ public sealed class UpdateCheckServiceTests
     [Fact]
     public void StateStore_success_replaces_the_profile_state_and_clears_on_no_updates()
     {
-        var (store, appState, profiles, repo) = CreateStateStore();
+        var (store, appState, repo) = CreateStateStore();
         var profile = Guid.NewGuid();
         var container = Guid.NewGuid();
-        profiles.Mods = new[] { new ModListEntry { ContainerId = container, Order = 0, Policy = ModVersionPolicy.Latest } };
+        var candidates = new[] { Candidate(container) };
         repo.Containers[container] = ContainerWithVersion(container, new NexusSource { ModId = 8 }, "1.0");
 
         // First record a flagged result.
         store.RecordResult(profile, new UpdateCheckResult(
             new[] { new ModUpdateInfo(container, 8, "Mod", "1.0", DateTimeOffset.UtcNow) },
             DateTimeOffset.UtcNow, false, false, Outcome: CheckOutcome.Success));
-        Assert.Contains(container, store.GetKnownUpdateContainerIds(profile));
+        Assert.Contains(container, store.GetKnownUpdateContainerIds(profile, candidates));
 
         // Then an authoritative success with no updates clears it.
         store.RecordResult(profile, new UpdateCheckResult(
             Array.Empty<ModUpdateInfo>(), DateTimeOffset.UtcNow, false, false,
             Outcome: CheckOutcome.Success));
-        Assert.Empty(store.GetKnownUpdateContainerIds(profile));
+        Assert.Empty(store.GetKnownUpdateContainerIds(profile, candidates));
     }
 
     [Fact]
     public void StateStore_no_auth_failed_rate_limited_preserve_prior_flags()
     {
-        var (store, _, profiles, repo) = CreateStateStore();
+        var (store, _, repo) = CreateStateStore();
         var profile = Guid.NewGuid();
         var container = Guid.NewGuid();
-        profiles.Mods = new[] { new ModListEntry { ContainerId = container, Order = 0, Policy = ModVersionPolicy.Latest } };
+        var candidates = new[] { Candidate(container) };
         repo.Containers[container] = ContainerWithVersion(container, new NexusSource { ModId = 8 }, "1.0");
 
         // Seed a flagged state via a success.
         store.RecordResult(profile, new UpdateCheckResult(
             new[] { new ModUpdateInfo(container, 8, "Mod", "1.0", DateTimeOffset.UtcNow) },
             DateTimeOffset.UtcNow, false, false, Outcome: CheckOutcome.Success));
-        Assert.Contains(container, store.GetKnownUpdateContainerIds(profile));
+        Assert.Contains(container, store.GetKnownUpdateContainerIds(profile, candidates));
 
         // Each non-authoritative outcome preserves the prior flag.
         foreach (var outcome in new[] { CheckOutcome.NoAuth, CheckOutcome.RateLimited, CheckOutcome.Failed })
         {
             store.RecordResult(profile, new UpdateCheckResult(
                 Array.Empty<ModUpdateInfo>(), DateTimeOffset.UtcNow, false, false, Outcome: outcome));
-            Assert.Contains(container, store.GetKnownUpdateContainerIds(profile));
+            Assert.Contains(container, store.GetKnownUpdateContainerIds(profile, candidates));
         }
     }
 
     [Fact]
     public void StateStore_no_nexus_mods_clears_the_profile_state()
     {
-        var (store, _, profiles, repo) = CreateStateStore();
+        var (store, _, repo) = CreateStateStore();
         var profile = Guid.NewGuid();
         var container = Guid.NewGuid();
-        profiles.Mods = new[] { new ModListEntry { ContainerId = container, Order = 0, Policy = ModVersionPolicy.Latest } };
+        var candidates = new[] { Candidate(container) };
         repo.Containers[container] = ContainerWithVersion(container, new NexusSource { ModId = 8 }, "1.0");
 
         store.RecordResult(profile, new UpdateCheckResult(
             new[] { new ModUpdateInfo(container, 8, "Mod", "1.0", DateTimeOffset.UtcNow) },
             DateTimeOffset.UtcNow, false, false, Outcome: CheckOutcome.Success));
-        Assert.Contains(container, store.GetKnownUpdateContainerIds(profile));
+        Assert.Contains(container, store.GetKnownUpdateContainerIds(profile, candidates));
 
         // A no-Nexus-mods result is a local-truth clear.
         store.RecordResult(profile, new UpdateCheckResult(
             Array.Empty<ModUpdateInfo>(), DateTimeOffset.UtcNow, false, false,
             Outcome: CheckOutcome.NoNexusMods));
-        Assert.Empty(store.GetKnownUpdateContainerIds(profile));
+        Assert.Empty(store.GetKnownUpdateContainerIds(profile, candidates));
     }
 
     [Fact]
     public void StateStore_profile_scoped_snapshots_never_bleed_between_profiles()
     {
-        var (store, appState, profiles, repo) = CreateStateStore();
+        var (store, appState, repo) = CreateStateStore();
         var profileA = Guid.NewGuid();
         var profileB = Guid.NewGuid();
         var containerA = Guid.NewGuid();
         var containerB = Guid.NewGuid();
-        profiles.Mods = Array.Empty<ModListEntry>();
         repo.Containers[containerA] = ContainerWithVersion(containerA, new NexusSource { ModId = 8 }, "1.0");
         repo.Containers[containerB] = ContainerWithVersion(containerB, new NexusSource { ModId = 9 }, "1.0");
 
@@ -1890,15 +1719,11 @@ public sealed class UpdateCheckServiceTests
     [Fact]
     public void StateStore_acknowledge_removes_a_single_entry()
     {
-        var (store, _, profiles, repo) = CreateStateStore();
+        var (store, _, repo) = CreateStateStore();
         var profile = Guid.NewGuid();
         var c1 = Guid.NewGuid();
         var c2 = Guid.NewGuid();
-        profiles.Mods = new[]
-        {
-            new ModListEntry { ContainerId = c1, Order = 0, Policy = ModVersionPolicy.Latest },
-            new ModListEntry { ContainerId = c2, Order = 1, Policy = ModVersionPolicy.Latest },
-        };
+        var candidates = new[] { Candidate(c1), Candidate(c2) };
         repo.Containers[c1] = ContainerWithVersion(c1, new NexusSource { ModId = 8 }, "1.0");
         repo.Containers[c2] = ContainerWithVersion(c2, new NexusSource { ModId = 9 }, "1.0");
 
@@ -1912,14 +1737,14 @@ public sealed class UpdateCheckServiceTests
 
         store.AcknowledgeInstall(profile, c1);
 
-        var flags = store.GetKnownUpdateContainerIds(profile);
+        var flags = store.GetKnownUpdateContainerIds(profile, candidates);
         Assert.Equal(c2, Assert.Single(flags));
     }
 
     [Fact]
     public void StateStore_hydration_self_heals_removed_pinned_source_changed_and_version_changed_entries()
     {
-        var (store, _, profiles, repo) = CreateStateStore();
+        var (store, _, repo) = CreateStateStore();
         var profile = Guid.NewGuid();
         var removed = Guid.NewGuid();
         var pinned = Guid.NewGuid();
@@ -1939,27 +1764,27 @@ public sealed class UpdateCheckServiceTests
             },
             DateTimeOffset.UtcNow, false, false, Outcome: CheckOutcome.Success));
 
-        // Now set up the live profile + repo state so only stillValid qualifies:
-        // - removed: NOT in the profile.
-        // - pinned: in the profile but on PinnedPolicy.
-        // - sourceChanged: in the profile + Latest, but the container's source
-        //   is no longer Nexus with the same ModId.
-        // - versionChanged: in the profile + Latest, but the installed version
+        // Now set up the candidate + repo state so only stillValid qualifies:
+        // - removed: NOT among the candidates.
+        // - pinned: a candidate but on PinnedPolicy.
+        // - sourceChanged: a Latest candidate, but the container's source is
+        //   no longer Nexus with the same ModId.
+        // - versionChanged: a Latest candidate, but the installed version
         //   differs from the snapshot's CurrentVersion.
-        // - stillValid: in the profile + Latest + Nexus + matching version.
-        profiles.Mods = new[]
+        // - stillValid: a Latest candidate + Nexus + matching version.
+        var candidates = new[]
         {
-            new ModListEntry { ContainerId = pinned, Order = 0, Policy = new PinnedPolicy("v") },
-            new ModListEntry { ContainerId = sourceChanged, Order = 1, Policy = ModVersionPolicy.Latest },
-            new ModListEntry { ContainerId = versionChanged, Order = 2, Policy = ModVersionPolicy.Latest },
-            new ModListEntry { ContainerId = stillValid, Order = 3, Policy = ModVersionPolicy.Latest },
+            Candidate(pinned, new PinnedPolicy("v")),
+            Candidate(sourceChanged),
+            Candidate(versionChanged),
+            Candidate(stillValid),
         };
         repo.Containers[pinned] = ContainerWithVersion(pinned, new NexusSource { ModId = 2 }, "1.0");
         repo.Containers[sourceChanged] = ContainerWithVersion(sourceChanged, new UntrackedSource(), "1.0");
         repo.Containers[versionChanged] = ContainerWithVersion(versionChanged, new NexusSource { ModId = 4 }, "2.0");
         repo.Containers[stillValid] = ContainerWithVersion(stillValid, new NexusSource { ModId = 5 }, "1.0");
 
-        var flags = store.GetKnownUpdateContainerIds(profile);
+        var flags = store.GetKnownUpdateContainerIds(profile, candidates);
 
         Assert.Equal(stillValid, Assert.Single(flags));
     }

@@ -3,6 +3,7 @@ using System.Linq;
 using Modificus.Curator.Config;
 using Modificus.Curator.General;
 using Modificus.Curator.Integrations;
+using Modificus.Curator.Profiles;
 using Microsoft.Extensions.Logging;
 
 namespace Modificus.Curator.UI.Session;
@@ -10,13 +11,18 @@ namespace Modificus.Curator.UI.Session;
 /// <summary>
 /// The UI-layer glue between <see cref="IProfileSession"/> (the active-profile
 /// authority) and <see cref="IUpdateCheckService"/> (the Integrations update
-/// check). Fires a background update check on three triggers: (1) startup, when
+/// check). Owns the candidate pull: on every fire it reads the profile's
+/// mod list through <see cref="IProfileService"/> + maps the entries to
+/// <see cref="ModListCandidate"/> at the call site, so Integrations holds no
+/// Profiles dependency and the runner is the one place a profile-validity
+/// problem surfaces (a pull failure is logged + skipped, not a failed check).
+/// Fires a background update check on three triggers: (1) startup, when
 /// the session restores the persisted active id; (2) an active-profile switch;
 /// and (3) a periodic timer (every <c>AutoUpdateCheckIntervalMinutes</c> when
 /// <c>AutoUpdateCheckEnabled</c> is on). All three fire the Month-only
 /// <see cref="IUpdateCheckService.CheckAsync"/> (cheap, one API call) +
-/// discard the task. A fourth trigger, the manual "check now" affordance on the
-/// mod list, routes through <see cref="CheckNowAsync"/> + fires the thorough
+/// discard the task. A fourth trigger, the manual "check now" affordance on
+/// the mod list, routes through <see cref="CheckNowAsync"/> + fires the thorough
 /// <see cref="IUpdateCheckService.CheckThoroughAsync"/> (the per-mod pass that
 /// also catches mods outside the Month window); its <see cref="Task"/> is
 /// awaitable so the list VM can drive an <c>IsCheckingNow</c> affordance while
@@ -124,6 +130,7 @@ public sealed class UpdateCheckRunner
     public static readonly TimeSpan TickInterval = TimeSpan.FromMinutes(1);
 
     private readonly IProfileSession _session;
+    private readonly IProfileService _profiles;
     private readonly IUpdateCheckService _updateCheck;
     private readonly IConfigLoader _configLoader;
     private readonly IUpdateCheckScheduleState _appState;
@@ -180,6 +187,10 @@ public sealed class UpdateCheckRunner
     private readonly Queue<DateTimeOffset> _manualRefreshTimes = new();
 
     /// <param name="session">The active-profile authority (fires on load + switch).</param>
+    /// <param name="profiles">The profile service the candidate pull reads the
+    /// profile's mod list through (mapped to
+    /// <see cref="ModListCandidate"/> at the call site; a pull failure is
+    /// logged + skipped, never surfaced as a failed check).</param>
     /// <param name="updateCheck">The Integrations update check entry point.</param>
     /// <param name="configLoader">Read live for the periodic toggle + the interval gate.</param>
     /// <param name="appState">Persists
@@ -198,6 +209,7 @@ public sealed class UpdateCheckRunner
     /// <see cref="DateTimeOffset.UtcNow"/>; tests inject a controllable clock.</param>
     public UpdateCheckRunner(
         IProfileSession session,
+        IProfileService profiles,
         IUpdateCheckService updateCheck,
         IConfigLoader configLoader,
         IUpdateCheckScheduleState appState,
@@ -207,6 +219,7 @@ public sealed class UpdateCheckRunner
         Func<DateTimeOffset>? getNow = null)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
+        _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _updateCheck = updateCheck ?? throw new ArgumentNullException(nameof(updateCheck));
         _configLoader = configLoader ?? throw new ArgumentNullException(nameof(configLoader));
         _appState = appState ?? throw new ArgumentNullException(nameof(appState));
@@ -496,6 +509,15 @@ public sealed class UpdateCheckRunner
     /// </summary>
     /// <remarks>
     /// <para>
+    /// <b>The candidate pull runs here.</b> The profile's mod list is read
+    /// through <see cref="IProfileService"/> inside the thread-pool task (a
+    /// disk read must not land on the UI thread) + mapped to candidates. The
+    /// runner owns profile validity now: a pull failure (e.g. the profile was
+    /// deleted between the trigger + the read) is logged + the whole run is
+    /// skipped, matching the old fire-and-forget swallow, so
+    /// <see cref="IUpdateCheckService.LastResult"/> is never mutated by a
+    /// profile-validity problem.</para>
+    /// <para>
     /// <b>Capture the exact result.</b> The check's return value is captured
     /// directly (not re-read from <see cref="IUpdateCheckService.LastResult"/>,
     /// which a concurrent check could have replaced between the call + the
@@ -536,18 +558,36 @@ public sealed class UpdateCheckRunner
         UpdateCheckResult? result = null;
         try
         {
-            // The check runs on a thread-pool task. The INNER awaits use
-            // ConfigureAwait(false) (explicit background-task code, the narrow
-            // documented exception). The OUTER await does NOT, so the
+            // The check (including the candidate pull: a disk read that belongs
+            // on the thread-pool task) runs in the background. The INNER awaits
+            // use ConfigureAwait(false) (explicit background-task code, the
+            // narrow documented exception). The OUTER await does NOT, so the
             // continuation resumes on the captured UI context (the UI-layer
             // convention) before invoking the automatic-update service below.
             result = await Task.Run(async () =>
             {
+                IReadOnlyList<ModListCandidate> candidates;
+                try
+                {
+                    candidates = _profiles.GetModList(profileId).ToCandidates();
+                }
+                catch (Exception ex)
+                {
+                    // The profile could not be read (deleted between the
+                    // trigger + this read, or a disk problem). Skip the whole
+                    // run: no check call, no LastResult mutation. Matches the
+                    // old fire-and-forget swallow for a deleted profile.
+                    _logger.LogInformation(ex,
+                        "Update check for profile {Profile} skipped: the candidate pull failed.",
+                        profileId);
+                    return (UpdateCheckResult?)null;
+                }
+
                 if (thorough)
                 {
-                    return await _updateCheck.CheckThoroughAsync(profileId).ConfigureAwait(false);
+                    return await _updateCheck.CheckThoroughAsync(profileId, candidates).ConfigureAwait(false);
                 }
-                return await _updateCheck.CheckAsync(profileId).ConfigureAwait(false);
+                return await _updateCheck.CheckAsync(profileId, candidates).ConfigureAwait(false);
             });
         }
         catch (OperationCanceledException)

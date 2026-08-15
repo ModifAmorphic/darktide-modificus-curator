@@ -45,7 +45,7 @@ public sealed class AutomaticUpdateServiceTests
         };
         var config = new FakeConfigLoader();
         config.Config.Integrations.Nexus.AutomaticUpdatesEnabled = enabled;
-        var state = new FakeUpdateStateStore(profiles, repo);
+        var state = new FakeUpdateStateStore(repo);
         var coordinator = new UpdateCoordinator();
         var dialogs = new FakeDialogService();
 

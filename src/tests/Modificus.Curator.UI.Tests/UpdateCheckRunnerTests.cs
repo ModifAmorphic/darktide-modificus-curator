@@ -2,6 +2,8 @@ using System.ComponentModel;
 using Modificus.Curator.Config;
 using Modificus.Curator.General;
 using Modificus.Curator.Integrations;
+using Modificus.Curator.Mods;
+using Modificus.Curator.Profiles;
 using Modificus.Curator.UI.Session;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -847,6 +849,90 @@ public sealed class UpdateCheckRunnerTests
         Assert.Equal(id, Assert.Single(service.Calls));
     }
 
+    // ---- the candidate pull (the runner owns profile validity) -------------
+
+    [Fact]
+    public async Task Check_maps_the_profile_entries_to_candidates_at_the_call_site()
+    {
+        // The runner reads the profile's mod list through IProfileService +
+        // maps each entry to a ModListCandidate (container id + current
+        // policy, policy identity preserved) so Integrations receives the
+        // check set without holding a Profiles reference.
+        var a = new ProfileSummary(Guid.NewGuid(), "Alpha", "");
+        var profiles = new FakeProfileService();
+        var latestContainer = Guid.NewGuid();
+        var pinnedContainer = Guid.NewGuid();
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = latestContainer, Order = 0, Policy = ModVersionPolicy.Latest },
+            new ModListEntry { ContainerId = pinnedContainer, Order = 1, Policy = new PinnedPolicy("v") });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var service = new FakeUpdateCheckService();
+        var autoUpdate = new FakeAutomaticUpdateService();
+        var runner = new UpdateCheckRunner(
+            session, profiles, service, new FakeConfigLoader(), new FakeAppStateStore(),
+            autoUpdate, NullLogger<UpdateCheckRunner>.Instance);
+
+        await runner.CheckNowAsync();
+
+        Assert.Equal(1, service.ThoroughCallCount);
+        var candidates = Assert.Single(service.CandidateCalls);
+        Assert.Equal(
+            profiles.GetModList(a.Id).Select(e => (e.ContainerId, e.Policy)),
+            candidates.Select(c => (c.ContainerId, c.Policy)));
+    }
+
+    [Fact]
+    public async Task Unreadable_profile_pull_skips_the_check_without_touching_LastResult()
+    {
+        // A deleted/unreadable profile surfaces at the runner's candidate pull
+        // now (Integrations no longer pulls the list itself). The pull failure
+        // is logged + the run skipped: no check call, no LastResult mutation,
+        // no automatic-update chaining - matching the old fire-and-forget
+        // swallow for a deleted profile.
+        var id = Guid.NewGuid();
+        var session = new FakeProfileSession { ActiveProfileId = id };
+        var profiles = new FakeProfileService
+        {
+            GetModListThrows = new KeyNotFoundException($"No profile {id}"),
+        };
+        var service = new FakeUpdateCheckService
+        {
+            // A staged result proves the skip path never mutated it.
+            LastResult = null,
+        };
+        var autoUpdate = new FakeAutomaticUpdateService();
+        var runner = new UpdateCheckRunner(
+            session, profiles, service, new FakeConfigLoader(), new FakeAppStateStore(),
+            autoUpdate, NullLogger<UpdateCheckRunner>.Instance);
+
+        await runner.CheckNowAsync();
+
+        Assert.Equal(0, service.CallCount);
+        Assert.Equal(0, service.ThoroughCallCount);
+        Assert.Null(service.LastResult);
+        Assert.Empty(autoUpdate.Calls);
+    }
+
+    [Fact]
+    public async Task Empty_profile_pull_still_calls_the_check_with_an_empty_candidate_set()
+    {
+        // A VALID profile whose mod list is empty is not a failure: the check
+        // runs with an empty candidate batch (the service maps that to its
+        // NoNexusMods short-circuit), so persisted state reconciles normally.
+        var id = Guid.NewGuid();
+        var session = new FakeProfileSession { ActiveProfileId = id };
+        var service = new FakeUpdateCheckService();
+        var runner = new UpdateCheckRunner(
+            session, new FakeProfileService(), service, new FakeConfigLoader(),
+            new FakeAppStateStore(), new FakeAutomaticUpdateService(),
+            NullLogger<UpdateCheckRunner>.Instance);
+
+        await runner.CheckNowAsync();
+
+        Assert.Equal(1, service.ThoroughCallCount);
+        Assert.Empty(Assert.Single(service.CandidateCalls));
+    }
+
     // ---- helpers -----------------------------------------------------------
 
     /// <summary>
@@ -867,6 +953,7 @@ public sealed class UpdateCheckRunnerTests
         autoUpdate ??= new FakeAutomaticUpdateService();
         return new UpdateCheckRunner(
             session,
+            new FakeProfileService(),
             service,
             configLoader,
             appState,
@@ -895,6 +982,7 @@ public sealed class UpdateCheckRunnerTests
         Action? tick = null;
         var runner = new UpdateCheckRunner(
             session,
+            new FakeProfileService(),
             service,
             configLoader,
             appState,

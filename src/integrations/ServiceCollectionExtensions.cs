@@ -100,16 +100,17 @@ public static class ServiceCollectionExtensions
 
     /// <summary>
     /// Registers the Nexus update-check service. Queries the v2 GraphQL
-    /// <c>modsByUid</c> batch endpoint for the active profile's LatestPolicy +
-    /// NexusSource mods via <see cref="INexusClient"/> +
-    /// <see cref="IModRepository"/> + <see cref="Profiles.IProfileService"/>.
-    /// Singleton: holds the last result (<see cref="IUpdateCheckService.LastResult"/>)
-    /// so the mod-list view can bind badges to it without re-running the check, and
-    /// publishes updates through <see cref="IUpdateCheckService.CheckCompleted"/>.
-    /// Also registers <see cref="IUpdateStateStore"/> (the profile-scoped known-update
+    /// <c>modsByUid</c> batch endpoint for the caller-supplied
+    /// <see cref="ModListCandidate"/> set (the LatestPolicy + NexusSource
+    /// subset is flaggable) via <see cref="INexusClient"/> +
+    /// <see cref="IModRepository"/>. Singleton: holds the last result
+    /// (<see cref="IUpdateCheckService.LastResult"/>) so the mod-list view can
+    /// bind badges to it without re-running the check, and publishes updates
+    /// through <see cref="IUpdateCheckService.CheckCompleted"/>. Also registers
+    /// <see cref="IUpdateStateStore"/> (the profile-scoped known-update
     /// persistence rules over <see cref="IKnownUpdateState.KnownUpdates"/>) as a
-    /// singleton; the check service records each result through it, and the UI reads
-    /// + acknowledges through it.
+    /// singleton; the check service records each result through it, and the UI
+    /// reads + acknowledges through it.
     /// </summary>
     private static void AddUpdateCheck(IServiceCollection services)
     {

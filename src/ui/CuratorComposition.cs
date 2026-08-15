@@ -358,11 +358,15 @@ public static class CuratorComposition
         // The UI-layer glue that fires an update check
         // (IUpdateCheckService, registered above via AddIntegrations) on the
         // automatic triggers: startup (when a profile is restored),
-        // active-profile switch, and a periodic timer. All three share one
-        // shared interval gate (read live from config) so a rapid
+        // active-profile switch, and a periodic timer. Owns the candidate
+        // pull: each fire reads the profile's mod list through
+        // IProfileService + maps the entries to ModListCandidates at the call
+        // site (so Integrations holds no Profiles reference); a pull failure
+        // (a deleted profile) is logged + skipped. All three triggers share
+        // one shared interval gate (read live from config) so a rapid
         // open/close loop or rapid profile switching cannot burn API calls;
         // the gate's last-check timestamp is persisted via the app-state
-        // it survives a close/reopen. The toggle gates only the periodic
+        // so it survives a close/reopen. The toggle gates only the periodic
         // timer. Subscribes to IProfileSession.PropertyChanged for switches
         // + fires the opening check for the restored active id. Started after
         // the provider is built (see StartUpdateCheck); best-effort, never
@@ -372,6 +376,7 @@ public static class CuratorComposition
         // delegate as a seam so it stays unit-testable.
         services.AddSingleton(sp => new UpdateCheckRunner(
             sp.GetRequiredService<IProfileSession>(),
+            sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IUpdateCheckService>(),
             sp.GetRequiredService<IConfigLoader>(),
             sp.GetRequiredService<IUpdateCheckScheduleState>(),
