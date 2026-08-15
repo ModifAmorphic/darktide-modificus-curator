@@ -52,7 +52,7 @@ namespace Modificus.Curator.UI.Session;
 /// the limit, and free mode resumes (automatic, via the prune step). A blocked
 /// attempt consumes nothing: no API call, no timestamp stamp, no persistence
 /// change. The window PERSISTS across restarts via
-/// <see cref="IAppStateStore.ManualRefreshTimestamps"/> (seeded at
+/// <see cref="IUpdateCheckScheduleState.ManualRefreshTimestamps"/> (seeded at
 /// <see cref="Start"/>, written back on every successful fire), so closing and
 /// reopening the app does not reset the free-refresh budget. Worst case for a
 /// determined user: 10 free + 30 throttled = 40 manual calls/hour, plus ~12
@@ -60,7 +60,7 @@ namespace Modificus.Curator.UI.Session;
 /// Nexus budget.</para>
 /// <para>
 /// <b>Last-check persisted across restarts.</b> The shared last-check timestamp
-/// is seeded from <see cref="IAppStateStore.LastUpdateCheckUtc"/> at
+/// is seeded from <see cref="IUpdateCheckScheduleState.LastUpdateCheckUtc"/> at
 /// <see cref="Start"/> and stamped back to it on every fire (auto + manual). So
 /// the interval gate survives a close/reopen: a check that fired moments ago in
 /// a prior session suppresses this session's opening check. The write is
@@ -126,14 +126,14 @@ public sealed class UpdateCheckRunner
     private readonly IProfileSession _session;
     private readonly IUpdateCheckService _updateCheck;
     private readonly IConfigLoader _configLoader;
-    private readonly IAppStateStore _appState;
+    private readonly IUpdateCheckScheduleState _appState;
     private readonly IAutomaticUpdateService _autoUpdate;
     private readonly ILogger<UpdateCheckRunner> _logger;
     private readonly Action<Action>? _startTimer;
     private readonly Func<DateTimeOffset> _getNow;
 
     // The last time any check fired (startup, switch, periodic, or manual).
-    // Seeded from the persisted IAppStateStore.LastUpdateCheckUtc at Start();
+    // Seeded from the persisted IUpdateCheckScheduleState.LastUpdateCheckUtc at Start();
     // stamped in-memory + persisted on every fire (auto + manual). Written +
     // read on the UI thread only (the timer tick, session property changes, and
     // CheckNow all run on the UI thread; RunAsync assigns this before
@@ -171,10 +171,10 @@ public sealed class UpdateCheckRunner
     // the property getter run on the UI thread (the button click routes through
     // the list VM's CheckForUpdatesNow, and the VM's countdown reads the
     // property), so no synchronization. PERSISTS across restarts via
-    // IAppStateStore.ManualRefreshTimestamps: seeded from the store at Start()
+    // IUpdateCheckScheduleState.ManualRefreshTimestamps: seeded from the store at Start()
     // (the first access prunes entries aged past the 1-hour window), and written
     // back on every successful manual fire. SEPARATE from the shared
-    // _lastCheckAt / IAppStateStore.LastUpdateCheckUtc interval-gate timestamp:
+    // _lastCheckAt / IUpdateCheckScheduleState.LastUpdateCheckUtc interval-gate timestamp:
     // a successful manual fire stamps BOTH (the queue + the shared timestamp via
     // RunAsync); a blocked attempt stamps NEITHER.
     private readonly Queue<DateTimeOffset> _manualRefreshTimes = new();
@@ -183,8 +183,8 @@ public sealed class UpdateCheckRunner
     /// <param name="updateCheck">The Integrations update check entry point.</param>
     /// <param name="configLoader">Read live for the periodic toggle + the interval gate.</param>
     /// <param name="appState">Persists
-    /// <see cref="IAppStateStore.LastUpdateCheckUtc"/> (the interval-gate
-    /// timestamp) and <see cref="IAppStateStore.ManualRefreshTimestamps"/>
+    /// <see cref="IUpdateCheckScheduleState.LastUpdateCheckUtc"/> (the interval-gate
+    /// timestamp) and <see cref="IUpdateCheckScheduleState.ManualRefreshTimestamps"/>
     /// (the manual throttle's sliding window) across restarts.</param>
     /// <param name="autoUpdate">The opt-in Premium automatic-update installer,
     /// chained after each check completes (the runner captures the exact result
@@ -200,7 +200,7 @@ public sealed class UpdateCheckRunner
         IProfileSession session,
         IUpdateCheckService updateCheck,
         IConfigLoader configLoader,
-        IAppStateStore appState,
+        IUpdateCheckScheduleState appState,
         IAutomaticUpdateService autoUpdate,
         ILogger<UpdateCheckRunner> logger,
         Action<Action>? startTimer = null,

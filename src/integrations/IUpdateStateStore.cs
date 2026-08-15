@@ -13,7 +13,7 @@ namespace Modificus.Curator.Integrations;
 /// <para>
 /// <see cref="IUpdateCheckService.LastResult"/> is memory-only, so a restart
 /// inside the interval gate would show no flags until the next API call lands.
-/// Persisting the flagged mods (via <see cref="IAppStateStore.KnownUpdates"/>)
+/// Persisting the flagged mods (via <see cref="IKnownUpdateState.KnownUpdates"/>)
 /// keeps the flags visible across a restart; the data model carries the
 /// persistence, this interface owns the domain rules over it.</para>
 /// <para>

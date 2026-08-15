@@ -107,7 +107,7 @@ public static class ServiceCollectionExtensions
     /// so the mod-list view can bind badges to it without re-running the check, and
     /// publishes updates through <see cref="IUpdateCheckService.CheckCompleted"/>.
     /// Also registers <see cref="IUpdateStateStore"/> (the profile-scoped known-update
-    /// persistence rules over <see cref="IAppStateStore.KnownUpdates"/>) as a
+    /// persistence rules over <see cref="IKnownUpdateState.KnownUpdates"/>) as a
     /// singleton; the check service records each result through it, and the UI reads
     /// + acknowledges through it.
     /// </summary>

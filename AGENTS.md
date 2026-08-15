@@ -119,11 +119,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           runtime/designer loader path; loads XAML + safe
                           in-memory defaults, no store, AVLN3001 clean) and an
                           internal production constructor that supplies
-                          `IAppStateStore` (resolved via an explicit singleton
+                          `IMainWindowStatePersistence` (resolved via an explicit singleton
                           factory in CuratorComposition, no service locator). It
                           persists its last unmaximized client size + whether the
                           last meaningful state was maximized under
-                          `IAppStateStore.MainWindowState` (validated + clamped
+                          `IMainWindowStatePersistence.MainWindowState` (validated + clamped
                           to the XAML minimums + the primary work area in DIP,
                           applied before first Show, maximized on first open
                           when flagged, tracked through deferred coalesced
@@ -525,7 +525,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           IProfileSession.PropertyChanged filtered to
                           ActiveProfileId + a periodic timer), all interval-gated
                           via a shared last-check persisted to
-                          `IAppStateStore.LastUpdateCheckUtc` (so a close/reopen
+                          `IUpdateCheckScheduleState.LastUpdateCheckUtc` (so a close/reopen
                           loop does not fire a call per launch); the
                           `AutoUpdateCheckEnabled` toggle gates ONLY the periodic
                           timer, and the manual `CheckNowAsync` carries its own
@@ -536,7 +536,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           signal + per-mod update action. `ModListViewModel` subscribes
                           to `IUpdateCheckService.CheckCompleted` and reads the
                           profile-scoped `IUpdateStateStore` (persisted in
-                          `IAppStateStore.KnownUpdates` / app-state.json, so a
+                          `IKnownUpdateState.KnownUpdates` / app-state.json, so a
                           restart inside the interval gate shows prior flags
                           before any API call) for per-row `UpdateAvailable`
                           (matched by ContainerId) + the list-level `IsRateLimited`
@@ -738,7 +738,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           The first-run `OnboardingService` (ui/Session/) owns
                           the one-time Nexus setup offer: it shows the
                           `WelcomeWindow` (ui/Views/) once on first startup
-                          (persisted via `IAppStateStore.OnboardingCompleted`),
+                          (persisted via `IOnboardingState.OnboardingCompleted`),
                           and on a "Set up Nexus" choice persists completion
                           first, then navigates the shell to Nexus
                           (wired from `App` after the main window opens,
@@ -957,7 +957,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         Failed) so authoritative success is distinguishable +
                         records each result through the `IUpdateStateStore`
                         (the profile-scoped known-update persistence rules over
-                        `IAppStateStore.KnownUpdates`: Success replaces/clears,
+                        `IKnownUpdateState.KnownUpdates`: Success replaces/clears,
                         NoNexusMods clears, no-auth/rate-limit/failed preserve,
                         hydration self-heals removed/pinned/source-changed/
                         version-changed entries, AcknowledgeInstall clears a
@@ -1495,7 +1495,7 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   wait for). The
   first-run `OnboardingService` (ui/Session/) owns the one-time Nexus setup
   offer: it shows the `WelcomeWindow` (ui/Views/) once on first startup
-  (persisted via `IAppStateStore.OnboardingCompleted`), and on a "Set up Nexus"
+  (persisted via `IOnboardingState.OnboardingCompleted`), and on a "Set up Nexus"
   choice persists completion first, then navigates the shell to Nexus
   Integrations (wired from `App` after the main window opens, exception-safe). See
   `docs/architecture/MODIFICUS-CURATOR.md`.

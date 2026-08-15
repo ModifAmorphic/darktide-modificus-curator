@@ -101,7 +101,7 @@ public static class CuratorComposition
         services.AddSingleton<IProfileSession>(sp => new ProfileSession(
             sp.GetRequiredService<ISteamService>(),
             sp.GetRequiredService<IProfileService>(),
-            sp.GetRequiredService<IAppStateStore>(),
+            sp.GetRequiredService<IProfileActivationState>(),
             StartRunningStatePolling));
         services.AddSingleton<LocalizationService>();
         // Whether the app runs inside a Steam Deck Gaming Mode session,
@@ -113,12 +113,13 @@ public static class CuratorComposition
         services.AddSingleton<IPreferencesService, PreferencesService>();
         // MainWindow is a singleton resolved as desktop.MainWindow + the modal
         // dialog owner. Built through an explicit factory that supplies
-        // IAppStateStore via the internal production constructor before the
-        // window is returned/shown; the public parameterless constructor stays
-        // available for Avalonia's XAML runtime/designer loader (AVLN3001
-        // clean), and production construction never uses a service locator.
+        // IMainWindowStatePersistence via the internal production constructor
+        // before the window is returned/shown; the public parameterless
+        // constructor stays available for Avalonia's XAML runtime/designer
+        // loader (AVLN3001 clean), and production construction never uses a
+        // service locator.
         services.AddSingleton<MainWindow>(sp => new MainWindow(
-            sp.GetRequiredService<IAppStateStore>()));
+            sp.GetRequiredService<IMainWindowStatePersistence>()));
         // The active profile's mod-list VM: a singleton (one list, the dominant
         // content area). Resolves IModImportService (via AddMods),
         // already registered above.
@@ -360,7 +361,7 @@ public static class CuratorComposition
         // active-profile switch, and a periodic timer. All three share one
         // shared interval gate (read live from config) so a rapid
         // open/close loop or rapid profile switching cannot burn API calls;
-        // the gate's last-check timestamp is persisted via IAppStateStore so
+        // the gate's last-check timestamp is persisted via the app-state
         // it survives a close/reopen. The toggle gates only the periodic
         // timer. Subscribes to IProfileSession.PropertyChanged for switches
         // + fires the opening check for the restored active id. Started after
@@ -373,7 +374,7 @@ public static class CuratorComposition
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IUpdateCheckService>(),
             sp.GetRequiredService<IConfigLoader>(),
-            sp.GetRequiredService<IAppStateStore>(),
+            sp.GetRequiredService<IUpdateCheckScheduleState>(),
             sp.GetRequiredService<IAutomaticUpdateService>(),
             sp.GetRequiredService<ILogger<UpdateCheckRunner>>(),
             StartUpdateCheckPolling));
@@ -423,7 +424,7 @@ public static class CuratorComposition
         // in-process "already shown" guard. Started from App after the main
         // window opens; best-effort, never blocks startup.
         services.AddSingleton(sp => new OnboardingService(
-            sp.GetRequiredService<IAppStateStore>(),
+            sp.GetRequiredService<IOnboardingState>(),
             sp.GetRequiredService<IDialogService>(),
             () => sp.GetRequiredService<ShellViewModel>().NavigateToIntegrationsAsync(),
             sp.GetRequiredService<ILogger<OnboardingService>>()));

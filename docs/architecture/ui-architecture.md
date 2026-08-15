@@ -249,7 +249,7 @@ compilation + operator visual testing.
 
 `MainWindow` remembers the last unmaximized (Normal) client size and whether
 the last meaningful state was Maximized, persisted as one atomic record under
-`IAppStateStore.MainWindowState` (the `AppWindowState` value type in General;
+`IMainWindowStatePersistence.MainWindowState` (the `AppWindowState` value type in General;
 width + height in DIP plus the boolean flag). No window position is stored;
 `WindowStartupLocation` stays `CenterScreen`.
 
@@ -738,7 +738,7 @@ reads the persisted state, and renders.
 ### Reading the result (profile-scoped + persisted)
 
 Per-row update flags are the profile-scoped known-update state held in
-`IUpdateStateStore` (backed by `IAppStateStore.KnownUpdates` in
+`IUpdateStateStore` (backed by `IKnownUpdateState.KnownUpdates` in
 `app-state.json`), NOT the single in-memory `IUpdateCheckService.LastResult`.
 The check service records each authoritative outcome through the store at
 publish time; `ModListViewModel` reads the store on reload, on profile switch,
@@ -937,7 +937,7 @@ apply.
 ## First-run Welcome onboarding (`OnboardingService`)
 
 The first-run Welcome coordinator shows a compact modal over the main window the
-first time the app starts with `IAppStateStore.OnboardingCompleted` still
+first time the app starts with `IOnboardingState.OnboardingCompleted` still
 `false`. It explains that Nexus setup is optional, describes the update-check,
 download-link, and Premium in-app update capabilities it enables, and summarizes
 the sign-in/API-key plus download-link settings available in Integrations. It
@@ -959,7 +959,7 @@ modal dialogs require a shown owner): `App` subscribes to the main window's
 `Opened` event once, resolves `OnboardingService`, and fires the call; a failure
 inside onboarding is logged and swallowed so it never crashes startup. The
 coordinator stays unit-testable through the `IDialogService.ShowWelcomeAsync`
-seam (returns a typed `WelcomeChoice`) and the `IAppStateStore` flag.
+seam (returns a typed `WelcomeChoice`) and the `IOnboardingState` flag.
 
 ## The DMF install prompt (`DmfPromptService`)
 

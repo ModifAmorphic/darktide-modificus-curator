@@ -17,7 +17,7 @@ a rolling 1-hour window fire freely; once spent, the path throttles to one per
 2 minutes until timestamps age out of the window and free mode resumes. A
 blocked attempt consumes nothing: no API call, no timestamp stamp. The window
 persists across restarts via `app-state.json`
-(`IAppStateStore.ManualRefreshTimestamps`), seeded at `UpdateCheckRunner.Start()`
+(`IUpdateCheckScheduleState.ManualRefreshTimestamps`), seeded at `UpdateCheckRunner.Start()`
 and written back on every successful fire, so closing and reopening the app
 does not reset the free-refresh budget.
 
@@ -49,7 +49,7 @@ Owned by `NexusConfig` (the bounds) and applied by the Nexus destination and
 Every automatic trigger (startup, active-profile switch, and the periodic timer)
 passes through one shared interval check: a check fires only when the configured
 interval has elapsed since the last check of any kind. The last-check timestamp
-is persisted to `app-state.json` (`IAppStateStore.LastUpdateCheckUtc`) and seeded
+is persisted to `app-state.json` (`IUpdateCheckScheduleState.LastUpdateCheckUtc`) and seeded
 at `UpdateCheckRunner.Start()`, so the gate survives a close/reopen: a rapid
 open/close loop does not fire a call per launch.
 
@@ -61,7 +61,7 @@ since it carries its own sliding window instead, but a successful manual fire
 still re-stamps the shared last-check timestamp so the periodic clock backs off
 after it.
 
-Owned by `IAppStateStore` (the persisted timestamp) and `UpdateCheckRunner` (the
+Owned by `IUpdateCheckScheduleState` (the persisted timestamp) and `UpdateCheckRunner` (the
 gate).
 
 ## Metadata backfill gate
@@ -70,7 +70,7 @@ The display-metadata backfill (the service that fills in the summary, thumbnail
 URL, and adult flag for existing Nexus containers imported before the capture
 was wired) carries its own proactive limit, separate from the update-check
 gates: at most **one real pass per 24-hour window**, persisted to
-`app-state.json` (`IAppStateStore.LastNexusMetadataBackfillUtc`). The pass runs
+`app-state.json` (`INexusMetadataBackfillState.LastNexusMetadataBackfillUtc`). The pass runs
 only when the Mods destination is in Detailed mode and encounters rows missing
 metadata; Compact mode never invokes it (see
 [ui: mod list density](ui.md#mod-list-density--detailed-rows)).
@@ -101,7 +101,7 @@ metadata; Compact mode never invokes it (see
   Detailed-mode encounter after upgrade runs the pass normally (see
   [general](general.md#iappstatestore--appstatestore)).
 
-Owned by `IAppStateStore` (the persisted timestamp) and `INexusModMetadataService`
+Owned by `INexusMetadataBackfillState` (the persisted timestamp) and `INexusModMetadataService`
 (the gate + the pass).
 
 ## Update-detection tiers

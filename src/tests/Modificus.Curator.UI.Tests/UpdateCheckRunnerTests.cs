@@ -642,7 +642,7 @@ public sealed class UpdateCheckRunnerTests
     public async Task ManualRefresh_window_persists_across_a_simulated_restart()
     {
         // The manual throttle's sliding window PERSISTS across restarts via
-        // IAppStateStore.ManualRefreshTimestamps, so a user who spends their 10
+        // IUpdateCheckScheduleState.ManualRefreshTimestamps, so a user who spends their 10
         // free refreshes, closes the app, and reopens within the 1-hour window
         // is STILL throttled (the 11th is blocked until the 2-minute cadence
         // allows it). This test simulates a restart by building a SECOND runner
@@ -788,7 +788,7 @@ public sealed class UpdateCheckRunnerTests
     public async Task RunAsync_persists_last_check_timestamp_on_startup_fire()
     {
         // Every fire (auto + manual) stamps _lastCheckAt AND persists it via
-        // IAppStateStore.LastUpdateCheckUtc. Use an injected clock for an exact
+        // IUpdateCheckScheduleState.LastUpdateCheckUtc. Use an injected clock for an exact
         // assertion: the persisted value equals the getNow value at fire time.
         var id = Guid.NewGuid();
         var session = new FakeProfileSession { ActiveProfileId = id };

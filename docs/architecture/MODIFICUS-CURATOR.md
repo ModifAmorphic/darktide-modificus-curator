@@ -117,7 +117,7 @@ library interfaces.
     - `AddSteam()`: Steam discovery + the platform process-lookup seam.
     - `AddRelayClient()`: the launch façade + the process-launcher seam.
     - `AddSingleton<MainWindow>()`: the UI surface. Registered through an
-      explicit factory that supplies `IAppStateStore` via the internal
+      explicit factory that supplies `IMainWindowStatePersistence` via the internal
       production constructor before the window is returned/shown; the public
       parameterless constructor stays available for Avalonia's XAML
       runtime/designer loader (see the UI architecture for the

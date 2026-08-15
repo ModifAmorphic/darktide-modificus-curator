@@ -870,8 +870,18 @@ internal sealed class FakeProfileService : IProfileService
     public string PrepareModRoot(Guid id) => throw new NotImplementedException();
 }
 
-/// <summary>Records <see cref="IAppStateStore"/> reads/writes for assertion.</summary>
-internal sealed class FakeAppStateStore : IAppStateStore
+/// <summary>
+/// In-memory app-state fake covering every role interface (the concrete store
+/// implements them all; tests use one instance across roles). Records writes
+/// for assertion.
+/// </summary>
+internal sealed class FakeAppStateStore :
+    IOnboardingState,
+    IProfileActivationState,
+    IUpdateCheckScheduleState,
+    IKnownUpdateState,
+    INexusMetadataBackfillState,
+    IMainWindowStatePersistence
 {
     /// <summary>
     /// The persisted onboarding flag (read + written directly by tests). Default
@@ -883,7 +893,7 @@ internal sealed class FakeAppStateStore : IAppStateStore
     public Guid? ActiveProfileId { get; set; } = null;
 
     /// <summary>
-    /// The last property written via the <see cref="IAppStateStore.LastUpdateCheckUtc"/>
+    /// The last property written via the <see cref="IUpdateCheckScheduleState.LastUpdateCheckUtc"/>
     /// setter (the public <see cref="LastUpdateCheckUtc"/> is the raw value; the
     /// explicit-interface setter records the write). Mirrors
     /// <see cref="SetCount"/> for the active-id path so tests can assert the
@@ -904,13 +914,13 @@ internal sealed class FakeAppStateStore : IAppStateStore
     public IReadOnlyList<DateTimeOffset>? ManualRefreshTimestamps { get; set; } = null;
 
     /// <summary>
-    /// The number of times the <see cref="IAppStateStore.ManualRefreshTimestamps"/>
+    /// The number of times the <see cref="IUpdateCheckScheduleState.ManualRefreshTimestamps"/>
     /// setter was invoked, so tests can assert the runner persisted the window on
     /// a manual fire.
     /// </summary>
     public int ManualRefreshSetCount { get; private set; }
 
-    Guid? IAppStateStore.ActiveProfileId
+    Guid? IProfileActivationState.ActiveProfileId
     {
         get => ActiveProfileId;
         set
@@ -920,7 +930,7 @@ internal sealed class FakeAppStateStore : IAppStateStore
         }
     }
 
-    DateTimeOffset? IAppStateStore.LastUpdateCheckUtc
+    DateTimeOffset? IUpdateCheckScheduleState.LastUpdateCheckUtc
     {
         get => LastUpdateCheckUtc;
         set
@@ -930,7 +940,7 @@ internal sealed class FakeAppStateStore : IAppStateStore
         }
     }
 
-    IReadOnlyList<DateTimeOffset>? IAppStateStore.ManualRefreshTimestamps
+    IReadOnlyList<DateTimeOffset>? IUpdateCheckScheduleState.ManualRefreshTimestamps
     {
         get => ManualRefreshTimestamps;
         set

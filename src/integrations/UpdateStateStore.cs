@@ -7,13 +7,13 @@ namespace Modificus.Curator.Integrations;
 
 /// <summary>
 /// Default <see cref="IUpdateStateStore"/>. Backs the domain rules over the raw
-/// <see cref="IAppStateStore.KnownUpdates"/> persistence, hydrating against the
+/// <see cref="IKnownUpdateState.KnownUpdates"/> persistence, hydrating against the
 /// live profile + repository so stale entries self-heal. Registered as a
 /// singleton.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>No caching.</b> Every read goes back through <see cref="IAppStateStore"/>
+/// <b>No caching.</b> Every read goes back through <see cref="IKnownUpdateState"/>
 /// (the store is itself a cached singleton that rewrites the whole model on each
 /// write) + through <see cref="IProfileService"/> / <see cref="IModRepository"/>
 /// for the live filter. The state file is tiny and these surfaces are cheap, so
@@ -21,19 +21,19 @@ namespace Modificus.Curator.Integrations;
 /// could drift from a concurrent write.</para>
 /// <para>
 /// <b>Concurrency.</b> The check completes on a threadpool task; the UI reads on
-/// the UI thread. <see cref="IAppStateStore"/> serializes its own writes under a
+/// the UI thread. The backing store serializes its own writes under a
 /// lock, and the filter reads here are idempotent (a stale entry dropped twice is
 /// harmless), so no additional synchronization is needed.</para>
 /// </remarks>
 internal sealed class UpdateStateStore : IUpdateStateStore
 {
-    private readonly IAppStateStore _appState;
+    private readonly IKnownUpdateState _appState;
     private readonly IProfileService _profiles;
     private readonly IModRepository _repository;
     private readonly ILogger<UpdateStateStore> _logger;
 
     public UpdateStateStore(
-        IAppStateStore appState,
+        IKnownUpdateState appState,
         IProfileService profiles,
         IModRepository repository,
         ILogger<UpdateStateStore> logger)

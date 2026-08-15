@@ -1420,7 +1420,7 @@ public sealed class UpdateCheckServiceTests
         // Mirrors AddUpdateCheck (the interface-to-impl registration under test
         // + the IUpdateStateStore registration that ships alongside it); the
         // unregistered Func<DateTimeOffset>? param must fall back to its default.
-        services.AddSingleton<IAppStateStore, AppStateStore>();
+        services.AddSingleton<IKnownUpdateState, AppStateStore>();
         services.AddSingleton<IUpdateStateStore, UpdateStateStore>();
         services.AddSingleton<IUpdateCheckService, UpdateCheckService>();
 

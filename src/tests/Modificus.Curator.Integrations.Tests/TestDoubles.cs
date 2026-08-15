@@ -54,23 +54,26 @@ internal sealed class FakeConfigLoader : IConfigLoader
 }
 
 /// <summary>
-/// In-memory <see cref="IAppStateStore"/> for the update-check + update-state
-/// tests. Only <see cref="KnownUpdates"/> is exercised by the update path; the
-/// other three members are no-op stubs kept to satisfy the interface.
+/// In-memory <see cref="INexusMetadataBackfillState"/> for the
+/// display-metadata backfill tests: the pass timestamp is read + written
+/// directly.
 /// </summary>
-internal sealed class FakeAppStateStore : IAppStateStore
+internal sealed class FakeBackfillState : INexusMetadataBackfillState
+{
+    public DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
+}
+
+/// <summary>
+/// In-memory <see cref="IKnownUpdateState"/> for the update-check + update-state
+/// tests. Only <see cref="IKnownUpdateState.KnownUpdates"/> is exercised by the
+/// update path.
+/// </summary>
+internal sealed class FakeAppStateStore : IKnownUpdateState
 {
     public Dictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? KnownUpdatesData { get; set; }
     public int KnownUpdatesSetCount { get; private set; }
 
-    public bool OnboardingCompleted { get; set; }
-    public Guid? ActiveProfileId { get; set; }
-    public DateTimeOffset? LastUpdateCheckUtc { get; set; }
-    public IReadOnlyList<DateTimeOffset>? ManualRefreshTimestamps { get; set; }
-    public DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
-    public AppWindowState? MainWindowState { get; set; }
-
-    IReadOnlyDictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? IAppStateStore.KnownUpdates
+    IReadOnlyDictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? IKnownUpdateState.KnownUpdates
     {
         get => KnownUpdatesData;
         set

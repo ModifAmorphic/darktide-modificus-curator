@@ -685,7 +685,7 @@ public sealed class NexusModMetadataServiceTests
         var repo = new FakeModRepository();
         repo.Add(NexusContainer(Guid.NewGuid(), 101, "A", "1.0"));
         var throwingConfig = new ThrowingConfigLoader(new InvalidOperationException("config disk gone"));
-        var appState = new FakeAppStateStore();
+        var appState = new FakeBackfillState();
         var service = new NexusModMetadataService(
             nexus, repo, throwingConfig, appState,
             NullLogger<NexusModMetadataService>.Instance, getNow: () => BaseNow);
@@ -824,7 +824,7 @@ public sealed class NexusModMetadataServiceTests
             ImportedAt = DateTimeOffset.UtcNow,
         };
 
-    private static (NexusModMetadataService Service, FakeNexusClient Nexus, IModRepository Repo, FakeAppStateStore AppState)
+    private static (NexusModMetadataService Service, FakeNexusClient Nexus, IModRepository Repo, FakeBackfillState AppState)
         CreateService(
             FakeNexusClient? nexus = null,
             IModRepository? repository = null,
@@ -838,7 +838,7 @@ public sealed class NexusModMetadataServiceTests
         var config = CuratorConfig.CreateDefault();
         config.Integrations.Nexus.AuthMethod = authMethod;
         var configLoader = new FakeConfigLoader { Config = config };
-        var appState = new FakeAppStateStore { LastNexusMetadataBackfillUtc = backfillStamp };
+        var appState = new FakeBackfillState { LastNexusMetadataBackfillUtc = backfillStamp };
 
         var service = new NexusModMetadataService(
             nexus, repository, configLoader, appState,

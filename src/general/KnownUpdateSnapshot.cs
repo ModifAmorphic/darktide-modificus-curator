@@ -2,7 +2,7 @@ namespace Modificus.Curator.General;
 
 /// <summary>
 /// One persisted "known update available" entry for a mod, scoped to a profile.
-/// A plain serializable DTO (no domain behavior) so <see cref="IAppStateStore"/>
+/// A plain serializable DTO (no domain behavior) so <see cref="IKnownUpdateState"/>
 /// can persist it in <c>app-state.json</c> without the General library taking a
 /// dependency on the Integrations update-check domain. The Integrations-layer
 /// <c>IUpdateStateStore</c> owns the domain rules (when to record, when to clear,

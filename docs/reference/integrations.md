@@ -567,7 +567,7 @@ public interface IUpdateStateStore
   on profile switch + after an acknowledgement + after a check completes.
 
 The persisted shape is `KnownUpdateSnapshot` (in General; a plain serializable
-DTO) backed by `IAppStateStore.KnownUpdates` (a profile-keyed map in
+DTO) backed by `IKnownUpdateState.KnownUpdates` (a profile-keyed map in
 `app-state.json`). Restored/persisted data is never re-published as a fresh
 authoritative result; the UI reads it directly to render flags.
 
@@ -638,7 +638,7 @@ semaphore, so the service is registered as a singleton (see
 1. **Auth gate.** Read `IConfigLoader.Load().Integrations.Nexus.AuthMethod`. If
    `None` -> return `Empty` (no API call). The user has not configured Nexus.
 2. **Persisted 24-hour gate (rechecked after acquiring the lock).** Read
-   `IAppStateStore.LastNexusMetadataBackfillUtc`. When set and within 24 hours
+   `INexusMetadataBackfillState.LastNexusMetadataBackfillUtc`. When set and within 24 hours
    of now (strict less-than; a future stamp from clock skew gates), return
    `Empty`. Rechecking after the semaphore is acquired means a second
    overlapping call that arrived while the first was running returns empty
@@ -683,7 +683,7 @@ semaphore, so the service is registered as a singleton (see
    false positive on `NexusRateLimits.Unknown`). When exhausted, set
    `RateLimited = true`, resolve the reset, and stop the pass.
 7. **Stamp + return.** After the loop, when at least one API request was
-   attempted, stamp `IAppStateStore.LastNexusMetadataBackfillUtc = now` (so a
+   attempted, stamp `INexusMetadataBackfillState.LastNexusMetadataBackfillUtc = now` (so a
    real pass gates the next one for 24 hours). A no-auth, already-gated, or
    no-candidate no-op attempts zero requests and does **not** stamp. Return an
    immutable `NexusModMetadataResult` (the `Updated` map is defensively wrapped
@@ -737,10 +737,11 @@ Registers:
   reference exists for this service).
 - `INexusModMetadataService` -> `NexusModMetadataService` (singleton; the
   missing-only display-metadata backfill over the stable v1 endpoint. Depends on
-  `INexusClient` + `IModRepository` + `IConfigLoader` + `IAppStateStore`;
+  `INexusClient` + `IModRepository` + `IConfigLoader` +
+  `INexusMetadataBackfillState`;
   holds the semaphore that serializes overlapping passes).
 - `IUpdateStateStore` -> `UpdateStateStore` (singleton; the profile-scoped
-  known-update persistence rules over `IAppStateStore.KnownUpdates` + the live
+  known-update persistence rules over `IKnownUpdateState.KnownUpdates` + the live
   profile/repository for hydration self-heal).
 
 The OAuth factory's token store + the service's token store are the SAME
@@ -755,7 +756,8 @@ view. No construction-time cycle.
 ## Dependencies
 
 - **Curator libraries:** `config` (`CuratorConfig.Integrations.Nexus`),
-  `general` (`IConfigLoader`, `IAppStateStore` for the metadata-backfill gate),
+  `general` (`IConfigLoader`, `INexusMetadataBackfillState` for the metadata-backfill
+  gate),
   `mods` (`IModImportService`, `NexusSource`, `IModRepository` /
   `ModContainer` / `ModVersion` for the acquisition + update-check services,
   `ModDisplayMetadata` for the acquisition capture + the metadata backfill),
@@ -826,7 +828,7 @@ view. No construction-time cycle.
   surfacing (200 OK body
   with errors), + rate-limit exception.
 - **`NexusModMetadataService`** against a fake `INexusClient` + a fake
-  `IModRepository` + the `FakeConfigLoader` + a fake/real `IAppStateStore`:
+  `IModRepository` + the `FakeConfigLoader` + a fake/real backfill state:
   the auth gate (None returns empty, no API call), the persisted 24-hour gate
   (boundary, future stamp, clock skew, extreme values), serialized overlapping
   passes (the semaphore + the post-lock gate recheck), candidate selection
