@@ -546,12 +546,24 @@ public partial class ModListViewModel : ObservableObject
     public string AddModsHintText => _localization["ModList_EmptyNoMods"];
 
     /// <summary>
-    /// The localized secondary hint shown in the empty state ONLY when Curator
-    /// is the registered nxm:// handler (so the user knows the Nexus 'Vortex' /
-    /// 'Mod manager download' buttons route mods straight into the app).
-    /// Re-fires on a culture change.
+    /// The localized secondary hint shown in the empty state: the Gaming Mode
+    /// guidance while gaming (the nxm download instruction cannot be followed
+    /// there, even when Curator owns the handler), otherwise the ordinary
+    /// nxm-handler hint (only surfaced when registered, via
+    /// <see cref="ShowNexusHint"/>). Re-fires on a culture change.
     /// </summary>
-    public string NxmDownloadHintText => _localization["ModList_NxmDownloadHint"];
+    public string NexusHintText => IsGamingMode
+        ? _localization["ModList_EmptyGamingModeHint"]
+        : _localization["ModList_NxmDownloadHint"];
+
+    /// <summary>
+    /// Whether the secondary empty-state hint should show: when Curator is the
+    /// registered OS handler for nxm:// links, or inside a Steam Deck Gaming
+    /// Mode session (where the Desktop Mode guidance replaces the nxm
+    /// instruction). The gaming half is constant for the process lifetime; the
+    /// registration half follows the shared state publishes.
+    /// </summary>
+    public bool ShowNexusHint => IsNxmRegistered || IsGamingMode;
 
     /// <summary>
     /// Whether Curator is the registered OS handler for nxm:// links, mirrored
@@ -562,6 +574,8 @@ public partial class ModListViewModel : ObservableObject
     /// external app changed ownership.
     /// </summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowNexusHint))]
+    [NotifyPropertyChangedFor(nameof(NexusHintText))]
     private bool _isNxmRegistered;
 
     /// <summary>
@@ -641,7 +655,7 @@ public partial class ModListViewModel : ObservableObject
         }
 
         OnPropertyChanged(nameof(AddModsHintText));
-        OnPropertyChanged(nameof(NxmDownloadHintText));
+        OnPropertyChanged(nameof(NexusHintText));
         OnPropertyChanged(nameof(AddModeLabel));
         OnPropertyChanged(nameof(RateLimitedNoticeText));
         OnPropertyChanged(nameof(AddButtonTooltip));
@@ -1390,9 +1404,12 @@ public partial class ModListViewModel : ObservableObject
     /// <see cref="IModAcquisitionService.AcquireLatestNexusAsync"/> (the
     /// auth-only / premium path) under the global install coordinator, then
     /// acknowledges the install (clearing the persisted known-update entry
-    /// immediately, with no extra API check) + reloads; <b>regular / unknown</b>
-    /// opens the mod's Nexus files page in the user's browser via the injectable
-    /// external-launcher seam, surfacing a fallback alert on launch failure.
+    /// immediately, with no extra API check) + reloads (works identically
+    /// inside Gaming Mode); <b>regular / unknown</b> opens the mod's Nexus
+    /// files page in the user's browser via the injectable external-launcher
+    /// seam, surfacing a fallback alert on launch failure, except inside a
+    /// Steam Deck Gaming Mode session where the browser flow cannot complete
+    /// and Desktop Mode guidance is shown instead.
     /// </summary>
     /// <remarks>
     /// <para><b>Defense.</b> No-op when: there is no active profile; the row is
@@ -1438,6 +1455,15 @@ public partial class ModListViewModel : ObservableObject
         if (IsPremiumUser)
         {
             await UpdatePremiumAsync(profileId, row, modId);
+        }
+        else if (IsGamingMode)
+        {
+            // The browser cannot complete the files-page flow inside Gaming
+            // Mode (the Gaming Mode browser does not hand nxm:// links back),
+            // so surface Desktop Mode guidance instead of opening it.
+            await _dialogs.ShowAlertAsync(
+                _localization["GamingMode_GuidanceTitle"],
+                _localization["GamingMode_BrowserGuidance"]);
         }
         else
         {
@@ -1554,10 +1580,22 @@ public partial class ModListViewModel : ObservableObject
     /// <see cref="_launchExternal"/> seam, surfacing a fallback alert (with the
     /// URL for manual copy) on a launch failure. Lets the user browse + download
     /// mods; nxm:// links route back into Curator when it owns the OS handler.
+    /// Inside a Steam Deck Gaming Mode session the browser flow cannot complete
+    /// (the Gaming Mode browser does not hand nxm:// links to Curator), so the
+    /// localized Desktop Mode guidance alert is shown instead and no browser is
+    /// launched.
     /// </summary>
     [RelayCommand]
-    private void AddNexusMods()
+    private async Task AddNexusMods()
     {
+        if (IsGamingMode)
+        {
+            await _dialogs.ShowAlertAsync(
+                _localization["GamingMode_GuidanceTitle"],
+                _localization["GamingMode_BrowserGuidance"]);
+            return;
+        }
+
         var url = NexusModsGamesUrl;
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
         {

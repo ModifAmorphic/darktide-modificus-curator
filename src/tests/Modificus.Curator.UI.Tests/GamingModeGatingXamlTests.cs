@@ -196,7 +196,10 @@ public sealed class GamingModeGatingXamlTests
         Assert.Contains("GamingMode_GuidanceTitle", names);
         Assert.Contains("GamingMode_PickerGuidance", names);
         Assert.Contains("GamingMode_FileManagerGuidance", names);
+        Assert.Contains("GamingMode_BrowserGuidance", names);
         Assert.Contains("ModList_AddGamingModeHint", names);
+        Assert.Contains("ModList_EmptyGamingModeHint", names);
+        Assert.Contains("Dmf_DownloadMessageGamingMode", names);
     }
 
     // ---- required source lookup (the ShellStylingTests pattern) ------------

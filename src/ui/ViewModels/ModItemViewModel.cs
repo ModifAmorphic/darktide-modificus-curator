@@ -258,10 +258,13 @@ public partial class ModItemViewModel : ObservableObject
     /// by the parent (constant for the process lifetime). Disables the linked
     /// row's "External" badge (its click opens the OS file manager, which depends
     /// on a desktop shell); the non-interactive "Folder unavailable" text is
-    /// unaffected either way.
+    /// unaffected either way. Also swaps the update-action tooltip's
+    /// open-files variant for the Desktop Mode guidance (regular/unknown users
+    /// only; Premium installs stay in-app).
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(LinkedBadgeTooltip))]
+    [NotifyPropertyChangedFor(nameof(UpdateActionTooltip))]
     private bool _isGamingMode;
 
     /// <summary>
@@ -370,8 +373,11 @@ public partial class ModItemViewModel : ObservableObject
     /// <summary>
     /// The localized tooltip for the stable update-action button, distinguished by
     /// the row's state so the affordance is discoverable without clicking:
-    /// Premium + update available -> "install directly"; regular/unknown + update
-    /// available -> "open the Nexus files page"; no update -> "up to date".
+    /// Premium + update available -> "install directly" (works inside Gaming
+    /// Mode too, so the gaming flag does not change it); regular/unknown +
+    /// update available -> "open the Nexus files page", or the Desktop Mode
+    /// guidance while inside a Gaming Mode session (the click shows the same
+    /// guidance instead of opening the browser); no update -> "up to date".
     /// Unsupported rows (Pinned / Untracked) never show the button, so no tooltip
     /// applies there.
     /// </summary>
@@ -384,8 +390,13 @@ public partial class ModItemViewModel : ObservableObject
                 return _localization["ModRow_UpdateTooltipNoUpdate"];
             }
 
-            return IsPremiumUser
-                ? _localization["ModRow_UpdateTooltipInstall"]
+            if (IsPremiumUser)
+            {
+                return _localization["ModRow_UpdateTooltipInstall"];
+            }
+
+            return IsGamingMode
+                ? _localization["GamingMode_BrowserGuidance"]
                 : _localization["ModRow_UpdateTooltipOpenFiles"];
         }
     }

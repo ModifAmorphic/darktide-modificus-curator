@@ -303,7 +303,9 @@ public static class CuratorComposition
         // existing/Premium DMF add. Singleton: owns the event subscription for
         // the app lifetime. Takes the shared nxm registration state so the
         // download confirm can tailor its message to the last-known handler
-        // ownership (manager-download vs. manual-import guidance; no probe).
+        // ownership (manager-download vs. manual-import guidance; no probe),
+        // and the Gaming Mode state so the case-2 browser branch can divert to
+        // Desktop Mode guidance there (Premium keeps the in-app download).
         // Registered BEFORE ShellViewModel so ShellViewModel's factory can
         // resolve it eagerly.
         services.AddSingleton(sp => new DmfPromptService(
@@ -315,7 +317,8 @@ public static class CuratorComposition
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<ILogger<DmfPromptService>>(),
-            sp.GetRequiredService<INxmRegistrationState>()));
+            sp.GetRequiredService<INxmRegistrationState>(),
+            sp.GetRequiredService<IGamingModeState>()));
 
         // ShellViewModel owns navigation + the deferred DMF trigger (consumed on
         // a real Mods entry). The concrete DmfPromptService is injected (not a

@@ -1,3 +1,5 @@
+using Modificus.Curator.Config;
+using Modificus.Curator.Integrations;
 using Modificus.Curator.Mods;
 using Modificus.Curator.Profiles;
 using Modificus.Curator.UI.Localization;
@@ -9,9 +11,11 @@ namespace Modificus.Curator.UI.Tests;
 /// <summary>
 /// Gaming Mode gating on the mod list (Steam Deck): the Add split button +
 /// its tooltip, the per-row push of the gaming flag (driving the linked
-/// badge's enabled state + tooltip), and the programmatic guard on the
-/// open-folder command. Built on the same hand-rolled fakes as
-/// <see cref="ModListViewModelTests"/> via
+/// badge's enabled state + tooltip), the programmatic guard on the
+/// open-folder command, and the browser-dependent Nexus flows (the Add Nexus
+/// Mods command, the regular-tier update action, and the empty-state
+/// secondary hint) swapping to Desktop Mode guidance. Built on the same
+/// hand-rolled fakes as <see cref="ModListViewModelTests"/> via
 /// <see cref="TestDoubles.BuildModList"/>'s gaming-mode seam.
 /// </summary>
 public sealed class ModListGamingModeTests
@@ -26,7 +30,12 @@ public sealed class ModListGamingModeTests
     /// </summary>
     private static (ModListViewModel Vm, FakeProfileSession Session) Build(
         GamingModeState gamingMode,
-        bool withNexusRow = false)
+        bool withNexusRow = false,
+        FakeNexusAuthService? auth = null,
+        FakeDialogService? dialogs = null,
+        FakeNxmRegistrationState? nxmRegistration = null,
+        FakeModAcquisitionService? acquisition = null,
+        Func<Uri, bool>? launchExternal = null)
     {
         var a = Profile("Alpha");
         var profiles = TestDoubles.Profiles(a);
@@ -46,6 +55,11 @@ public sealed class ModListGamingModeTests
         var vm = TestDoubles.BuildModList(
             profiles, session, repo,
             localization: Localization,
+            auth: auth,
+            dialogs: dialogs,
+            nxmRegistration: nxmRegistration,
+            acquisition: acquisition,
+            launchExternal: launchExternal,
             gamingMode: gamingMode);
         return (vm, session);
     }
@@ -166,5 +180,171 @@ public sealed class ModListGamingModeTests
         await vm.OpenFolderCommand.ExecuteAsync(row);
 
         Assert.Equal(0, opened);
+    }
+
+    // ---- Add Nexus Mods command (browser guidance) --------------------------
+
+    [Fact]
+    public async Task Gaming_mode_AddNexusMods_shows_guidance_instead_of_launching_the_browser()
+    {
+        var launches = new List<Uri>();
+        var dialogs = new FakeDialogService();
+        var (vm, _) = Build(new GamingModeState(true),
+            dialogs: dialogs,
+            launchExternal: uri => { launches.Add(uri); return true; });
+
+        await vm.AddNexusModsCommand.ExecuteAsync(null);
+
+        Assert.Empty(launches);
+        var alert = Assert.Single(dialogs.AlertCalls);
+        Assert.Equal(Localization["GamingMode_GuidanceTitle"], alert.Title);
+        Assert.Equal(Localization["GamingMode_BrowserGuidance"], alert.Message);
+    }
+
+    [Fact]
+    public async Task Non_gaming_AddNexusMods_launches_the_browser_without_an_alert()
+    {
+        var launches = new List<Uri>();
+        var dialogs = new FakeDialogService();
+        var (vm, _) = Build(new GamingModeState(false),
+            dialogs: dialogs,
+            launchExternal: uri => { launches.Add(uri); return true; });
+
+        await vm.AddNexusModsCommand.ExecuteAsync(null);
+
+        Assert.Single(launches);
+        Assert.Empty(dialogs.AlertCalls);
+    }
+
+    // ---- empty-state secondary hint ------------------------------------------
+
+    [Theory]
+    [InlineData(true, true, true)]   // gaming + registered -> gaming hint
+    [InlineData(true, false, true)]  // gaming + not registered -> gaming hint
+    [InlineData(false, true, true)]  // desktop + registered -> nxm hint
+    [InlineData(false, false, false)] // desktop + not registered -> hidden
+    public void Empty_state_secondary_hint_matrix(bool gaming, bool registered, bool expectedShow)
+    {
+        // In Gaming Mode the Desktop Mode guidance wins even when Curator owns
+        // the nxm handler: the nxm download instruction is exactly what must
+        // NOT show there. Outside Gaming Mode the ordinary rule holds (the
+        // hint shows only when registered).
+        var (vm, _) = Build(
+            gaming ? new GamingModeState(true) : new GamingModeState(false),
+            nxmRegistration: new FakeNxmRegistrationState
+            {
+                IsAvailable = true,
+                IsRegistered = registered,
+            });
+
+        Assert.Equal(expectedShow, vm.ShowNexusHint);
+        Assert.Equal(
+            gaming
+                ? Localization["ModList_EmptyGamingModeHint"]
+                : Localization["ModList_NxmDownloadHint"],
+            vm.NexusHintText);
+    }
+
+    // ---- per-row update action ------------------------------------------------
+
+    [Fact]
+    public async Task Gaming_mode_Update_on_a_flagged_regular_row_shows_guidance_without_a_browser()
+    {
+        var launches = new List<Uri>();
+        var dialogs = new FakeDialogService();
+        var auth = new FakeNexusAuthService
+        {
+            State = new NexusAuthState(NexusAuthMethod.ApiKey, "free", IsPremium: false),
+        };
+        var (vm, _) = Build(new GamingModeState(true),
+            withNexusRow: true,
+            auth: auth,
+            dialogs: dialogs,
+            launchExternal: uri => { launches.Add(uri); return true; });
+        var row = vm.Mods.Single(m => m.Name == "SoundPack");
+        Assert.False(vm.IsPremiumUser);
+        row.UpdateAvailable = true; // the flag the persisted store drives
+
+        await vm.UpdateCommand.ExecuteAsync(row);
+
+        Assert.Empty(launches);
+        var alert = Assert.Single(dialogs.AlertCalls);
+        Assert.Equal(Localization["GamingMode_GuidanceTitle"], alert.Title);
+        Assert.Equal(Localization["GamingMode_BrowserGuidance"], alert.Message);
+    }
+
+    [Fact]
+    public async Task Gaming_mode_Update_on_a_flagged_premium_row_installs_in_app()
+    {
+        // Premium installs work in Gaming Mode: the acquisition runs under the
+        // coordinator with no guidance alert and no browser.
+        var launches = new List<Uri>();
+        var dialogs = new FakeDialogService();
+        var acquisition = new FakeModAcquisitionService();
+        var auth = new FakeNexusAuthService
+        {
+            State = new NexusAuthState(NexusAuthMethod.OAuth, "premium", IsPremium: true),
+        };
+        var (vm, _) = Build(new GamingModeState(true),
+            withNexusRow: true,
+            auth: auth,
+            dialogs: dialogs,
+            acquisition: acquisition,
+            launchExternal: uri => { launches.Add(uri); return true; });
+        var row = vm.Mods.Single(m => m.Name == "SoundPack");
+        Assert.True(vm.IsPremiumUser);
+        row.UpdateAvailable = true;
+
+        await vm.UpdateCommand.ExecuteAsync(row);
+
+        var call = Assert.Single(acquisition.LatestNexusCalls);
+        Assert.Equal("warhammer40kdarktide", call.GameDomain);
+        Assert.Equal(1234, call.ModId);
+        Assert.Empty(launches);
+        Assert.Empty(dialogs.AlertCalls);
+    }
+
+    // ---- per-row update-action tooltip ---------------------------------------
+
+    [Fact]
+    public void Gaming_mode_regular_flagged_row_tooltip_reads_the_browser_guidance()
+    {
+        var auth = new FakeNexusAuthService
+        {
+            State = new NexusAuthState(NexusAuthMethod.ApiKey, "free", IsPremium: false),
+        };
+        var (vm, _) = Build(new GamingModeState(true), withNexusRow: true, auth: auth);
+        var row = vm.Mods.Single(m => m.Name == "SoundPack");
+        row.UpdateAvailable = true;
+
+        Assert.Equal(Localization["GamingMode_BrowserGuidance"], row.UpdateActionTooltip);
+    }
+
+    [Fact]
+    public void Gaming_mode_premium_flagged_row_tooltip_keeps_the_install_hint()
+    {
+        var auth = new FakeNexusAuthService
+        {
+            State = new NexusAuthState(NexusAuthMethod.OAuth, "premium", IsPremium: true),
+        };
+        var (vm, _) = Build(new GamingModeState(true), withNexusRow: true, auth: auth);
+        var row = vm.Mods.Single(m => m.Name == "SoundPack");
+        row.UpdateAvailable = true;
+
+        Assert.Equal(Localization["ModRow_UpdateTooltipInstall"], row.UpdateActionTooltip);
+    }
+
+    [Fact]
+    public void Non_gaming_regular_flagged_row_tooltip_keeps_the_open_files_hint()
+    {
+        var auth = new FakeNexusAuthService
+        {
+            State = new NexusAuthState(NexusAuthMethod.ApiKey, "free", IsPremium: false),
+        };
+        var (vm, _) = Build(new GamingModeState(false), withNexusRow: true, auth: auth);
+        var row = vm.Mods.Single(m => m.Name == "SoundPack");
+        row.UpdateAvailable = true;
+
+        Assert.Equal(Localization["ModRow_UpdateTooltipOpenFiles"], row.UpdateActionTooltip);
     }
 }

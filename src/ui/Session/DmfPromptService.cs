@@ -36,7 +36,10 @@ namespace Modificus.Curator.UI.Session;
 /// under a spinner (the Nexus <c>download_link</c> endpoint is premium-only)
 /// plus the add; everyone else gets the DMF files page opened in their browser
 /// (the user downloads DMF there, and either clicks Download if Curator owns
-/// the <c>nxm://</c> handler, or imports the archive manually).</para>
+/// the <c>nxm://</c> handler, or imports the archive manually). Inside a Steam
+/// Deck Gaming Mode session the browser branch cannot complete, so Premium
+/// users still get the confirm + in-app download while everyone else gets an
+/// informational Desktop Mode guidance alert.</para>
 /// <para>
 /// <b>No auth trigger.</b> Configuring Nexus auth no longer surfaces a DMF
 /// prompt on its own; the one-time Nexus setup offer lives in the first-run
@@ -86,6 +89,7 @@ public sealed class DmfPromptService
     private readonly IDialogService _dialogs;
     private readonly LocalizationService _localization;
     private readonly INxmRegistrationState _nxmRegistration;
+    private readonly IGamingModeState _gamingMode;
     private readonly ILogger<DmfPromptService> _logger;
     private readonly Func<Uri, bool> _launchExternal;
 
@@ -107,6 +111,7 @@ public sealed class DmfPromptService
         LocalizationService localization,
         ILogger<DmfPromptService> logger,
         INxmRegistrationState nxmRegistration,
+        IGamingModeState gamingMode,
         Func<Uri, bool>? launchExternal = null)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
@@ -118,6 +123,7 @@ public sealed class DmfPromptService
         _localization = localization ?? throw new ArgumentNullException(nameof(localization));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
+        _gamingMode = gamingMode ?? throw new ArgumentNullException(nameof(gamingMode));
         _launchExternal = launchExternal ?? DefaultLaunchExternal;
 
         _profiles.ProfileCreated += OnProfileCreated;
@@ -260,7 +266,22 @@ public sealed class DmfPromptService
         // everyone else gets the DMF files page opened in the browser. The
         // confirm message is tailored to whether Curator owns the nxm handler
         // so the user knows whether to click Download on Nexus (manager path)
-        // or download the archive and import it manually.
+        // or download the archive and import it manually. Inside a Gaming Mode
+        // session the browser branch cannot complete (the Gaming Mode browser
+        // does not hand nxm:// links to Curator, and manual import needs
+        // Desktop Mode), so the premium state is resolved up front: Premium
+        // keeps the ordinary confirm + in-app download flow, while everyone
+        // else gets an informational Desktop Mode guidance alert (no Yes/No
+        // confirm: there is no action that could run inside Gaming Mode to
+        // confirm). No nxm registration probe happens on either path.
+        if (_gamingMode.IsGamingMode && (await _auth.GetCurrentStateAsync())?.IsPremium != true)
+        {
+            await _dialogs.ShowAlertAsync(
+                _localization["Dmf_DownloadTitle"],
+                _localization["Dmf_DownloadMessageGamingMode"]);
+            return;
+        }
+
         var ownsHandler = OwnsNxmHandler();
         var message = ownsHandler
             ? _localization["Dmf_DownloadMessage"]

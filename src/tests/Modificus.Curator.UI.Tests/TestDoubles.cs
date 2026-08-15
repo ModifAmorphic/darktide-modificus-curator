@@ -42,6 +42,9 @@ internal static class TestDoubles
     /// <param name="nxmRegistration">Optional shared registration-state
     /// override. When omitted, a plain fake (unavailable, not registered) is
     /// wired; the DMF wording follows it without probing.</param>
+    /// <param name="gamingMode">Optional Gaming Mode state override. When
+    /// omitted (the default), a non-gaming session so the browser paths run
+    /// as they do on a desktop.</param>
     public static DmfPromptService BuildDmfPromptService(
         FakeProfileService? profiles = null,
         FakeProfileSession? session = null,
@@ -51,6 +54,7 @@ internal static class TestDoubles
         FakeDialogService? dialogs = null,
         LocalizationService? localization = null,
         FakeNxmRegistrationState? nxmRegistration = null,
+        IGamingModeState? gamingMode = null,
         Func<Uri, bool>? launchExternal = null)
     {
         profiles ??= Profiles();
@@ -61,6 +65,7 @@ internal static class TestDoubles
         dialogs ??= new FakeDialogService();
         localization ??= new LocalizationService();
         nxmRegistration ??= new FakeNxmRegistrationState();
+        gamingMode ??= new GamingModeState(false);
         // SAFETY: an omitted launcher seam defaults to the harmless no-op
         // recorder (never the production Process.Start fallback).
         launchExternal ??= TestLauncher.NoOp;
@@ -75,6 +80,7 @@ internal static class TestDoubles
             localization,
             NullLogger<DmfPromptService>.Instance,
             nxmRegistration,
+            gamingMode,
             launchExternal);
     }
 
