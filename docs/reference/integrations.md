@@ -18,7 +18,6 @@ downloads, + mod-file listing; the v2 GraphQL endpoint covers the update check
 public interface INexusClient
 {
     Task<Response<ValidateInfo>> ValidateAsync(CancellationToken ct = default);              // API key
-    Task<Response<ModUpdate[]>> ModUpdatesAsync(string gameDomain, NexusPeriod period, CancellationToken ct = default);
     Task<Response<DownloadLink[]>> DownloadLinksAsync(string gameDomain, int modId, int fileId, CancellationToken ct = default);                                  // premium
     Task<Response<DownloadLink[]>> DownloadLinksAsync(string gameDomain, int modId, int fileId, string nxmKey, long expiresEpoch, CancellationToken ct = default); // free user
     Task<Response<ModInfo>> GetModInfoAsync(string gameDomain, int modId, CancellationToken ct = default);
@@ -28,8 +27,6 @@ public interface INexusClient
 ```
 
 - `ValidateAsync` -- hits `GET /v1/users/validate.json` (API-key validate).
-- `ModUpdatesAsync` -- hits `GET /v1/games/{domain}/mods/updated.json?period={1d|1w|1m}`.
-  (Retained on the v1 API surface; the update check no longer calls it.)
 - `DownloadLinksAsync` (premium) -- hits `GET /v1/games/{domain}/mods/{modId}/files/{fileId}/download_link.json`.
 - `DownloadLinksAsync` (free user, with `nxmKey` + `expiresEpoch`) -- same
   endpoint with `?key={nxmKey}&expires={epoch}`.
@@ -100,15 +97,6 @@ public sealed class ValidateInfo          // API-key validate response
 
 public enum NexusMembershipRole { Member, Supporter, Premium, LifetimePremium }
 
-public sealed class ModUpdate              // one entry in /mods/updated.json
-{
-    public long ModId { get; set; }
-    public long LatestFileUpdate { get; set; }            // Unix seconds
-    public DateTimeOffset LatestFileUpdateUtc { get; }
-    public long LatestModActivity { get; set; }           // Unix seconds
-    public DateTimeOffset LatestModActivityUtc { get; }
-}
-
 public sealed class DownloadLink           // CDN link from download_link.json
 {
     public string Name { get; set; }
@@ -137,8 +125,6 @@ public sealed class ModInfo                 // mod-page payload from mods/{id}.j
 }
 
 public sealed class ModFile { /* file_id, file_name, name, version, size, category_id, uploaded_timestamp, archived, ... */ }
-
-public enum NexusPeriod { Day, Week, Month }  // period=1d|1w|1m
 ```
 
 `ModInfo.PictureUrl` is bound as a nullable string so an absent wire value

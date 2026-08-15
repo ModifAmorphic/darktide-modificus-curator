@@ -36,16 +36,6 @@ public interface INexusClient
     Task<Response<ValidateInfo>> ValidateAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// Lists mods updated in the past <paramref name="period"/> for
-    /// <paramref name="gameDomain"/>. Hits
-    /// <c>GET /v1/games/{domain}/mods/updated.json?period={1d|1w|1m}</c>.
-    /// </summary>
-    Task<Response<ModUpdate[]>> ModUpdatesAsync(
-        string gameDomain,
-        NexusPeriod period,
-        CancellationToken ct = default);
-
-    /// <summary>
     /// Premium-user download links for the given file. Hits
     /// <c>GET /v1/games/{domain}/mods/{modId}/files/{fileId}/download_link.json</c>
     /// (premium-only endpoint; the response carries the CDN URLs).

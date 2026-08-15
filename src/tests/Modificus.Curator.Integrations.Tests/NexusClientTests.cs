@@ -25,12 +25,6 @@ public sealed class NexusClientTests
       ""profile_url"": ""https://www.nexusmods.com/users/12345""
     }";
 
-    private const string ModUpdatesJson = @"
-    [
-      { ""mod_id"": 100, ""latest_file_update"": 1717000000, ""latest_mod_activity"": 1717000100 },
-      { ""mod_id"": 200, ""latest_file_update"": 1717000200, ""latest_mod_activity"": 1717000300 }
-    ]";
-
     private const string DownloadLinksJson = @"
     [
       { ""name"": ""CDN-A"", ""short_name"": ""cdn-a"", ""URI"": ""https://cdn-a.example.com/file.zip"" },
@@ -96,44 +90,6 @@ public sealed class NexusClientTests
         var request = Assert.Single(handler.Requests);
         Assert.Equal(new Uri(ApiBase + "v1/users/validate.json"), request.RequestUri);
         Assert.Equal(HttpMethod.Get, request.Method);
-    }
-
-    // ---- ModUpdates -------------------------------------------------------
-
-    [Fact]
-    public async Task ModUpdatesAsync_hits_updated_endpoint_with_period_query()
-    {
-        var (client, handler) = CreateClient(_ => HttpResponses.NexusOk(ModUpdatesJson));
-
-        var response = await client.ModUpdatesAsync("warhammer40kdarktide", NexusPeriod.Month);
-
-        Assert.Equal(2, response.Data.Length);
-        Assert.Equal(100L, response.Data[0].ModId);
-        Assert.Equal(200L, response.Data[1].ModId);
-        Assert.Equal(
-            DateTimeOffset.FromUnixTimeSeconds(1717000100),
-            response.Data[0].LatestModActivityUtc);
-
-        var request = Assert.Single(handler.Requests);
-        Assert.Equal(
-            new Uri(ApiBase + "v1/games/warhammer40kdarktide/mods/updated.json?period=1m"),
-            request.RequestUri);
-    }
-
-    [Theory]
-    [InlineData(NexusPeriod.Day, "1d")]
-    [InlineData(NexusPeriod.Week, "1w")]
-    [InlineData(NexusPeriod.Month, "1m")]
-    public async Task ModUpdatesAsync_period_maps_to_query_string(NexusPeriod period, string expected)
-    {
-        // The period-string mapping is part of the contract; assert via the
-        // outgoing URI on each call.
-        var (client, handler) = CreateClient(_ => HttpResponses.NexusOk(ModUpdatesJson));
-
-        await client.ModUpdatesAsync("skyrim", period);
-
-        var request = Assert.Single(handler.Requests);
-        Assert.Contains($"period={expected}", request.RequestUri!.Query);
     }
 
     // ---- DownloadLinks ----------------------------------------------------
@@ -474,14 +430,6 @@ public sealed class NexusClientTests
     }
 
     // ---- argument validation ---------------------------------------------
-
-    [Fact]
-    public async Task ModUpdatesAsync_null_game_throws()
-    {
-        var (client, _) = CreateClient(_ => HttpResponses.NexusOk(ModUpdatesJson));
-        await Assert.ThrowsAsync<ArgumentNullException>(
-            () => client.ModUpdatesAsync(null!, NexusPeriod.Day));
-    }
 
     [Fact]
     public async Task DownloadLinksAsync_free_null_key_throws()

@@ -835,8 +835,6 @@ public sealed class ModAcquisitionServiceTests
 
         public Task<Response<ValidateInfo>> ValidateAsync(CancellationToken ct = default)
             => throw new NotImplementedException();
-        public Task<Response<ModUpdate[]>> ModUpdatesAsync(string gameDomain, NexusPeriod period, CancellationToken ct = default)
-            => throw new NotImplementedException();
 
         public Task<Response<ModUpdateStatus[]>> CheckUpdatesGraphQlAsync(
             int gameId, IReadOnlyList<int> modIds, CancellationToken ct = default)

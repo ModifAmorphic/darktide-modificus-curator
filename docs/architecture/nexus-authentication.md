@@ -224,8 +224,6 @@ shape. v3 is Experimental for the surfaces we need, so v1 + v2 only:
 
 v1 REST:
 - `GET /v1/users/validate.json` (API-key validate)
-- `GET /v1/games/{domain}/mods/updated.json?period={1d|1w|1m}` (retained on the
-  interface; the update check no longer calls it)
 - `GET /v1/games/{domain}/mods/{modId}/files/{fileId}/download_link.json`
   (premium download links); same endpoint with
   `?key={nxmKey}&expires={epoch}` for free users
