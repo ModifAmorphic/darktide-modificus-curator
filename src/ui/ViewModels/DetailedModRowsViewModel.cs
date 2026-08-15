@@ -42,9 +42,9 @@ public partial class DetailedModRowsViewModel : ObservableObject
     private ModRowDensity _rowDensity;
 
     /// <summary>
-    /// The persisted density, read + normalized (only <see cref="ModRowDensity.Detailed"/>
+    /// The persisted density, read + normalized (only <see cref="ModRowDensity.Compact"/>
     /// survives; every other numeric value, including undefined, becomes
-    /// <see cref="ModRowDensity.Compact"/>) from
+    /// <see cref="ModRowDensity.Detailed"/>) from
     /// <see cref="CuratorConfig.Preferences.ModRowDensity"/> at construction.
     /// The setter is private so the only mutation path is <see cref="SetDensityCommand"/>,
     /// which normalizes, persists, and reprocesses the current rows: external
@@ -78,7 +78,7 @@ public partial class DetailedModRowsViewModel : ObservableObject
 
     /// <summary>
     /// Creates the coordinator and reads the persisted density (normalizing
-    /// undefined to Compact).
+    /// undefined to Detailed).
     /// </summary>
     public DetailedModRowsViewModel(
         IConfigLoader configLoader,
@@ -96,25 +96,25 @@ public partial class DetailedModRowsViewModel : ObservableObject
         RowDensity = NormalizeDensity(_configLoader.Load().Preferences.ModRowDensity);
     }
 
-    /// <summary>Compact mode is active (the default).</summary>
+    /// <summary>Compact mode is active (the dense one-line row).</summary>
     public bool IsCompact => RowDensity == ModRowDensity.Compact;
 
-    /// <summary>Detailed mode is active (summary + thumbnail rows).</summary>
+    /// <summary>Detailed mode is active (summary + thumbnail rows; the default).</summary>
     public bool IsDetailed => RowDensity == ModRowDensity.Detailed;
 
     /// <summary>
-    /// Normalizes a density value: only <see cref="ModRowDensity.Detailed"/>
+    /// Normalizes a density value: only <see cref="ModRowDensity.Compact"/>
     /// survives; every other numeric value (including undefined) becomes
-    /// <see cref="ModRowDensity.Compact"/>.
+    /// <see cref="ModRowDensity.Detailed"/>.
     /// </summary>
     private static ModRowDensity NormalizeDensity(ModRowDensity value) =>
-        value == ModRowDensity.Detailed ? ModRowDensity.Detailed : ModRowDensity.Compact;
+        value == ModRowDensity.Compact ? ModRowDensity.Compact : ModRowDensity.Detailed;
 
     /// <summary>
     /// Sets the density, persists, and reprocesses the current rows. A
     /// value-equal density (after normalization) is a strict no-op: no save,
     /// no reload, no backfill. An undefined numeric parameter normalizes to
-    /// Compact.
+    /// Detailed.
     /// </summary>
     [RelayCommand]
     private void SetDensity(ModRowDensity density)

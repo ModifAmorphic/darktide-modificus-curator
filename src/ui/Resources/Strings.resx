@@ -413,12 +413,12 @@
     <comment>Tooltip on the auto-sort checkbox. Notes that real sorting is coming; no em-dash.</comment>
   </data>
   <data name="ModList_CompactRowsTooltip" xml:space="preserve">
-    <value>Use compact mod rows</value>
-    <comment>Tooltip + accessibility name on the Compact density toolbar button. The dense one-line row.</comment>
+    <value>Compact mods</value>
+    <comment>Tooltip + accessibility name on the Compact density toolbar button.</comment>
   </data>
   <data name="ModList_DetailedRowsTooltip" xml:space="preserve">
-    <value>Use detailed mod rows</value>
-    <comment>Tooltip + accessibility name on the Detailed density toolbar button. The multi-line row with summary + thumbnail.</comment>
+    <value>Detailed mod descriptions</value>
+    <comment>Tooltip + accessibility name on the Detailed density toolbar button.</comment>
   </data>
 
   <data name="ModRow_Enabled" xml:space="preserve">

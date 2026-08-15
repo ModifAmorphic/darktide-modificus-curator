@@ -1143,10 +1143,11 @@ configured `true` here.
 
 ## Mod list density / detailed rows
 
-The Compact/Detailed row-density choice for the Mods destination. Compact is the
-dense one-line row (the default, unchanged behavior); Detailed adds the Nexus
-summary + a cached thumbnail across multiple lines while preserving every
-existing row action. Three UI-layer components cooperate: the
+The Compact/Detailed row-density choice for the Mods destination. Detailed is
+the default: the multi-line row with the Nexus summary + a cached thumbnail,
+preserving every existing row action; Compact is the dense one-line row,
+surviving only when explicitly persisted or selected. Three UI-layer
+components cooperate: the
 `DetailedModRowsViewModel` coordinator (the lifecycle + orchestration owner),
 `ModListViewModel` (which exposes it read-only + hands it the row snapshot on
 reload), and `ModItemViewModel` (which gains display state but stays
@@ -1172,8 +1173,8 @@ public sealed partial class DetailedModRowsViewModel : ObservableObject
         ILogger<DetailedModRowsViewModel> logger);
 
     public ModRowDensity RowDensity { get; private set; }   // persisted Compact/Detailed selection; mutated only by SetDensityCommand
-    public bool IsCompact { get; }                        // RowDensity == Compact (the default)
-    public bool IsDetailed { get; }                       // RowDensity == Detailed
+    public bool IsCompact { get; }                        // RowDensity == Compact (the one-line row)
+    public bool IsDetailed { get; }                       // RowDensity == Detailed (the default)
 
     // CommunityToolkit-generated from SetDensity(ModRowDensity):
     public IRelayCommand<ModRowDensity> SetDensityCommand { get; }
@@ -1182,8 +1183,8 @@ public sealed partial class DetailedModRowsViewModel : ObservableObject
 }
 ```
 
-- `RowDensity`: the persisted density, read + normalized (only `Detailed`
-  survives; every other numeric value, including undefined, becomes `Compact`)
+- `RowDensity`: the persisted density, read + normalized (only `Compact`
+  survives; every other numeric value, including undefined, becomes `Detailed`)
   from `CuratorConfig.Preferences.ModRowDensity` at construction. The setter is
   private, so `SetDensityCommand` is the only mutation path. Setting it through
   the command normalizes, persists (a focused live
@@ -1851,8 +1852,9 @@ No backend library references the UI (the dependency direction is one-way).
   factory builds an `X11PlatformOptions` carrying it, without starting Avalonia
   or initializing X11 (no `DISPLAY` required).
 - **`DetailedModRowsViewModelTests`**: config/density normalization (default
-  Compact, old config without `ModRowDensity` loads Compact, Detailed
-  round-trips through JSON, undefined normalizes to Compact), the
+  Detailed, old config without `ModRowDensity` loads Detailed, persisted
+  `compact`/`detailed` strings load as themselves at the coordinator, Detailed
+  round-trips through JSON, undefined normalizes to Detailed), the
   `SetDensityCommand` (immediate state + persistence via a focused
   read-modify-save, same-density no-op), the coordinator pipeline (Compact
   returns a completed task + clears thumbnails; Detailed starts thumbnails +

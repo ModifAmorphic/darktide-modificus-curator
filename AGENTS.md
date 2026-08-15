@@ -39,9 +39,10 @@ game-binary constraints now live with the runtime, in
   external mod folder without copying it, manage
   the mod list (enable/disable/reorder/policy/remove), configure Settings
   (discovery paths + mod-repo location), and launch modded Darktide. The mod
-  list has a persisted Compact/Detailed row density (Compact is the default and
-  unchanged behavior; Detailed adds a Nexus summary and a cached thumbnail per
-  row). Every
+  list has a persisted Compact/Detailed row density (Detailed is the default,
+  with a Nexus summary and a cached thumbnail per row; Compact is the one-line
+  variant, surviving only when explicitly persisted or selected, and
+  absent/unknown normalizes to Detailed). Every
   Nexus Latest row shows a stable update-action button (disabled + neutral when
   no update, enabled + accent when flagged); a Premium click installs in-app,
   a regular/unknown click opens the mod's Nexus files page. Premium users can
@@ -236,10 +237,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           (view_headline for Compact, view_agenda for Detailed)
                           bound to `DetailedModRowsViewModel.SetDensityCommand`;
                           the active one carries the `selected` class (the shell's
-                          conditional-class pattern, not a ToggleButton). Compact is
-                          the default + the absent/unknown value, and the Compact
-                          view + behavior are unchanged from before the selector
-                          existed. Detailed renders a rounded card per row laid
+                          conditional-class pattern, not a ToggleButton). Detailed is
+                          the default; absent/unknown normalizes to Detailed, and
+                          Compact survives only when explicitly persisted or
+                          selected. Detailed renders a rounded card per row laid
                           out as one adaptive Grid (the card root carries
                           `Container.Name="detailedModRow"` +
                           `Container.Sizing="Width"`, so a `ContainerQuery
@@ -769,9 +770,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         CompatdataPath/ProtonBinaryPath snapshot fields; automatic
                         mode rewrites the active-platform fields from the discoverer,
                         manual mode validates the stored paths as-is)
-                        + the Preferences.ModRowDensity slot (Compact default,
-                        Detailed the multi-line variant; absent/unknown normalizes to
-                        Compact) + the AppPaths.ModThumbnailCacheDir root
+                        + the Preferences.ModRowDensity slot (Detailed default,
+                        Compact the one-line variant; absent/unknown normalizes to
+                        Detailed) + the AppPaths.ModThumbnailCacheDir root
                         (<app-data>/cache/mod-thumbnails)
   profiles/             Modificus.Curator.Profiles -- profile data model, persistence,
                           container-based staging (ProfileService.PrepareModRoot

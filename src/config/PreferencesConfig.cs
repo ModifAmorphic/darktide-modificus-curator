@@ -54,16 +54,17 @@ public sealed class PreferencesConfig
     public bool ShowRelayConsole { get; set; }
 
     /// <summary>
-    /// The mod-list row density: <see cref="ModRowDensity.Compact"/> (the dense
-    /// one-line row) or <see cref="ModRowDensity.Detailed"/> (multi-line with
-    /// summary + thumbnail). Defaults to <see cref="ModRowDensity.Compact"/>.
-    /// Owned by the Mods toolbar's density coordinator, not by
+    /// The mod-list row density: <see cref="ModRowDensity.Detailed"/> (multi-line
+    /// with summary + thumbnail) or <see cref="ModRowDensity.Compact"/> (the dense
+    /// one-line row). Defaults to <see cref="ModRowDensity.Detailed"/>. Owned by
+    /// the Mods toolbar's density coordinator, not by
     /// <see cref="IPreferencesService.ApplyAndPersist"/>; the coordinator does
     /// its own focused read-modify-save so the density field does not widen that
-    /// method's parameter list. Absent or undefined numeric values normalize to
-    /// Compact when read.
+    /// method's parameter list. Absent or undefined values normalize to
+    /// Detailed when read; Compact survives only when explicitly persisted or
+    /// selected.
     /// </summary>
-    public ModRowDensity ModRowDensity { get; set; } = ModRowDensity.Compact;
+    public ModRowDensity ModRowDensity { get; set; } = ModRowDensity.Detailed;
 }
 
 /// <summary>
@@ -84,15 +85,16 @@ public enum ThemeMode
 }
 
 /// <summary>
-/// The mod-list row density. <see cref="Compact"/> is the dense one-line row
-/// (the default); <see cref="Detailed"/> adds the summary + thumbnail rows. An
-/// absent or undefined numeric value normalizes to <see cref="Compact"/>.
+/// The mod-list row density. <see cref="Detailed"/> is the multi-line row with
+/// summary + thumbnail (the default); <see cref="Compact"/> is the dense
+/// one-line row. An absent or undefined numeric value normalizes to
+/// <see cref="Detailed"/>.
 /// </summary>
 public enum ModRowDensity
 {
-    /// <summary>The dense one-line row (the default).</summary>
+    /// <summary>The dense one-line row.</summary>
     Compact = 0,
 
-    /// <summary>The multi-line row with summary + thumbnail.</summary>
+    /// <summary>The multi-line row with summary + thumbnail (the default).</summary>
     Detailed = 1,
 }
