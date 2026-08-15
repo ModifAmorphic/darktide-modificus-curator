@@ -10,9 +10,9 @@ namespace Modificus.Curator.Integrations;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Gating.</b> The shared <see cref="UpdateCoordinator"/> serializes
-/// installs globally. <see cref="TryInstallLatestAsync"/> (the manual
-/// semantics) refuses politely when the gate is held (a
+/// <b>Gating.</b> One install runs at a time, globally across every caller.
+/// <see cref="TryInstallLatestAsync"/> (the manual semantics) refuses politely
+/// when another install is in flight (a
 /// <see cref="ModInstallStatus.Busy"/> outcome, nothing touched);
 /// <see cref="InstallLatestAsync"/> (the automatic semantics) awaits its turn
 /// so a sequential batch proceeds one mod at a time.</para>
@@ -34,8 +34,8 @@ namespace Modificus.Curator.Integrations;
 /// <c>active = true</c> when an install attempt starts (after the gate is
 /// acquired) and <c>active = false</c> from the attempt's finally block
 /// (success, failure, or cancellation), so a subscriber's spinner can never get
-/// stuck. <see cref="BusyChanged"/> mirrors the coordinator for subscribers
-/// that gate other affordances on "an install is in flight".</para>
+/// stuck. <see cref="BusyChanged"/> notifies subscribers that gate other
+/// affordances on "an install is in flight".</para>
 /// <para>
 /// <b>Errors.</b> A non-cancellation failure surfaces as
 /// <see cref="ModInstallStatus.Failed"/> carrying the exception (the caller
@@ -46,8 +46,9 @@ namespace Modificus.Curator.Integrations;
 public interface IModUpdateInstaller
 {
     /// <summary>
-    /// Whether an install is currently in flight (coordinator-backed). Raised
-    /// via <see cref="BusyChanged"/> on acquire + release.
+    /// Whether an install is currently in flight (one install runs at a time
+    /// globally). Raised via <see cref="BusyChanged"/> when an install starts
+    /// or finishes.
     /// </summary>
     bool IsBusy { get; }
 

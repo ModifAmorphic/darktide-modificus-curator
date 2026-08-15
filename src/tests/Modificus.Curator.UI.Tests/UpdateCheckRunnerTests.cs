@@ -722,6 +722,66 @@ public sealed class UpdateCheckRunnerTests
         await WaitAsync(() => service2.ThoroughCallCount == 1);
     }
 
+    [Fact]
+    public async Task CheckNow_with_a_throwing_candidate_pull_still_engages_the_refresh_gate()
+    {
+        // A manual fire consumes sliding-window budget BEFORE the check runs.
+        // When the candidate pull throws, the run ends in the null-result path
+        // (no check call, no automatic-update chaining), but the gate must
+        // still re-evaluate after the attempt: the button disables + the
+        // countdown timer engages exactly as a successful fire would. Feeding
+        // the gate only on non-null results left a budget-consuming failure
+        // with the button enabled + the countdown timer stopped until the next
+        // unrelated event.
+        var id = Guid.NewGuid();
+        var session = new FakeProfileSession { ActiveProfileId = id };
+        var profiles = new FakeProfileService
+        {
+            GetModListThrows = new KeyNotFoundException($"No profile {id}"),
+        };
+        var service = new FakeUpdateCheckService();
+        var appState = new FakeAppStateStore();
+        var now = DateTimeOffset.UtcNow;
+        Action? countdownTick = null;
+        var runner = new UpdateCheckRunner(
+            session, profiles, service, new FakeConfigLoader(), appState,
+            new FakeAutomaticUpdateService(), NullLogger<UpdateCheckRunner>.Instance,
+            getNow: () => now,
+            startCountdownTimer: t => countdownTick ??= t);
+
+        // Spend the free budget: 10 allowed fires, each ending in the
+        // null-result path (the pull throws inside every run).
+        var tenth = now;
+        for (var i = 0; i < 10; i++)
+        {
+            now = now.AddSeconds(1);
+            tenth = now;
+            await runner.CheckNowAsync();
+        }
+        var gate = runner.RefreshGate;
+
+        Assert.Equal(0, service.ThoroughCallCount); // every pull failed
+        Assert.Equal(10, appState.ManualRefreshTimestamps!.Count); // budget spent
+
+        // The gate engaged from the failed attempts alone: throttled, the
+        // button blocked by the gate, the countdown timer started.
+        Assert.True(gate.IsManualThrottled);
+        Assert.False(gate.IsRefreshEnabled);
+        Assert.NotNull(countdownTick);
+
+        // The countdown advances: a tick inside the cooldown keeps the
+        // throttle live; past the 10th timestamp + 2 minutes it clears.
+        now = tenth.AddSeconds(30);
+        countdownTick!.Invoke();
+        Assert.True(gate.IsManualThrottled);
+        Assert.False(gate.IsRefreshEnabled);
+
+        now = tenth.AddMinutes(2).AddSeconds(1);
+        countdownTick.Invoke();
+        Assert.False(gate.IsManualThrottled);
+        Assert.True(gate.IsRefreshEnabled);
+    }
+
     /// <summary>
     /// Fires <paramref name="count"/> manual refreshes, advancing the captured
     /// clock 1 second before each so the timestamps are distinct but all within

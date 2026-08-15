@@ -176,8 +176,9 @@ public sealed class UpdateCheckRunner
     // the front on every access (NextManualRefreshAllowedAt / CanRefreshManually)
     // as they age past ManualRefreshWindow. UI-thread only: CheckNowAsync and
     // the property getter run on the UI thread (the button click routes through
-    // the list VM's CheckForUpdatesNow, and the VM's countdown reads the
-    // property), so no synchronization. PERSISTS across restarts via
+    // the list VM's CheckForUpdatesNow, and the refresh gate reads the property
+    // on each re-evaluation, including each countdown tick), so no
+    // synchronization. PERSISTS across restarts via
     // IUpdateCheckScheduleState.ManualRefreshTimestamps: seeded from the store at Start()
     // (the first access prunes entries aged past the 1-hour window), and written
     // back on every successful manual fire. SEPARATE from the shared
@@ -321,9 +322,13 @@ public sealed class UpdateCheckRunner
     /// path throttles to one per <see cref="ManualRefreshThrottleInterval"/>
     /// (2 minutes). A throttled attempt is a silent no-op: it returns
     /// <see cref="Task.CompletedTask"/> WITHOUT firing, WITHOUT recording a
-    /// timestamp, and WITHOUT stamping <c>_lastCheckAt</c> / persisting. The VM
-    /// reads <see cref="NextManualRefreshAllowedAt"/> after the await to drive the
-    /// countdown tooltip + the button's disabled state.</para>
+    /// timestamp, and WITHOUT stamping <c>_lastCheckAt</c> / persisting. The
+    /// runner-owned <see cref="RefreshGate"/> decides the resulting button
+    /// state: it re-evaluates on every completed manual attempt, whatever the
+    /// outcome (an allowed fire consumed budget even when the run ends without
+    /// a result), and on a blocked attempt's early return. The list VM renders
+    /// the localized countdown tooltip + disabled state from the gate via
+    /// <see cref="UpdateRefreshGate.StateChanged"/>; it computes nothing.</para>
     /// </remarks>
     /// <returns>A <see cref="Task"/> that completes when the thorough check
     /// finishes (success or failure), or <see cref="Task.CompletedTask"/> when
@@ -366,10 +371,13 @@ public sealed class UpdateCheckRunner
     /// The absolute instant the next manual refresh becomes allowed, or
     /// <c>null</c> when the manual path is not throttled (under the free limit,
     /// or the 2-minute cooldown has elapsed). Computed via the injected
-    /// <c>_getNow</c> clock so it is deterministic in tests. The single source of
-    /// truth for both the refresh button's enable state and the countdown
-    /// tooltip: the list VM reads this on every manual attempt (after the await)
-    /// and on each 1-second countdown tick.
+    /// <c>_getNow</c> clock so it is deterministic in tests. The single source
+    /// of the manual-throttle half of the refresh gate's decisions: the
+    /// runner-owned <see cref="RefreshGate"/> reads this on every re-evaluation
+    /// (after every applied check result, after every completed or blocked
+    /// manual attempt, and on each 1-second countdown tick) + folds it into
+    /// <see cref="UpdateRefreshGate.IsManualThrottled"/>; the list VM renders
+    /// the gate's state, it does not read this directly.
     /// </summary>
     /// <remarks>
     /// Prunes the window first (so aged timestamps drop out + the count reflects
@@ -611,13 +619,11 @@ public sealed class UpdateCheckRunner
             // Defensive only: no cancellation token is wired today (the
             // runner uses the default token), so this does not fire in
             // production. Swallowed silently regardless.
-            return;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex,
                 "Update check for profile {Profile} threw unexpectedly.", profileId);
-            return;
         }
 
         // The thread-pool task returned the result. The outer await resumes on
@@ -649,6 +655,16 @@ public sealed class UpdateCheckRunner
                 _logger.LogError(ex,
                     "Automatic update batch for profile {Profile} threw unexpectedly.", profileId);
             }
+        }
+        else
+        {
+            // The run ended without a result: the candidate pull failed, or
+            // the belt-and-suspenders catch above swallowed an unexpected
+            // throw. A manual fire consumed sliding-window budget BEFORE the
+            // run started, so the gate still owes a re-evaluation; a null
+            // result changes no rate-limit tracking, so a plain re-evaluate
+            // (not ApplyResult) is the full feed.
+            RefreshGate.Reevaluate();
         }
     }
 }

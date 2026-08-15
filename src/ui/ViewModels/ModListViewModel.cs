@@ -1171,10 +1171,12 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     /// <see cref="IUpdateCheckService.CheckCompleted"/> subscription re-applies
     /// the result to the rows when it lands. The command is a no-op (via the
     /// runner) when no profile is active; a second click while one is in flight
-    /// is a no-op (the <see cref="IsCheckingNow"/> guard). After the await,
-    /// <see cref="ReevaluateRefreshGate"/> re-evaluates the runner's
-    /// sliding-window throttle so the button disables + the countdown tooltip
-    /// engages when the manual path is rate-limited.
+    /// is a no-op (the <see cref="IsCheckingNow"/> guard). The runner-owned
+    /// refresh gate (<see cref="UpdateRefreshGate"/>) re-evaluates itself after
+    /// every completed attempt, whatever the outcome, so the button's disabled
+    /// state + the countdown tooltip arrive via the gate's
+    /// <see cref="UpdateRefreshGate.StateChanged"/>; this VM does no post-await
+    /// gate work.
     /// </summary>
     [RelayCommand]
     private async Task CheckForUpdatesNow()
@@ -1195,9 +1197,9 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
             // synchronously. The runner's Task.Run dispatches the actual check
             // to a thread-pool task; we only await its completion here. The
             // runner's refresh gate re-evaluates itself after every attempt (a
-            // fire that spent the free budget engages the countdown; a blocked
-            // attempt re-evaluates on its early return), so this VM needs no
-            // post-await gate work.
+            // fire that spent the free budget engages the countdown whatever
+            // the run's outcome; a blocked attempt re-evaluates on its early
+            // return), so this VM needs no post-await gate work.
             await _updateCheckRunner.CheckNowAsync();
         }
         finally

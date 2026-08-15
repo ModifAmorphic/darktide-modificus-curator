@@ -1173,8 +1173,9 @@ public sealed class ModListViewModelTests
     /// Drives the runner into the throttled state by firing 10 manual refreshes
     /// through the VM's CheckForUpdatesNow command (advancing the runner clock
     /// 1s before each so the timestamps are distinct but within 2 minutes of
-    /// each other). The 10th fire engages the throttle: ReevaluateRefreshGate
-    /// runs after the await + sees the count at 10.
+    /// each other). The 10th fire engages the throttle: the runner's refresh
+    /// gate re-evaluates after the awaited attempt + sees the count at 10, and
+    /// the VM renders the throttled state via the gate's StateChanged.
     /// </summary>
     private static async Task DriveIntoThrottleAsync(
         ModListViewModel vm, Action<DateTimeOffset> setClock)
