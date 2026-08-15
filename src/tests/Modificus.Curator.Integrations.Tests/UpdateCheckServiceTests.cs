@@ -297,6 +297,23 @@ public sealed class UpdateCheckServiceTests
         Assert.Equal(0, nexus.GraphQlCallCount);
     }
 
+    [Fact]
+    public async Task CheckAsync_empty_candidates_yield_NoNexusMods_not_Failed()
+    {
+        // An empty candidate list (a valid profile with no mods) is the local
+        // truth that no applicable Nexus update can exist: the NoNexusMods
+        // short-circuit (which clears persisted known-update state), never a
+        // Failed outcome.
+        var nexus = new FakeNexusClient(); // unset; would serve an empty default if called
+        var service = CreateService(nexus, new FakeModRepository());
+
+        var result = await service.CheckAsync(ProfileId, Array.Empty<ModListCandidate>());
+
+        Assert.Empty(result.Updates);
+        Assert.Equal(CheckOutcome.NoNexusMods, result.Outcome);
+        Assert.Equal(0, nexus.GraphQlCallCount);
+    }
+
     // ---- source / policy filter -------------------------------------------
 
     [Fact]
