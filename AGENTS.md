@@ -593,16 +593,16 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            non-clickable "Folder unavailable" text in the same cell
                            (caution brush; `IsExternalBroken` pushed from
                            `IsExternalAvailable` at Reload). The policy ComboBox is
-                          disabled for linked rows + the update-action cell stays
-                          empty (space preserved). A Nexus + Latest row's source
-                          badge appends the installed release tag inline
-                          (e.g. `Nexus #8 · 1.0`, the `ActualVersion` joined from the
-                          repo); Pinned exposes its version in the pin dropdown +
-                          Untracked isn't Nexus-sourced, so neither appends it to the
-                          badge. `ModItemViewModel`
-                          carries the INPC state + derived `SourceUrl`/`UpdatePageUrl`/
-                          `IsNexusLatest`/`CanShowUpdateAction`/
-                          `UpdateActionEnabled`/`UpdateActionTooltip`/`NexusModId`;
+                           disabled for linked rows + the update-action cell stays
+                           empty (space preserved). A Nexus + Latest row's source
+                           badge appends the installed release tag inline
+                           (e.g. `Nexus #8 · 1.0`, the `ActualVersion` joined from the
+                           repo); Pinned exposes its version in the pin dropdown +
+                           Untracked isn't Nexus-sourced, so neither appends it to the
+                           badge. `ModItemViewModel`
+                           carries the INPC state + derived `SourceUrl`/`UpdatePageUrl`/
+                           `IsNexusLatest`/`CanShowUpdateAction`/
+                           `UpdateActionEnabled`/`UpdateActionTooltip`/`NexusModId`;
                            `IsPremiumUser` + `AnyRowUpdating` + `IsGamingMode` are
                            pushed down so the per-row enabled state + tooltip
                            recompute without a parent walk (while gaming, a
@@ -610,26 +610,26 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            tooltip carry Desktop Mode guidance instead of the
                            files-page launch; Premium rows keep the in-app
                            install path). The `UpdateCoordinator` (ui/Session/) is the
-                          single one-install-at-a-time gate shared with the
-                          `IAutomaticUpdateService` (ui/Session/), the opt-in
-                          Premium automatic installer chained after each check from
-                          `UpdateCheckRunner` (captures the exact result, gates on
-                          authoritative Success + updates + AutomaticUpdatesEnabled
-                          + active profile + a fresh Premium verify, installs
-                          sequentially under the coordinator, isolates per-mod
-                          failures into one summary alert, acknowledges on success,
-                          stops on profile switch, raises UpdatesApplied so the list
-                          VM reloads, raises ModUpdateProgress per mod so the
-                          row-level spinner tracks the currently installing row).
-                          The check is split by trigger:
-                          `IUpdateCheckService.CheckAsync` (the v2 GraphQL
-                          `modsByUid` batch query, 1 API call for all mods)
-                          fires on profile load + the periodic timer, both
-                          interval-gated; `IUpdateCheckService.CheckThoroughAsync`
-                          (same v2 batch query; the two differ only in the result's
-                          `Thorough` flag) fires on the manual "check now" button
-                          under its own sliding-window throttle; both record their
-                          authoritative outcome through the `IUpdateStateStore`
+                           single one-install-at-a-time gate shared with the
+                           `IAutomaticUpdateService` (ui/Session/), the opt-in
+                           Premium automatic installer chained after each check from
+                           `UpdateCheckRunner` (captures the exact result, gates on
+                           authoritative Success + updates + AutomaticUpdatesEnabled
+                           + active profile + a fresh Premium verify, installs
+                           sequentially under the coordinator, isolates per-mod
+                           failures into one summary alert, acknowledges on success,
+                           stops on profile switch, raises UpdatesApplied so the list
+                           VM reloads, raises ModUpdateProgress per mod so the
+                           row-level spinner tracks the currently installing row).
+                           The check is split by trigger:
+                           `IUpdateCheckService.CheckAsync` (the v2 GraphQL
+                           `modsByUid` batch query, 1 API call for all mods)
+                           fires on profile load + the periodic timer, both
+                           interval-gated; `IUpdateCheckService.CheckThoroughAsync`
+                           (same v2 batch query; the two differ only in the result's
+                           `Thorough` flag) fires on the manual "check now" button
+                           under its own sliding-window throttle; both record their
+                           authoritative outcome through the `IUpdateStateStore`
                           (Success replaces/clears, NoNexusMods clears, no-auth/
                           rate-limit/failed preserve) + share `LastResult`/
                           `CheckCompleted`, distinguished by the result's

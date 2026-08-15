@@ -416,7 +416,9 @@
         Gaming Mode toolbar hint (Steam Deck): shown only while a Gaming Mode
         session is detected, next to the disabled Add split button. The
         touch/controller-reachable explanation for the whole Add affordance (no
-        hover required); may ellipsize at narrow widths.
+        hover required). Sits in an Auto column, so at the window minimum the
+        toolbar grid hard-clips rather than reflowing; Gaming-Mode-only and
+        sized to fit with slack at the minimum width.
       -->
       <TextBlock Grid.Column="5"
                  Text="{ReflectionBinding [ModList_AddGamingModeHint], Source={StaticResource Loc}}"
@@ -424,8 +426,7 @@
                  FontSize="11"
                  Opacity="0.6"
                  Margin="12,0,0,0"
-                 VerticalAlignment="Center"
-                 TextTrimming="CharacterEllipsis" />
+                 VerticalAlignment="Center" />
     </Grid>
 
     <!--
