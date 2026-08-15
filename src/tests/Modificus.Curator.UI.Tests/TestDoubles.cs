@@ -1601,18 +1601,12 @@ internal class FakeModRepository : IModRepository
 
     // Default-safe: managed + unknown report available (matches production).
     // Linked availability is driven by ExternalUnavailableIds so a VM test can
-    // simulate a broken linked container (the repo recomputes this on rescan in
-    // production; the VM reads it once per reload here).
+    // simulate a broken linked container (production seeds the signal when the
+    // container is recorded; the VM reads it once per reload here).
     public HashSet<Guid> ExternalUnavailableIds { get; } = new();
 
     public bool IsExternalAvailable(Guid containerId) =>
         !ExternalUnavailableIds.Contains(containerId);
-
-    // Rescan is a repository-lifecycle operation exercised by the Mods-layer
-    // tests; the VM tests never drive it. Recorded as a no-op so a future VM
-    // test that wires it can assert on the call.
-    public int RescanCalls { get; private set; }
-    public virtual void Rescan() => RescanCalls++;
 
     /// <summary>Test helper: seed a container with a single latest version.</summary>
     public ModContainer Seed(ModSource source, string name, string versionString = "1.0")

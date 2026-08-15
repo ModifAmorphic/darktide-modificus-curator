@@ -397,8 +397,8 @@ use.
 **Storage location:** because paths are derived, changing `<ModsFolder>` is a
 physical move of the tree plus a config update; no manifest rewriting, no drift
 detection. Curator does not offer the move from the UI (the operator edits the
-config + moves the folder by hand); `Rescan` rebuilds the in-memory index from
-the new location.
+config + moves the folder by hand); the in-memory index follows the new
+location on the next start.
 
 ## Mod sources / integrations
 

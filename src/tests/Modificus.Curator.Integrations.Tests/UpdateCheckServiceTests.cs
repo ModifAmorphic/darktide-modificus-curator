@@ -1729,7 +1729,6 @@ public sealed class UpdateCheckServiceTests
             => throw new NotImplementedException();
         public void PruneUnreferenced(IReadOnlySet<(Guid ContainerId, string VersionFolder)> referenced)
             => throw new NotImplementedException();
-        public void Rescan() => throw new NotImplementedException();
         public bool IsExternalAvailable(Guid containerId) => throw new NotImplementedException();
     }
 
