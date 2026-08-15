@@ -106,6 +106,12 @@ public static class CuratorComposition
             sp.GetRequiredService<IAppStateStore>(),
             StartRunningStatePolling));
         services.AddSingleton<LocalizationService>();
+        // Whether the app runs inside a Steam Deck Gaming Mode session,
+        // captured once here (the session cannot change without restarting
+        // Curator). The theme application reads it: the System preference
+        // resolves to Dark inside Gaming Mode, where no usable OS
+        // color-scheme preference exists.
+        services.AddSingleton<IGamingModeState>(new GamingModeState());
         services.AddSingleton<IPreferencesService, PreferencesService>();
         // MainWindow is a singleton resolved as desktop.MainWindow + the modal
         // dialog owner. Built through an explicit factory that supplies
