@@ -404,14 +404,6 @@
     <value>Adding mods from Nexus Mods requires Steam Deck Desktop Mode.</value>
     <comment>Secondary hint shown in the no-mods empty state while a Steam Deck Gaming Mode session is detected (it replaces the nxm download hint, whose instruction cannot be followed there).</comment>
   </data>
-  <data name="ModList_AutoSort" xml:space="preserve">
-    <value>Auto-sort</value>
-    <comment>Label next to the auto-sort checkbox in the mod list header.</comment>
-  </data>
-  <data name="ModList_AutoSortTooltip" xml:space="preserve">
-    <value>Sort mods by their dependencies (dependency-based sorting is coming; currently no-op).</value>
-    <comment>Tooltip on the auto-sort checkbox. Notes that real sorting is coming; no em-dash.</comment>
-  </data>
   <data name="ModList_CompactRowsTooltip" xml:space="preserve">
     <value>Compact mods</value>
     <comment>Tooltip + accessibility name on the Compact density toolbar button.</comment>

@@ -223,8 +223,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           sorting, and app restarts;
                           the Mods destination (`ModListViewModel` + `ModListView`):
                           the active profile's mod list (the dominant content area),
-                          with its own toolbar (refresh, rate-limit notice, auto-
-                          sort, the Compact/Detailed density selector, the Add split
+                          with its own toolbar (refresh, rate-limit notice,
+                          the Compact/Detailed density selector, the Add split
                           button) shown only on Mods, and the
                           inline import card (`ImportWorkflowViewModel` +
                           `ImportWorkflowView`, an application-lifetime singleton
@@ -826,9 +826,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         RELAY_LUA_LOGS + RELAY_SKIP_SPLASH); backward-
                         compat null/missing normalization to empty, mirroring Mods;
                         GetLaunchSettings is the focused read the launch path uses;
-                        apply at launch) + the auto-sort seam
-                        (IModOrderResolver/IdentityModOrderResolver, identity stub now;
-                        real dependency-driven resolver later) + ModCleanup (the startup
+                        apply at launch) + ModCleanup (the startup
                         prune orchestration; keeps a referenced linked container by
                         containerId sentinel, since a linked container has no versions)
   mods/          Modificus.Curator.Mods -- the unified mod repository
@@ -1454,12 +1452,12 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   runs), global
   Preferences + i18n infrastructure, the mod-list UI (view mods with
   source/version badges, enable/disable, remove-with-confirm, reorder (drag the
-  per-row grip at the left edge, Move Up / Move Down buttons, or auto-sort;
+  per-row grip at the left edge, or Move Up / Move Down buttons;
   profile-scoped per-row order locks keep a row's exact zero-based position
-  across any reorder or auto-sort, toggled by a lock button beside Move Up /
+  across any reorder, toggled by a lock button beside Move Up /
   Move Down; the grip is the only surface that initiates a drag so the rest of
   every row stays touch-scrolling surface), per-mod
-  Latest/Pinned policy, auto-sort identity stub, local folder/archive import
+  Latest/Pinned policy, local folder/archive import
   via file picker + drag-and-drop, and linking an external mod folder without
   copying it, joined to containers via `IModRepository` by
   `ContainerId`; a persisted Compact/Detailed row density with cached

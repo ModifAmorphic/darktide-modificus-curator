@@ -40,7 +40,7 @@ public enum ModAddMode
 /// shell. Loads the profile's mods (joined with source + version from the mod
 /// repository for the badge), and applies every edit through
 /// <see cref="IProfileService"/>: enable/disable, reorder (up/down), per-mod
-/// policy (Latest / Pinned), remove (confirmed), auto-sort (identity stub),
+/// policy (Latest / Pinned), remove (confirmed),
 /// the add flow (file picker + drag-and-drop) forwarded to the injected
 /// <see cref="ImportWorkflowViewModel"/> (the inline import card), and the
 /// link-external-folder flow (folder picker only, no copy, no card) via
@@ -129,7 +129,6 @@ public partial class ModListViewModel : ObservableObject
     private readonly IProfileSession _session;
     private readonly IModRepository _repo;
     private readonly IModImportService _importService;
-    private readonly IModOrderResolver _orderResolver;
     private readonly IDialogService _dialogs;
     private readonly LocalizationService _localization;
     private readonly IUpdateCheckService _updateCheck;
@@ -171,7 +170,6 @@ public partial class ModListViewModel : ObservableObject
         IProfileSession session,
         IModRepository repo,
         IModImportService importService,
-        IModOrderResolver orderResolver,
         IDialogService dialogs,
         LocalizationService localization,
         IUpdateCheckService updateCheck,
@@ -197,7 +195,6 @@ public partial class ModListViewModel : ObservableObject
         _session = session;
         _repo = repo;
         _importService = importService;
-        _orderResolver = orderResolver;
         _dialogs = dialogs;
         _localization = localization;
         _updateCheck = updateCheck;
@@ -386,15 +383,6 @@ public partial class ModListViewModel : ObservableObject
     /// conjunction in a single Avalonia compiled binding.
     /// </summary>
     public bool ShowAddModsHint => HasActiveProfile && ModCount <= 1;
-
-    /// <summary>
-    /// The auto-sort toggle state. Turning it on applies the
-    /// <see cref="IModOrderResolver"/> once (the identity stub is a no-op). Held
-    /// in-memory only for v1 (not persisted): the real dependency-driven resolver
-    /// lands later, and the toggle reflects "apply once" intent.
-    /// </summary>
-    [ObservableProperty]
-    private bool _autoSortEnabled;
 
     /// <summary>
     /// The Add split button's current mode (which action the primary click runs).
@@ -1694,30 +1682,6 @@ public partial class ModListViewModel : ObservableObject
         {
             return false;
         }
-    }
-
-    // ---- auto-sort (identity stub) -----------------------------------------
-
-    /// <summary>
-    /// Applies the <see cref="IModOrderResolver"/> to the current list + persists
-    /// the resolved order. With the identity stub this is a no-op (order
-    /// unchanged); the real dependency-driven resolver drops in later without a
-    /// UI change. <see cref="AutoSortEnabled"/> reflects the toggle state.
-    /// </summary>
-    [RelayCommand]
-    private void AutoSort()
-    {
-        if (_session.ActiveProfileId is not Guid id || Mods.Count == 0)
-        {
-            return;
-        }
-
-        var entries = _profiles.GetModList(id);
-        var order = _orderResolver.ResolveOrder(entries);
-        _profiles.SetModOrder(id, order);
-        _session.HasPendingChanges = true;
-        Reload();
-        _logger.LogDebug("Auto-sorted via {Resolver}", _orderResolver.GetType().Name);
     }
 
     // ---- link-external-folder helper -------------------------------------

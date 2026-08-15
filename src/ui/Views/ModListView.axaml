@@ -196,7 +196,7 @@
 
   <!--
     The active profile's mod list: header (title + rate-limit notice +
-    check-now refresh + auto-sort + Add split button) over a scrollable row
+    check-now refresh + Add split button) over a scrollable row
     list. The no-profile handoff (a HyperlinkButton to Profiles) is owned by
     the shell in MainWindow.axaml and overlays this page only when there is no
     active profile; this view never paints its own no-profile text. The whole
@@ -222,20 +222,20 @@
 
   <Grid RowDefinitions="Auto,Auto,*">
 
-    <!-- Header: check-now refresh + rate-limit notice + hidden auto-sort seam +
+    <!-- Header: check-now refresh + rate-limit notice +
          Compact/Detailed density selector + Add split button (hidden until a
          profile is active). The destination title lives in the global shell
-         header; this toolbar shows only the Mods-specific actions. Refresh is
-         first; the rate-limit notice follows it and occupies the single flexible
-         (*) column so the pill keeps its content width at wide widths while the
-         column still gives it a finite constraint for ellipsis at narrow widths
-         (its full text stays in the tooltip), never pushing the density pair or
-         Add out; the hidden auto-sort seam stays wired; the
-         density pair sits adjacent immediately before Add. The toolbar carries
-         the page's safe left + right insets (the row ScrollViewer below spans to
-         the destination edge so its scrollbar sits at the edge, not inset). -->
+          header; this toolbar shows only the Mods-specific actions. Refresh is
+          first; the rate-limit notice follows it and occupies the single flexible
+          (*) column so the pill keeps its content width at wide widths while the
+          column still gives it a finite constraint for ellipsis at narrow widths
+          (its full text stays in the tooltip), never pushing the density pair or
+          Add out; the
+          density pair sits adjacent immediately before Add. The toolbar carries
+          the page's safe left + right insets (the row ScrollViewer below spans to
+          the destination edge so its scrollbar sits at the edge, not inset). -->
     <Grid Grid.Row="0"
-          ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto"
+          ColumnDefinitions="Auto,*,Auto,Auto,Auto"
           IsVisible="{Binding HasActiveProfile}"
           Margin="20,12,20,8">
       <!--
@@ -311,21 +311,6 @@
                      VerticalAlignment="Center" />
       </StackPanel>
       <!--
-        Auto-sort toggle. Intentionally hidden (IsVisible="False"): the real
-        dependency-driven IModOrderResolver lands later. The wiring (the
-        AutoSortEnabled binding, the AutoSort_Click handler, the
-        IdentityModOrderResolver registration) stays intact so the seam drops in
-        without a UI change; only the control is collapsed out of layout.
-      -->
-      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Margin="16,0,0,0"
-                   IsVisible="False">
-        <CheckBox IsChecked="{Binding AutoSortEnabled, Mode=TwoWay}"
-                  Click="AutoSort_Click"
-                  ToolTip.Tip="{ReflectionBinding [ModList_AutoSortTooltip], Source={StaticResource Loc}}" />
-        <TextBlock Text="{ReflectionBinding [ModList_AutoSort], Source={StaticResource Loc}}"
-                   VerticalAlignment="Center" />
-      </StackPanel>
-      <!--
         Compact / Detailed density selector. Two adjacent drawn-icon buttons
         immediately before Add; the active one carries the `selected` class
         (bound to DetailedRows.IsCompact / IsDetailed, the shell's conditional
@@ -340,7 +325,7 @@
         Compact, view_agenda (two stacked blocks) for Detailed, so the two read
         as distinct densities rather than two near-identical lists.
       -->
-      <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="2"
+      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2"
                    VerticalAlignment="Center" Margin="16,0,0,0">
         <Button Classes="icon density"
                 Classes.selected="{Binding DetailedRows.IsCompact}"
@@ -383,7 +368,7 @@
         guidance while disabled, and the toolbar hint below explains without
         hover.
       -->
-      <SplitButton Grid.Column="4"
+      <SplitButton Grid.Column="3"
                    Click="Add_Click"
                    ToolTip.Tip="{Binding AddButtonTooltip}"
                    ToolTip.ShowOnDisabled="True"
@@ -420,7 +405,7 @@
         toolbar grid hard-clips rather than reflowing; Gaming-Mode-only and
         sized to fit with slack at the minimum width.
       -->
-      <TextBlock Grid.Column="5"
+      <TextBlock Grid.Column="4"
                  Text="{ReflectionBinding [ModList_AddGamingModeHint], Source={StaticResource Loc}}"
                  IsVisible="{Binding IsGamingMode}"
                  FontSize="11"

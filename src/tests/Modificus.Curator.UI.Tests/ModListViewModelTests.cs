@@ -359,28 +359,6 @@ public sealed class ModListViewModelTests
         Assert.Empty(profiles.SetModOrderCalls);
     }
 
-    // ---- auto-sort (identity no-op) ----------------------------------------
-
-    [Fact]
-    public void AutoSort_runs_the_resolver_and_persists_the_order()
-    {
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var repo = new FakeModRepository();
-        var dmf = Seed(repo, new UntrackedSource(), "DMF");
-        var sound = Seed(repo, new UntrackedSource(), "SoundPack");
-        profiles.WithMods(a.Id,
-            new ModListEntry { ContainerId = dmf.Id, Order = 0 },
-            new ModListEntry { ContainerId = sound.Id, Order = 1 });
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var vm = Build(profiles, session, repo);
-
-        vm.AutoSortCommand.Execute(null);
-
-        // Identity resolver returns the current order unchanged (by container id).
-        Assert.Equal(new[] { dmf.Id, sound.Id }, Assert.Single(profiles.SetModOrderCalls));
-    }
-
     // ---- remove (confirm / cancel) -----------------------------------------
 
     [Fact]
@@ -2386,17 +2364,6 @@ public sealed class ModListViewModelTests
         Assert.False(session.HasPendingChanges);
 
         await vm.RemoveCommand.ExecuteAsync(Row(vm, "DMF"));
-
-        Assert.True(session.HasPendingChanges);
-    }
-
-    [Fact]
-    public void AutoSort_sets_HasPendingChanges()
-    {
-        var (vm, session, _) = BuildWithOneMod();
-        Assert.False(session.HasPendingChanges);
-
-        vm.AutoSortCommand.Execute(null);
 
         Assert.True(session.HasPendingChanges);
     }

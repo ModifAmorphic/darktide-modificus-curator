@@ -111,7 +111,6 @@ internal static class TestDoubles
         FakeProfileSession? session = null,
         FakeModRepository? repo = null,
         FakeModImportService? importService = null,
-        IModOrderResolver? orderResolver = null,
         FakeDialogService? dialogs = null,
         LocalizationService? localization = null,
         FakeUpdateCheckService? updateCheck = null,
@@ -136,7 +135,6 @@ internal static class TestDoubles
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
         repo ??= new FakeModRepository();
         importService ??= new FakeModImportService(repo);
-        orderResolver ??= new IdentityModOrderResolver();
         dialogs ??= new FakeDialogService();
         localization ??= new LocalizationService();
         updateCheck ??= new FakeUpdateCheckService();
@@ -219,7 +217,6 @@ internal static class TestDoubles
             session,
             repo,
             importService,
-            orderResolver,
             dialogs,
             localization,
             updateCheck,

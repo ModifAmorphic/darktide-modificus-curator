@@ -41,7 +41,7 @@ dialogs, preferences, and i18n fit together.
 │  │  visibility-switched by Is*Visible projections)                      │ │
 │  │ ProfilesView | ModListView (drag-and-drop) | IntegrationsView |      │ │
 │  │   ModListView header: rate-limit notice · refresh ·                  │ │
-│  │     auto-sort · Compact/Detailed density selector ·                  │ │
+│  │     Compact/Detailed density selector ·                              │ │
 │  │     Add split button (Nexus Mods + 3 pickers)                        │ │
 │  │   rows:   Compact Grid OR Detailed card (thumbnail + name +          │ │
 │  │     badge + summary · wrapping action strip: enabled · policy ·       │ │
@@ -504,7 +504,7 @@ The command set:
   file/folder `DragDrop` handlers (which stay external-only).
 - **Order lock** (`ToggleOrderLock`): toggles `ModListEntry.OrderLocked` through
   `IProfileService.SetModOrderLocked`. A locked row keeps its exact zero-based
-  position across any reorder or auto-sort; its grip stops intercepting pointer
+  position across any reorder; its grip stops intercepting pointer
   input (the area falls through to touch scrolling) and both move buttons
   disable. Lock metadata alone does NOT set `IProfileSession.HasPendingChanges`:
   it does not change the staged mod tree or `mods.lst`.
@@ -516,12 +516,6 @@ The command set:
 - **Remove** (`Remove`): a confirm gate, then `IProfileService.RemoveMod`.
   The repository copy survives; the confirm is about the profile edit, not
   data loss.
-- **Auto-sort** (`AutoSort`): applies the `IModOrderResolver` and persists. The
-  current resolver is the identity resolver (order unchanged); a real
-  dependency-driven resolver is a separate concern. The seam is DI-swappable, so
-  the UI wires against the abstraction, and a locked row keeps its position
-  through auto-sort because the resolver routes through the lock-projecting
-  `SetModOrder`.
 - **Add** (inline import workflow): the Add split button's four flyout items are
   all modes that set themselves as the default on click (the face label tracks
   the mode): "Add Nexus Mods" (the default; opens the Darktide Nexus Mods games
@@ -829,7 +823,7 @@ re-hydrates from the store when the result lands.
 ### View affordances
 
 - **The Mods toolbar.** Refresh + an indeterminate spinner (the manual "check
-  now" affordance), the rate-limit notice pill, the hidden auto-sort seam, the
+  now" affordance), the rate-limit notice pill, the
   Compact/Detailed density selector, and the Add split button, in that order.
   The rate-limit pill occupies the toolbar's single flexible (`*`) column with
   `HorizontalAlignment=Left`: at normal and wide widths it keeps its content

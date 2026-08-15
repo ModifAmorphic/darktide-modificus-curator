@@ -300,26 +300,6 @@ asserts they agree, guarding against drift. Profile files are plaintext, so this
 is not secret storage; logs never print environment values (only the profile id
 + counts).
 
-### `IModOrderResolver` + `IdentityModOrderResolver`
-
-The auto-sort seam. The mod-list UI's auto-sort toggle resolves an order via
-this interface, then applies it through `IProfileService.SetModOrder`.
-
-```csharp
-public interface IModOrderResolver
-{
-    IReadOnlyList<Guid> ResolveOrder(IReadOnlyList<ModListEntry> mods);
-}
-
-public sealed class IdentityModOrderResolver : IModOrderResolver;   // identity stub
-```
-
-The current implementation is the **identity stub** (`IdentityModOrderResolver`):
-it returns container ids in their current `ModListEntry.Order` (a no-op). A real
-dependency-driven auto-sort algorithm is out of v1; this interface is the
-DI-swappable seam so the UI wires against the abstraction now.
-Pure + deterministic (stable on ties).
-
 ### `ModCleanup` (static)
 
 Startup prune orchestration. Collects every `(containerId, versionFolder)`
@@ -358,9 +338,6 @@ public static IServiceCollection AddProfiles(this IServiceCollection services);
   platform-selective default (an NTFS junction on Windows via `Junction.Create`;
   `Directory.CreateSymbolicLink` on Linux). `TryAdd` so a test may pre-register a
   throwing/fake delegate.
-- `TryAddSingleton<IModOrderResolver, IdentityModOrderResolver>()`: the auto-
-  sort identity stub. `TryAdd` so a test (or a real dependency-driven resolver)
-  may pre-register an override.
 - `AddSingleton<IProfileService, ProfileService>()` -- the filesystem-backed
   implementation (internal). Resolves `CuratorConfig`, `IModRepository`,
   `StagingLinkCreator`, and `ILogger<ProfileService>` from the container.
@@ -420,8 +397,8 @@ staging-link projection (an NTFS junction on Windows, a symlink on Linux). For a
 linked mod the link points directly at the external folder; the external folder
 is the user's and is never modified.
 `mods.lst` lists exactly what got staged, in `Order`: staging itself enforces
-no placement (the fresh-add DMF-first + lock default lives in `AddMod`, and
-auto-sort is a higher-layer concern), so the file is a faithful projection of
+no placement (the fresh-add DMF-first + lock default lives in `AddMod`), so the
+file is a faithful projection of
 the profile's list.
 
 ### Moving `IsLatest` requires zero profile-entry changes

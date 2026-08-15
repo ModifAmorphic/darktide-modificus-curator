@@ -120,8 +120,8 @@ public static class CuratorComposition
         services.AddSingleton<MainWindow>(sp => new MainWindow(
             sp.GetRequiredService<IAppStateStore>()));
         // The active profile's mod-list VM: a singleton (one list, the dominant
-        // content area). Resolves IModImportService (via AddMods) +
-        // IModOrderResolver (via AddProfiles), both already registered above.
+        // content area). Resolves IModImportService (via AddMods),
+        // already registered above.
         // The UI-thread marshal seam for ModListViewModel's CheckCompleted handler
         // (the event fires on a threadpool thread; the handler iterates the
         // UI-bound Mods collection). Production wires Dispatcher.UIThread.Post.
@@ -213,7 +213,6 @@ public static class CuratorComposition
                 sp.GetRequiredService<IProfileSession>(),
                 sp.GetRequiredService<IModRepository>(),
                 sp.GetRequiredService<IModImportService>(),
-                sp.GetRequiredService<IModOrderResolver>(),
                 sp.GetRequiredService<IDialogService>(),
                 sp.GetRequiredService<LocalizationService>(),
                 sp.GetRequiredService<IUpdateCheckService>(),

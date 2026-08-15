@@ -629,17 +629,6 @@ public partial class ModListView : UserControl
     }
 
     /// <summary>
-    /// Applies the auto-sort resolver once on toggle. The command is a no-op when
-    /// there is no active profile or no mods (and the identity resolver makes it a
-    /// no-op regardless); <see cref="ModListViewModel.AutoSortEnabled"/> tracks the
-    /// toggle state for display.
-    /// </summary>
-    private void AutoSort_Click(object? sender, RoutedEventArgs e)
-    {
-        ViewModel?.AutoSortCommand.Execute(null);
-    }
-
-    /// <summary>
     /// Routes the header "check for updates now" button to the VM's
     /// <c>CheckForUpdatesNowCommand</c> (an AsyncRelayCommand). The command
     /// owns the thorough check + the <c>IsCheckingNow</c> affordance + the

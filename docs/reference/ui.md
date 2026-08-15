@@ -48,7 +48,7 @@ public interface IProfileSession : INotifyPropertyChanged
 - `HasPendingChanges`: session-scoped edit/stage coordination state. True when
   the active profile's `profile.json` has structural/version edits not yet
   reflected in the staged tree the running game loaded. Set by mod-list edits
-  (toggle/move/policy/remove/add/link/auto-sort/update); cleared on the next
+  (toggle/move/policy/remove/add/link/update); cleared on the next
   successful stage (a launch). In-memory only (never persisted). The shell
   surfaces this as a yellow "changes pending" status dot while the game runs,
   since Curator does not re-stage the mod tree mid-session.
@@ -1661,7 +1661,7 @@ instance violation) propagates out; `App` catches it and calls
 - **Curator libraries:** `config` (`CuratorConfig`, `PreferencesConfig`,
   `ThemeMode`, `ModRowDensity`, `NexusConfig`, `DiscoveryConfig`), `general`
   (`IConfigLoader`, `IAppStateStore`, `LoggingBootstrap`), `profiles`
-  (`IProfileService`, `ProfileSummary`, `ModListEntry`, `IModOrderResolver`),
+  (`IProfileService`, `ProfileSummary`, `ModListEntry`),
   `mods` (`IModRepository`, `IModImportService`, `ModContainer`,
   `ModDisplayMetadata`, `ModVersion`, `ModVersionPolicy`, `ModSource`,
   `NexusSource`, `UntrackedSource`, `LinkedSource`),
@@ -1752,7 +1752,7 @@ No backend library references the UI (the dependency direction is one-way).
   Profiles library -- plus the `EnableLuaLogs` Logging toggle + the `SkipSplash`
   skip-splash toggle).
 - **`ModListViewModelTests`**: enable / disable, reorder, per-mod policy,
-  remove (with confirm), auto-sort (identity resolver), the inline import workflow
+  remove (with confirm), the inline import workflow
   integration (child VM exposure, `ItemImported` reload for the active profile,
   no-misdirect for an inactive profile, add-mode stability, end-to-end
   create/activate/import), the linked-folder flow
@@ -1911,7 +1911,7 @@ dotnet test src/modificus-curator.sln -c Release
 - [integrations](integrations.md): the `INexusAuthService`,
   `IModAcquisitionService`, `INexusModMetadataService`, and
   `IUpdateCheckService` the UI consumes.
-- [profiles](profiles.md): `IProfileService`, `IModOrderResolver`, and the
+- [profiles](profiles.md): `IProfileService` and the
   profile / mod-list model the UI drives.
 - [mods](mods.md): `IModRepository`, `IModImportService`, `ModDisplayMetadata`,
   and the source / version-policy model the UI reads.

@@ -26,8 +26,8 @@ unmodified).
   Compact and Detailed row density; Detailed rows show a Nexus summary and a
    cached thumbnail when one is available, with a neutral placeholder otherwise.
    Reorder mods by dragging the grip at the left edge of a row, or with the Move
-   Up and Move Down buttons; lock a mod's load-order position so reordering and
-   auto-sort leave it in place.
+   Up and Move Down buttons; lock a mod's load-order position so reordering
+   leaves it in place.
    On first startup a one-time Welcome window introduces Curator and offers to
   set up the Nexus integration. See
   [`src/README.md`](src/README.md) for developer/build

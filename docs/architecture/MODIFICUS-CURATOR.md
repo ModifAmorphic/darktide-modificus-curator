@@ -545,10 +545,9 @@ is in [UI reference](../reference/ui.md).
 - Per-mod: enable / disable, remove, update (when the source reports a newer
   version), pin to version, per-mod auto-update override. The pinned-vs-latest
   policy drives version resolution at stage time (see [Mod repository](#mod-repository)).
-- Auto-sort (dependency-driven; toggleable); manual reorder (drag the per-row
-  grip at the left edge, or the Move Up / Move Down buttons) overrides
-  auto-sort. A mod can be locked to its exact zero-based position; a locked row
-  keeps its position across any reorder or auto-sort, and its grip stops
+- Manual reorder: drag the per-row grip at the left edge, or use the Move Up /
+  Move Down buttons. A mod can be locked to its exact zero-based position; a
+  locked row keeps its position across any reorder, and its grip stops
   intercepting pointer input so its area falls through to touch scrolling.
 - A freshly added DMF lands first and order-locked (the profile add
   boundary's placement default; updateable). The lock is a default the user
@@ -810,7 +809,7 @@ Per-profile settings live with the profile, not in the global config.
 - Profiles (create / edit / remove / switch -- switch blocked while the game is
   running).
 - Mod list: enable / disable / remove, update indicators, version pinning,
-  per-mod auto-update override, auto-sort + manual sequential reorder.
+  per-mod auto-update override, manual sequential reorder.
 - Mod storage (unified repository keyed by `(source, identity)`, version resolution by policy).
 - Mod sources: Nexus Mods (primary) + local; DMF via the
   new-profile prompt (Nexus mod 8).
