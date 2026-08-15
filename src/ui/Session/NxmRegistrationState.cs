@@ -27,7 +27,7 @@ public interface INxmRegistrationState
     event Action? Changed;
 
     /// <summary>
-    /// Synchronous bounded probe of the OS registration; the only writer.
+    /// Synchronous probe of the OS registration; the only writer.
     /// A probe throw is caught, logged, and treated as not-registered. Even
     /// with no registrar (or a failing probe) the refresh still publishes
     /// <see cref="Changed"/> (marshaled to the UI thread), so every consumer

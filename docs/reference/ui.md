@@ -622,7 +622,7 @@ public interface INxmRegistrationState
     bool IsAvailable { get; }       // a platform registrar exists (Windows/Linux)
     bool IsRegistered { get; }      // last-known; false when unknown/unavailable
     event Action? Changed;          // raised on the UI thread after any refresh
-    void RefreshFromOs();           // synchronous bounded probe; the only writer
+    void RefreshFromOs();           // synchronous probe; the only writer
 }
 ```
 
@@ -631,7 +631,7 @@ public interface INxmRegistrationState
   enter (`IntegrationsViewModel.RefreshAsync` -> `RefreshNxmState`), and one
   after each register/release action on the Nexus page. `RefreshFromOs` is the
   only writer: it reads `INxmHandlerRegistrar.IsRegistered()` (on Linux a
-  sanitized, timeout-bounded `xdg-mime` child; see the
+  sanitized `xdg-mime` child; see the
   [nxm reference](nxm.md#os-scheme-handler-registration-service)), catches any
   throw as not-registered, and marshals `Changed` to the UI thread through the
   shared `Action<Action>` seam (defensively; every caller is already there).

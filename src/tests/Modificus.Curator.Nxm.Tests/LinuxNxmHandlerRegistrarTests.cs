@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -9,8 +8,7 @@ namespace Modificus.Curator.Nxm.Tests;
 /// Linux): Register writes the <c>.desktop</c> file with the expected content +
 /// path; IsRegistered reflects the (faked) xdg-mime result; Unregister removes
 /// the file without any xdg-mime call; the child-env sanitizer drops only
-/// LD_PRELOAD; the default runner bounds a wedged executable (process-tree
-/// kill, failure result, prompt return). Each registrar is built with an
+/// LD_PRELOAD. Each registrar is built with an
 /// explicit null <c>$APPIMAGE</c> accessor so the standalone path is exercised
 /// regardless of whether the test host itself runs from an AppImage.
 /// </summary>
@@ -19,10 +17,6 @@ public sealed class LinuxNxmHandlerRegistrarTests
     // Forces standalone mode (no $APPIMAGE) so these tests exercise the direct
     // handler path regardless of the test host environment.
     private static Func<string?> NoAppImage => () => null;
-
-    // A distinctive sleep duration so the timeout test can identify its own
-    // child processes in the process table without false positives.
-    private const int TimeoutTestSleepSeconds = 987;
 
     [Fact]
     public void Register_writes_desktop_file_with_expected_content()
@@ -244,81 +238,6 @@ public sealed class LinuxNxmHandlerRegistrarTests
         Assert.Equal(2, sanitized.Count);
         Assert.Equal("/usr/bin", sanitized["PATH"]);
         Assert.Equal("/home/user", sanitized["HOME"]);
-    }
-
-    // ---- bounded runner -----------------------------------------------------
-
-    [Fact]
-    public void Runner_timeout_kills_the_process_tree_and_fails_the_call()
-    {
-        if (!OperatingSystem.IsLinux())
-            return; // gated: the runner + script are Linux-only.
-
-        var dir = CreateTempApplicationsDir();
-        // A shell script standing in for a wedged xdg-mime: it spawns a
-        // long-sleeping child so the process-tree kill is exercised.
-        Directory.CreateDirectory(dir);
-        var scriptPath = Path.Combine(dir, "wedged-xdg.sh");
-        try
-        {
-            File.WriteAllText(scriptPath, $"#!/bin/sh\nsleep {TimeoutTestSleepSeconds}\n");
-            File.SetUnixFileMode(
-                scriptPath,
-                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-
-            // The desktop file must exist so IsRegistered reaches the runner.
-            File.WriteAllText(
-                Path.Combine(dir, NxmHandlerPaths.LinuxDesktopFileId),
-                "[Desktop Entry]\nType=Application\n");
-
-            var registrar = new LinuxNxmHandlerRegistrar(
-                "/opt/curator/Modificus.Curator.NxmHandler",
-                NullLogger<LinuxNxmHandlerRegistrar>.Instance,
-                applicationsDir: dir,
-                appImagePathAccessor: NoAppImage,
-                xdgExecutable: scriptPath,
-                xdgWaitTimeoutMs: 200);
-
-            var stopwatch = Stopwatch.StartNew();
-            var registered = registrar.IsRegistered();
-            stopwatch.Stop();
-
-            // The wedged helper maps to not-registered and returns promptly
-            // (bounded well below the script's own runtime).
-            Assert.False(registered);
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10));
-            // No orphan: the script wrapper and its sleep child are both gone.
-            Assert.True(NoProcessMatching(scriptPath));
-            Assert.True(NoProcessMatching($"sleep {TimeoutTestSleepSeconds}"));
-        }
-        finally
-        {
-            TryCleanup(dir);
-        }
-    }
-
-    /// <summary>
-    /// Whether no live process carries <paramref name="marker"/> in its command
-    /// line (a short poll absorbs kernel reaping lag after the tree kill).
-    /// </summary>
-    private static bool NoProcessMatching(string marker)
-    {
-        for (var attempt = 0; attempt < 40; attempt++)
-        {
-            var psi = new ProcessStartInfo("ps", "-eo args=")
-            {
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-            };
-            using var ps = Process.Start(psi)
-                ?? throw new InvalidOperationException("Failed to start ps.");
-            var args = ps.StandardOutput.ReadToEnd();
-            ps.WaitForExit();
-            if (!args.Contains(marker, StringComparison.Ordinal))
-                return true;
-            Thread.Sleep(50);
-        }
-        return false;
     }
 
     private static string CreateTempApplicationsDir() =>

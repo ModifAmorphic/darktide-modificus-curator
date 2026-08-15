@@ -16,13 +16,13 @@ namespace Modificus.Curator.Nxm;
 /// pre-check <see cref="IsRegistered"/> before releasing.
 /// <see cref="MaintainRegistration"/> runs best-effort after startup but never
 /// auto-registers. <see cref="IsRegistered"/> is synchronous and not
-/// necessarily cheap: on Linux it may spawn a bounded external process.
+/// necessarily cheap: on Linux it may spawn an external process.
 /// </remarks>
 public interface INxmHandlerRegistrar
 {
     /// <summary>
     /// Whether the OS currently routes <c>nxm://</c> to this handler exe.
-    /// Synchronous and potentially slow: on Linux this may spawn a bounded
+    /// Synchronous and potentially slow: on Linux this may spawn an
     /// external process, so callers on a UI thread should invoke it
     /// deliberately, not incidentally.
     /// </summary>
@@ -62,11 +62,11 @@ public interface INxmHandlerRegistrar
     /// replace another mod manager's registration. When Curator does not own the
     /// association, the method is a silent no-op.</para>
     /// <para>
-    /// <b>Failure is non-fatal, the wait is bounded.</b> Any error is logged
-    /// and swallowed, so a maintenance failure never breaks Curator startup.
-    /// The call is synchronous and may take time on Linux (it can spawn the
-    /// sanitized, timeout-bounded <c>xdg-mime</c> child), so callers should
-    /// not assume it is instant.</para>
+    /// <b>Failure is non-fatal.</b> Any error is logged and swallowed, so a
+    /// maintenance failure never breaks Curator startup. The call is
+    /// synchronous and may take time on Linux (it can spawn the sanitized
+    /// <c>xdg-mime</c> child), so callers should not assume it is
+    /// instant.</para>
     /// <para>
     /// <b>Platform no-ops.</b> Windows has no AppImage-style temporary mount, so
     /// its implementation is a no-op. The standalone Linux layout (no

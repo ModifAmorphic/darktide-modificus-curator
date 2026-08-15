@@ -530,7 +530,7 @@ public partial class IntegrationsViewModel : ObservableObject
     /// Refreshes the status line + active-method indicator + masked-key field
     /// from the persisted auth state, the update-check toggle + interval from
     /// the persisted config, and the nxm handler registration state from the OS
-    /// (one bounded probe through the shared registration state). Called by the
+    /// (one probe through the shared registration state). Called by the
     /// shell's Nexus-enter effect, which is the registration state's deliberate
     /// probe point. Resolves the display name +
     /// premium state by method: OAuth reads it from the access token's JWT

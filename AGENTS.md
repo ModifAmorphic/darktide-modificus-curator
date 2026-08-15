@@ -984,21 +984,21 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         default (the real handler is registered via AddSingleton
                         last-wins, in CuratorComposition after AddNxm()), the OS
                         scheme-handler registrar
-                        (INxmHandlerRegistrar: WindowsNxmHandlerRegistrar writes
-                        HKCU\Software\Classes\nxm; LinuxNxmHandlerRegistrar writes a .desktop
-                        file + xdg-mime default; every xdg-mime invocation runs through one
-                        bounded, sanitized runner: the child's env is the parent's with ONLY
-                        LD_PRELOAD removed (Steam's overlay preload slows host utilities
-                        ~10x; Curator's own env untouched) + a bounded wait (default 5s;
-                        on expiry the process tree is killed + the call fails), so a wedged
-                        helper can never hang the caller; AppImage registration atomically copies the
-                        handler to a durable per-user directory + creates a sibling symlink
-                        to $APPIMAGE; startup maintenance refreshes those files only while
-                        Curator owns the active association; Unregister is self-guarded on
-                        both platforms: it never removes another program's registration +
-                        touches only Curator's own registration files (a no-op or a
-                        removal of Curator's own files depending on platform state), so
-                        callers never pre-check), + NxmHandlerRelay (the testable core the
+                         (INxmHandlerRegistrar: WindowsNxmHandlerRegistrar writes
+                         HKCU\Software\Classes\nxm; LinuxNxmHandlerRegistrar writes a .desktop
+                         file + xdg-mime default; every xdg-mime invocation runs sanitized:
+                         the child's env is the parent's with ONLY LD_PRELOAD removed
+                         (Steam's overlay preload slows host utilities ~10x; Curator's own
+                         env untouched), while the wait stays plain + synchronous (a hung
+                         desktop helper hangs the probe rather than being masked:
+                         deliberate, fail loud); AppImage registration atomically copies the
+                         handler to a durable per-user directory + creates a sibling symlink
+                         to $APPIMAGE; startup maintenance refreshes those files only while
+                         Curator owns the active association; Unregister is self-guarded on
+                         both platforms: it never removes another program's registration +
+                         touches only Curator's own registration files (a no-op or a
+                         removal of Curator's own files depending on platform state), so
+                         callers never pre-check), + NxmHandlerRelay (the testable core the
                         handler exe calls: hot-path IPC delivery + cold-start launch+retry,
                         UseShellExecute=false on both OSes). AOT-friendly (IsAotCompatible;
                         only raw byte/UTF-8 IO in the handler path).
@@ -1180,9 +1180,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             IPC server resilience, SingleInstanceGuard, router,
                                             relay helper, standalone + AppImage Linux registrar
                                             (incl. the child-env sanitizer dropping exactly
-                                            LD_PRELOAD + the bounded runner killing a wedged
-                                            executable's process tree on timeout with a
-                                            sleeping stand-in script), owned-registration
+                                            LD_PRELOAD), owned-registration
                                             maintenance, the Windows registrar's self-guarded
                                             unregister (absent no-op / foreign preserved / own
                                             deleted, via the base-key seam over a temp subkey;

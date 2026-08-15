@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using System.Runtime.Versioning;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
@@ -19,16 +18,17 @@ namespace Modificus.Curator.Nxm;
 /// by <c>AddNxm()</c>. Resolves the applications dir + the Curator-managed
 /// handler dir via <see cref="Environment.SpecialFolder.LocalApplicationData"/>
 /// (the codebase convention for per-user data, honoring <c>$XDG_DATA_HOME</c>).
-/// The dirs, the <c>xdg</c> runner + executable, the runner wait timeout, and
-/// the <c>$APPIMAGE</c> accessor are overridable for deterministic testing.
+/// The dirs, the <c>xdg</c> runner, and the <c>$APPIMAGE</c> accessor are
+/// overridable for deterministic testing.
 /// </para>
 /// <para>
-/// <b>Bounded, sanitized runner.</b> Every <c>xdg-mime</c> invocation runs with
-/// a child environment from which only <c>LD_PRELOAD</c> is removed (Steam
-/// injects its overlay via <c>LD_PRELOAD</c>, which slows unrelated host
-/// utilities by an order of magnitude; Curator's own environment is untouched)
-/// and a bounded wait: a wedged helper is killed with its process tree and
-/// mapped to a failure result instead of hanging the caller.
+/// <b>Sanitized runner.</b> Every <c>xdg-mime</c> invocation runs with a child
+/// environment from which only <c>LD_PRELOAD</c> is removed (Steam injects its
+/// overlay via <c>LD_PRELOAD</c>, which slows unrelated host utilities by an
+/// order of magnitude; Curator's own environment is untouched). The wait is
+/// plain and synchronous: a hung desktop helper hangs the probe rather than
+/// being masked. That is deliberate (fail loud); sanitization is what keeps
+/// the ordinary case fast.
 /// </para>
 /// <para>
 /// <b>Two execution modes.</b> Standalone (no <c>$APPIMAGE</c>): the desktop
@@ -59,12 +59,6 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
     /// </summary>
     private const string SteamOverlayPreloadVar = "LD_PRELOAD";
 
-    /// <summary>
-    /// Default bound on each <c>xdg-mime</c> wait. A sanitized query runs in
-    /// roughly 0.1 s; 5 s bounds a wedged helper without flaking slow hardware.
-    /// </summary>
-    internal const int DefaultXdgWaitTimeoutMs = 5000;
-
     /// <summary>The managed subfolder holding the copied handler + symlink.</summary>
     private const string ManagedHandlerFolder = "nxm-handler";
 
@@ -83,8 +77,6 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
     private readonly string _applicationsDir;
     private readonly string _managedDir;
     private readonly Func<string, (int exitCode, string output)> _runXdg;
-    private readonly string _xdgExecutable;
-    private readonly int _xdgWaitTimeoutMs;
     private readonly Func<string?> _appImagePathAccessor;
     private readonly ILogger<LinuxNxmHandlerRegistrar> _logger;
 
@@ -94,9 +86,7 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
         string? applicationsDir = null,
         Func<string, (int exitCode, string output)>? runXdg = null,
         string? managedDir = null,
-        Func<string?>? appImagePathAccessor = null,
-        string? xdgExecutable = null,
-        int? xdgWaitTimeoutMs = null)
+        Func<string?>? appImagePathAccessor = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(handlerExePath);
         _handlerExePath = handlerExePath;
@@ -115,8 +105,6 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
                 ManagedHandlerFolder);
         _appImagePathAccessor = appImagePathAccessor
             ?? (() => Environment.GetEnvironmentVariable("APPIMAGE"));
-        _xdgExecutable = xdgExecutable ?? "xdg-mime";
-        _xdgWaitTimeoutMs = xdgWaitTimeoutMs ?? DefaultXdgWaitTimeoutMs;
     }
 
     private string DesktopFilePath => Path.Combine(_applicationsDir, NxmHandlerPaths.LinuxDesktopFileId);
@@ -538,7 +526,7 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
 
     private (int exitCode, string output) RunXdgDefault(string arguments)
     {
-        var psi = new ProcessStartInfo(_xdgExecutable, arguments)
+        var psi = new ProcessStartInfo("xdg-mime", arguments)
         {
             RedirectStandardOutput = true,
             UseShellExecute = false,
@@ -552,37 +540,12 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
         foreach (var pair in childEnv)
             psi.Environment[pair.Key] = pair.Value;
 
+        // Plain synchronous wait: a hung desktop helper hangs the probe rather
+        // than being masked (deliberate, fail loud).
         using var proc = Process.Start(psi)
-            ?? throw new InvalidOperationException($"Failed to start {_xdgExecutable}.");
-        if (!proc.WaitForExit(_xdgWaitTimeoutMs))
-        {
-            _logger.LogWarning(
-                "{Executable} did not exit within {TimeoutMs}ms; killing the process tree and treating the call as failed.",
-                _xdgExecutable, _xdgWaitTimeoutMs);
-            try
-            {
-                proc.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-                // Raced to exit between the timeout expiring and the kill.
-            }
-            catch (Win32Exception ex)
-            {
-                // kill(2) failed on a tree member. Return the failure result
-                // WITHOUT the reaping wait: a failed kill must not hang it.
-                _logger.LogWarning(ex,
-                    "Killing the wedged {Executable} process tree failed; treating the call as failed.",
-                    _xdgExecutable);
-                return (-1, string.Empty);
-            }
-            proc.WaitForExit();
-            // Failure result: a nonzero exit code so IsRegistered maps to
-            // false and maintenance skips (the wedged helper's output is not
-            // trustworthy).
-            return (-1, string.Empty);
-        }
+            ?? throw new InvalidOperationException("Failed to start xdg-mime.");
         var output = proc.StandardOutput.ReadToEnd().Trim();
+        proc.WaitForExit();
         return (proc.ExitCode, output);
     }
 }

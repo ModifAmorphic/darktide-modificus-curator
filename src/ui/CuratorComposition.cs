@@ -442,8 +442,9 @@ public static class CuratorComposition
         // non-fatal case. A NxmSingleInstanceException propagates out of
         // StartNxmServer (and out of Build) without reaching this call, so a
         // single-instance violation never triggers maintenance. Best-effort:
-        // failures are logged + swallowed, and the call is synchronous but
-        // bounded (its xdg-mime child runs sanitized with a bounded wait).
+        // failures are logged + swallowed; the call is synchronous (its
+        // sanitized xdg-mime child can take time on Linux; a hung desktop
+        // helper hangs here rather than being masked, deliberately).
         // On Linux AppImage runs this refreshes the durable handler copy + the
         // AppImage symlink; everywhere else it is a no-op.
         MaintainNxmRegistration(provider, loggerFactory);
@@ -683,9 +684,9 @@ public static class CuratorComposition
     /// Calls <see cref="INxmHandlerRegistrar.MaintainRegistration"/> once after
     /// <see cref="StartNxmServer"/> has returned, so the fatal process-
     /// enumeration single-instance check has already succeeded. Best-effort: any
-    /// failure is logged + swallowed (non-fatal). The call is synchronous but
-    /// bounded: on Linux it may spawn the registrar's sanitized
-    /// <c>xdg-mime</c> child under a bounded wait.
+    /// failure is logged + swallowed (non-fatal). The call is synchronous: on
+    /// Linux it may spawn the registrar's sanitized <c>xdg-mime</c> child and
+    /// wait for it, so it can take time.
     /// </summary>
     /// <remarks>
     /// <para>
