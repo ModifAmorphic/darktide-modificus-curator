@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.29.2...v0.30.0) (2026-08-15)
+
+
+### Features
+
+* steam deck gaming mode compatibility ([#204](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/204)) ([66f5540](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/66f5540ba9ccc5c3aba3a7ed969d2c2f883e23e0)), closes [#180](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/180) [#182](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/182) [#183](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/183)
+
 ## [0.29.2](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.29.1...v0.29.2) (2026-08-15)
 
 
