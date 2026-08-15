@@ -59,13 +59,16 @@ namespace Modificus.Curator.UI.ViewModels;
 /// running-state:</b> <see cref="IsLaunchAttemptInProgress"/> covers the whole
 /// launch attempt (the render yield, the synchronous discovery/staging/spawn
 /// call, failure-dialog handling, and the post-spawn wait for the session's
-/// detector to notice Darktide). An executable launch sets it before anything
-/// else; a successful spawn keeps it until the session's live running-state
-/// signal observes the game or a bounded timeout elapses, so the
-/// process-detection gap after a spawn can never double-launch and a detector
-/// that never sees the game can never wedge the button. This is signal
-/// observation, not process supervision: Relay and Darktide stay
-/// fire-and-forget (no process handle, no wait, no lifetime management).
+/// detector to notice Darktide and the spawned Relay process to exit). An
+/// executable launch sets it before anything else; a successful spawn keeps
+/// it until both the session's live running-state signal observes the game
+/// and the spawned Relay process exits (its exit observed as a bare
+/// completion task from the launch facade), or a bounded timeout elapses
+/// releasing the whole combined wait, so the process-detection gap after a
+/// spawn can never double-launch and a signal that never arrives can never
+/// wedge the button. This is signal observation, not process supervision:
+/// the shell holds no process handle and manages no process lifetime, and
+/// Darktide stays untracked beyond the session signal.
 /// </para>
 /// <para><b>Localizable text is live:</b> the status strings + the current page
 /// title re-resolve from <see cref="LocalizationService"/> on a culture
@@ -646,10 +649,11 @@ public partial class ShellViewModel : ObservableObject
 
     /// <summary>
     /// How long a successful launch keeps the attempt state while waiting for
-    /// the session's running-state signal to observe Darktide. Bounds the
-    /// process-detection handoff so a detector that never sees the game (a
-    /// spawn that died silently) still re-enables Launch. Starts after
-    /// <see cref="IRelayLaunchService"/> returns
+    /// the session's running-state signal to observe Darktide and the spawned
+    /// Relay process to exit. One cap over the whole combined wait, so a
+    /// signal that never arrives (a detector that never sees the game, a
+    /// spawn that died silently without exiting observably) still re-enables
+    /// Launch. Starts after <see cref="IRelayLaunchService"/> returns
     /// <see cref="LaunchStatus.Launched"/>, never during
     /// discovery/staging/spawn.
     /// </summary>
@@ -667,9 +671,10 @@ public partial class ShellViewModel : ObservableObject
     /// Whether a launch attempt is executing: from the executable launch
     /// request, through the render yield + the synchronous launch call +
     /// failure-dialog handling, until the post-spawn handoff resolves (the
-    /// session's running-state signal observing Darktide, or the bounded
-    /// timeout). Gates <see cref="LaunchCommand"/> alongside the active-profile
-    /// + running gates. Shell-owned and distinct from
+    /// session's running-state signal observing Darktide and the spawned
+    /// Relay process exiting, or the bounded timeout releasing the whole
+    /// combined wait). Gates <see cref="LaunchCommand"/> alongside the
+    /// active-profile + running gates. Shell-owned and distinct from
     /// <see cref="IsGameRunning"/> (the session's process-detected state): the
     /// attempt covers the gap a detector cannot yet see.
     /// </summary>
@@ -688,8 +693,10 @@ public partial class ShellViewModel : ObservableObject
     /// immediate <see cref="IsGameRunning"/> refresh so the indicator +
     /// CanLaunch react at once, and clearing the pending-changes flag (the
     /// successful stage re-staged the mod tree); then the attempt state stays
-    /// set until the session's running-state signal observes Darktide or
-    /// <see cref="LaunchHandoffTimeout"/> elapses.</description></item>
+    /// set until the session's running-state signal observes Darktide and
+    /// the spawned Relay process exits (the bare exit task from the result),
+    /// or <see cref="LaunchHandoffTimeout"/> elapses releasing the whole
+    /// combined wait.</description></item>
     /// <item><term><see cref="LaunchStatus.DiscoveryIncomplete"/></term>
     /// <description>opens the escape-hatch dialog with the missing fields. No
     /// retry.</description></item>
@@ -736,9 +743,11 @@ public partial class ShellViewModel : ObservableObject
                     _logger.LogInformation("Launched profile {Id}.", profileId);
 
                     // Fire-and-forget spawn: the detector needs time to notice
-                    // Darktide. Keep the attempt state until it does (or the
-                    // bounded timeout elapses) so the gap cannot double-launch.
-                    await WaitForRunningStateHandoffAsync();
+                    // Darktide, and Relay finishes its injection work before it
+                    // exits. Keep the attempt state until the session observes
+                    // the game and the spawned process exits (or the bounded
+                    // timeout releases the wait) so the gap cannot double-launch.
+                    await WaitForRunningStateHandoffAsync(result.RelayExited);
                     break;
 
                 case LaunchStatus.DiscoveryIncomplete:
@@ -777,13 +786,17 @@ public partial class ShellViewModel : ObservableObject
 
     /// <summary>
     /// Waits out the process-detection handoff after a successful launch:
-    /// resolves when the session's live running-state signal observes Darktide,
-    /// or when the bounded timeout elapses. Observes the existing session
-    /// signal only (never a process handle; the session's polling detector
-    /// owns noticing the game). A false polling result never resolves the wait;
-    /// the temporary subscription is removed deterministically.
+    /// resolves when the session's live running-state signal observes Darktide
+    /// AND the spawned Relay process exits (the bare exit task from the launch
+    /// facade; a null task, e.g. a non-tracking result, is treated as already
+    /// complete), or when the bounded timeout elapses, releasing the whole
+    /// combined wait. Observes the existing session signal + the facade's
+    /// exit task only (never a process handle; the session's polling detector
+    /// owns noticing the game, the facade owns the spawned handle's lifetime).
+    /// A false polling result never resolves the wait; the temporary
+    /// subscription is removed deterministically.
     /// </summary>
-    private async Task WaitForRunningStateHandoffAsync()
+    private async Task WaitForRunningStateHandoffAsync(Task? relayExit)
     {
         var observed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         PropertyChangedEventHandler handler = (_, e) =>
@@ -799,14 +812,21 @@ public partial class ShellViewModel : ObservableObject
         _session.PropertyChanged += handler;
         try
         {
-            if (_session.IsRunning
-                || await Task.WhenAny(observed.Task, _launchHandoffTimeout()) == observed.Task)
+            if (_session.IsRunning)
+            {
+                // Already running at handoff entry: the detector half is
+                // satisfied, but the relay wait below must still apply.
+                observed.TrySetResult();
+            }
+
+            var conditions = Task.WhenAll(observed.Task, relayExit ?? Task.CompletedTask);
+            if (await Task.WhenAny(conditions, _launchHandoffTimeout()) == conditions)
             {
                 return;
             }
 
             _logger.LogInformation(
-                "Launch handoff timed out without observing Darktide; re-enabling Launch.");
+                "Launch handoff timed out without observing Darktide and Relay exit; re-enabling Launch.");
         }
         finally
         {

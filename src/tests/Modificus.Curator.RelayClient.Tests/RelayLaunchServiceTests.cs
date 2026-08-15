@@ -112,6 +112,7 @@ public sealed class RelayLaunchServiceTests
 
         Assert.Equal(LaunchStatus.Launched, result.Status);
         Assert.Null(result.Message);
+        Assert.NotNull(result.RelayExited);
     }
 
     // ---- Linux --------------------------------------------------------------
@@ -237,7 +238,97 @@ public sealed class RelayLaunchServiceTests
         var result = svc.Launch(Guid.NewGuid());
 
         Assert.Equal(LaunchStatus.Launched, result.Status);
+        Assert.NotNull(result.RelayExited);
     }
+
+    // ---- Relay exit tracking ------------------------------------------------
+
+    [Fact]
+    public async Task Launched_exit_task_completes_when_the_spawned_process_exits_and_disposes_the_handle()
+    {
+        using var fx = new RelayFixture();
+        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        var svc = fx.BuildLinuxService();
+
+        var result = svc.Launch(Guid.NewGuid());
+        var spawned = fx.Launcher.LastSpawned;
+        Assert.NotNull(spawned);
+
+        // Held: the exit task stays pending while the spawned process lives.
+        Assert.False(result.RelayExited!.IsCompleted);
+        Assert.False(spawned.Disposed);
+
+        spawned.SimulateExit();
+        await result.RelayExited;
+
+        // The tracking owns the handle's lifetime: observation ended, so it
+        // disposed the handle.
+        Assert.True(spawned.Disposed);
+    }
+
+    [Fact]
+    public async Task Launched_exit_task_completes_and_disposes_when_the_handle_cannot_be_observed()
+    {
+        // An unobservable process (WaitForExitAsync throws) is treated as
+        // exited: the exit task still completes, never faults, and the handle
+        // is still disposed.
+        using var fx = new RelayFixture();
+        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Launcher.ThrowOnWaitForExit = true;
+        var svc = fx.BuildWindowsService();
+
+        var result = svc.Launch(Guid.NewGuid());
+        var relayExited = result.RelayExited;
+        Assert.NotNull(relayExited);
+
+        await relayExited;
+        Assert.True(fx.Launcher.LastSpawned!.Disposed);
+    }
+
+    [Fact]
+    public void Non_launched_results_carry_no_exit_task()
+    {
+        // Every result but Launched carries a null exit task: only a real
+        // spawn has an exit to observe.
+
+        // DiscoveryIncomplete: short-circuits before any spawn.
+        using (var fx = new RelayFixture())
+        {
+            fx.Steam.Result = FakeDiscovery.CompleteLinux with
+            {
+                ProtonBinaryPath = null,
+                ProtonVersion = null,
+                Status = DiscoveryStatus.Partial,
+            };
+            var result = fx.BuildLinuxService().Launch(Guid.NewGuid());
+
+            Assert.Equal(LaunchStatus.DiscoveryIncomplete, result.Status);
+            Assert.Null(result.RelayExited);
+        }
+
+        // StagingFailed: the mod root failed before any spawn.
+        using (var fx = new RelayFixture())
+        {
+            fx.Steam.Result = FakeDiscovery.CompleteLinux;
+            fx.Profiles.PrepareModRootThrows = true;
+            var result = fx.BuildLinuxService().Launch(Guid.NewGuid());
+
+            Assert.Equal(LaunchStatus.StagingFailed, result.Status);
+            Assert.Null(result.RelayExited);
+        }
+
+        // Error: the spawn itself failed (a null handle).
+        using (var fx = new RelayFixture())
+        {
+            fx.Steam.Result = FakeDiscovery.CompleteLinux;
+            fx.Launcher.Returns = false;
+            var result = fx.BuildLinuxService().Launch(Guid.NewGuid());
+
+            Assert.Equal(LaunchStatus.Error, result.Status);
+            Assert.Null(result.RelayExited);
+        }
+    }
+
 
     // ---- DiscoveryIncomplete ------------------------------------------------
 
@@ -808,8 +899,9 @@ public sealed class RelayLaunchServiceTests
         var result = svc.Launch(Guid.NewGuid());
 
         Assert.Equal(LaunchStatus.Error, result.Status);
-        Assert.NotNull(result.Message);
-        Assert.Equal(1, fx.Launcher.Calls); // it tried, but Start returned false
+        // Message unchanged from the null-spawn mapping.
+        Assert.Equal($"Failed to start the Relay launcher at '{fx.LauncherPath}'.", result.Message);
+        Assert.Equal(1, fx.Launcher.Calls); // it tried, but Start returned null
     }
 
     [Fact]

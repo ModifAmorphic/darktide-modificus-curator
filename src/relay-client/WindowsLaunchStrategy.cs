@@ -38,7 +38,7 @@ internal sealed class WindowsLaunchStrategy : IPlatformLaunchStrategy
     }
 
     /// <inheritdoc />
-    public bool Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings, bool createNoWindow)
+    public ISpawnedProcess? Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings, bool createNoWindow)
     {
         ArgumentNullException.ThrowIfNull(launchSettings);
 

@@ -7,9 +7,11 @@ namespace Modificus.Curator.UI.Tests;
 /// The shell-owned launch-attempt state (<see cref="ShellViewModel.IsLaunchAttemptInProgress"/>):
 /// Launch disables for the whole attempt (the pre-launch render yield, the
 /// synchronous launch call, failure-dialog handling, and the post-spawn
-/// running-state handoff), so the process-detection gap after a successful
-/// spawn can never double-launch. Deterministic seams drive the yield + the
-/// handoff timeout (no live Avalonia dispatcher, no real 30-second wait).
+/// handoff: the session's running-state signal AND the spawned Relay
+/// process's exit task), so the process-detection gap after a successful
+/// spawn can never double-launch. Deterministic seams drive the yield, the
+/// relay exit, and the handoff timeout (no live Avalonia dispatcher, no real
+/// 30-second wait).
 /// </summary>
 public sealed class ShellLaunchAttemptTests
 {
@@ -155,6 +157,124 @@ public sealed class ShellLaunchAttemptTests
         Assert.False(shell.IsLaunchAttemptInProgress);
         Assert.False(shell.IsGameRunning);
         Assert.True(shell.LaunchCommand.CanExecute(null));
+    }
+
+    // ---- combined wait: session signal AND relay exit -----------------------
+
+    [Fact]
+    public async Task Relay_exit_held_keeps_the_attempt_set_even_after_Darktide_is_observed()
+    {
+        // Darktide's process appears before Relay finishes its injection
+        // work, so observing the game alone must not clear the attempt: the
+        // handoff resolves only when the relay exit task completes too.
+        var a = Profile("Alpha");
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var relayExitTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var launch = new FakeLaunchService
+        {
+            NextResult = new LaunchResult(
+                LaunchStatus.Launched, null, Array.Empty<string>(), relayExitTcs.Task),
+        };
+        var handoffTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var shell = TestDoubles.BuildShell(
+            profiles: TestDoubles.Profiles(a),
+            session: session,
+            launch: launch,
+            launchHandoffTimeout: () => handoffTcs.Task).Shell;
+
+        var executing = shell.LaunchCommand.ExecuteAsync(null);
+        await UntilAsync(() => launch.LaunchCalls.Count == 1);
+
+        // The session's live signal observes Darktide, but Relay is still
+        // running: the attempt stays set and Launch stays disabled.
+        session.IsRunning = true;
+        await UntilAsync(() => shell.IsGameRunning);
+        Assert.True(shell.IsLaunchAttemptInProgress);
+        Assert.False(shell.LaunchCommand.CanExecute(null));
+
+        // Relay exits: the combined wait resolves and the attempt clears (the
+        // ordinary running gate keeps Launch disabled).
+        relayExitTcs.SetResult();
+        await executing;
+
+        Assert.False(shell.IsLaunchAttemptInProgress);
+        Assert.True(shell.IsGameRunning);
+        Assert.False(shell.LaunchCommand.CanExecute(null));
+        Assert.False(handoffTcs.Task.IsCompleted); // the timeout never fired
+    }
+
+    [Fact]
+    public async Task Relay_exit_held_with_Darktide_never_observed_times_out_and_permits_retry()
+    {
+        // Neither condition resolves on its own signal: the single timeout
+        // releases the whole combined wait so the button cannot wedge.
+        var a = Profile("Alpha");
+        var session = new FakeProfileSession { ActiveProfileId = a.Id, IsRunning = false };
+        var relayExitTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var launch = new FakeLaunchService
+        {
+            NextResult = new LaunchResult(
+                LaunchStatus.Launched, null, Array.Empty<string>(), relayExitTcs.Task),
+        };
+        var handoffTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var shell = TestDoubles.BuildShell(
+            profiles: TestDoubles.Profiles(a),
+            session: session,
+            launch: launch,
+            launchHandoffTimeout: () => handoffTcs.Task).Shell;
+
+        var executing = shell.LaunchCommand.ExecuteAsync(null);
+        await UntilAsync(() => launch.LaunchCalls.Count == 1);
+        Assert.True(shell.IsLaunchAttemptInProgress);
+
+        // The timeout elapses while both the detector half and the relay half
+        // are still pending: retry becomes possible.
+        handoffTcs.SetResult();
+        await executing;
+
+        Assert.False(shell.IsLaunchAttemptInProgress);
+        Assert.False(shell.IsGameRunning);
+        Assert.True(shell.LaunchCommand.CanExecute(null));
+        Assert.False(relayExitTcs.Task.IsCompleted); // the relay never exited
+    }
+
+    [Fact]
+    public async Task Already_running_session_still_waits_for_relay_exit()
+    {
+        // The detector half is satisfied at handoff entry (the eager refresh
+        // observed the game): the initial IsRunning short-circuit must not
+        // skip the relay half of the wait.
+        var a = Profile("Alpha");
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        session.OnRefresh = () => session.IsRunning = true;
+        var relayExitTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var launch = new FakeLaunchService
+        {
+            NextResult = new LaunchResult(
+                LaunchStatus.Launched, null, Array.Empty<string>(), relayExitTcs.Task),
+        };
+        var handoffTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var shell = TestDoubles.BuildShell(
+            profiles: TestDoubles.Profiles(a),
+            session: session,
+            launch: launch,
+            launchHandoffTimeout: () => handoffTcs.Task).Shell;
+
+        var executing = shell.LaunchCommand.ExecuteAsync(null);
+        await UntilAsync(() => session.RefreshCalls == 1);
+
+        // IsRunning was already true when the handoff began, yet the attempt
+        // persists while Relay runs.
+        Assert.True(shell.IsGameRunning);
+        Assert.True(shell.IsLaunchAttemptInProgress);
+        Assert.False(shell.LaunchCommand.CanExecute(null));
+
+        relayExitTcs.SetResult();
+        await executing;
+
+        Assert.False(shell.IsLaunchAttemptInProgress);
+        Assert.True(shell.IsGameRunning);
+        Assert.False(shell.LaunchCommand.CanExecute(null)); // the running gate
     }
 
     // ---- failure + exception paths ------------------------------------------

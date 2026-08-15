@@ -11,9 +11,10 @@ public interface IProcessLauncher
     /// <summary>
     /// Starts the process described by <paramref name="request"/> (executable
     /// path, argv-form arguments, and requested environment mutations) and
-    /// returns without waiting. Returns <c>true</c> if the process was started;
-    /// <c>false</c> if it could not be started (file not found, permission
-    /// denied, etc.: never throws for those).
+    /// returns without waiting. Returns the spawned process's observation
+    /// handle (<see cref="ISpawnedProcess"/>), or <c>null</c> if it could not
+    /// be started (file not found, permission denied, etc.: never throws for
+    /// those).
     /// </summary>
     /// <param name="request">The immutable launch description. The
     /// implementation must apply each argument verbatim (no re-shelling or
@@ -22,5 +23,5 @@ public interface IProcessLauncher
     /// inherited environment, then apply
     /// <see cref="ProcessLaunchRequest.EnvironmentOverrides"/> (overrides win
     /// when a key appears in both sets).</param>
-    bool Start(ProcessLaunchRequest request);
+    ISpawnedProcess? Start(ProcessLaunchRequest request);
 }

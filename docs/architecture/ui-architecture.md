@@ -368,15 +368,21 @@ additional feedback. It then calls
   launch-availability react at once, not on the next poll. Successful launch
   surfaces no status note or other confirmation; the running indicator is the
   durable signal. The attempt state then stays set until the session's
-  running-state signal observes Darktide or a 30-second timeout elapses (the
-  timeout starts only after the spawn returns; a false polling result never
-  clears the state). When the game is observed, the ordinary `IsGameRunning`
-  gate keeps Launch disabled; on timeout with the game absent, retry becomes
-  possible. The wait observes the existing session signal only (subscribe
-  before the initial check so a flip cannot be missed; the temporary
-  subscription is removed deterministically): it is bounded detector
-  handoff, not process waiting or process ownership (Relay and Darktide stay
-  fire-and-forget, no process handle).
+  running-state signal observes Darktide AND the spawned Relay process exits
+  (Darktide's process appears before Relay finishes its injection work, so
+  the game is not visually up until Relay exits), or a 30-second timeout
+  elapses releasing the whole combined wait (the timeout starts only after
+  the spawn returns; a false polling result never clears the state). When
+  both conditions land, the ordinary `IsGameRunning` gate keeps Launch
+  disabled; on timeout with the wait unresolved, retry becomes possible. The
+  wait observes the existing session signal + the launch facade's relay-exit
+  task (`LaunchResult.RelayExited`: Relay directly on Windows, the Proton
+  wrapper process on Linux, whose exit follows Relay's under `proton run`;
+  subscribe-before-check so a flip cannot be missed, the temporary
+  subscription removed deterministically): bounded detector handoff, not
+  process waiting or process ownership (the shell takes no process handle;
+  the facade owns the spawned handle and its disposal; Darktide stays
+  untracked beyond the session signal).
 - **`DiscoveryIncomplete`**: opens the focused escape-hatch dialog with the
   missing fields. No auto-retry: the user submits the paths, closes the
   dialog, and clicks Launch again. A loop here would trap the user if they
@@ -393,7 +399,9 @@ handling), so retry becomes possible exactly when the flow finishes. The
 pre-launch yield and the handoff timeout are injected delegates (production:
 the dispatcher yield + a real 30-second delay; tests: completed or
 TaskCompletionSource-backed tasks) so unit tests need no live Avalonia
-dispatcher and never wait real time.
+dispatcher and never wait real time. The relay-exit half of the wait rides
+the launch result itself (`LaunchResult.RelayExited`; tests hand the shell a
+TaskCompletionSource-backed task through the fake launch service).
 
 ### The full-client launch overlay
 
@@ -426,8 +434,9 @@ accessibility service is introduced.
 
 The overlay's visibility binds directly to the attempt state (no second state
 machine), so it appears with the pre-launch render yield, stays through the
-synchronous launch and the post-spawn handoff until Darktide is detected or
-the 30-second timeout expires, and disappears through the existing `finally`
+synchronous launch and the post-spawn handoff until Darktide is detected and
+the spawned Relay process exits (or the 30-second timeout expires), and
+disappears through the existing `finally`
 state clear. Failure and discovery dialogs are separate OS-owned dialog
 windows (`Window.ShowDialog`), so they appear above the overlay while failure
 handling is in progress; the overlay remains behind them as the dimmed shell.

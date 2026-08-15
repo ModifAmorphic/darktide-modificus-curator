@@ -4,8 +4,10 @@ namespace Modificus.Curator.RelayClient;
 /// The launch façade over Mod Relay. Resolves the profile + Steam
 /// discovery, assembles the launcher args, and invokes
 /// <c>mod_relay.exe</c> -- directly on Windows, under <c>proton run</c> on
-/// Linux. Fire-and-forget: <see cref="Launch"/> starts the launcher and returns;
-/// it does not track the game process.
+/// Linux. <see cref="Launch"/> starts the launcher and returns without
+/// waiting: the only process it observes is the spawned launcher itself
+/// (its exit, as a bare completion task on the result); the game process is
+/// not tracked.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -24,7 +26,8 @@ public interface IRelayLaunchService
     /// Launches the given profile modded. Always returns a
     /// <see cref="LaunchResult"/> (never throws for expected conditions):
     /// <list type="bullet">
-    /// <item><term><see cref="LaunchStatus.Launched"/></term><description>the launcher process was started.</description></item>
+    /// <item><term><see cref="LaunchStatus.Launched"/></term><description>the launcher process was started;
+    /// <see cref="LaunchResult.RelayExited"/> completes when it exits.</description></item>
     /// <item><term><see cref="LaunchStatus.DiscoveryIncomplete"/></term><description>Steam discovery is missing required fields for the current OS; <see cref="LaunchResult.MissingDiscoveryFields"/> lists them.</description></item>
     /// <item><term><see cref="LaunchStatus.StagingFailed"/></term><description>the profile's mod root could not be prepared (a staging link could not be created). <see cref="LaunchResult.Message"/> carries the raised exception's body (the runtime/OS error).</description></item>
     /// <item><term><see cref="LaunchStatus.Error"/></term><description>unknown profile, missing runtime dir, or process-start failure -- see <see cref="LaunchResult.Message"/>.</description></item>
@@ -46,18 +49,25 @@ public interface IRelayLaunchService
 /// requires but could not be resolved; populated only for
 /// <see cref="LaunchStatus.DiscoveryIncomplete"/> (empty otherwise). Field names
 /// mirror the <c>DiscoveryResult</c> properties so they map to a prompt.</param>
+/// <param name="RelayExited">Completes when the spawned launcher process
+/// exits: Relay directly on Windows; the Proton wrapper process on Linux,
+/// whose exit follows Relay's under <c>proton run</c>. Populated only for
+/// <see cref="LaunchStatus.Launched"/> (null otherwise). The task never
+/// faults and carries no result value.</param>
 public sealed record LaunchResult(
     LaunchStatus Status,
     string? Message,
-    IReadOnlyList<string> MissingDiscoveryFields);
+    IReadOnlyList<string> MissingDiscoveryFields,
+    Task? RelayExited = null);
 
 /// <summary>
 /// Coarse outcome of a launch attempt.
 /// </summary>
 public enum LaunchStatus
 {
-    /// <summary>The launcher process was started (fire-and-forget -- no
-    /// game-process tracking).</summary>
+    /// <summary>The launcher process was started; its exit is observable via
+    /// <see cref="LaunchResult.RelayExited"/>. The game process is not
+    /// tracked.</summary>
     Launched,
 
     /// <summary>Steam discovery is missing required fields for the current OS;
