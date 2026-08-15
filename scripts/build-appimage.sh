@@ -12,12 +12,17 @@
 #   downloads/   the Relay zip when fetched via gh (wiped)
 #   .vpk-tool/   the pinned vpk 1.2.0 tool cache (installed once, reused)
 #
-# The default pack version is <manifest>-local.<YYYYmmddHHMM>, where
-# <manifest> comes from .release-please-manifest.json. The -local. prerelease
-# suffix sorts below the released version by design: a locally installed test
-# build never masks a real release, and the app's self-update then offers to
-# move to the latest release. Local builds pack into a clean output directory
-# with no prior feed, so no delta packages are generated; deltas are a
+# The default pack version is <next-release>-local.<YYYYmmddHHMM>: the
+# manifest version from .release-please-manifest.json with its patch bumped
+# (0.29.2 -> 0.29.3-local.<stamp>), so the test build sorts ABOVE the
+# currently released version. On Linux, Velopack launches the app from its
+# extracted state dir (/var/tmp/velopack/<packId>) and reverts an AppImage
+# whose version is older than the installed one, so a below-release test
+# build would be silently replaced. Above-release, the test build runs
+# quietly (no update pill) until the next real release supersedes it; to
+# return to stable sooner, clear the Velopack state dir and re-run the
+# stock installer. Local builds pack into a clean output directory with no
+# prior feed, so no delta packages are generated; deltas are a
 # release-workflow concern.
 #
 # Environment overrides (env vars, not needed for normal use):
@@ -61,14 +66,27 @@ if [ -n "${RELAY_ZIP:-}" ]; then
     [ -f "$RELAY_ZIP" ] || die "RELAY_ZIP does not exist: $RELAY_ZIP"
 fi
 
-# Pack version: the release-please manifest plus a -local prerelease stamp
-# that sorts below the released version.
+# Pack version: the release-please manifest with its patch bumped, plus a
+# -local prerelease stamp (0.29.2 -> 0.29.3-local.<stamp>). The test build
+# must sort ABOVE the released version: on Linux, Velopack launches the app
+# from its extracted state dir (/var/tmp/velopack/<packId>) and reverts an
+# AppImage whose version is older than the installed one, so a below-stable
+# test build is silently replaced. Sorting above stable keeps the test build
+# running with no update pill; the next real release supersedes it through
+# normal self-update, or return to stable manually by clearing the Velopack
+# state dir and re-running the stock installer.
 manifest_version=$(sed -n 's/^[[:space:]]*"\."[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
     "$ROOT/.release-please-manifest.json") \
     || die "Could not read $ROOT/.release-please-manifest.json."
 [ -n "$manifest_version" ] \
     || die "No version found in $ROOT/.release-please-manifest.json."
-VERSION="${VERSION:-$manifest_version-local.$(date +%Y%m%d%H%M)}"
+release_base=${manifest_version%%-*}
+release_major_minor=${release_base%.*}
+release_patch=${release_base##*.}
+case "$release_patch" in
+    ''|*[!0-9]*) die "Unsupported manifest version for the patch bump: $manifest_version." ;;
+esac
+VERSION="${VERSION:-$release_major_minor.$((release_patch + 1))-local.$(date +%Y%m%d%H%M)}"
 
 PUBLISH_DIR="${PUBLISH_DIR:-$ROOT/publish}"
 case "$PUBLISH_DIR" in
