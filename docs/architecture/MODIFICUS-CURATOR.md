@@ -555,9 +555,10 @@ is in [UI reference](../reference/ui.md).
 - A freshly added DMF lands first and order-locked (the profile add
   boundary's placement default; updateable). The lock is a default the user
   can clear, not a protected state.
-- **Row density.** The list has a persisted Compact/Detailed density (Compact
-  is the default and the absent/unknown value; Detailed is the multi-line
-  variant). Compact is the unchanged one-line row. Detailed renders a rounded
+- **Row density.** The list has a persisted Compact/Detailed density: Detailed
+  is the default (the multi-line row with summary + thumbnail), and an absent
+  or unknown value normalizes to it; Compact is the dense one-line variant,
+  surviving only when persisted or selected. Detailed renders a rounded
   card per row laid out as one adaptive Grid (the card root is a named width
   container, so an Avalonia `ContainerQuery max-width:680` in the view's styles
   swaps the layout at the 680-DIP card-width breakpoint): column 0 is the
@@ -722,12 +723,18 @@ synchronous discovery/staging/spawn call run on the UI thread. The state stays
 set while a failure dialog is open (clearing after the dialog handling and on
 any exception path, when retry becomes possible). After a `Launched` result it
 stays set until the session's existing running-state signal observes Darktide
-or a 30-second timeout elapses (started only after the spawn returns), so the
-process-detection gap cannot double-launch and a detector that never sees the
-game cannot wedge the button; a false polling result never clears it. This is
-signal observation, not process supervision: Relay and Darktide remain
-fire-and-forget (no process handle, no `WaitForExit`, no lifetime management
-on either process).
+AND the spawned Relay process exits (Darktide's process appears before Relay
+finishes its injection work, so the game is not visually up until Relay exits;
+the exit arrives as a bare fault-free completion task on the result, Relay
+directly on Windows and the Proton wrapper process on Linux, whose exit
+follows Relay's under `proton run`), or a 30-second timeout elapses releasing
+the whole combined wait (started only after the spawn returns), so the
+process-detection gap cannot double-launch and a signal that never arrives
+cannot wedge the button; a false polling result never clears it. This is
+signal observation, not process supervision: the UI holds no process handle
+and no `WaitForExit` of its own (the launch façade owns the spawned handle,
+observes its exit, and disposes it); Darktide remains untracked beyond the
+session signal.
 
 While the attempt state is true, the whole client area is blocked by an
 in-window launch overlay: a semi-opaque scrim over the disabled shell plus a

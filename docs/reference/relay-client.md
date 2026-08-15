@@ -2,8 +2,10 @@
 
 > The v1 launch façade over Mod Relay. Resolves the profile + Steam
 > discovery, assembles the launcher args, and invokes `mod_relay.exe` --
-> directly on Windows, under `proton run` on Linux. Fire-and-forget in v1: it
-> starts the launcher and returns; it does not track the game process.
+> directly on Windows, under `proton run` on Linux. It starts the launcher
+> and returns without waiting; the only process it observes is the spawned
+> launcher itself (its exit, as a bare completion task on the result). It
+> does not track the game process.
 
 ## Public surface
 
@@ -53,12 +55,17 @@ expected conditions:
 public sealed record LaunchResult(
     LaunchStatus Status,
     string? Message,                         // populated for Error + StagingFailed
-    IReadOnlyList<string> MissingDiscoveryFields);  // populated only for DiscoveryIncomplete
+    IReadOnlyList<string> MissingDiscoveryFields,  // populated only for DiscoveryIncomplete
+    Task? RelayExited = null);               // Launched only: completes when the spawned process exits
 
 public enum LaunchStatus { Launched, DiscoveryIncomplete, StagingFailed, Error }
 ```
 
-- `Launched` -- the launcher process started (fire-and-forget; no game-process tracking in v1).
+- `Launched` -- the launcher process was started; `RelayExited` completes when
+  it exits (any exit code; the task never faults and carries no result value).
+  On Windows the spawned process is Relay itself; on Linux it is the Proton
+  wrapper, whose exit follows Relay's under `proton run`. The game process is
+  not tracked.
 - `DiscoveryIncomplete` -- discovery is missing required fields; the field names
   mirror `DiscoveryResult` properties so the UI can map them to a prompt.
 - `StagingFailed` -- the profile's mod root could not be prepared (a staging
@@ -79,7 +86,7 @@ to `Status != Complete`. The per-platform required set is owned by the active
   - `RequiredDiscoveryFields(discovery)` -- the discovery fields this platform
     requires but could not resolve (Windows: the game binary only; Linux: Steam +
     game binary + compatdata + Proton).
-  - `Start(launcherPath, discovery, gameBinary, modPath, logFile, launchSettings, createNoWindow) → bool`
+  - `Start(launcherPath, discovery, gameBinary, modPath, logFile, launchSettings, createNoWindow) → ISpawnedProcess?`
     -- the spawn. Windows: a direct invocation of the launcher with native
     (untranslated) args; Linux: `<proton> run <launcher.exe> <args>` with both
     `STEAM_COMPAT_*` env vars and the path-valued flags `Z:\`-translated. The
@@ -88,27 +95,37 @@ to `Status != Complete`. The per-platform required set is owned by the active
     launcher's own flags as a bare `--` separator then one argv entry each).
     `createNoWindow` flows through to the launch request's `CreateNoWindow`
     (hides the child console window); the orchestrator derives it from the
-    global `ShowRelayConsole` preference.
+    global `ShowRelayConsole` preference. Returns the spawned process's
+    observation handle, or `null` when it could not be started.
   - `Name` -- a short label ("Windows" / "Linux") for log messages.
   - Two implementations (`WindowsLaunchStrategy`, `LinuxLaunchStrategy`),
     selected once at DI time from the host OS (see
     [Cross-platform notes](#cross-platform-notes)).
-- `IProcessLauncher` -- `Start(ProcessLaunchRequest) → bool` (fire-and-forget;
-  `true` if started, `false` if it could not start -- never throws). Abstracted
-  so the launch path is deterministic and mockable in tests (the real
-  `Process.Start` would spawn a real process). Injected into the strategy (not
-  the service) so tests can fake the spawn. The default `ProcessLauncher` builds
-  a `ProcessStartInfo` with `UseShellExecute = false`, strips every key the
-  request lists in `EnvironmentVariablesToRemove` from the inherited parent
-  environment, then applies each `EnvironmentOverrides` entry on top (overrides
-  win when a key appears in both sets), and adds each argument verbatim to
-  `ArgumentList` (argv-correct, no shell, no injection surface). It also forwards
-  the request's `CreateNoWindow` to `ProcessStartInfo.CreateNoWindow` (honored
-  with `UseShellExecute = false`; hides the child console window). The
-  deterministic `ProcessStartInfo` construction is factored into an internal
-  `BuildStartInfo(ProcessLaunchRequest)` pure helper that production `Start`
-  uses verbatim, so tests can inspect the final environment + argument layout
-  without spawning a real process.
+- `ISpawnedProcess` -- the observation handle returned by a successful spawn:
+    `WaitForExitAsync()` completes when the spawned process exits (any exit
+    code) and `Dispose()` releases the handle's resources. Nothing else: it
+    cannot start, stop, signal, or inspect the process. The launch service's
+    exit tracking is the single owner, so it observes the exit as a bare
+    fault-free task on `LaunchResult.RelayExited` and disposes the handle
+    itself; result consumers never see a disposable.
+- `IProcessLauncher` -- `Start(ProcessLaunchRequest) → ISpawnedProcess?`
+    (starts the process and returns without waiting; non-null handle if
+    started, `null` if it could not start -- never throws). Abstracted
+    so the launch path is deterministic and mockable in tests (the real
+    `Process.Start` would spawn a real process). Injected into the strategy (not
+    the service) so tests can fake the spawn. The default `ProcessLauncher` builds
+    a `ProcessStartInfo` with `UseShellExecute = false`, strips every key the
+    request lists in `EnvironmentVariablesToRemove` from the inherited parent
+    environment, then applies each `EnvironmentOverrides` entry on top (overrides
+    win when a key appears in both sets), and adds each argument verbatim to
+    `ArgumentList` (argv-correct, no shell, no injection surface). It also forwards
+    the request's `CreateNoWindow` to `ProcessStartInfo.CreateNoWindow` (honored
+    with `UseShellExecute = false`; hides the child console window). The
+    deterministic `ProcessStartInfo` construction is factored into an internal
+    `BuildStartInfo(ProcessLaunchRequest)` pure helper that production `Start`
+    uses verbatim, so tests can inspect the final environment + argument layout
+    without spawning a real process; the returned handle wraps the real
+    `Process` (`WaitForExitAsync` + `Dispose`, nothing more).
 
   The request is the immutable public `ProcessLaunchRequest` sealed object
   (`FilePath`, `Arguments`, `EnvironmentOverrides`,
@@ -351,8 +368,11 @@ from the container.
 `Modificus.Curator.RelayClient.Tests` is a **dual-purpose** project. `dotnet
 test` runs the xUnit suite -- `RelayLaunchServiceTests` (Windows + Linux arg
 assembly via the concrete `WindowsLaunchStrategy` / `LinuxLaunchStrategy` + a
-fake `IProcessLauncher`, `DiscoveryIncomplete` missing-field derivation,
-`StagingFailed` + `Error` mapping, plus the Linux AppImage-identity removal set
+fake `IProcessLauncher` (which returns a fake `ISpawnedProcess` with a
+test-controlled exit), `DiscoveryIncomplete` missing-field derivation,
+`StagingFailed` + `Error` mapping, the `RelayExited` tracking (completes when
+the fake spawned process exits and disposes the handle, completes when exit
+observation throws, null on every non-Launched result), plus the Linux AppImage-identity removal set
 and the Windows empty-removal/override assertion, plus the launch-settings merge --
 Linux profile env before Proton startup alongside the AppImage removals + the
 `STEAM_COMPAT_*` overrides; Windows profile env as overrides; empty/legacy when no

@@ -184,14 +184,16 @@ owned by `IProfileSession`; launch availability derives directly from
   the button via `LaunchCommand`'s can-execute) through the pre-launch render
   yield, the synchronous launch call, failure-dialog handling, and the
   post-spawn wait for the session's running-state signal to observe Darktide
-  (or a 30-second timeout, started only after the spawn returns; a false
+  AND the spawned Relay process to exit (or a 30-second timeout, started only
+  after the spawn returns, releasing the whole combined wait; a false
   polling result never clears it). Shell-owned and distinct from
   `IsGameRunning`: the attempt covers the process-detection gap the session's
   detector cannot yet see. A method-level guard refuses a second,
   direct/programmatic execution while an attempt is active. The state clears
   in all completion and exception paths; on the `Launched` path only after
-  the handoff resolves (game observed -> the ordinary running gate keeps
-  Launch disabled; timeout with the game absent -> retry is possible). While
+  the handoff resolves (game observed and Relay exited -> the ordinary
+  running gate keeps Launch disabled; timeout with the wait unresolved ->
+  retry is possible). While
   the state is true, the shell also shows the full-client launch overlay (a
   scrim + centered indeterminate progress card layered over the disabled
   shell inside `MainWindow`; see the `MainWindow` section). The button's
@@ -201,10 +203,13 @@ owned by `IProfileSession`; launch availability derives directly from
   input, so the disabled style + overlay paint before the synchronous launch
   work resumes) and the handoff timeout are injected delegates, so unit tests
   run deterministically without a live dispatcher or real waiting. The wait
-  observes the existing session signal only (subscribe-before-check, the
-  temporary subscription removed deterministically): bounded detector
-  handoff, not process supervision (no process handle is taken; Relay and
-  Darktide stay fire-and-forget).
+  observes the existing session signal + the launch facade's relay-exit task
+  (from `LaunchResult.RelayExited`; a null task behaves as already complete):
+  subscribe-before-check, the temporary subscription removed
+  deterministically, the combined conditions awaited against the single
+  timeout. Bounded detector handoff, not process supervision (no process
+  handle is taken; the facade owns the spawned handle and its disposal, and
+  Darktide stays untracked beyond the session signal).
 
 The hosted page view models are application-lifetime singletons; navigation
 never calls an old Window-close final-cleanup (`Detach`) path. There is no
@@ -1143,10 +1148,11 @@ configured `true` here.
 
 ## Mod list density / detailed rows
 
-The Compact/Detailed row-density choice for the Mods destination. Compact is the
-dense one-line row (the default, unchanged behavior); Detailed adds the Nexus
-summary + a cached thumbnail across multiple lines while preserving every
-existing row action. Three UI-layer components cooperate: the
+The Compact/Detailed row-density choice for the Mods destination. Detailed is
+the default: the multi-line row with the Nexus summary + a cached thumbnail,
+preserving every existing row action; Compact is the dense one-line row,
+surviving only when persisted or selected. Three UI-layer
+components cooperate: the
 `DetailedModRowsViewModel` coordinator (the lifecycle + orchestration owner),
 `ModListViewModel` (which exposes it read-only + hands it the row snapshot on
 reload), and `ModItemViewModel` (which gains display state but stays
@@ -1172,8 +1178,8 @@ public sealed partial class DetailedModRowsViewModel : ObservableObject
         ILogger<DetailedModRowsViewModel> logger);
 
     public ModRowDensity RowDensity { get; private set; }   // persisted Compact/Detailed selection; mutated only by SetDensityCommand
-    public bool IsCompact { get; }                        // RowDensity == Compact (the default)
-    public bool IsDetailed { get; }                       // RowDensity == Detailed
+    public bool IsCompact { get; }                        // RowDensity == Compact (the one-line row)
+    public bool IsDetailed { get; }                       // RowDensity == Detailed (the default)
 
     // CommunityToolkit-generated from SetDensity(ModRowDensity):
     public IRelayCommand<ModRowDensity> SetDensityCommand { get; }
@@ -1182,8 +1188,8 @@ public sealed partial class DetailedModRowsViewModel : ObservableObject
 }
 ```
 
-- `RowDensity`: the persisted density, read + normalized (only `Detailed`
-  survives; every other numeric value, including undefined, becomes `Compact`)
+- `RowDensity`: the persisted density, read + normalized (only `Compact`
+  survives; every other numeric value, including undefined, becomes `Detailed`)
   from `CuratorConfig.Preferences.ModRowDensity` at construction. The setter is
   private, so `SetDensityCommand` is the only mutation path. Setting it through
   the command normalizes, persists (a focused live
@@ -1703,12 +1709,16 @@ No backend library references the UI (the dependency direction is one-way).
   following a shared-state publish, unavailable when no registrar exists).
 - **`ShellLaunchAttemptTests`**: the shell-owned launch-attempt state with
   deterministic timing seams (a controllable pre-launch render yield + a
-  controllable handoff timeout, no live dispatcher and no real 30-second
+  controllable handoff timeout + a controllable relay-exit task, no live
+  dispatcher and no real 30-second
   wait): the attempt state disables Launch before the launch service runs, a
   false eager refresh + false polling notification never re-enable it while
   waiting, a later `IsRunning = true` completes the handoff (attempt cleared,
-  Launch still disabled by the running gate), the timeout clears the attempt
-  and re-enables retry when the game stays absent, failure results keep the
+  Launch still disabled by the running gate), a held relay exit keeps the
+  attempt set even after Darktide is observed (and still holds an
+  already-running session at handoff entry) until the exit lands, the timeout
+  clears the attempt and re-enables retry when the combined wait stays
+  unresolved, failure results keep the
   attempt through the dialog then clear and permit retry, a launch-service
   exception clears it, and a direct concurrent execution is refused (one
   launch call).
@@ -1851,8 +1861,9 @@ No backend library references the UI (the dependency direction is one-way).
   factory builds an `X11PlatformOptions` carrying it, without starting Avalonia
   or initializing X11 (no `DISPLAY` required).
 - **`DetailedModRowsViewModelTests`**: config/density normalization (default
-  Compact, old config without `ModRowDensity` loads Compact, Detailed
-  round-trips through JSON, undefined normalizes to Compact), the
+  Detailed, old config without `ModRowDensity` loads Detailed, persisted
+  `compact`/`detailed` strings load as themselves at the coordinator, Detailed
+  round-trips through JSON, undefined normalizes to Detailed), the
   `SetDensityCommand` (immediate state + persistence via a focused
   read-modify-save, same-density no-op), the coordinator pipeline (Compact
   returns a completed task + clears thumbnails; Detailed starts thumbnails +

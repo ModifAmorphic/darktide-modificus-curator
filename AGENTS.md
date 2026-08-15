@@ -39,9 +39,10 @@ game-binary constraints now live with the runtime, in
   external mod folder without copying it, manage
   the mod list (enable/disable/reorder/policy/remove), configure Settings
   (discovery paths + mod-repo location), and launch modded Darktide. The mod
-  list has a persisted Compact/Detailed row density (Compact is the default and
-  unchanged behavior; Detailed adds a Nexus summary and a cached thumbnail per
-  row). Every
+  list has a persisted Compact/Detailed row density (Detailed is the default,
+  with a Nexus summary and a cached thumbnail per row; Compact is the one-line
+  variant, surviving only when persisted or selected, and
+  absent/unknown normalizes to Detailed). Every
   Nexus Latest row shows a stable update-action button (disabled + neutral when
   no update, enabled + accent when flagged); a Premium click installs in-app,
   a regular/unknown click opens the mod's Nexus files page. Premium users can
@@ -160,13 +161,21 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           yields once to the Avalonia dispatcher at Loaded
                           priority so the freshly-disabled button paints, then
                           runs the synchronous launch on the UI thread;
-                          branches on `LaunchResult.Status`, keeping the
-                          attempt state through failure-dialog handling; after
-                          `Launched` + the eager refresh the attempt state
-                          stays set until the session's running-state signal
-                          observes Darktide or a 30-second timeout elapses
-                          (bounded detector handoff, no process handle; the
-                          state clears in all completion/exception paths)), and
+                           branches on `LaunchResult.Status`, keeping the
+                           attempt state through failure-dialog handling; after
+                           `Launched` + the eager refresh the attempt state
+                           stays set until BOTH the session's running-state
+                           signal observes Darktide AND the spawned Relay
+                           process exits (the exit task carried on the result:
+                           Relay directly on Windows, the Proton wrapper on
+                           Linux, whose exit follows Relay's under proton run;
+                           Darktide's process appears before Relay finishes
+                           injecting, so the overlay must outlive the detector
+                           signal), or a 30-second timeout elapses releasing
+                           the whole combined wait (the UI still holds no
+                           process handle; the façade observes + disposes the
+                           spawn; the state clears in all completion/exception
+                           paths)), and
                           the global status strip (running + pending + nxm-handler
                           + app-update notice; the nxm indicator mirrors the
                           shared `INxmRegistrationState`, seeded by its one
@@ -236,10 +245,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           (view_headline for Compact, view_agenda for Detailed)
                           bound to `DetailedModRowsViewModel.SetDensityCommand`;
                           the active one carries the `selected` class (the shell's
-                          conditional-class pattern, not a ToggleButton). Compact is
-                          the default + the absent/unknown value, and the Compact
-                          view + behavior are unchanged from before the selector
-                          existed. Detailed renders a rounded card per row laid
+                          conditional-class pattern, not a ToggleButton). Detailed is
+                          the default; absent/unknown normalizes to Detailed, and
+                          Compact survives only when persisted or selected.
+                          Detailed renders a rounded card per row laid
                           out as one adaptive Grid (the card root carries
                           `Container.Name="detailedModRow"` +
                           `Container.Sizing="Width"`, so a `ContainerQuery
@@ -769,9 +778,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         CompatdataPath/ProtonBinaryPath snapshot fields; automatic
                         mode rewrites the active-platform fields from the discoverer,
                         manual mode validates the stored paths as-is)
-                        + the Preferences.ModRowDensity slot (Compact default,
-                        Detailed the multi-line variant; absent/unknown normalizes to
-                        Compact) + the AppPaths.ModThumbnailCacheDir root
+                        + the Preferences.ModRowDensity slot (Detailed default,
+                        Compact the one-line variant; absent/unknown normalizes to
+                        Detailed) + the AppPaths.ModThumbnailCacheDir root
                         (<app-data>/cache/mod-thumbnails)
   profiles/             Modificus.Curator.Profiles -- profile data model, persistence,
                           container-based staging (ProfileService.PrepareModRoot
@@ -1007,13 +1016,18 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         (skips Darktide's intro splash state, no value, not
                         Z:\-translated on Linux); game args append one bare -- then
                         each arg as its own ArgumentList entry (Relay's --
-                        contract; no version preflight); the spawn seam IProcessLauncher takes
-                        one immutable ProcessLaunchRequest with FilePath,
-                        Arguments, EnvironmentOverrides, EnvironmentVariablesToRemove,
-                        and CreateNoWindow, applied by ProcessLauncher
-                        as UseShellExecute=false + CreateNoWindow + ArgumentList +
-                        remove-then-override over the inherited environment;
-                        CreateNoWindow hides the Relay console window unless the
+                         contract; no version preflight); the spawn seam IProcessLauncher takes
+                         one immutable ProcessLaunchRequest with FilePath,
+                         Arguments, EnvironmentOverrides, EnvironmentVariablesToRemove,
+                         and CreateNoWindow, applied by ProcessLauncher
+                         as UseShellExecute=false + CreateNoWindow + ArgumentList +
+                         remove-then-override over the inherited environment,
+                         and returns an ISpawnedProcess? observation handle
+                         (null = could not start; WaitForExitAsync + Dispose,
+                         nothing else) whose exit the launch service tracks as
+                         the bare fault-free RelayExited task on a Launched
+                         result, disposing the handle itself;
+                         CreateNoWindow hides the Relay console window unless the
                         global ShowRelayConsole preference opts in (read live from
                         config at launch; a harmless no-op on Linux, where no
                         console appears regardless); ResolveLauncherPath prefers the
@@ -1112,7 +1126,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             `dotnet test` = xUnit; `dotnet run` = composition smoke harness);
                                             covers RelayLaunchServiceTests (Windows + Linux arg
                                             assembly + DiscoveryIncomplete/StagingFailed/Error
-                                            mapping + the Linux five-key AppImage-identity
+                                            mapping + the RelayExited exit tracking over the
+                                            fake ISpawnedProcess: completes when the fake exits,
+                                            completes + disposes when exit observation throws,
+                                            null on every non-Launched result + the Linux five-key AppImage-identity
                                             removal set + the Windows empty removals/overrides
                                             + the launch-settings merge: Linux profile env
                                             before Proton startup alongside the AppImage
@@ -1145,12 +1162,15 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             not-registered, Changed marshaled through the UI seam)
                                             + the
                                             ShellLaunchAttemptTests (the launch-attempt state via
-                                            deterministic yield + timeout seams: attempt set +
+                                            deterministic yield + timeout + relay-exit seams: attempt set +
                                             CanExecute false before the launch service runs, false
                                             eager/polling state never re-enables while waiting,
                                             IsRunning=true completes the handoff with Launch still
-                                            disabled by the running gate, timeout clears the attempt
-                                            for retry, failure results keep the attempt through the
+                                            disabled by the running gate, a held relay exit keeps
+                                            the attempt set after Darktide is observed + when the
+                                            session was already running at handoff entry until
+                                            the exit lands, timeout clears the attempt
+                                            for retry when the combined wait stays unresolved, failure results keep the attempt through the
                                             dialog then clear, exception path clears, direct
                                             concurrent execution rejected) + the LaunchOverlayTests
                                             (the full-client launch overlay as XML source tests:

@@ -28,22 +28,38 @@ public sealed class DetailedModRowsViewModelTests
     // ---- config / density normalization ------------------------------------
 
     [Fact]
-    public void Default_config_has_Compact_density()
+    public void Default_config_has_Detailed_density()
     {
         var config = CuratorConfig.CreateDefault();
-        Assert.Equal(ModRowDensity.Compact, config.Preferences.ModRowDensity);
+        Assert.Equal(ModRowDensity.Detailed, config.Preferences.ModRowDensity);
     }
 
     [Fact]
-    public void Old_config_without_ModRowDensity_loads_Compact()
+    public void Old_config_without_ModRowDensity_loads_Detailed()
     {
-        var opts = new JsonSerializerOptions(JsonSerializerDefaults.Web)
-        {
-            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
-        };
-        var json = """{"preferences":{"theme":"dark","fontScale":1.0,"language":"en","showRelayConsole":false}}""";
-        var config = JsonSerializer.Deserialize<CuratorConfig>(json, opts)!;
-        Assert.Equal(ModRowDensity.Compact, config.Preferences.ModRowDensity);
+        var config = ParseConfig(
+            """{"preferences":{"theme":"dark","fontScale":1.0,"language":"en","showRelayConsole":false}}""");
+        Assert.Equal(ModRowDensity.Detailed, config.Preferences.ModRowDensity);
+    }
+
+    [Fact]
+    public void Persisted_compact_string_loads_Compact_in_coordinator()
+    {
+        // The persisted value wins over the Detailed default: a config that
+        // explicitly saved "compact" keeps Compact.
+        var config = ParseConfig("""{"preferences":{"modRowDensity":"compact"}}""");
+        var (coordinator, _, _) = CreateCoordinator(configLoader: new FakeConfigLoader { Config = config });
+        Assert.Equal(ModRowDensity.Compact, coordinator.RowDensity);
+        Assert.True(coordinator.IsCompact);
+    }
+
+    [Fact]
+    public void Persisted_detailed_string_loads_Detailed_in_coordinator()
+    {
+        var config = ParseConfig("""{"preferences":{"modRowDensity":"detailed"}}""");
+        var (coordinator, _, _) = CreateCoordinator(configLoader: new FakeConfigLoader { Config = config });
+        Assert.Equal(ModRowDensity.Detailed, coordinator.RowDensity);
+        Assert.True(coordinator.IsDetailed);
     }
 
     [Fact]
@@ -61,15 +77,16 @@ public sealed class DetailedModRowsViewModelTests
     }
 
     [Fact]
-    public void Undefined_numeric_density_normalizes_to_Compact_in_coordinator()
+    public void Undefined_numeric_density_normalizes_to_Detailed_in_coordinator()
     {
         var config = CuratorConfig.CreateDefault();
         config.Preferences.ModRowDensity = (ModRowDensity)42;
+        // The config layer keeps the undefined value untouched.
         Assert.Equal((ModRowDensity)42, config.Preferences.ModRowDensity);
 
         var (coordinator, _, _) = CreateCoordinator(configLoader: new FakeConfigLoader { Config = config });
-        Assert.Equal(ModRowDensity.Compact, coordinator.RowDensity);
-        Assert.True(coordinator.IsCompact);
+        Assert.Equal(ModRowDensity.Detailed, coordinator.RowDensity);
+        Assert.True(coordinator.IsDetailed);
     }
 
     [Fact]
@@ -209,7 +226,11 @@ public sealed class DetailedModRowsViewModelTests
     {
         var meta = new ControllableMetaService();
         var thumb = new ControllableThumbService();
-        var (coordinator, _, _) = CreateCoordinator(metaService: meta, thumbService: thumb);
+        var config = CuratorConfig.CreateDefault();
+        config.Preferences.ModRowDensity = ModRowDensity.Compact;
+        var (coordinator, _, _) = CreateCoordinator(
+            metaService: meta, thumbService: thumb,
+            configLoader: new FakeConfigLoader { Config = config });
 
         var row = MakeRow(source: new NexusSource { ModId = 1 },
             metadata: new ModDisplayMetadata { ThumbnailUrl = HttpsUrl });
@@ -410,7 +431,7 @@ public sealed class DetailedModRowsViewModelTests
         var fired = new List<string?>();
         coordinator.PropertyChanged += (_, e) => fired.Add(e.PropertyName);
 
-        coordinator.SetDensityCommand.Execute(ModRowDensity.Detailed);
+        coordinator.SetDensityCommand.Execute(ModRowDensity.Compact);
 
         Assert.Contains(nameof(DetailedModRowsViewModel.RowDensity), fired);
         Assert.Contains(nameof(DetailedModRowsViewModel.IsCompact), fired);
@@ -423,12 +444,12 @@ public sealed class DetailedModRowsViewModelTests
         var loader = new FakeConfigLoader();
         var (coordinator, _, _) = CreateCoordinator(configLoader: loader);
 
-        coordinator.SetDensityCommand.Execute(ModRowDensity.Detailed);
+        coordinator.SetDensityCommand.Execute(ModRowDensity.Compact);
 
-        Assert.Equal(ModRowDensity.Detailed, coordinator.RowDensity);
-        Assert.True(coordinator.IsDetailed);
-        Assert.False(coordinator.IsCompact);
-        Assert.Equal(ModRowDensity.Detailed, loader.Config.Preferences.ModRowDensity);
+        Assert.Equal(ModRowDensity.Compact, coordinator.RowDensity);
+        Assert.True(coordinator.IsCompact);
+        Assert.False(coordinator.IsDetailed);
+        Assert.Equal(ModRowDensity.Compact, loader.Config.Preferences.ModRowDensity);
     }
 
     [Fact]
@@ -439,7 +460,7 @@ public sealed class DetailedModRowsViewModelTests
         var (coordinator, _, _) = CreateCoordinator(configLoader: loader, metaService: meta);
 
         var savesBefore = loader.SaveCalls;
-        coordinator.SetDensityCommand.Execute(ModRowDensity.Compact);
+        coordinator.SetDensityCommand.Execute(ModRowDensity.Detailed);
 
         Assert.Equal(savesBefore, loader.SaveCalls);
         Assert.Equal(0, meta.CallCount);
@@ -494,10 +515,19 @@ public sealed class DetailedModRowsViewModelTests
 
         Assert.Empty(vm.Mods);
         Assert.NotNull(vm.DetailedRows);
-        Assert.True(vm.DetailedRows.IsCompact);
+        Assert.True(vm.DetailedRows.IsDetailed);
     }
 
     // ---- helpers + fakes ----------------------------------------------------
+
+    private static CuratorConfig ParseConfig(string json)
+    {
+        var opts = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        };
+        return JsonSerializer.Deserialize<CuratorConfig>(json, opts)!;
+    }
 
     private static ModItemViewModel MakeRow(
         Guid? containerId = null,

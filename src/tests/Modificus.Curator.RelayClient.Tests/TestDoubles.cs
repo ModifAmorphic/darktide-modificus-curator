@@ -134,14 +134,55 @@ internal sealed class FakeSteamService : ISteamService
 }
 
 /// <summary>
+/// Hand-rolled <see cref="ISpawnedProcess"/> double: the exit is a
+/// <see cref="TaskCompletionSource"/> the test completes via
+/// <see cref="SimulateExit"/>, <see cref="WaitForExitAsync"/> can be made to
+/// throw (the launch service's tracking must absorb it), and
+/// <see cref="Disposed"/> records the disposal the tracking owes the handle.
+/// </summary>
+internal sealed class FakeSpawnedProcess : ISpawnedProcess
+{
+    private readonly TaskCompletionSource _exited =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>When set, <see cref="WaitForExitAsync"/> returns a faulted
+    /// task (an unobservable process).</summary>
+    public bool ThrowOnWaitForExit { get; init; }
+
+    /// <summary>Whether the tracking disposed the handle.</summary>
+    public bool Disposed { get; private set; }
+
+    /// <summary>Completes the exit, unblocking the exit observation.</summary>
+    public void SimulateExit() => _exited.TrySetResult();
+
+    /// <inheritdoc />
+    public Task WaitForExitAsync() => ThrowOnWaitForExit
+        ? Task.FromException(new InvalidOperationException("simulated observation failure"))
+        : _exited.Task;
+
+    /// <inheritdoc />
+    public void Dispose() => Disposed = true;
+}
+
+/// <summary>
 /// Hand-rolled test double for <see cref="IProcessLauncher"/>. Records the last
 /// invocation's immutable <see cref="ProcessLaunchRequest"/> and returns a
-/// configurable boolean (default <c>true</c> = started).
+/// configurable result (default: a <see cref="FakeSpawnedProcess"/>; set
+/// <see cref="Returns"/> false to simulate a start failure).
 /// </summary>
 internal sealed class FakeProcessLauncher : IProcessLauncher
 {
-    /// <summary>The value returned by <see cref="Start"/> (default true = started).</summary>
+    /// <summary>The value returned by <see cref="Start"/> (default true = a
+    /// spawned handle; false = null, could not start).</summary>
     public bool Returns { get; set; } = true;
+
+    /// <summary>When set, each spawned fake's <see cref="ISpawnedProcess.WaitForExitAsync"/>
+    /// throws (the unobservable-process path).</summary>
+    public bool ThrowOnWaitForExit { get; set; }
+
+    /// <summary>The fake handle returned by the last successful
+    /// <see cref="Start"/> (null when it returned null).</summary>
+    public FakeSpawnedProcess? LastSpawned { get; private set; }
 
     public ProcessLaunchRequest? LastRequest { get; private set; }
     public int Calls { get; private set; }
@@ -155,11 +196,17 @@ internal sealed class FakeProcessLauncher : IProcessLauncher
     public bool CreateNoWindow => LastRequest?.CreateNoWindow ?? false;
 
     /// <inheritdoc />
-    public bool Start(ProcessLaunchRequest request)
+    public ISpawnedProcess? Start(ProcessLaunchRequest request)
     {
         Calls++;
         LastRequest = request;
-        return Returns;
+        if (!Returns)
+        {
+            return null;
+        }
+
+        LastSpawned = new FakeSpawnedProcess { ThrowOnWaitForExit = ThrowOnWaitForExit };
+        return LastSpawned;
     }
 }
 

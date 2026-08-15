@@ -217,7 +217,7 @@ public sealed class PreferencesConfig
     public double FontScale { get; set; } = 1.0;
     public string Language { get; set; } = "en";
     public bool ShowRelayConsole { get; set; }            // default false (hidden)
-    public ModRowDensity ModRowDensity { get; set; } = ModRowDensity.Compact;
+    public ModRowDensity ModRowDensity { get; set; } = ModRowDensity.Detailed;
 }
 
 public enum ThemeMode
@@ -229,8 +229,8 @@ public enum ThemeMode
 
 public enum ModRowDensity
 {
-    Compact = 0,   // the dense one-line row (the default)
-    Detailed = 1,  // the multi-line row with summary + thumbnail
+    Compact = 0,   // the dense one-line row
+    Detailed = 1,  // the multi-line row with summary + thumbnail (the default)
 }
 ```
 
@@ -255,13 +255,19 @@ public enum ModRowDensity
   takes effect on the next launch. On Linux no console window appears regardless,
   so the flag has no observable effect there. Surfaced as a checkbox in the
   Preferences destination.
-- `ModRowDensity`: the mod-list row density. `Compact` (the default) is the dense
-  one-line row; `Detailed` adds the Nexus summary + a cached thumbnail across
-  multiple lines while preserving every existing row action. Persisted as the
-  numeric enum value (camelCase via the same JSON-string enum conversion as
-  `ThemeMode`). Absent or undefined numeric values normalize to `Compact` when
-  the coordinator reads the value, so a hand-edit or an old config file without
-  the field yields Compact. Owned by the Mods toolbar's density coordinator
+- `ModRowDensity`: the mod-list row density. `Detailed` (the default) is the
+  multi-line row with the Nexus summary + a cached thumbnail, preserving every
+  existing row action; `Compact` is the dense one-line row, surviving only when
+  persisted or selected. Persisted by camelCase string name via the
+  same JSON-string enum conversion as `ThemeMode`, so the numeric values are
+  irrelevant to stored configs. Absent or undefined values normalize to
+  `Detailed` when the coordinator reads the value, so a hand-edit or an old
+  config file without the field yields Detailed; a config that persisted
+  `compact` keeps Compact. Because startup persistence writes the whole
+  Preferences section, a config that has run an earlier build carries a
+  persisted `compact` even when the density was never selected, so existing
+  installs keep Compact until Detailed is selected. Owned by the Mods
+  toolbar's density coordinator
   (`DetailedModRowsViewModel`, a child of `ModListViewModel`), which normalizes,
   applies, and persists only this property. See
   [ui: mod list density](ui.md#mod-list-density--detailed-rows).

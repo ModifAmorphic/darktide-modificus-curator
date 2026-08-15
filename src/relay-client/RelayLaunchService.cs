@@ -173,15 +173,17 @@ internal sealed class RelayLaunchService : IRelayLaunchService
             // console appears regardless, so the flag is a harmless no-op there.
             var createNoWindow = !config.Preferences.ShowRelayConsole;
 
-            var started = _strategy.Start(launcherPath, discovery, gameBinary, modPath, logFile, launchSettings, createNoWindow);
+            var spawned = _strategy.Start(launcherPath, discovery, gameBinary, modPath, logFile, launchSettings, createNoWindow);
 
-            if (!started)
+            if (spawned is null)
             {
                 return ErrorResult($"Failed to start the Relay launcher at '{launcherPath}'.");
             }
 
             _logger.LogInformation("Launched profile {Id} via the {Platform} path.", profileId, _strategy.Name);
-            return new LaunchResult(LaunchStatus.Launched, Message: null, MissingDiscoveryFields: Array.Empty<string>());
+            return new LaunchResult(
+                LaunchStatus.Launched, Message: null, MissingDiscoveryFields: Array.Empty<string>(),
+                RelayExited: TrackRelayExit(spawned));
         }
         catch (KeyNotFoundException ex)
         {
@@ -274,6 +276,40 @@ internal sealed class RelayLaunchService : IRelayLaunchService
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Wraps the spawned process's exit into the bare completion task carried
+    /// on a <see cref="LaunchStatus.Launched"/> result: fault-free,
+    /// value-free, and releasing the observation handle once observation ends.
+    /// The only code that creates the tracking owns the handle's lifetime, so
+    /// no consumer of the result ever sees a disposable.
+    /// </summary>
+    private static Task TrackRelayExit(ISpawnedProcess process)
+    {
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = MonitorAsync(process, exited);
+        return exited.Task;
+    }
+
+    private static async Task MonitorAsync(ISpawnedProcess process, TaskCompletionSource exited)
+    {
+        try
+        {
+            // Background observation in a backend library (the ConfigureAwait(false) ban is src/ui-only): keeps the continuation and finally off the UI dispatcher.
+            await process.WaitForExitAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // Observation only: an unobservable process is treated as exited.
+        }
+        finally
+        {
+            // Release the handle before completing: the exit task's awaiters
+            // must never observe completion ahead of the owed disposal.
+            process.Dispose();
+            exited.TrySetResult();
+        }
     }
 
     private static LaunchResult ErrorResult(string message) =>

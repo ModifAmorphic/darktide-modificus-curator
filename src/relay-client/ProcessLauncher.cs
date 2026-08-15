@@ -16,9 +16,11 @@ namespace Modificus.Curator.RelayClient;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Fire-and-forget: <see cref="Start"/> starts the process and returns without
-/// waiting -- the launcher + injected shell own their own lifecycle and the game
-/// process is intentionally not tracked in v1.</para>
+/// Non-blocking: <see cref="Start"/> starts the process and returns without
+/// waiting. The returned <see cref="ISpawnedProcess"/> handle exposes the
+/// spawned process's exit as a bare task + releases its resources; the
+/// launcher + injected shell own their own lifecycle and the game process is
+/// intentionally not tracked in v1.</para>
 /// <para>
 /// Registered as a singleton via <c>AddRelayClient()</c> with <c>TryAdd</c>
 /// so tests (and hosts with a custom launch hook) can pre-register an override --
@@ -34,7 +36,7 @@ internal sealed class ProcessLauncher : IProcessLauncher
     }
 
     /// <inheritdoc />
-    public bool Start(ProcessLaunchRequest request)
+    public ISpawnedProcess? Start(ProcessLaunchRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -48,13 +50,13 @@ internal sealed class ProcessLauncher : IProcessLauncher
                 // Process.Start returns null only when a new process is reusing an
                 // already-running one's resources -- rare, but treat as "not started."
                 _logger.LogWarning("Process.Start returned null for {File}.", request.FilePath);
-                return false;
+                return null;
             }
 
             _logger.LogInformation(
                 "Started process {Pid} for {File} ({Count} arguments).",
                 process.Id, request.FilePath, request.Arguments.Count);
-            return true;
+            return new SpawnedProcess(process);
         }
         catch (Exception ex) when (ex is InvalidOperationException
                                        or FileNotFoundException
@@ -63,9 +65,9 @@ internal sealed class ProcessLauncher : IProcessLauncher
         {
             // The common start failures: missing file, permission denied
             // (Win32Exception), or no platform support. Never throw -- the service
-            // maps a false return to LaunchStatus.Error with a clear message.
+            // maps a null return to LaunchStatus.Error with a clear message.
             _logger.LogWarning(ex, "Failed to start process {File}.", request.FilePath);
-            return false;
+            return null;
         }
     }
 
@@ -130,5 +132,19 @@ internal sealed class ProcessLauncher : IProcessLauncher
         }
 
         return startInfo;
+    }
+
+    /// <summary>
+    /// The <see cref="ISpawnedProcess"/> over the real <see cref="Process"/>:
+    /// exit observation via <see cref="Process.WaitForExitAsync(CancellationToken)"/>
+    /// and resource release via <see cref="Process.Dispose"/>. Private + sealed
+    /// so only <see cref="ProcessLauncher"/> creates it; the handle's owner
+    /// (whoever observes the exit) is its single disposer.
+    /// </summary>
+    private sealed class SpawnedProcess(Process process) : ISpawnedProcess
+    {
+        public Task WaitForExitAsync() => process.WaitForExitAsync(CancellationToken.None);
+
+        public void Dispose() => process.Dispose();
     }
 }

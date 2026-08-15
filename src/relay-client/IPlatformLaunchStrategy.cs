@@ -34,8 +34,9 @@ internal interface IPlatformLaunchStrategy
     /// invocation of <paramref name="launcherPath"/> with native (untranslated)
     /// args. Linux: <c>&lt;proton&gt; run &lt;launcherPath&gt; &lt;args&gt;</c>
     /// with both <c>STEAM_COMPAT_*</c> env vars and the path-valued flags
-    /// <c>Z:\</c>-translated (the launcher runs under Wine). Fire-and-forget:
-    /// returns <c>true</c> if the process started.
+    /// <c>Z:\</c>-translated (the launcher runs under Wine). Returns the
+    /// spawned process's observation handle, or <c>null</c> if it could not
+    /// be started.
     /// </summary>
     /// <param name="launcherPath">Native path to <c>mod_relay.exe</c>.</param>
     /// <param name="discovery">The resolved discovery (Linux reads the Proton +
@@ -65,5 +66,5 @@ internal interface IPlatformLaunchStrategy
     /// Relay process's console window (flows through to the launch request's
     /// <see cref="ProcessLaunchRequest.CreateNoWindow"/>). The orchestrator
     /// derives this from the global <c>ShowRelayConsole</c> preference.</param>
-    bool Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings, bool createNoWindow);
+    ISpawnedProcess? Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings, bool createNoWindow);
 }
