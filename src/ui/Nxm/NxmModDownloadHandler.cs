@@ -76,12 +76,6 @@ internal sealed class NxmModDownloadHandler : INxmModDownloadHandler
     private readonly Action<Guid>? _refreshModList;
     private readonly ILogger<NxmModDownloadHandler> _logger;
 
-    /// <summary>
-    /// The Darktide Nexus game domain. Curator supports only Darktide; any
-    /// <c>nxm://</c> link for another game is rejected before auth / profile /
-    /// acquisition with a localized alert.
-    /// </summary>
-
     public NxmModDownloadHandler(
         Func<Func<Task>, Task> invokeOnUi,
         IModAcquisitionService acquisition,

@@ -30,11 +30,6 @@ namespace Modificus.Curator.UI.Session;
 /// </remarks>
 internal sealed class AutomaticUpdateService : IAutomaticUpdateService
 {
-    /// <summary>
-    /// The Darktide Nexus game domain. Fixed: mirrors <c>UpdateCheckService</c> +
-    /// <c>ModAcquisitionService</c> + <c>ModListViewModel</c>.
-    /// </summary>
-
     private readonly IProfileSession _session;
     private readonly IProfileService _profiles;
     private readonly IModRepository _repository;

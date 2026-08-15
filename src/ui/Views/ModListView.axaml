@@ -225,15 +225,15 @@
     <!-- Header: check-now refresh + rate-limit notice +
          Compact/Detailed density selector + Add split button (hidden until a
          profile is active). The destination title lives in the global shell
-          header; this toolbar shows only the Mods-specific actions. Refresh is
-          first; the rate-limit notice follows it and occupies the single flexible
-          (*) column so the pill keeps its content width at wide widths while the
-          column still gives it a finite constraint for ellipsis at narrow widths
-          (its full text stays in the tooltip), never pushing the density pair or
-          Add out; the
-          density pair sits adjacent immediately before Add. The toolbar carries
-          the page's safe left + right insets (the row ScrollViewer below spans to
-          the destination edge so its scrollbar sits at the edge, not inset). -->
+         header; this toolbar shows only the Mods-specific actions. Refresh is
+         first; the rate-limit notice follows it and occupies the single flexible
+         (*) column so the pill keeps its content width at wide widths while the
+         column still gives it a finite constraint for ellipsis at narrow widths
+         (its full text stays in the tooltip), never pushing the density pair or
+         Add out. The density pair sits adjacent immediately before Add. The
+         toolbar carries the page's safe left + right insets (the row
+         ScrollViewer below spans to the destination edge so its scrollbar sits
+         at the edge, not inset). -->
     <Grid Grid.Row="0"
           ColumnDefinitions="Auto,*,Auto,Auto,Auto"
           IsVisible="{Binding HasActiveProfile}"

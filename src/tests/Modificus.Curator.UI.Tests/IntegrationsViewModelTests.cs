@@ -15,8 +15,9 @@ namespace Modificus.Curator.UI.Tests;
 /// Integrations dialog with the active-method indicator, the masked + persisted
 /// API-key field with Show eye toggle, the validate-on-existing path, the
 /// status-line wording that names the active method, the OAuth-login + API-key
-/// commands routing through the service, the disabled-while-running gate, and
-/// the Sign-out command clearing state.
+/// commands routing through the service, the API-key help link opening through
+/// the external launcher (silent on failure), the disabled-while-running gate,
+/// and the Sign-out command clearing state.
 /// </summary>
 public sealed class IntegrationsViewModelTests
 {
@@ -916,13 +917,45 @@ public sealed class IntegrationsViewModelTests
         Assert.True(vm.IsApiKeyAuthEnabled);
     }
 
+    // ---- API-key help link --------------------------------------------------
+
+    [Fact]
+    public async Task OpenApiKeyHelp_opens_the_help_url_in_the_default_launcher()
+    {
+        var launcher = new FakeExternalLauncher();
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null, launcher: launcher);
+
+        vm.OpenApiKeyHelpCommand.Execute(null);
+
+        var uri = Assert.Single(launcher.OpenedUris);
+        Assert.Equal(Localization["Integrations_ApiKeyHelpUrl"], uri.OriginalString);
+    }
+
+    [Fact]
+    public async Task OpenApiKeyHelp_stays_silent_when_the_launcher_throws()
+    {
+        // The help link is deliberately best-effort: a throwing launcher must
+        // not crash the command or surface an alert (the URL stays available
+        // in the link's tooltip for manual copy).
+        var launcher = new FakeExternalLauncher
+        {
+            OpenUriResult = _ => throw new InvalidOperationException("boom"),
+        };
+        var (vm, _, dialogs, _, _) = await BuildAndRefresh(state: null, launcher: launcher);
+
+        vm.OpenApiKeyHelpCommand.Execute(null);
+
+        Assert.Empty(dialogs.AlertCalls);
+    }
+
     // ---- helpers -----------------------------------------------------------
 
     private static async Task<(IntegrationsViewModel vm, FakeNexusAuthService auth, FakeDialogService dialogs, FakeNxmHandlerRegistrar? registrar, FakeNxmRegistrationState state)> BuildAndRefresh(
         NexusAuthState? state = null,
         FakeConfigLoader? configLoader = null,
         FakeDialogService? dialogs = null,
-        FakeNxmHandlerRegistrar? registrar = null)
+        FakeNxmHandlerRegistrar? registrar = null,
+        FakeExternalLauncher? launcher = null)
     {
         var auth = new FakeNexusAuthService { CurrentState = state };
         configLoader ??= new FakeConfigLoader();
@@ -931,7 +964,7 @@ public sealed class IntegrationsViewModelTests
         // registrar-less wiring is unavailable, like an unsupported platform).
         var nxmRegistration = new FakeNxmRegistrationState(registrar);
 
-        var vm = new IntegrationsViewModel(auth, Localization, configLoader, dialogs, registrar, nxmRegistration, new FakeExternalLauncher(), Logger);
+        var vm = new IntegrationsViewModel(auth, Localization, configLoader, dialogs, registrar, nxmRegistration, launcher ?? new FakeExternalLauncher(), Logger);
         await vm.RefreshAsync(); // resolve the initial status line + nxm state
         return (vm, auth, dialogs, registrar, nxmRegistration);
     }

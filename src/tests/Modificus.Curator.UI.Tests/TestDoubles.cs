@@ -871,17 +871,16 @@ internal sealed class FakeProfileService : IProfileService
 }
 
 /// <summary>
-/// In-memory app-state fake covering every role interface (the concrete store
-/// implements them all; tests use one instance across roles). Records writes
-/// for assertion.
+/// In-memory app-state fake covering the role interfaces the UI tests consume
+/// (the concrete store implements all six; the two the UI never touches, the
+/// metadata-backfill gate + the main-window geometry, stay in the General
+/// tests' coverage). Records writes for assertion.
 /// </summary>
 internal sealed class FakeAppStateStore :
     IOnboardingState,
     IProfileActivationState,
     IUpdateCheckScheduleState,
-    IKnownUpdateState,
-    INexusMetadataBackfillState,
-    IMainWindowStatePersistence
+    IKnownUpdateState
 {
     /// <summary>
     /// The persisted onboarding flag (read + written directly by tests). Default
@@ -956,19 +955,6 @@ internal sealed class FakeAppStateStore :
     /// fresh / first-run real store.
     /// </summary>
     public IReadOnlyDictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? KnownUpdates { get; set; }
-
-    /// <summary>
-    /// The persisted last Nexus display-metadata backfill timestamp (read +
-    /// written directly by tests). Default <c>null</c>, mirroring a fresh /
-    /// first-run real store.
-    /// </summary>
-    public DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
-
-    /// <summary>
-    /// The persisted main-window geometry (read + written directly by tests).
-    /// Default <c>null</c>, mirroring a fresh / first-run real store.
-    /// </summary>
-    public AppWindowState? MainWindowState { get; set; }
 }
 
 /// <summary>

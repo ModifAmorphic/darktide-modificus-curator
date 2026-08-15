@@ -33,7 +33,7 @@ public sealed class UpdateCheckServiceTests
     private const int UnlistedModId = 200;
     private const int PinnedModId = 300;
 
-    // Must match UpdateCheckService.GameId (Darktide = 4943).
+    // Must match NexusGameIdentity.DarktideGameId (Darktide = 4943).
     private const int GameId = 4943;
 
     // ---- happy path + flagging --------------------------------------------

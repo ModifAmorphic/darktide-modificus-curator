@@ -140,8 +140,8 @@ domain check, the URL parser) reads them from here.
 ```csharp
 public static class NexusGameIdentity
 {
-    public const string DarktideDomain;   /* the Darktide URL slug + v1 API path segment */
-    public const int DarktideGameId;      /* identifies Darktide to the v2 GraphQL API */
+    public const string DarktideDomain = ...;   /* the Darktide URL slug + v1 API path segment */
+    public const int DarktideGameId = ...;      /* identifies Darktide to the v2 GraphQL API */
 }
 ```
 
