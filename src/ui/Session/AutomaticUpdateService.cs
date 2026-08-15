@@ -225,20 +225,19 @@ internal sealed class AutomaticUpdateService : IAutomaticUpdateService
 
     /// <summary>
     /// Re-validates that <paramref name="info"/> is still an eligible automatic
-    /// target in <paramref name="profileId"/>: the mod is still in the profile on
-    /// <see cref="LatestPolicy"/>, the container still resolves to a
-    /// <see cref="NexusSource"/> with the same <see cref="NexusSource.ModId"/>,
-    /// and the installed version still matches the result snapshot's
-    /// <see cref="ModUpdateInfo.CurrentVersion"/>. Returns <c>false</c> (with a
+    /// target in <paramref name="profileId"/>, delegating the four rules
+    /// (membership / policy / source / version) to the shared
+    /// <see cref="UpdateEligibility"/> evaluator. Returns <c>false</c> (with a
     /// short <paramref name="reason"/>) on any mismatch; the caller skips the
     /// entry but continues the batch.
     /// </summary>
     private bool IsStillEligible(Guid profileId, ModUpdateInfo info, out string reason)
     {
-        ModListEntry? entry;
+        ModListCandidate? candidate;
         try
         {
-            entry = _profiles.GetModList(profileId).FirstOrDefault(e => e.ContainerId == info.ContainerId);
+            candidate = _profiles.GetModList(profileId).ToCandidates()
+                .FirstOrDefault(c => c.ContainerId == info.ContainerId);
         }
         catch (KeyNotFoundException)
         {
@@ -246,40 +245,12 @@ internal sealed class AutomaticUpdateService : IAutomaticUpdateService
             return false;
         }
 
-        if (entry is null)
-        {
-            reason = "removed from profile";
-            return false;
-        }
-
-        if (entry.Policy is not LatestPolicy)
-        {
-            reason = "re-pinned";
-            return false;
-        }
-
-        var container = _repository.Get(info.ContainerId);
-        if (container is null)
-        {
-            reason = "container gone";
-            return false;
-        }
-
-        if (container.Source is not NexusSource nexus || nexus.ModId != info.ModId)
-        {
-            reason = "source changed";
-            return false;
-        }
-
-        var installedVersion = container.ResolveVersion(new LatestPolicy())?.VersionString ?? string.Empty;
-        if (!string.Equals(installedVersion, info.CurrentVersion, StringComparison.OrdinalIgnoreCase))
-        {
-            reason = "version changed";
-            return false;
-        }
-
-        reason = string.Empty;
-        return true;
+        return UpdateEligibility.IsEligible(
+            candidate,
+            _repository.Get(info.ContainerId),
+            info.ModId,
+            info.CurrentVersion,
+            out reason);
     }
 
     /// <summary>

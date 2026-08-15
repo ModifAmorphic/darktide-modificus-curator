@@ -968,12 +968,17 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         NoNexusMods clears, no-auth/rate-limit/failed preserve,
                         hydration self-heals removed/pinned/source-changed/
                         version-changed entries, AcknowledgeInstall clears a
-                        single entry on a successful version change);
+                        single entry on a successful version change;
                         LastResult + CheckCompleted event for the mod-list;
                         the update family takes the profile's mod list as
                         caller-mapped `ModListCandidate` records
                         (ContainerId + Policy), so Integrations holds no
-                        Profiles reference)
+                        Profiles reference; + the pure static
+                        `UpdateEligibility` evaluator, the one source of the
+                        four known-update eligibility rules (member /
+                        LatestPolicy / NexusSource same ModId / ordinal-ignore-
+                        case version match), shared by the store's hydration
+                        self-heal + the install-time revalidation)
   steam/                Modificus.Curator.Steam -- Steam + Darktide + Proton discovery
                         (multi-library + compatdata; Linux Proton resolves from Steam's
                         CompatToolMapping in config.vdf, app-specific entry first then
@@ -1118,6 +1123,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           preserve, no-Nexus-mods clears, acknowledge,
                                           + the hydration self-heal for removed/pinned/
                                           source-changed/version-changed entries)
+                                          + the UpdateEligibility evaluator (the four
+                                          rules + every rejection reason + the
+                                          case-insensitive version match)
                                           + the NexusModMetadataService (stable-v1
                                           display-metadata backfill: the 24-hour gate,
                                           the 25-attempt cap, active-profile-priority

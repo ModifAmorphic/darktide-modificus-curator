@@ -584,6 +584,26 @@ DTO) backed by `IKnownUpdateState.KnownUpdates` (a profile-keyed map in
 `app-state.json`). Restored/persisted data is never re-published as a fresh
 authoritative result; the UI reads it directly to render flags.
 
+### Eligibility rules (`UpdateEligibility`)
+
+The four known-update eligibility rules live in one pure static evaluator,
+`UpdateEligibility.IsEligible(candidate, container, expectedModId,
+expectedVersion, out reason)`, shared by every consumer that must decide
+whether a recorded flag still applies: the state store's hydration self-heal
+(`GetKnownUpdateContainerIds`) and the mod-update installer's in-gate
+revalidation. A flag stays eligible only while:
+
+1. the container is still a member of the caller's candidate list,
+2. the entry is still on `LatestPolicy`,
+3. the container still resolves to a `NexusSource` with the recorded mod id, and
+4. the installed version (resolved via `ModContainer.ResolveVersion` with a
+   `LatestPolicy`) still matches the recorded version case-insensitively.
+
+A rejection carries a short machine-readable reason ("removed from profile",
+"re-pinned", "container gone", "source changed", "version changed") for
+logging. The evaluator is pure: no services, no I/O, no clock; everything
+arrives as arguments.
+
 ### UI wiring (`UpdateCheckRunner`)
 
 The triggers that fire the checks live in `UpdateCheckRunner` in `ui/Session/`,
@@ -847,6 +867,10 @@ view. No construction-time cycle.
   game id + mod ids, string + numeric UID deserialization, GraphQL-error
   surfacing (200 OK body
   with errors), + rate-limit exception.
+- **`UpdateEligibility`** -- the four rules evaluated directly: the eligible
+  baseline, each rejection reason (removed / re-pinned / container gone /
+  source changed by id + by source type / version changed), and the
+  case-insensitive version match.
 - **`NexusModMetadataService`** against a fake `INexusClient` + a fake
   `IModRepository` + the `FakeConfigLoader` + a fake/real backfill state:
   the auth gate (None returns empty, no API call), the persisted 24-hour gate

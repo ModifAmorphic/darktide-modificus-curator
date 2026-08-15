@@ -120,17 +120,11 @@ internal sealed class UpdateStateStore : IUpdateStateStore
     }
 
     /// <summary>
-    /// Drops entries whose membership, policy, source, or installed version no
-    /// longer match the caller's candidates + the repository state. A kept entry
-    /// must:
-    /// <list type="bullet">
-    /// <item>still be a member of the candidate list (not removed),</item>
-    /// <item>still be on <see cref="LatestPolicy"/> (not re-pinned),</item>
-    /// <item>still resolve to a <see cref="NexusSource"/> container with the
-    /// same <see cref="NexusSource.ModId"/> (not source-changed), and</item>
-    /// <item>still have the same installed <see cref="KnownUpdateSnapshot.CurrentVersion"/>
-    /// (not locally version-changed).</item>
-    /// </list>
+    /// Drops entries the shared eligibility evaluator rejects (see
+    /// <see cref="UpdateEligibility"/>): membership, policy, source, and
+    /// installed version are all re-checked against the caller's candidates +
+    /// the repository, so removed / re-pinned / source-changed /
+    /// version-changed entries self-heal out.
     /// </summary>
     private List<KnownUpdateSnapshot> FilterValid(
         IReadOnlyList<ModListCandidate> candidates, List<KnownUpdateSnapshot> snapshots)
@@ -146,36 +140,16 @@ internal sealed class UpdateStateStore : IUpdateStateStore
         var valid = new List<KnownUpdateSnapshot>();
         foreach (var snapshot in snapshots)
         {
-            if (!candidatesById.TryGetValue(snapshot.ContainerId, out var candidate))
+            candidatesById.TryGetValue(snapshot.ContainerId, out var candidate);
+            if (UpdateEligibility.IsEligible(
+                    candidate,
+                    _repository.Get(snapshot.ContainerId),
+                    snapshot.ModId,
+                    snapshot.CurrentVersion,
+                    out _))
             {
-                continue; // removed from the profile
+                valid.Add(snapshot);
             }
-
-            if (candidate.Policy is not LatestPolicy)
-            {
-                continue; // re-pinned
-            }
-
-            var container = _repository.Get(snapshot.ContainerId);
-            if (container is null)
-            {
-                continue; // container gone from the repository
-            }
-
-            if (container.Source is not NexusSource nexus || nexus.ModId != snapshot.ModId)
-            {
-                continue; // source changed / no longer the same Nexus mod
-            }
-
-            var installedVersion = container.ResolveVersion(new LatestPolicy())?.VersionString
-                ?? string.Empty;
-            if (!string.Equals(installedVersion, snapshot.CurrentVersion,
-                StringComparison.OrdinalIgnoreCase))
-            {
-                continue; // local version changed since the flag was recorded
-            }
-
-            valid.Add(snapshot);
         }
 
         return valid;
