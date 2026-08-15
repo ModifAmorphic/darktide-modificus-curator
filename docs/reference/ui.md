@@ -157,9 +157,10 @@ owned by `IProfileSession`; launch availability derives directly from
   Mods). For a real change: (1) leaving Profiles awaits the unsaved-changes
   three-choice guard (`ProfilesViewModel.ConfirmCanNavigateAwayAsync`), and
   Cancel/ESC/X or a Save that the service rejected keeps everything
-  unchanged; (2) run the current destination's leave effects (Nexus
-  Integration: `Deactivate` + nxm status refresh + mod-list reload; Settings:
-  mod-list reload + re-read `CheckOnStartup` + refresh the app-update notice);
+   unchanged; (2) run the current destination's leave effects (Nexus
+   Integration: `Deactivate` + mod-list reload, with no registration probe on
+   the way out; Settings:
+   mod-list reload + re-read `CheckOnStartup` + refresh the app-update notice);
   (3) switch `CurrentDestination`; (4) run the target's enter effects (Settings:
   `RefreshFromConfig` synchronously; Nexus: await `RefreshAsync`;
   Mods: await `DmfPromptService.ProcessPendingAsync` after the destination is
@@ -173,7 +174,9 @@ owned by `IProfileSession`; launch availability derives directly from
   five hosted page view models (singletons, injected into the shell).
 - Launch + status-strip surface (`IsGameRunning`, `HasPendingStagedChanges`,
   `GameRunningText`, the `Show*Dot` states, `IsNxmRegistered` + its derived
-  text/tooltip, `ShowAppUpdateNotice` + its text/tooltip, and the
+  text/tooltip (mirrored from the shared NXM registration state; see
+  [Shared NXM registration state](#shared-nxm-registration-state)),
+  `ShowAppUpdateNotice` + its text/tooltip, and the
   `CheckAppUpdateNowCommand` / `DismissAppUpdateCommand` notice flow): described
   where relevant below and in the app-update section.
 - `IsLaunchAttemptInProgress`: whether a launch attempt is executing, from the
@@ -591,9 +594,9 @@ public sealed class OnboardingService
   via the injected `navigateToIntegrations` delegate.
 - `navigateToIntegrations`: resolved lazily through
   `ShellViewModel.NavigateToIntegrationsAsync` at composition, so the
-  destination's auth refresh runs and the leave-Integrations nxm/mod-list
-  refresh applies after the Welcome-driven visit too. Kept as a delegate so
-  the coordinator stays unit-testable.
+  destination's auth + registration-state refresh runs and the
+  leave-Integrations mod-list reload applies after the Welcome-driven visit
+  too. Kept as a delegate so the coordinator stays unit-testable.
 - `WelcomeChoice`: the typed result returned through
   `IDialogService.ShowWelcomeAsync`. `Continue` (the default; also ESC, the
   title-bar close button, and a window close) persists completion and leaves the
@@ -604,6 +607,43 @@ The App wires the call after the main window is actually opened (Avalonia modal
 dialogs require a shown owner): a one-shot `Opened` handler resolves the
 coordinator and fires the call; a failure is logged and swallowed so it never
 crashes startup.
+
+## Shared NXM registration state
+
+The OS `nxm://` association is inherently racy (any other manager can claim it
+at any time; the OS routes a click at click time), so the UI does not chase
+freshness. One application-lifetime singleton, `NxmRegistrationState`
+(`src/ui/Session/`), holds the last-known registration and publishes changes to
+every consumer surface:
+
+```csharp
+public interface INxmRegistrationState
+{
+    bool IsAvailable { get; }       // a platform registrar exists (Windows/Linux)
+    bool IsRegistered { get; }      // last-known; false when unknown/unavailable
+    event Action? Changed;          // raised on the UI thread after any refresh
+    void RefreshFromOs();           // synchronous probe; the only writer
+}
+```
+
+- **Deliberate probe points, exactly three kinds:** one seed `RefreshFromOs()`
+  in the `ShellViewModel` constructor (startup), one per Nexus-destination
+  enter (`IntegrationsViewModel.RefreshAsync` -> `RefreshNxmState`), and one
+  after each register/release action on the Nexus page. `RefreshFromOs` is the
+  only writer: it reads `INxmHandlerRegistrar.IsRegistered()` (on Linux a
+  sanitized `xdg-mime` child; see the
+  [nxm reference](nxm.md#os-scheme-handler-registration-service)), catches any
+  throw as not-registered, and marshals `Changed` to the UI thread through the
+  shared `Action<Action>` seam (defensively; every caller is already there).
+  No other probe exists in the UI layer: `ModListViewModel.Reload()` and
+  navigation-leave effects never touch the OS registration.
+- **Consumers:** the shell status strip (its `IsNxmRegistered` mirrors the
+  state, null when unavailable), the Mods empty-state Nexus hint (the mod
+  list's `IsNxmRegistered` follows the state; `Reload` stays probe-free), the
+  Nexus destination (copies `IsAvailable`/`IsRegistered` after each refresh and
+  performs the mutations through the registrar it still injects), and the DMF
+  download-prompt wording (reads the state; never probes). All of them accept
+  staleness between deliberate refreshes by design.
 
 ## The DMF prompt coordinator
 
@@ -634,6 +674,7 @@ public sealed class DmfPromptService
         IDialogService dialogs,
         LocalizationService localization,
         ILogger<DmfPromptService> logger,
+        INxmRegistrationState nxmRegistration,
         Func<Uri, bool>? launchExternal = null);
 
     // Returns true when a pending trigger was consumed (a prompt may or may
@@ -667,7 +708,8 @@ Two cases on a trigger:
 1. DMF in the repo but not in the profile: a Yes/No confirm. On Yes,
    `IProfileService.AddMod` adds it instantly.
 2. DMF not in the repo: a Yes/No confirm (the message tailors to whether Curator
-   owns the `nxm://` handler: the manager-download path when it does,
+   owns the `nxm://` handler, read from the shared NXM registration state with
+   no probe: the manager-download path when it does,
    manual-import guidance when it does not). On Yes, premium users get the
    in-app API download under a modal spinner (via
    `IDialogService.ShowProgressAsync` plus
@@ -1441,6 +1483,10 @@ services.AddSingleton<LocalizationService>();
 services.AddSingleton<IPreferencesService, PreferencesService>();
 services.AddSingleton<MainWindow>();
 services.AddSingleton<Action<Action>>(_ => action => Dispatcher.UIThread.Post(action));
+services.AddSingleton<INxmRegistrationState>(sp => new NxmRegistrationState(  // shared last-known nxm state (before its consumers)
+    sp.GetService<INxmHandlerRegistrar>(),
+    sp.GetRequiredService<Action<Action>>(),
+    sp.GetRequiredService<ILogger<NxmRegistrationState>>()));
 services.AddSingleton<UpdateCoordinator>();                 // one-install-at-a-time gate
 services.AddSingleton<IAutomaticUpdateService, AutomaticUpdateService>(); // Premium auto-installer
 services.AddSingleton<IModThumbnailService>(sp => new ModThumbnailService( // UI-owned thumbnail cache (before the coordinator that injects it)
@@ -1461,7 +1507,7 @@ services.AddSingleton<IntegrationsViewModel>();
 services.AddSingleton<PreferencesViewModel>();
 services.AddSingleton<SettingsViewModel>();
 services.AddSingleton(sp => new ShellViewModel(/* … all five page VMs, IAppUpdateService, Action<Action> */,
-                                              sp.GetService<INxmHandlerRegistrar>()));
+                                              sp.GetRequiredService<INxmRegistrationState>()));
 services.AddSingleton<IDialogService>(sp => new DialogService(/* owner, localization, configLoader */));
 services.AddSingleton(sp => new UpdateCheckRunner(/* … incl. IAutomaticUpdateService, StartUpdateCheckPolling */));
 #if CURATOR_VELOPACK
@@ -1472,7 +1518,7 @@ services.AddSingleton<IAppUpdateService>(sp => new VelopackAppUpdateService(
 services.AddSingleton<IAppUpdateService, NoopAppUpdateService>();
 #endif
 services.AddSingleton(sp => new AppUpdateCheckRunner(/* IAppUpdateService, IConfigLoader, logger */));
-services.AddSingleton(sp => new DmfPromptService(/* … */, sp.GetService<INxmHandlerRegistrar>()));
+services.AddSingleton(sp => new DmfPromptService(/* … */, sp.GetRequiredService<INxmRegistrationState>()));
 services.AddSingleton(sp => new OnboardingService(
     sp.GetRequiredService<IAppStateStore>(),
     sp.GetRequiredService<IDialogService>(),
@@ -1498,17 +1544,23 @@ Key wiring notes:
   any profile can be created. The shell consumes the pending trigger on the
   next real navigation into Mods; `ProfilesViewModel` is narrowly coupled to
   profile workflow and does no DMF or mod-list work after Save.
-- `ShellViewModel` and `DmfPromptService` resolve the
-  `INxmHandlerRegistrar` via `GetService` (null on platforms without a
-  registrar) so the shell status strip, the Integrations "Nexus download
-  links" section, and the DMF download-confirm message can query/toggle the OS
-  `nxm://` handler without forcing activation to fail on unsupported
-  platforms. The composition root no longer auto-registers the handler.
+- `INxmRegistrationState` is registered before the VMs/services that inject it
+  (`ModListViewModel`, `IntegrationsViewModel`, `DmfPromptService`,
+  `ShellViewModel`). It wraps the optional `INxmHandlerRegistrar` (resolved via
+  `GetService`: null on platforms without a registrar, which maps to
+  `IsAvailable = false` instead of an activation failure) and owns the UI's only
+  OS probes (see
+  [Shared NXM registration state](#shared-nxm-registration-state)). Only
+  `IntegrationsViewModel` still injects the registrar itself, for the
+  register/release mutations; the registrar self-guards release (it never
+  removes another program's registration; whether it is a no-op or removes
+  only Curator's own files depends on the platform state). The composition
+  root never auto-registers the handler.
 - `OnboardingService` resolves `ShellViewModel.NavigateToIntegrationsAsync`
   lazily through its `navigateToIntegrations` delegate, so the first-run
   Welcome "Set up Nexus" choice navigates to Nexus through the
-  shell's standard path (the destination's auth refresh runs, and leaving it
-  later refreshes the shell's nxm status + reloads the mod list).
+  shell's standard path (the destination's auth + registration-state refresh
+  runs, and leaving it later reloads the mod list).
 - `MainWindow` is a singleton: the desktop lifetime installs the resolved
   instance as `desktop.MainWindow`, and `DialogService` resolves the same
   instance as the owner for modal dialogs.
@@ -1592,12 +1644,13 @@ No backend library references the UI (the dependency direction is one-way).
   Mods selection, compact-pane toggle, same-destination no-op, leave/enter
   lifecycle, dirty-Profiles-draft navigation cancellation, entering Settings
   rehydrates + leaving Settings runs the mod-list + app-update refresh, entering
-  Integrations refreshes + leaving cancels auth + refreshes nxm/mod-list, Launch
+  Integrations refreshes + leaving cancels auth + reloads the mod list with
+  zero additional registration refreshes on any leave, Launch
   CanExecute + execution following `IProfileSession.ActiveProfileId` directly
   (including a live active-id change), the launch result branches
   (Launched / DiscoveryIncomplete / StagingFailed / Error), and
-  the nxm handler status (startup read + refresh after leaving Nexus
-  Integrations + unavailable when no registrar).
+  the nxm handler status (exactly one seed refresh at construction, the strip
+  following a shared-state publish, unavailable when no registrar exists).
 - **`ShellLaunchAttemptTests`**: the shell-owned launch-attempt state with
   deterministic timing seams (a controllable pre-launch render yield + a
   controllable handoff timeout, no live dispatcher and no real 30-second
@@ -1651,8 +1704,10 @@ No backend library references the UI (the dependency direction is one-way).
   `UpdateCommand` success / failure / one-at-a-time / premium gating,
   `CheckForUpdatesNow`, `IsRateLimited` + the coupled `IsRateLimitActive`
   refresh-button/pill gating (server reset + fallback cooldown, precedence over
-  the manual throttle), and the `NamesChanged` in-place row
-  name refresh (refreshed when the flag is set, untouched when it is not).
+  the manual throttle), the `NamesChanged` in-place row
+  name refresh (refreshed when the flag is set, untouched when it is not), and
+  the empty-state Nexus hint (construction + both `Reload` paths perform zero
+  registration probes; `IsNxmRegistered` follows the shared state).
 - **`ModListOrderLockTests`**: the profile-scoped load-order lock + drag-reorder
   surface through the VM, against the lock-aware `FakeProfileService` projection:
   `OrderLocked` + move/grip availability on reload, `ToggleOrderLock` persists
@@ -1699,9 +1754,15 @@ No backend library references the UI (the dependency direction is one-way).
 - **`IntegrationsViewModelTests`**: the Nexus destination (OAuth
   login, API-key validate, sign-out), auth controls staying usable while
   Darktide runs, the "Nexus download links" section (status display, register
-  confirm / success / failure, unregister only when Curator owns the handler,
-  unavailable when no registrar), and `Deactivate` (prompt OAuth cancellation
-  on navigation away, idempotent, does not disable a later auth attempt).
+  confirm / success / failure, unregister delegating straight to the
+  self-guarded registrar with no UI-side pre-check probe and exactly one
+  post-action state publish, unavailable when no registrar), and `Deactivate`
+  (prompt OAuth cancellation on navigation away, idempotent, does not disable a
+  later auth attempt).
+- **`NxmRegistrationStateTests`**: the production shared-state contract
+  (unavailable without a registrar yet a refresh still publishes, the registrar
+  read on refresh, a probe throw treated as not-registered, and `Changed`
+  marshaled through the UI seam).
 - **`UpdateCheckRunnerTests`**: the four triggers (startup restore,
   active-switch, periodic timer with the live toggle + interval, manual
   CheckNowAsync), the periodic-clock reset, the unobserved-exception safety,
@@ -1719,7 +1780,8 @@ No backend library references the UI (the dependency direction is one-way).
   opens), the prompt-timing-after-create (the prompt fires from
   `ProfilesViewModel` immediately after the create + activation), the premium
   in-app download, the non-premium / unknown / no-auth browser-open path (opens
-  regardless of the nxm registrar state), and the browser-launch failure
+  regardless of the registration state; the download-confirm wording follows
+  the shared state with zero probes), and the browser-launch failure
   fallback alert.
 - **`OnboardingServiceTests`**: the first-run Welcome coordinator (already
   complete no-op, Continue persists + skips Integrations, Set up Nexus

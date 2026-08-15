@@ -23,12 +23,22 @@ internal sealed class WindowsNxmHandlerRegistrar : INxmHandlerRegistrar
     private const string FriendlyName = "URL:Nexus Mods Link";
 
     private readonly string _handlerExePath;
+    private readonly RegistryKey _baseKey;
     private readonly ILogger<WindowsNxmHandlerRegistrar> _logger;
 
-    public WindowsNxmHandlerRegistrar(string handlerExePath, ILogger<WindowsNxmHandlerRegistrar> logger)
+    /// <summary>
+    /// Creates the registrar. <paramref name="baseKey"/> is a test seam: the
+    /// registration is written under <c>Software\Classes\nxm</c> relative to
+    /// this key (production default: <see cref="Registry.CurrentUser"/>).
+    /// </summary>
+    public WindowsNxmHandlerRegistrar(
+        string handlerExePath,
+        ILogger<WindowsNxmHandlerRegistrar> logger,
+        RegistryKey? baseKey = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(handlerExePath);
         _handlerExePath = handlerExePath;
+        _baseKey = baseKey ?? Registry.CurrentUser;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -45,7 +55,7 @@ internal sealed class WindowsNxmHandlerRegistrar : INxmHandlerRegistrar
     public void Register()
     {
         // HKCU\Software\Classes\nxm: (Default) = friendly name, URL Protocol = "".
-        using var nxmKey = Registry.CurrentUser.CreateSubKey(ClassesNxmKey);
+        using var nxmKey = _baseKey.CreateSubKey(ClassesNxmKey);
         nxmKey.SetValue(null, FriendlyName);
         nxmKey.SetValue("URL Protocol", string.Empty);
 
@@ -60,11 +70,19 @@ internal sealed class WindowsNxmHandlerRegistrar : INxmHandlerRegistrar
     [SupportedOSPlatform("windows")]
     public void Unregister()
     {
-        // Deletes the whole nxm tree under HKCU\Software\Classes. Idempotent on
-        // an absent key (throws only on permission failures, which we surface).
+        // Self-guarded: delete the tree only when the command value points at
+        // OUR handler. An absent key is the idempotent no-op; a key owned by
+        // another program is preserved (logged).
+        if (!IsRegistered())
+        {
+            _logger.LogInformation(
+                "Skipping nxm:// unregister: Curator is not the current handler (absent or owned by another program).");
+            return;
+        }
+
         try
         {
-            Registry.CurrentUser.DeleteSubKeyTree(ClassesNxmKey, throwOnMissingSubKey: false);
+            _baseKey.DeleteSubKeyTree(ClassesNxmKey, throwOnMissingSubKey: false);
             _logger.LogInformation("Unregistered nxm:// handler.");
         }
         catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException)
@@ -92,7 +110,7 @@ internal sealed class WindowsNxmHandlerRegistrar : INxmHandlerRegistrar
     {
         try
         {
-            using var commandKey = Registry.CurrentUser.OpenSubKey(
+            using var commandKey = _baseKey.OpenSubKey(
                 Path.Combine(ClassesNxmKey, CommandSubKey));
             return commandKey?.GetValue(null) as string;
         }

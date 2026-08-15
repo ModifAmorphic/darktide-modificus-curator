@@ -3,7 +3,6 @@ using System.Diagnostics;
 using Modificus.Curator.Config;
 using Modificus.Curator.Integrations;
 using Modificus.Curator.Mods;
-using Modificus.Curator.Nxm;
 using Modificus.Curator.Profiles;
 using Modificus.Curator.UI.Dialogs;
 using Modificus.Curator.UI.Localization;
@@ -86,7 +85,7 @@ public sealed class DmfPromptService
     private readonly INexusAuthService _auth;
     private readonly IDialogService _dialogs;
     private readonly LocalizationService _localization;
-    private readonly INxmHandlerRegistrar? _nxmRegistrar;
+    private readonly INxmRegistrationState _nxmRegistration;
     private readonly ILogger<DmfPromptService> _logger;
     private readonly Func<Uri, bool> _launchExternal;
 
@@ -107,7 +106,7 @@ public sealed class DmfPromptService
         IDialogService dialogs,
         LocalizationService localization,
         ILogger<DmfPromptService> logger,
-        INxmHandlerRegistrar? nxmRegistrar = null,
+        INxmRegistrationState nxmRegistration,
         Func<Uri, bool>? launchExternal = null)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
@@ -118,7 +117,7 @@ public sealed class DmfPromptService
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
         _localization = localization ?? throw new ArgumentNullException(nameof(localization));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _nxmRegistrar = nxmRegistrar;
+        _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
         _launchExternal = launchExternal ?? DefaultLaunchExternal;
 
         _profiles.ProfileCreated += OnProfileCreated;
@@ -290,24 +289,14 @@ public sealed class DmfPromptService
     }
 
     /// <summary>
-    /// Whether Curator is registered as the OS <c>nxm://</c> handler (false when
-    /// no platform registrar is available). Used only to tailor the download
-    /// confirm message (manager-download vs. manual-import guidance). A probe
-    /// throw is treated as "not registered" (defensive; the platform registrars
-    /// catch their own probe exceptions).
+    /// Whether Curator is registered as the OS <c>nxm://</c> handler, from the
+    /// shared last-known registration state (false when no platform registrar
+    /// exists). Used only to tailor the download confirm message
+    /// (manager-download vs. manual-import guidance); it never probes the OS,
+    /// so the guidance is advisory and may be stale after an out-of-band
+    /// ownership change (accepted by design).
     /// </summary>
-    private bool OwnsNxmHandler()
-    {
-        try
-        {
-            return _nxmRegistrar?.IsRegistered() ?? false;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "IsRegistered probe threw during the DMF prompt; treating as not registered.");
-            return false;
-        }
-    }
+    private bool OwnsNxmHandler() => _nxmRegistration.IsRegistered;
 
     /// <summary>
     /// Opens DMF's Nexus files page in the user's default browser. Used when DMF

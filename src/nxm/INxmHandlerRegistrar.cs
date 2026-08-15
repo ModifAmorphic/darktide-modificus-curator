@@ -9,16 +9,22 @@ namespace Modificus.Curator.Nxm;
 /// </summary>
 /// <remarks>
 /// Registration is an explicit user action: the register path confirms first
-/// (it is a system-wide change that can affect other mod managers), and the
-/// unregister path only releases Curator's own registration by re-checking
-/// <see cref="IsRegistered"/> before <see cref="Unregister"/>.
+/// (it is a system-wide change that can affect other mod managers). The
+/// mutating operations are ownership-safe on their own:
+/// <see cref="Unregister"/> never removes another program's registration and
+/// touches only Curator's own registration files, so callers never need to
+/// pre-check <see cref="IsRegistered"/> before releasing.
 /// <see cref="MaintainRegistration"/> runs best-effort after startup but never
-/// auto-registers.
+/// auto-registers. <see cref="IsRegistered"/> is synchronous and not
+/// necessarily cheap: on Linux it may spawn an external process.
 /// </remarks>
 public interface INxmHandlerRegistrar
 {
     /// <summary>
     /// Whether the OS currently routes <c>nxm://</c> to this handler exe.
+    /// Synchronous and potentially slow: on Linux this may spawn an
+    /// external process, so callers on a UI thread should invoke it
+    /// deliberately, not incidentally.
     /// </summary>
     bool IsRegistered();
 
@@ -31,8 +37,13 @@ public interface INxmHandlerRegistrar
     void Register();
 
     /// <summary>
-    /// Removes the registration (deletes the registry key / <c>.desktop</c>
-    /// file). Best-effort: idempotent on an absent registration.
+    /// Releases only Curator's own registration (deletes the registry key /
+    /// <c>.desktop</c> file). Self-guarded: never removes another program's
+    /// registration. Whether it is a no-op or removes only Curator's own files
+    /// depends on the platform state (Windows logs + skips when Curator is not
+    /// the current handler; Linux removes Curator's own desktop file even when
+    /// another manager is the active default). Idempotent on an absent
+    /// registration.
     /// </summary>
     void Unregister();
 
@@ -51,8 +62,11 @@ public interface INxmHandlerRegistrar
     /// replace another mod manager's registration. When Curator does not own the
     /// association, the method is a silent no-op.</para>
     /// <para>
-    /// <b>Failure is non-fatal.</b> Any error is logged and swallowed, so
-    /// maintenance never blocks Curator startup.</para>
+    /// <b>Failure is non-fatal.</b> Any error is logged and swallowed, so a
+    /// maintenance failure never breaks Curator startup. The call is
+    /// synchronous and may take time on Linux (it can spawn the sanitized
+    /// <c>xdg-mime</c> child), so callers should not assume it is
+    /// instant.</para>
     /// <para>
     /// <b>Platform no-ops.</b> Windows has no AppImage-style temporary mount, so
     /// its implementation is a no-op. The standalone Linux layout (no

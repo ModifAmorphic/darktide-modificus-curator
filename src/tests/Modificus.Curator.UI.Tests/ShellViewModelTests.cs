@@ -266,16 +266,16 @@ public sealed class ShellViewModelTests
     {
         // Reload + toggle re-read fire ONLY when leaving Settings, not on other
         // transitions (e.g. Profiles -> Mods). Smoke check: navigating Profiles
-        // -> Mods reads zero registrar probes beyond construction + runs no
-        // Settings leave effects.
+        // -> Mods performs zero registration refreshes beyond the construction
+        // seed + runs no Settings leave effects.
         var parts = TestDoubles.BuildShell();
         var shell = parts.Shell;
-        var baselineIsRegistered = parts.NxmRegistrar?.IsRegisteredCalls ?? 0;
+        Assert.Equal(1, parts.NxmRegistration.RefreshFromOsCalls); // the seed
 
         await shell.NavigateCommand.ExecuteAsync(ShellDestination.Profiles);
         await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
 
-        Assert.Equal(baselineIsRegistered, parts.NxmRegistrar?.IsRegisteredCalls ?? 0);
+        Assert.Equal(1, parts.NxmRegistration.RefreshFromOsCalls);
     }
 
     // ---- entering / leaving Nexus --------------------------------------------
@@ -293,12 +293,12 @@ public sealed class ShellViewModelTests
     }
 
     [Fact]
-    public async Task Leaving_Integrations_cancels_auth_and_refreshes_nxm_and_mod_list()
+    public async Task Leaving_Integrations_cancels_auth_and_reloads_the_mod_list()
     {
         // Start an in-flight OAuth on the Integrations page, then navigate away.
-        // Leaving Integrations calls Deactivate (cancels the in-flight login),
-        // refreshes nxm status (re-probes the registrar), and reloads the mod
-        // list.
+        // Leaving Integrations calls Deactivate (cancels the in-flight login)
+        // and reloads the mod list; it performs NO additional registration
+        // refresh (the Nexus ENTER refresh is the deliberate probe point).
         var registrar = new FakeNxmHandlerRegistrar { Registered = true };
         var parts = TestDoubles.BuildShell(nxmRegistrar: registrar);
         var shell = parts.Shell;
@@ -308,7 +308,8 @@ public sealed class ShellViewModelTests
         var loginTask = parts.IntegrationsPage.LoginWithOAuthCommand.ExecuteAsync(null);
         Assert.NotNull(parts.Auth.LastOAuthTask);
         Assert.True(parts.Auth.OAuthLoginCalls > 0);
-        var isRegisteredBefore = registrar.IsRegisteredCalls;
+        // Construction seed (1) + the Nexus-enter refresh (2).
+        Assert.Equal(2, parts.NxmRegistration.RefreshFromOsCalls);
 
         await shell.NavigateCommand.ExecuteAsync(ShellDestination.Mods);
 
@@ -318,8 +319,8 @@ public sealed class ShellViewModelTests
         Assert.Same(parts.Auth.LastOAuthTask, finished);
         Assert.True(parts.Auth.LastOAuthTask!.IsCanceled);
         await loginTask; // command swallows OperationCanceledException + completes
-        // The nxm status was re-probed on leave.
-        Assert.True(registrar.IsRegisteredCalls > isRegisteredBefore);
+        // Leaving Nexus refreshed nothing: still the seed + the enter refresh.
+        Assert.Equal(2, parts.NxmRegistration.RefreshFromOsCalls);
     }
 
     [Fact]
@@ -523,11 +524,15 @@ public sealed class ShellViewModelTests
     // ---- nxm handler status -----------------------------------------------
 
     [Fact]
-    public void Constructor_reads_nxm_status_when_registrar_reports_registered()
+    public void Constructor_performs_exactly_one_seed_refresh()
     {
         var registrar = new FakeNxmHandlerRegistrar { Registered = true };
-        var shell = TestDoubles.BuildShell(nxmRegistrar: registrar).Shell;
+        var state = new FakeNxmRegistrationState(registrar);
+        var shell = TestDoubles.BuildShell(nxmRegistration: state).Shell;
 
+        // One OS probe at construction, no more.
+        Assert.Equal(1, state.RefreshFromOsCalls);
+        Assert.Equal(1, registrar.IsRegisteredCalls);
         Assert.True(shell.IsNxmRegistered);
         Assert.Equal(Localization["Status_NxmRegistered"], shell.NxmHandlerStatusText);
     }
@@ -535,10 +540,28 @@ public sealed class ShellViewModelTests
     [Fact]
     public void Constructor_shows_unavailable_when_no_registrar()
     {
-        var shell = TestDoubles.BuildShell(nxmRegistrar: null).Shell;
+        var state = new FakeNxmRegistrationState();
+        var shell = TestDoubles.BuildShell(nxmRegistration: state).Shell;
 
         Assert.Null(shell.IsNxmRegistered);
         Assert.Equal(Localization["Status_NxmUnavailable"], shell.NxmHandlerStatusText);
+        // The seed refresh still ran (published once, unavailable).
+        Assert.Equal(1, state.RefreshFromOsCalls);
+    }
+
+    [Fact]
+    public void Nxm_status_updates_when_the_shared_state_publishes()
+    {
+        var state = new FakeNxmRegistrationState { IsAvailable = true, IsRegistered = false };
+        var shell = TestDoubles.BuildShell(nxmRegistration: state).Shell;
+        Assert.False(shell.IsNxmRegistered);
+
+        state.IsRegistered = true;
+        state.RaiseChanged();
+
+        Assert.True(shell.IsNxmRegistered);
+        Assert.True(shell.IsNxmEnabled);
+        Assert.Equal(Localization["Status_NxmRegistered"], shell.NxmHandlerStatusText);
     }
 
     // ---- status strip -----------------------------------------------------

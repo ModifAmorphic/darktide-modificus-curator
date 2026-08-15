@@ -22,6 +22,15 @@ namespace Modificus.Curator.Nxm;
 /// overridable for deterministic testing.
 /// </para>
 /// <para>
+/// <b>Sanitized runner.</b> Every <c>xdg-mime</c> invocation runs with a child
+/// environment from which only <c>LD_PRELOAD</c> is removed (Steam injects its
+/// overlay via <c>LD_PRELOAD</c>, which slows unrelated host utilities by an
+/// order of magnitude; Curator's own environment is untouched). The wait is
+/// plain and synchronous: a hung desktop helper hangs the probe rather than
+/// being masked. That is deliberate (fail loud); sanitization is what keeps
+/// the ordinary case fast.
+/// </para>
+/// <para>
 /// <b>Two execution modes.</b> Standalone (no <c>$APPIMAGE</c>): the desktop
 /// entry's <c>Exec</c> points directly at the packaged handler exe shipped
 /// beside Curator. AppImage (<c>$APPIMAGE</c> present): the packaged handler is
@@ -36,12 +45,19 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
 {
     private const string XdgHandlerDesktopEntry = "[Desktop Entry]";
 
-    /// <summary>
-    /// The per-user data segment under the local-application-data folder, shared
+    /// <summary>The per-user data segment under the local-application-data folder, shared
     /// with <c>AppPaths.AppDataDir</c> on Linux so the managed handler dir lives
-    /// alongside the rest of Curator's user data.
-    /// </summary>
+    /// alongside the rest of Curator's user data.</summary>
     private const string LinuxDataSegment = "Modificus Curator";
+
+    /// <summary>
+    /// The only environment variable removed from the <c>xdg-mime</c> child's
+    /// environment. Steam injects its game-overlay libraries through
+    /// <c>LD_PRELOAD</c>; inherited by an unrelated host utility they slow it by
+    /// roughly an order of magnitude. Nothing else is stripped (measured; do
+    /// not broaden without re-measuring the target environment).
+    /// </summary>
+    private const string SteamOverlayPreloadVar = "LD_PRELOAD";
 
     /// <summary>The managed subfolder holding the copied handler + symlink.</summary>
     private const string ManagedHandlerFolder = "nxm-handler";
@@ -178,18 +194,6 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
         // symlink points at, and the managed dir is removed only when empty.
         TryCleanupManagedFiles();
 
-        // Best-effort: ask xdg-mime to forget (it has no "unset" verb; the
-        // scheme simply falls back to whatever else claims it once our file is
-        // gone). We invoke query to surface the state, but do not throw.
-        try
-        {
-            _runXdg("query default x-scheme-handler/nxm");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "xdg-mime query after unregister failed (ignored).");
-        }
-
         _logger.LogInformation("Unregistered nxm:// handler desktop file.");
     }
 
@@ -241,7 +245,7 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
 
         // Curator owns the active registration. Refresh the persistent handler
         // bytes and the AppImage symlink. All best-effort: a failure is logged
-        // and swallowed so maintenance never blocks startup.
+        // and swallowed (non-fatal; the next startup retries).
         try
         {
             RefreshManagedHandler();
@@ -503,7 +507,24 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
     // unquoted so the shell substitutes it verbatim.
     private static string FormatExec(string execPath) => $"\"{execPath}\" %u";
 
-    private static (int exitCode, string output) RunXdgDefault(string arguments)
+    /// <summary>
+    /// Builds the child environment for an <c>xdg-mime</c> invocation: a copy
+    /// of <paramref name="source"/> with only <c>LD_PRELOAD</c> removed. The
+    /// source dictionary is left untouched, so the parent (Curator's)
+    /// environment is unaffected. Pure; unit-tested directly.
+    /// </summary>
+    internal static Dictionary<string, string?> SanitizeChildEnvironment(IDictionary<string, string?> source)
+    {
+        var sanitized = new Dictionary<string, string?>(source.Count, StringComparer.Ordinal);
+        foreach (var pair in source)
+        {
+            if (!string.Equals(pair.Key, SteamOverlayPreloadVar, StringComparison.Ordinal))
+                sanitized[pair.Key] = pair.Value;
+        }
+        return sanitized;
+    }
+
+    private (int exitCode, string output) RunXdgDefault(string arguments)
     {
         var psi = new ProcessStartInfo("xdg-mime", arguments)
         {
@@ -511,6 +532,16 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        // psi.Environment lazily snapshots the parent env at first access;
+        // replace its contents with the sanitized copy so exactly the child
+        // (and its descendants) loses LD_PRELOAD.
+        var childEnv = SanitizeChildEnvironment(psi.Environment);
+        psi.Environment.Clear();
+        foreach (var pair in childEnv)
+            psi.Environment[pair.Key] = pair.Value;
+
+        // Plain synchronous wait: a hung desktop helper hangs the probe rather
+        // than being masked (deliberate, fail loud).
         using var proc = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start xdg-mime.");
         var output = proc.StandardOutput.ReadToEnd().Trim();

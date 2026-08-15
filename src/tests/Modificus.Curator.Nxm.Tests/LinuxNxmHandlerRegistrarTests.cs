@@ -7,10 +7,10 @@ namespace Modificus.Curator.Nxm.Tests;
 /// <see cref="LinuxNxmHandlerRegistrar"/> standalone-mode tests (gated to
 /// Linux): Register writes the <c>.desktop</c> file with the expected content +
 /// path; IsRegistered reflects the (faked) xdg-mime result; Unregister removes
-/// the file. The xdg invocation is faked so the test is deterministic and does
-/// not depend on a desktop environment being installed. Each registrar is built
-/// with an explicit null <c>$APPIMAGE</c> accessor so the standalone path is
-/// exercised regardless of whether the test host itself runs from an AppImage.
+/// the file without any xdg-mime call; the child-env sanitizer drops only
+/// LD_PRELOAD. Each registrar is built with an
+/// explicit null <c>$APPIMAGE</c> accessor so the standalone path is exercised
+/// regardless of whether the test host itself runs from an AppImage.
 /// </summary>
 public sealed class LinuxNxmHandlerRegistrarTests
 {
@@ -126,7 +126,7 @@ public sealed class LinuxNxmHandlerRegistrarTests
     }
 
     [Fact]
-    public void Unregister_removes_desktop_file()
+    public void Unregister_removes_desktop_file_and_invokes_no_xdg_command()
     {
         if (!OperatingSystem.IsLinux())
             return;
@@ -134,11 +134,18 @@ public sealed class LinuxNxmHandlerRegistrarTests
         var dir = CreateTempApplicationsDir();
         try
         {
+            var xdgCalls = new List<string>();
+            (int, string) RunXdg(string args)
+            {
+                xdgCalls.Add(args);
+                return (0, "");
+            }
+
             var registrar = new LinuxNxmHandlerRegistrar(
                 "/opt/curator/Modificus.Curator.NxmHandler",
                 NullLogger<LinuxNxmHandlerRegistrar>.Instance,
                 applicationsDir: dir,
-                runXdg: _ => (0, ""),
+                runXdg: RunXdg,
                 appImagePathAccessor: NoAppImage);
 
             registrar.Register();
@@ -146,6 +153,11 @@ public sealed class LinuxNxmHandlerRegistrarTests
 
             registrar.Unregister();
             Assert.False(File.Exists(Path.Combine(dir, NxmHandlerPaths.LinuxDesktopFileId)));
+
+            // Register performs the single xdg-mime "default" call; Unregister
+            // performs none (the discarded trailing query is gone).
+            var call = Assert.Single(xdgCalls);
+            Assert.StartsWith("default ", call, StringComparison.Ordinal);
         }
         finally
         {
@@ -179,6 +191,53 @@ public sealed class LinuxNxmHandlerRegistrarTests
         {
             TryCleanup(dir);
         }
+    }
+
+    // ---- child environment sanitization ------------------------------------
+
+    [Fact]
+    public void SanitizeChildEnvironment_removes_only_LD_PRELOAD()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // gated: the helper lives on the Linux registrar.
+
+        var source = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["LD_PRELOAD"] = "/steam/overlay.so",
+            ["PATH"] = "/usr/bin:/bin",
+            ["LD_LIBRARY_PATH"] = "/steam/lib", // other LD_* vars survive
+            ["APPIMAGE"] = "/home/user/Curator.AppImage",
+        };
+
+        var sanitized = LinuxNxmHandlerRegistrar.SanitizeChildEnvironment(source);
+
+        Assert.DoesNotContain("LD_PRELOAD", sanitized.Keys);
+        Assert.Equal(3, sanitized.Count);
+        Assert.Equal("/usr/bin:/bin", sanitized["PATH"]);
+        Assert.Equal("/steam/lib", sanitized["LD_LIBRARY_PATH"]);
+        Assert.Equal("/home/user/Curator.AppImage", sanitized["APPIMAGE"]);
+        // The source (the parent env) is untouched.
+        Assert.Equal("/steam/overlay.so", source["LD_PRELOAD"]);
+        Assert.Equal(4, source.Count);
+    }
+
+    [Fact]
+    public void SanitizeChildEnvironment_is_a_no_op_when_LD_PRELOAD_is_absent()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+
+        var source = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["PATH"] = "/usr/bin",
+            ["HOME"] = "/home/user",
+        };
+
+        var sanitized = LinuxNxmHandlerRegistrar.SanitizeChildEnvironment(source);
+
+        Assert.Equal(2, sanitized.Count);
+        Assert.Equal("/usr/bin", sanitized["PATH"]);
+        Assert.Equal("/home/user", sanitized["HOME"]);
     }
 
     private static string CreateTempApplicationsDir() =>
