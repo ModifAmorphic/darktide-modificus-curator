@@ -164,19 +164,25 @@ a status line + a toggle button), not something the app does on startup. The
 register path shows a confirmation dialog first: it is a system-wide change
 that can take `nxm://` clicks away from Vortex, Mod Organizer 2, Nexus Mod
 Manager, or other mod managers, so the user must opt in knowingly. The
-unregister path only releases Curator's own registration (it re-checks
-`IsRegistered()` before `Unregister()` so it never deletes another program's
-handler). The composition root never registers, but after single-instance
-ownership succeeds it performs best-effort maintenance of an existing
-Curator-owned AppImage registration. Maintenance refreshes the copied handler
-and symlink only when the desktop file exists and `xdg-mime query default`
-still reports Curator. It never calls `xdg-mime default` or takes ownership from
-another manager. `INxmHandlerRegistrar` is resolved lazily by the Integrations
-view model + the shell status strip. The
-main-window status strip surfaces the current state ("Nexus links: enabled" /
-"Nexus links: disabled" / "Nexus links: unavailable") and refreshes when leaving the
-Nexus destination. No polling: the OS registration rarely changes
-out-of-band.
+unregister path releases only Curator's own registration, and the ownership
+safety lives inside the registrar, not the caller: on Windows it is a logged
+no-op when Curator is not the current handler; on Linux it removes only
+Curator's own desktop file and never touches another manager's registration.
+Callers never pre-check. The composition root never registers, but after
+single-instance ownership succeeds it performs best-effort maintenance of an
+existing Curator-owned AppImage registration. Maintenance refreshes the copied
+handler and symlink only when the desktop file exists and
+`xdg-mime query default` still reports Curator. It never calls
+`xdg-mime default` or takes ownership from another manager.
+`INxmHandlerRegistrar` is resolved by the Integrations view model (the
+register/release mutations) and by the shared UI registration state
+(`INxmRegistrationState`, the sole probe surface: one startup seed, one probe
+on entering the Nexus destination, and one publish after each register/release
+action). The main-window status strip and the Mods empty-state hint consume
+that shared state and update via its `Changed` event (the strip surfaces
+"Nexus links: enabled" / "Nexus links: disabled" / "Nexus links:
+unavailable"). No polling: consumers read last-known state and accept that the
+OS registration rarely changes out-of-band.
 
 The packaged handler-exe path is derived from `AppContext.BaseDirectory` plus
 the fixed handler assembly name. The handler ships as a sibling of the main

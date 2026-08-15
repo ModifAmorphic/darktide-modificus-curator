@@ -1552,9 +1552,10 @@ Key wiring notes:
   OS probes (see
   [Shared NXM registration state](#shared-nxm-registration-state)). Only
   `IntegrationsViewModel` still injects the registrar itself, for the
-  register/release mutations; the registrar self-guards release (a logged no-op
-  when Curator is not the current handler). The composition root never
-  auto-registers the handler.
+  register/release mutations; the registrar self-guards release (it never
+  removes another program's registration; whether it is a no-op or removes
+  only Curator's own files depends on the platform state). The composition
+  root never auto-registers the handler.
 - `OnboardingService` resolves `ShellViewModel.NavigateToIntegrationsAsync`
   lazily through its `navigateToIntegrations` delegate, so the first-run
   Welcome "Set up Nexus" choice navigates to Nexus through the

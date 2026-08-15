@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Runtime.Versioning;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
@@ -565,6 +566,15 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
             catch (InvalidOperationException)
             {
                 // Raced to exit between the timeout expiring and the kill.
+            }
+            catch (Win32Exception ex)
+            {
+                // kill(2) failed on a tree member. Return the failure result
+                // WITHOUT the reaping wait: a failed kill must not hang it.
+                _logger.LogWarning(ex,
+                    "Killing the wedged {Executable} process tree failed; treating the call as failed.",
+                    _xdgExecutable);
+                return (-1, string.Empty);
             }
             proc.WaitForExit();
             // Failure result: a nonzero exit code so IsRegistered maps to

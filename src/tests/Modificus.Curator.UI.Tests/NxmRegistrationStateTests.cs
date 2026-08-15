@@ -58,13 +58,17 @@ public sealed class NxmRegistrationStateTests
     [Fact]
     public void RefreshFromOs_treats_a_probe_throw_as_not_registered()
     {
+        var published = 0;
         var state = new NxmRegistrationState(
             new ThrowingRegistrar(), static action => action(), NullLogger<NxmRegistrationState>.Instance);
+        state.Changed += () => published++;
 
         state.RefreshFromOs();
 
         Assert.True(state.IsAvailable);
         Assert.False(state.IsRegistered);
+        // The publish still fires so every consumer re-syncs after the probe.
+        Assert.Equal(1, published);
     }
 
     [Fact]

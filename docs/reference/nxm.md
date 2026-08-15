@@ -385,9 +385,10 @@ OS `nxm://` handler is an explicit user action from the Nexus destination (a
 "Nexus download links" section with a status line + a toggle), not something
 `CuratorComposition.Build()` does on startup. The register path confirms first
 (it is a system-wide change that can affect Vortex, Mod Organizer 2, Nexus Mod
-Manager, or other mod managers); the unregister path only releases Curator's
-own registration (the registrar self-guards ownership: a logged no-op when
-Curator is not the current handler, so callers never pre-check). The
+Manager, or other mod managers); the unregister path never removes another
+program's registration and touches only Curator's own registration files (the
+registrar self-guards ownership, so callers never pre-check; whether it is a
+no-op or removes Curator's own files depends on the platform state). The
 composition root never calls `Register()` automatically. It does call
 `MaintainRegistration()` once after the fatal single-instance check succeeds;
 that operation cannot claim ownership. The registrar is resolved by the

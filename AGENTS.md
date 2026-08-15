@@ -995,9 +995,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         handler to a durable per-user directory + creates a sibling symlink
                         to $APPIMAGE; startup maintenance refreshes those files only while
                         Curator owns the active association; Unregister is self-guarded on
-                        both platforms: it releases only Curator's own registration + is a
-                        logged no-op when Curator is not the current handler, so callers
-                        never pre-check), + NxmHandlerRelay (the testable core the
+                        both platforms: it never removes another program's registration +
+                        touches only Curator's own registration files (a no-op or a
+                        removal of Curator's own files depending on platform state), so
+                        callers never pre-check), + NxmHandlerRelay (the testable core the
                         handler exe calls: hot-path IPC delivery + cold-start launch+retry,
                         UseShellExecute=false on both OSes). AOT-friendly (IsAotCompatible;
                         only raw byte/UTF-8 IO in the handler path).

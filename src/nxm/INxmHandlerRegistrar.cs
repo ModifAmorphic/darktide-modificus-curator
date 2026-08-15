@@ -11,21 +11,20 @@ namespace Modificus.Curator.Nxm;
 /// Registration is an explicit user action: the register path confirms first
 /// (it is a system-wide change that can affect other mod managers). The
 /// mutating operations are ownership-safe on their own:
-/// <see cref="Unregister"/> releases only Curator's own registration and is a
-/// logged no-op when Curator is not the current handler, so callers never need
-/// to pre-check <see cref="IsRegistered"/> before releasing.
+/// <see cref="Unregister"/> never removes another program's registration and
+/// touches only Curator's own registration files, so callers never need to
+/// pre-check <see cref="IsRegistered"/> before releasing.
 /// <see cref="MaintainRegistration"/> runs best-effort after startup but never
 /// auto-registers. <see cref="IsRegistered"/> is synchronous and not
-/// necessarily cheap: on Linux it spawns a bounded external
-/// <c>xdg-mime</c> process (sanitized child environment, bounded wait).
+/// necessarily cheap: on Linux it may spawn a bounded external process.
 /// </remarks>
 public interface INxmHandlerRegistrar
 {
     /// <summary>
     /// Whether the OS currently routes <c>nxm://</c> to this handler exe.
-    /// Synchronous and potentially slow: on Linux this spawns an external
-    /// <c>xdg-mime</c> process (bounded), so callers on a UI thread should
-    /// invoke it deliberately, not incidentally.
+    /// Synchronous and potentially slow: on Linux this may spawn a bounded
+    /// external process, so callers on a UI thread should invoke it
+    /// deliberately, not incidentally.
     /// </summary>
     bool IsRegistered();
 
@@ -40,8 +39,11 @@ public interface INxmHandlerRegistrar
     /// <summary>
     /// Releases only Curator's own registration (deletes the registry key /
     /// <c>.desktop</c> file). Self-guarded: never removes another program's
-    /// registration; a logged no-op when Curator is not the current handler.
-    /// Idempotent on an absent registration.
+    /// registration. Whether it is a no-op or removes only Curator's own files
+    /// depends on the platform state (Windows logs + skips when Curator is not
+    /// the current handler; Linux removes Curator's own desktop file even when
+    /// another manager is the active default). Idempotent on an absent
+    /// registration.
     /// </summary>
     void Unregister();
 
