@@ -68,6 +68,11 @@ Requires the **.NET 10 SDK**. From the repo root:
 dotnet build src/modificus-curator.sln --configuration Release
 ```
 
+To build a local test AppImage from any branch (mirrors the release
+workflow's AppImage recipe), run `sh scripts/build-appimage.sh` from the
+repo root; see the script header for the output layout and environment
+overrides.
+
 ## Run
 
 ```sh
@@ -123,7 +128,7 @@ component prefix). When release-please creates a release, the release workflow
 publishes each target as unsigned assets (Windows: a Velopack installer
 and a portable ZIP; Linux: a framework-dependent tar.gz bundle plus a
 self-contained Velopack AppImage and update feed), fetches
-the latest non-draft Mod Relay prerelease, and uploads a GitHub Artifact
+the latest non-draft stable Mod Relay release, and uploads a GitHub Artifact
 Attestation against each asset. Verify an asset's provenance with:
 
 ```

@@ -1281,7 +1281,12 @@ scripts/            release.env: the install manifest (standalone RELEASE_URL /
                     command link + the exact standalone NXM desktop while preserving
                     user data + the AppImage distribution + Velopack state; explicit
                     --purge-data mirrors uninstall.sh --purge-data so either
-                    purge is a complete Linux removal); tests/ contains the isolated
+                     purge is a complete Linux removal); build-appimage.sh:
+                     the local AppImage builder mirroring the release
+                     build-linux recipe (output under the gitignored publish/
+                     root; VERSION / RELAY_ZIP / PUBLISH_DIR overrides;
+                     requires mksquashfs for the vpk pack); tests/ contains
+                     the isolated
                     test-install.sh, test-uninstall.sh, and
                     test-uninstall-standalone.sh harnesses. Testing overrides:
                     INSTALL_ROOT / BIN_LINK / CURATOR_REPO / CURATOR_ARCHIVE (local tar.gz
@@ -1301,7 +1306,8 @@ scripts/            release.env: the install manifest (standalone RELEASE_URL /
                     job; no artifact upload; release-please-only PRs are ignored via
                     paths-ignore; there is intentionally no push trigger),
                     release (release-please cuts the release; each platform job resolves
-                    the newest non-draft Relay prerelease and downloads its Windows x64
+                    the newest non-draft stable Relay release and downloads its
+                    Windows x64
                     asset, then per-target jobs publish unsigned assets that diverge by
                     platform: build-windows produces two
                     Windows artifacts: (1) the Velopack installer from the Curator UI
@@ -1364,6 +1370,8 @@ dotnet build src/modificus-curator.sln --configuration Release
 dotnet test  src/modificus-curator.sln --configuration Release
 dotnet run   --project src/ui --configuration Release   # app shell window
 ```
+- Local test AppImage from any branch, mirroring the release build:
+  `sh scripts/build-appimage.sh`.
 - The composition root is `src/ui/CuratorComposition.cs` (loads
   config → builds the Serilog logger → wires every `Add<Library>()` → runs the
   startup `ModCleanup.PruneUnreferenced` pass + an ordinary startup
