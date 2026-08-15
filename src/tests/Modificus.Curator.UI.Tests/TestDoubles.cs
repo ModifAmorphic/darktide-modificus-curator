@@ -34,11 +34,11 @@ internal static class TestDoubles
     /// fires through the same fake the test asserts on. The dialog fake defaults
     /// to confirm=true (the Yes/No case 1 + 2 confirm) + a successful acquisition.
     /// </summary>
-    /// <param name="launchExternal">Optional external-launcher override. When
-    /// omitted the builder wires <see cref="TestLauncher.NoOp"/>, a harmless
-    /// recorder that NEVER shell-opens, so the case-2 non-premium browser path
-    /// can never reach the production <c>Process.Start</c> fallback. Pass a spy
-    /// to assert on the opened URL.</param>
+    /// <param name="launcher">Optional external-launcher override. When
+    /// omitted the builder wires a fresh <see cref="FakeExternalLauncher"/>, a
+    /// harmless in-memory recorder that NEVER shell-opens, so the case-2
+    /// non-premium browser path can never reach the OS. Pass a spy to assert
+    /// on the opened URL.</param>
     /// <param name="nxmRegistration">Optional shared registration-state
     /// override. When omitted, a plain fake (unavailable, not registered) is
     /// wired; the DMF wording follows it without probing.</param>
@@ -55,7 +55,7 @@ internal static class TestDoubles
         LocalizationService? localization = null,
         FakeNxmRegistrationState? nxmRegistration = null,
         IGamingModeState? gamingMode = null,
-        Func<Uri, bool>? launchExternal = null)
+        FakeExternalLauncher? launcher = null)
     {
         profiles ??= Profiles();
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
@@ -66,9 +66,9 @@ internal static class TestDoubles
         localization ??= new LocalizationService();
         nxmRegistration ??= new FakeNxmRegistrationState();
         gamingMode ??= new GamingModeState(false);
-        // SAFETY: an omitted launcher seam defaults to the harmless no-op
-        // recorder (never the production Process.Start fallback).
-        launchExternal ??= TestLauncher.NoOp;
+        // SAFETY: an omitted launcher defaults to the harmless in-memory
+        // recorder (there is no production fallback in the service).
+        launcher ??= new FakeExternalLauncher();
         profiles.RepoLookup = repo;
         return new DmfPromptService(
             profiles,
@@ -81,7 +81,7 @@ internal static class TestDoubles
             NullLogger<DmfPromptService>.Instance,
             nxmRegistration,
             gamingMode,
-            launchExternal);
+            launcher);
     }
 
     /// <summary>
@@ -90,16 +90,12 @@ internal static class TestDoubles
     /// so the add flow's reload joins the freshly imported source + version
     /// (mirrors the real import service's behavior).
     /// </summary>
-    /// <param name="launchExternal">Optional external-launcher override. When
-    /// omitted (the common case) the builder wires <see cref="TestLauncher.NoOp"/>,
-    /// a harmless recorder that NEVER shell-opens, so a non-Premium update click
-    /// or any other external-open path in a test can never reach the production
-    /// <c>Process.Start</c> fallback. Pass a custom recorder/spy to assert on the
-    /// opened URL.</param>
-    /// <param name="launchExternalPath">Optional path-launcher override (the
-    /// open-external-folder seam). When omitted, wires
-    /// <see cref="TestLauncher.NoOpPath"/> so a linked-row badge click can never
-    /// reach the production file-manager launch.</param>
+    /// <param name="launcher">Optional external-launcher override. When
+    /// omitted (the common case) the builder wires a fresh
+    /// <see cref="FakeExternalLauncher"/>, a harmless in-memory recorder that
+    /// NEVER shell-opens, so a non-Premium update click or any other
+    /// external-open path in a test can never reach the OS. Pass a custom
+    /// recorder/spy to assert on the opened URL or path.</param>
     /// <param name="nxmRegistration">Optional shared registration-state
     /// override. When omitted (the default), the VM's
     /// <c>IsNxmRegistered</c> reads a plain fake (unavailable, not registered)
@@ -111,7 +107,6 @@ internal static class TestDoubles
         FakeProfileSession? session = null,
         FakeModRepository? repo = null,
         FakeModImportService? importService = null,
-        IModOrderResolver? orderResolver = null,
         FakeDialogService? dialogs = null,
         LocalizationService? localization = null,
         FakeUpdateCheckService? updateCheck = null,
@@ -127,8 +122,7 @@ internal static class TestDoubles
         Func<DateTimeOffset>? getNow = null,
         Action<Action>? startCountdownTimer = null,
         Action? stopCountdownTimer = null,
-        Func<Uri, bool>? launchExternal = null,
-        Func<string, bool>? launchExternalPath = null,
+        FakeExternalLauncher? launcher = null,
         FakeNxmRegistrationState? nxmRegistration = null,
         IGamingModeState? gamingMode = null)
     {
@@ -136,7 +130,6 @@ internal static class TestDoubles
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
         repo ??= new FakeModRepository();
         importService ??= new FakeModImportService(repo);
-        orderResolver ??= new IdentityModOrderResolver();
         dialogs ??= new FakeDialogService();
         localization ??= new LocalizationService();
         updateCheck ??= new FakeUpdateCheckService();
@@ -172,14 +165,12 @@ internal static class TestDoubles
             NullLogger<DetailedModRowsViewModel>.Instance);
 
         invokeOnUi ??= static action => action();
-        // SAFETY: an omitted launcher seam defaults to the harmless no-op
-        // recorder (never the production Process.Start fallback). This is the
-        // test-safety guarantee that no UI test can shell-open the operator's
-        // browser, even when a path that triggers an external open is exercised.
-        launchExternal ??= TestLauncher.NoOp;
-        // SAFETY: the path-launcher seam (open-external-folder) defaults to the
-        // harmless path recorder for the same reason.
-        launchExternalPath ??= TestLauncher.NoOpPath;
+        // SAFETY: an omitted launcher defaults to the harmless in-memory
+        // recorder (never the OS shell; the VM has no production fallback).
+        // This is the test-safety guarantee that no UI test can shell-open the
+        // operator's browser, even when a path that triggers an external open
+        // is exercised.
+        launcher ??= new FakeExternalLauncher();
         // The shared nxm registration state: default is a plain fake
         // (unavailable, not registered, no probe possible).
         nxmRegistration ??= new FakeNxmRegistrationState();
@@ -219,7 +210,6 @@ internal static class TestDoubles
             session,
             repo,
             importService,
-            orderResolver,
             dialogs,
             localization,
             updateCheck,
@@ -235,11 +225,10 @@ internal static class TestDoubles
             NullLogger<ModListViewModel>.Instance,
             nxmRegistration,
             gamingMode,
+            launcher,
             startCountdownTimer,
             stopCountdownTimer,
-            getNow,
-            launchExternal,
-            launchExternalPath);
+            getNow);
     }
 
     /// <summary>
@@ -339,6 +328,7 @@ internal static class TestDoubles
             NullLogger<ProfilesViewModel>.Instance);
         var integrationsPage = new IntegrationsViewModel(
             auth, localization, config, dialogs, nxmRegistrar, nxmRegistration,
+            new FakeExternalLauncher(),
             NullLogger<IntegrationsViewModel>.Instance);
         var preferencesPage = new PreferencesViewModel(
             new FakePreferencesService(), config, localization,
@@ -350,7 +340,8 @@ internal static class TestDoubles
             appUpdate, dialogs,
             new GamingModeState(false),
             invokeOnUi: static action => action(),
-            NullLogger<SettingsViewModel>.Instance);
+            NullLogger<SettingsViewModel>.Instance,
+            new FakeExternalLauncher());
 
         var shell = new ShellViewModel(
             session, launch, dialogs, localization,
@@ -371,79 +362,64 @@ internal static class TestDoubles
 }
 
 /// <summary>
-/// The harmless default external-launcher shared by every UI test builder that
-/// can wire a launcher seam (<see cref="TestDoubles.BuildModList"/>,
-/// <see cref="TestDoubles.BuildDmfPromptService"/>, and the DmfPromptServiceTests
-/// Build helper). Records the URI into <see cref="Opens"/> (so a test can prove
-/// the seam ran) + returns <c>true</c> (success), NEVER shell-opening. This is
-/// the single test-safety guarantee that an omitted launcher seam can NEVER
-/// reach the production <c>Process.Start</c> fallback (which would open a real
-/// browser tab on the operator desktop).
+/// In-memory <see cref="IExternalLauncher"/>: records every URI + path open
+/// and returns a configurable outcome (success by default). The UI-test
+/// builders default to this fake, so no test can shell-open the operator's
+/// browser or file manager: the VMs have no production fallback, and the
+/// default here touches nothing outside memory.
 /// </summary>
 /// <remarks>
-/// A test that wants to assert on the opened URL either reads <see cref="Opens"/>
-/// (after <see cref="Reset"/>) when relying on the default, or passes its own
-/// recorder/spy to the builder (the per-call recorders in
-/// <c>ModListViewModelTests.BuildForRowAction</c> + the DmfPrompt case-2 tests
-/// do this). The default recorder is process-free: opening a URI records it in
-/// memory and nothing touches the OS shell.
-/// The <see cref="NoOpPath"/> variant records a filesystem path (the
-/// open-external-folder seam) into <see cref="PathOpens"/>; same safety contract.
+/// A test that wants to assert on an open either reads
+/// <see cref="OpenedUris"/> / <see cref="OpenedPaths"/> on its own instance, or
+/// points the <see cref="OpenUriResult"/> / <see cref="OpenPathResult"/>
+/// handlers at its own recorder. Point a handler at a throwing delegate to
+/// exercise a caller's exception path; return <c>false</c> to exercise its
+/// launch-failure alert.
 /// </remarks>
-internal static class TestLauncher
+internal sealed class FakeExternalLauncher : IExternalLauncher
 {
-    private static readonly ConcurrentQueue<Uri> _opens = new();
-    private static readonly ConcurrentQueue<string> _pathOpens = new();
+    private readonly List<Uri> _openedUris = new();
+    private readonly List<string> _openedPaths = new();
 
-    /// <summary>
-    /// A snapshot of the URIs the no-op launcher was asked to open since the
-    /// last <see cref="Reset"/>. Tests assert on this to prove the default
-    /// builder seam handled the open (the production <c>Process.Start</c>
-    /// fallback would NOT record here, so a non-empty result proves the no-op
-    /// ran instead).
-    /// </summary>
-    public static IReadOnlyList<Uri> Opens => _opens.ToArray();
+    /// <summary>Decides the OpenUri outcome; defaults to success.</summary>
+    public Func<Uri, bool> OpenUriResult { get; set; } = _ => true;
 
-    /// <summary>
-    /// A snapshot of the filesystem paths the no-op path-launcher was asked to
-    /// open since the last <see cref="Reset"/>. Tests assert on this to prove
-    /// the open-external-folder seam ran (the production file-manager launch
-    /// would NOT record here).
-    /// </summary>
-    public static IReadOnlyList<string> PathOpens => _pathOpens.ToArray();
+    /// <summary>Decides the OpenPath outcome; defaults to success.</summary>
+    public Func<string, bool> OpenPathResult { get; set; } = _ => true;
 
-    /// <summary>
-    /// Clears both the URI + path recorded opens. Call at the start of a focused
-    /// assertion so earlier tests' recorder activity does not bleed in.
-    /// </summary>
-    public static void Reset()
+    /// <summary>Every URI this launcher was asked to open, in order.</summary>
+    public IReadOnlyList<Uri> OpenedUris => _openedUris;
+
+    /// <summary>Every filesystem path this launcher was asked to open, in order.</summary>
+    public IReadOnlyList<string> OpenedPaths => _openedPaths;
+
+    /// <inheritdoc />
+    public bool OpenUri(Uri uri)
     {
-        _opens.Clear();
-        _pathOpens.Clear();
+        _openedUris.Add(uri);
+        return OpenUriResult(uri);
+    }
+
+    /// <inheritdoc />
+    public bool OpenPath(string path)
+    {
+        _openedPaths.Add(path);
+        return OpenPathResult(path);
     }
 
     /// <summary>
-    /// The harmless default launcher: records the URI + returns <c>true</c>
-    /// (success), never shell-opening. Every UI test builder that can wire a
-    /// launcher seam defaults to this when the caller omits one.
+    /// A launcher whose URI opens record into <paramref name="uris"/> and
+    /// succeed.
     /// </summary>
-    public static readonly Func<Uri, bool> NoOp = uri =>
-    {
-        _opens.Enqueue(uri);
-        return true;
-    };
+    public static FakeExternalLauncher RecordingUris(List<Uri> uris) =>
+        new() { OpenUriResult = uri => { uris.Add(uri); return true; } };
 
     /// <summary>
-    /// The harmless default path-launcher: records the filesystem path + returns
-    /// <c>true</c> (success), never shell-opening. The open-external-folder seam
-    /// defaults to this so a linked-row badge click in a test can never reach the
-    /// production file-manager launch.
+    /// A launcher whose path opens record into <paramref name="paths"/> and
+    /// succeed.
     /// </summary>
-    public static readonly Func<string, bool> NoOpPath = path =>
-    {
-        _pathOpens.Enqueue(path);
-        return true;
-    };
+    public static FakeExternalLauncher RecordingPaths(List<string> paths) =>
+        new() { OpenPathResult = path => { paths.Add(path); return true; } };
 }
 
 /// <summary>
@@ -894,8 +870,17 @@ internal sealed class FakeProfileService : IProfileService
     public string PrepareModRoot(Guid id) => throw new NotImplementedException();
 }
 
-/// <summary>Records <see cref="IAppStateStore"/> reads/writes for assertion.</summary>
-internal sealed class FakeAppStateStore : IAppStateStore
+/// <summary>
+/// In-memory app-state fake covering the role interfaces the UI tests consume
+/// (the concrete store implements all six; the two the UI never touches, the
+/// metadata-backfill gate + the main-window geometry, stay in the General
+/// tests' coverage). Records writes for assertion.
+/// </summary>
+internal sealed class FakeAppStateStore :
+    IOnboardingState,
+    IProfileActivationState,
+    IUpdateCheckScheduleState,
+    IKnownUpdateState
 {
     /// <summary>
     /// The persisted onboarding flag (read + written directly by tests). Default
@@ -907,7 +892,7 @@ internal sealed class FakeAppStateStore : IAppStateStore
     public Guid? ActiveProfileId { get; set; } = null;
 
     /// <summary>
-    /// The last property written via the <see cref="IAppStateStore.LastUpdateCheckUtc"/>
+    /// The last property written via the <see cref="IUpdateCheckScheduleState.LastUpdateCheckUtc"/>
     /// setter (the public <see cref="LastUpdateCheckUtc"/> is the raw value; the
     /// explicit-interface setter records the write). Mirrors
     /// <see cref="SetCount"/> for the active-id path so tests can assert the
@@ -928,13 +913,13 @@ internal sealed class FakeAppStateStore : IAppStateStore
     public IReadOnlyList<DateTimeOffset>? ManualRefreshTimestamps { get; set; } = null;
 
     /// <summary>
-    /// The number of times the <see cref="IAppStateStore.ManualRefreshTimestamps"/>
+    /// The number of times the <see cref="IUpdateCheckScheduleState.ManualRefreshTimestamps"/>
     /// setter was invoked, so tests can assert the runner persisted the window on
     /// a manual fire.
     /// </summary>
     public int ManualRefreshSetCount { get; private set; }
 
-    Guid? IAppStateStore.ActiveProfileId
+    Guid? IProfileActivationState.ActiveProfileId
     {
         get => ActiveProfileId;
         set
@@ -944,7 +929,7 @@ internal sealed class FakeAppStateStore : IAppStateStore
         }
     }
 
-    DateTimeOffset? IAppStateStore.LastUpdateCheckUtc
+    DateTimeOffset? IUpdateCheckScheduleState.LastUpdateCheckUtc
     {
         get => LastUpdateCheckUtc;
         set
@@ -954,7 +939,7 @@ internal sealed class FakeAppStateStore : IAppStateStore
         }
     }
 
-    IReadOnlyList<DateTimeOffset>? IAppStateStore.ManualRefreshTimestamps
+    IReadOnlyList<DateTimeOffset>? IUpdateCheckScheduleState.ManualRefreshTimestamps
     {
         get => ManualRefreshTimestamps;
         set
@@ -970,19 +955,6 @@ internal sealed class FakeAppStateStore : IAppStateStore
     /// fresh / first-run real store.
     /// </summary>
     public IReadOnlyDictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? KnownUpdates { get; set; }
-
-    /// <summary>
-    /// The persisted last Nexus display-metadata backfill timestamp (read +
-    /// written directly by tests). Default <c>null</c>, mirroring a fresh /
-    /// first-run real store.
-    /// </summary>
-    public DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
-
-    /// <summary>
-    /// The persisted main-window geometry (read + written directly by tests).
-    /// Default <c>null</c>, mirroring a fresh / first-run real store.
-    /// </summary>
-    public AppWindowState? MainWindowState { get; set; }
 }
 
 /// <summary>
@@ -1601,18 +1573,12 @@ internal class FakeModRepository : IModRepository
 
     // Default-safe: managed + unknown report available (matches production).
     // Linked availability is driven by ExternalUnavailableIds so a VM test can
-    // simulate a broken linked container (the repo recomputes this on rescan in
-    // production; the VM reads it once per reload here).
+    // simulate a broken linked container (production seeds the signal when the
+    // container is recorded; the VM reads it once per reload here).
     public HashSet<Guid> ExternalUnavailableIds { get; } = new();
 
     public bool IsExternalAvailable(Guid containerId) =>
         !ExternalUnavailableIds.Contains(containerId);
-
-    // Rescan is a repository-lifecycle operation exercised by the Mods-layer
-    // tests; the VM tests never drive it. Recorded as a no-op so a future VM
-    // test that wires it can assert on the call.
-    public int RescanCalls { get; private set; }
-    public virtual void Rescan() => RescanCalls++;
 
     /// <summary>Test helper: seed a container with a single latest version.</summary>
     public ModContainer Seed(ModSource source, string name, string versionString = "1.0")

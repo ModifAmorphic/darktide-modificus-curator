@@ -63,20 +63,6 @@ namespace Modificus.Curator.Integrations;
 /// </remarks>
 internal sealed class UpdateCheckService : IUpdateCheckService
 {
-    /// <summary>
-    /// The Darktide Nexus game domain. Fixed: Curator supports only Darktide, so
-    /// there is no config key for it (introducing one would imply multi-game
-    /// support that does not exist).
-    /// </summary>
-    private const string GameDomain = "warhammer40kdarktide";
-
-    /// <summary>
-    /// The Darktide Nexus game id (used for v2 GraphQL UID computation:
-    /// <c>uid = game_id * 2^32 + mod_id</c>). Fixed for the same reason as
-    /// <see cref="GameDomain"/>.
-    /// </summary>
-    private const int GameId = 4943;
-
     private readonly INexusClient _nexus;
     private readonly IProfileService _profiles;
     private readonly IModRepository _repository;
@@ -282,7 +268,7 @@ internal sealed class UpdateCheckService : IUpdateCheckService
         Response<ModUpdateStatus[]> response;
         try
         {
-            response = await _nexus.CheckUpdatesGraphQlAsync(GameId, modIds, ct)
+            response = await _nexus.CheckUpdatesGraphQlAsync(NexusGameIdentity.DarktideGameId, modIds, ct)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -344,7 +330,7 @@ internal sealed class UpdateCheckService : IUpdateCheckService
         var flagged = new List<(ModUpdateInfo Info, ModUpdateStatus Node, bool Tier1Driven)>();
         foreach (var (entry, container, nexus) in checkable)
         {
-            var uid = (long)GameId * 4294967296L + nexus.ModId;
+            var uid = (long)NexusGameIdentity.DarktideGameId * 4294967296L + nexus.ModId;
             if (!byUid.TryGetValue(uid, out var status))
             {
                 // The API did not return a node for this UID (invalid id,
@@ -433,7 +419,7 @@ internal sealed class UpdateCheckService : IUpdateCheckService
         bool namesChanged = false;
         foreach (var (_, container, nexus) in nexusMods)
         {
-            var uid = (long)GameId * 4294967296L + nexus.ModId;
+            var uid = (long)NexusGameIdentity.DarktideGameId * 4294967296L + nexus.ModId;
             if (!byUid.TryGetValue(uid, out var status))
             {
                 continue;
@@ -513,7 +499,7 @@ internal sealed class UpdateCheckService : IUpdateCheckService
 
         try
         {
-            var files = await _nexus.ListModFilesAsync(GameDomain, modId, ct)
+            var files = await _nexus.ListModFilesAsync(NexusGameIdentity.DarktideDomain, modId, ct)
                 .ConfigureAwait(false);
             var latest = NexusModFiles.LatestMain(files.Data);
             var version = latest?.Version;

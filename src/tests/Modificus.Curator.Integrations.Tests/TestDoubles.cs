@@ -4,6 +4,32 @@ using Modificus.Curator.General;
 namespace Modificus.Curator.Integrations.Tests;
 
 /// <summary>
+/// In-memory <see cref="IExternalLauncher"/>: records opened URIs + paths and
+/// returns a configurable outcome (success by default). Never touches the OS
+/// shell, so tests can exercise browser-open paths safely.
+/// </summary>
+internal sealed class FakeExternalLauncher : IExternalLauncher
+{
+    private readonly List<Uri> _openedUris = new();
+
+    /// <summary>Decides the OpenUri outcome; defaults to success.</summary>
+    public Func<Uri, bool> OpenUriResult { get; set; } = _ => true;
+
+    /// <summary>Every URI this launcher was asked to open, in order.</summary>
+    public IReadOnlyList<Uri> OpenedUris => _openedUris;
+
+    /// <inheritdoc />
+    public bool OpenUri(Uri uri)
+    {
+        _openedUris.Add(uri);
+        return OpenUriResult(uri);
+    }
+
+    /// <inheritdoc />
+    public bool OpenPath(string path) => true;
+}
+
+/// <summary>
 /// Recording <see cref="IConfigLoader"/> for tests. <see cref="Load"/> returns
 /// a configurable config; <see cref="Save"/> captures the last-written config.
 /// </summary>
@@ -28,23 +54,26 @@ internal sealed class FakeConfigLoader : IConfigLoader
 }
 
 /// <summary>
-/// In-memory <see cref="IAppStateStore"/> for the update-check + update-state
-/// tests. Only <see cref="KnownUpdates"/> is exercised by the update path; the
-/// other three members are no-op stubs kept to satisfy the interface.
+/// In-memory <see cref="INexusMetadataBackfillState"/> for the
+/// display-metadata backfill tests: the pass timestamp is read + written
+/// directly.
 /// </summary>
-internal sealed class FakeAppStateStore : IAppStateStore
+internal sealed class FakeBackfillState : INexusMetadataBackfillState
+{
+    public DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
+}
+
+/// <summary>
+/// In-memory <see cref="IKnownUpdateState"/> for the update-check + update-state
+/// tests. Only <see cref="IKnownUpdateState.KnownUpdates"/> is exercised by the
+/// update path.
+/// </summary>
+internal sealed class FakeAppStateStore : IKnownUpdateState
 {
     public Dictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? KnownUpdatesData { get; set; }
     public int KnownUpdatesSetCount { get; private set; }
 
-    public bool OnboardingCompleted { get; set; }
-    public Guid? ActiveProfileId { get; set; }
-    public DateTimeOffset? LastUpdateCheckUtc { get; set; }
-    public IReadOnlyList<DateTimeOffset>? ManualRefreshTimestamps { get; set; }
-    public DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
-    public AppWindowState? MainWindowState { get; set; }
-
-    IReadOnlyDictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? IAppStateStore.KnownUpdates
+    IReadOnlyDictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? IKnownUpdateState.KnownUpdates
     {
         get => KnownUpdatesData;
         set

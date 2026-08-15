@@ -48,7 +48,7 @@ public interface IProfileSession : INotifyPropertyChanged
 - `HasPendingChanges`: session-scoped edit/stage coordination state. True when
   the active profile's `profile.json` has structural/version edits not yet
   reflected in the staged tree the running game loaded. Set by mod-list edits
-  (toggle/move/policy/remove/add/link/auto-sort/update); cleared on the next
+  (toggle/move/policy/remove/add/link/update); cleared on the next
   successful stage (a launch). In-memory only (never persisted). The shell
   surfaces this as a yellow "changes pending" status dot while the game runs,
   since Curator does not re-stage the mod tree mid-session.
@@ -76,7 +76,7 @@ The production implementation. `ObservableObject` (CommunityToolkit.Mvvm) so
 `[ObservableProperty]` raises `PropertyChanged` for `ActiveProfileId` and
 `IsRunning`. Owns:
 
-- The active id, restored from `IAppStateStore` at startup (straight into
+- The active id, restored from `IProfileActivationState` at startup (straight into
   the backing field; no write-back, no subscribers yet). A stale id (deleted
   while Curator was closed) resolves to no selection in the shell and is
   cleaned up lazily on the next delete-of-active reconcile rather than
@@ -92,7 +92,7 @@ public sealed partial class ProfileSession : ObservableObject, IProfileSession
     public ProfileSession(
         ISteamService steam,
         IProfileService profiles,
-        IAppStateStore appState,
+        IProfileActivationState appState,
         Action<Action>? startTimer = null);
 }
 ```
@@ -235,7 +235,7 @@ public partial class MainWindow : Window
     internal const double CorrectionTolerance = 1.0;   // DIP, #19431 threshold
 
     public MainWindow();                               // XAML runtime/designer path (no store)
-    internal MainWindow(IAppStateStore stateStore);    // production path
+    internal MainWindow(IMainWindowStatePersistence stateStore);    // production path
 
     internal static double ComputeOpenPaneLength(double widestLabelWidth);
     internal static (double Width, double Height) NormalizeSavedSize(
@@ -259,7 +259,7 @@ no-profile handoff link, the full-client launch overlay (in
 service calls stay in `ShellViewModel`. The public parameterless constructor
 loads XAML + safe in-memory defaults and is the Avalonia runtime/designer
 loader path (it performs no store IO and locates no service). Production
-construction goes through the internal `MainWindow(IAppStateStore)` overload,
+construction goes through the internal `MainWindow(IMainWindowStatePersistence)` overload,
 supplied by an explicit singleton factory in the composition root before the
 window is returned/shown.
 
@@ -309,7 +309,7 @@ window is returned/shown.
   pieces so future tweaks are deliberate.
 - **Persisted window geometry.** The last unmaximized (Normal) client size in
   DIP and whether the last meaningful state was Maximized are read from
-  `IAppStateStore.MainWindowState` on the production path, validated + clamped
+  `IMainWindowStatePersistence.MainWindowState` on the production path, validated + clamped
   by the pure `NormalizeSavedSize` helper to the XAML minimums (`MinWindowWidth`
   / `MinWindowHeight`) and, when available, the primary screen's working area
   converted from physical pixels to DIP via `Screen.Scaling` (the pure
@@ -581,7 +581,7 @@ not expressible as a compiled binding.
 ### `OnboardingService`
 
 The first-run Welcome coordinator. Shows the Welcome modal once, the first time
-the app starts with `IAppStateStore.OnboardingCompleted` still `false`, persists
+the app starts with `IOnboardingState.OnboardingCompleted` still `false`, persists
 completion, and navigates the shell to Nexus on a "Set up Nexus"
 choice. After the first run, the call is a no-op for the lifetime of the process.
 
@@ -589,7 +589,7 @@ choice. After the first run, the call is a no-op for the lifetime of the process
 public sealed class OnboardingService
 {
     public OnboardingService(
-        IAppStateStore appState,
+        IOnboardingState appState,
         IDialogService dialogs,
         Func<Task> navigateToIntegrations,   // resolves to ShellViewModel.NavigateToIntegrationsAsync
         ILogger<OnboardingService> logger);
@@ -770,7 +770,7 @@ Two cases on a trigger:
    `IDialogService.ShowProgressAsync` plus
    `IModAcquisitionService.AcquireLatestNexusAsync`); everyone else (no auth,
    regular, or unknown premium state) gets the DMF Nexus files page
-   (`https://www.nexusmods.com/warhammer40kdarktide/mods/8?tab=files`) opened in
+   (`https://www.nexusmods.com/<darktide-domain>/mods/8?tab=files`) opened in
    the default browser via the OS shell-open (`UseShellExecute = true`),
    regardless of `nxm://` setup. When Curator owns the handler the user clicks
    Download on the page and the handler picks up the URL; otherwise the user
@@ -784,11 +784,9 @@ profile add boundary's fresh-add rule places it first (rank 0) and
 order-locked; the prompt carries no placement choreography (see
 [profiles](profiles.md)).
 
-`launchExternal` is injectable so tests exercise the browser-open failure
-path without launching a real browser. The default uses `Process.Start` with
-`UseShellExecute = true`; the exception filter is narrow
-(`Win32Exception`, `PlatformNotSupportedException`,
-`FileNotFoundException`) so a real wiring bug is not silently swallowed.
+The browser-open runs through the shared `IExternalLauncher` (General library),
+so tests exercise the failure path with an in-memory fake instead of launching
+a real browser.
 
 ## The update check runner
 
@@ -815,7 +813,7 @@ public sealed class UpdateCheckRunner
         IProfileSession session,
         IUpdateCheckService updateCheck,
         IConfigLoader configLoader,
-        IAppStateStore appState,
+        IUpdateCheckScheduleState appState,
         IAutomaticUpdateService autoUpdate,
         ILogger<UpdateCheckRunner> logger,
         Action<Action>? startTimer = null,
@@ -834,8 +832,8 @@ public sealed class UpdateCheckRunner
   granularity: the runner fires when that much time has elapsed since the
   last check, checked on each tick.
 - `Start()`: seeds the last-check timestamp
-  (`IAppStateStore.LastUpdateCheckUtc`) and the manual throttle's sliding window
-  (`IAppStateStore.ManualRefreshTimestamps`) from the persisted store,
+  (`IUpdateCheckScheduleState.LastUpdateCheckUtc`) and the manual throttle's sliding window
+  (`IUpdateCheckScheduleState.ManualRefreshTimestamps`) from the persisted store,
   subscribes to the session's active-profile changes, starts the periodic tick,
   and fires an opening check only when a profile was already restored at startup
   AND the configured interval has elapsed. Called once from the composition root
@@ -872,7 +870,7 @@ runtime change in the Nexus destination takes effect without a
 restart.
 
 The last-check timestamp is persisted to `app-state.json`
-(`IAppStateStore.LastUpdateCheckUtc`) and seeded at `Start()`, so the interval
+(`IUpdateCheckScheduleState.LastUpdateCheckUtc`) and seeded at `Start()`, so the interval
 gate survives a close/reopen: a check that fired moments ago in a prior session
 suppresses this session's opening check, and a rapid open/close loop does not
 fire a call per launch. Every fire (automatic or manual) re-stamps the
@@ -888,7 +886,7 @@ silent no-op (no API call, no timestamp stamp). The list VM reads
 countdown tick to drive the disabled button and the `m:ss` countdown tooltip
 ("Rate limiting protection enabled. Manual refresh will be available again in
 {time}."). The window persists across restarts via `app-state.json`
-(`IAppStateStore.ManualRefreshTimestamps`), seeded at `Start()` and written back
+(`IUpdateCheckScheduleState.ManualRefreshTimestamps`), seeded at `Start()` and written back
 on every successful fire, so closing and reopening the app does not reset the
 free-refresh budget. See
 [the rate-limiting strategy](rate-limiting-strategy.md) for the thresholds.
@@ -1533,7 +1531,7 @@ UI registers its own surface after the backend libraries:
 services.AddSingleton<IProfileSession>(sp => new ProfileSession(
     sp.GetRequiredService<ISteamService>(),
     sp.GetRequiredService<IProfileService>(),
-    sp.GetRequiredService<IAppStateStore>(),
+    sp.GetRequiredService<IProfileActivationState>(),
     StartRunningStatePolling));                 // DispatcherTimer, 3s
 services.AddSingleton<LocalizationService>();
 services.AddSingleton<IPreferencesService, PreferencesService>();
@@ -1576,7 +1574,7 @@ services.AddSingleton<IAppUpdateService, NoopAppUpdateService>();
 services.AddSingleton(sp => new AppUpdateCheckRunner(/* IAppUpdateService, IConfigLoader, logger */));
 services.AddSingleton(sp => new DmfPromptService(/* … */, sp.GetRequiredService<INxmRegistrationState>()));
 services.AddSingleton(sp => new OnboardingService(
-    sp.GetRequiredService<IAppStateStore>(),
+    sp.GetRequiredService<IOnboardingState>(),
     sp.GetRequiredService<IDialogService>(),
     () => sp.GetRequiredService<ShellViewModel>().NavigateToIntegrationsAsync(),
     sp.GetRequiredService<ILogger<OnboardingService>>()));
@@ -1660,8 +1658,9 @@ instance violation) propagates out; `App` catches it and calls
 
 - **Curator libraries:** `config` (`CuratorConfig`, `PreferencesConfig`,
   `ThemeMode`, `ModRowDensity`, `NexusConfig`, `DiscoveryConfig`), `general`
-  (`IConfigLoader`, `IAppStateStore`, `LoggingBootstrap`), `profiles`
-  (`IProfileService`, `ProfileSummary`, `ModListEntry`, `IModOrderResolver`),
+  (`IConfigLoader`, `IExternalLauncher`, `NexusGameIdentity`, the app-state
+  role interfaces, `LoggingBootstrap`), `profiles`
+  (`IProfileService`, `ProfileSummary`, `ModListEntry`),
   `mods` (`IModRepository`, `IModImportService`, `ModContainer`,
   `ModDisplayMetadata`, `ModVersion`, `ModVersionPolicy`, `ModSource`,
   `NexusSource`, `UntrackedSource`, `LinkedSource`),
@@ -1752,7 +1751,7 @@ No backend library references the UI (the dependency direction is one-way).
   Profiles library -- plus the `EnableLuaLogs` Logging toggle + the `SkipSplash`
   skip-splash toggle).
 - **`ModListViewModelTests`**: enable / disable, reorder, per-mod policy,
-  remove (with confirm), auto-sort (identity resolver), the inline import workflow
+  remove (with confirm), the inline import workflow
   integration (child VM exposure, `ItemImported` reload for the active profile,
   no-misdirect for an inactive profile, add-mode stability, end-to-end
   create/activate/import), the linked-folder flow
@@ -1911,7 +1910,7 @@ dotnet test src/modificus-curator.sln -c Release
 - [integrations](integrations.md): the `INexusAuthService`,
   `IModAcquisitionService`, `INexusModMetadataService`, and
   `IUpdateCheckService` the UI consumes.
-- [profiles](profiles.md): `IProfileService`, `IModOrderResolver`, and the
+- [profiles](profiles.md): `IProfileService` and the
   profile / mod-list model the UI drives.
 - [mods](mods.md): `IModRepository`, `IModImportService`, `ModDisplayMetadata`,
   and the source / version-policy model the UI reads.

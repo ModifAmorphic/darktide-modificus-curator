@@ -18,7 +18,6 @@ downloads, + mod-file listing; the v2 GraphQL endpoint covers the update check
 public interface INexusClient
 {
     Task<Response<ValidateInfo>> ValidateAsync(CancellationToken ct = default);              // API key
-    Task<Response<ModUpdate[]>> ModUpdatesAsync(string gameDomain, NexusPeriod period, CancellationToken ct = default);
     Task<Response<DownloadLink[]>> DownloadLinksAsync(string gameDomain, int modId, int fileId, CancellationToken ct = default);                                  // premium
     Task<Response<DownloadLink[]>> DownloadLinksAsync(string gameDomain, int modId, int fileId, string nxmKey, long expiresEpoch, CancellationToken ct = default); // free user
     Task<Response<ModInfo>> GetModInfoAsync(string gameDomain, int modId, CancellationToken ct = default);
@@ -28,8 +27,6 @@ public interface INexusClient
 ```
 
 - `ValidateAsync` -- hits `GET /v1/users/validate.json` (API-key validate).
-- `ModUpdatesAsync` -- hits `GET /v1/games/{domain}/mods/updated.json?period={1d|1w|1m}`.
-  (Retained on the v1 API surface; the update check no longer calls it.)
 - `DownloadLinksAsync` (premium) -- hits `GET /v1/games/{domain}/mods/{modId}/files/{fileId}/download_link.json`.
 - `DownloadLinksAsync` (free user, with `nxmKey` + `expiresEpoch`) -- same
   endpoint with `?key={nxmKey}&expires={epoch}`.
@@ -100,15 +97,6 @@ public sealed class ValidateInfo          // API-key validate response
 
 public enum NexusMembershipRole { Member, Supporter, Premium, LifetimePremium }
 
-public sealed class ModUpdate              // one entry in /mods/updated.json
-{
-    public long ModId { get; set; }
-    public long LatestFileUpdate { get; set; }            // Unix seconds
-    public DateTimeOffset LatestFileUpdateUtc { get; }
-    public long LatestModActivity { get; set; }           // Unix seconds
-    public DateTimeOffset LatestModActivityUtc { get; }
-}
-
 public sealed class DownloadLink           // CDN link from download_link.json
 {
     public string Name { get; set; }
@@ -137,8 +125,6 @@ public sealed class ModInfo                 // mod-page payload from mods/{id}.j
 }
 
 public sealed class ModFile { /* file_id, file_name, name, version, size, category_id, uploaded_timestamp, archived, ... */ }
-
-public enum NexusPeriod { Day, Week, Month }  // period=1d|1w|1m
 ```
 
 `ModInfo.PictureUrl` is bound as a nullable string so an absent wire value
@@ -239,7 +225,8 @@ public sealed class NexusOAuthTokenStore : INexusTokenStore;   // OidcClient + t
 `Duende.IdentityModel.OidcClient`). It pre-grabs an ephemeral loopback port
 (exposed as `RedirectUri`), then on `InvokeAsync` binds an `HttpListener` on
 that port, opens the user's default browser at OidcClient's authorize URL via
-`Process.Start(UseShellExecute=true)`, awaits the callback, and returns the
+the shared `IExternalLauncher` (General library; a launch that could not start
+maps to `BrowserResultType.UnknownError`), awaits the callback, and returns the
 authorization response. Three-minute flow timeout; on expiry it surfaces
 `BrowserResultType.Timeout`. Independent of the `nxm://` scheme handler
 (loopback redirect, not `nxm://`).
@@ -496,8 +483,8 @@ the `Thorough` flag on the result).
     not called). A profile with only Pinned Nexus mods still runs the batch (for
     the name sync).
 4. **Query Nexus v2 GraphQL (1 call for ALL Nexus mods).**
-   `INexusClient.CheckUpdatesGraphQlAsync(GameId, modIds, ct)` where `GameId`
-   is the Darktide constant `4943` + `modIds` is EVERY Nexus mod's id (Latest +
+   `INexusClient.CheckUpdatesGraphQlAsync(NexusGameIdentity.DarktideGameId, modIds, ct)`
+   + `modIds` is EVERY Nexus mod's id (Latest +
    Pinned), so Pinned ids ride along for the name sync. The client computes UIDs
    (`uid = game_id * 2^32 + mod_id`), builds the `modsByUid` GraphQL query, and
    POSTs to `/v2/graphql`. A `NexusRateLimitException` is caught + surfaces as a
@@ -580,7 +567,7 @@ public interface IUpdateStateStore
   on profile switch + after an acknowledgement + after a check completes.
 
 The persisted shape is `KnownUpdateSnapshot` (in General; a plain serializable
-DTO) backed by `IAppStateStore.KnownUpdates` (a profile-keyed map in
+DTO) backed by `IKnownUpdateState.KnownUpdates` (a profile-keyed map in
 `app-state.json`). Restored/persisted data is never re-published as a fresh
 authoritative result; the UI reads it directly to render flags.
 
@@ -651,7 +638,7 @@ semaphore, so the service is registered as a singleton (see
 1. **Auth gate.** Read `IConfigLoader.Load().Integrations.Nexus.AuthMethod`. If
    `None` -> return `Empty` (no API call). The user has not configured Nexus.
 2. **Persisted 24-hour gate (rechecked after acquiring the lock).** Read
-   `IAppStateStore.LastNexusMetadataBackfillUtc`. When set and within 24 hours
+   `INexusMetadataBackfillState.LastNexusMetadataBackfillUtc`. When set and within 24 hours
    of now (strict less-than; a future stamp from clock skew gates), return
    `Empty`. Rechecking after the semaphore is acquired means a second
    overlapping call that arrived while the first was running returns empty
@@ -668,7 +655,7 @@ semaphore, so the service is registered as a singleton (see
    `Get` re-checks that the metadata is still `null` (an optimization; the
    correctness boundary is the atomic `TryInitializeDisplayMetadata` below).
    When the 25-attempt cap is reached, the pass stops. Otherwise it calls
-   `INexusClient.GetModInfoAsync("warhammer40kdarktide", modId, ct)`.
+   `INexusClient.GetModInfoAsync(NexusGameIdentity.DarktideDomain, modId, ct)`.
    - `NexusApiException` (a per-mod API failure, e.g. one removed mod) is
      logged and the pass **continues** with the next candidate.
    - `NexusRateLimitException` sets `RateLimited = true`, resolves the reset via
@@ -696,7 +683,7 @@ semaphore, so the service is registered as a singleton (see
    false positive on `NexusRateLimits.Unknown`). When exhausted, set
    `RateLimited = true`, resolve the reset, and stop the pass.
 7. **Stamp + return.** After the loop, when at least one API request was
-   attempted, stamp `IAppStateStore.LastNexusMetadataBackfillUtc = now` (so a
+   attempted, stamp `INexusMetadataBackfillState.LastNexusMetadataBackfillUtc = now` (so a
    real pass gates the next one for 24 hours). A no-auth, already-gated, or
    no-candidate no-op attempts zero requests and does **not** stamp. Return an
    immutable `NexusModMetadataResult` (the `Updated` map is defensively wrapped
@@ -750,10 +737,11 @@ Registers:
   reference exists for this service).
 - `INexusModMetadataService` -> `NexusModMetadataService` (singleton; the
   missing-only display-metadata backfill over the stable v1 endpoint. Depends on
-  `INexusClient` + `IModRepository` + `IConfigLoader` + `IAppStateStore`;
+  `INexusClient` + `IModRepository` + `IConfigLoader` +
+  `INexusMetadataBackfillState`;
   holds the semaphore that serializes overlapping passes).
 - `IUpdateStateStore` -> `UpdateStateStore` (singleton; the profile-scoped
-  known-update persistence rules over `IAppStateStore.KnownUpdates` + the live
+  known-update persistence rules over `IKnownUpdateState.KnownUpdates` + the live
   profile/repository for hydration self-heal).
 
 The OAuth factory's token store + the service's token store are the SAME
@@ -768,7 +756,8 @@ view. No construction-time cycle.
 ## Dependencies
 
 - **Curator libraries:** `config` (`CuratorConfig.Integrations.Nexus`),
-  `general` (`IConfigLoader`, `IAppStateStore` for the metadata-backfill gate),
+  `general` (`IConfigLoader`, `INexusMetadataBackfillState` for the metadata-backfill
+  gate),
   `mods` (`IModImportService`, `NexusSource`, `IModRepository` /
   `ModContainer` / `ModVersion` for the acquisition + update-check services,
   `ModDisplayMetadata` for the acquisition capture + the metadata backfill),
@@ -839,7 +828,7 @@ view. No construction-time cycle.
   surfacing (200 OK body
   with errors), + rate-limit exception.
 - **`NexusModMetadataService`** against a fake `INexusClient` + a fake
-  `IModRepository` + the `FakeConfigLoader` + a fake/real `IAppStateStore`:
+  `IModRepository` + the `FakeConfigLoader` + a fake/real backfill state:
   the auth gate (None returns empty, no API call), the persisted 24-hour gate
   (boundary, future stamp, clock skew, extreme values), serialized overlapping
   passes (the semaphore + the post-lock gate recheck), candidate selection

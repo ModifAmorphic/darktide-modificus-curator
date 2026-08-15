@@ -41,7 +41,7 @@ dialogs, preferences, and i18n fit together.
 │  │  visibility-switched by Is*Visible projections)                      │ │
 │  │ ProfilesView | ModListView (drag-and-drop) | IntegrationsView |      │ │
 │  │   ModListView header: rate-limit notice · refresh ·                  │ │
-│  │     auto-sort · Compact/Detailed density selector ·                  │ │
+│  │     Compact/Detailed density selector ·                              │ │
 │  │     Add split button (Nexus Mods + 3 pickers)                        │ │
 │  │   rows:   Compact Grid OR Detailed card (thumbnail + name +          │ │
 │  │     badge + summary · wrapping action strip: enabled · policy ·       │ │
@@ -249,7 +249,7 @@ compilation + operator visual testing.
 
 `MainWindow` remembers the last unmaximized (Normal) client size and whether
 the last meaningful state was Maximized, persisted as one atomic record under
-`IAppStateStore.MainWindowState` (the `AppWindowState` value type in General;
+`IMainWindowStatePersistence.MainWindowState` (the `AppWindowState` value type in General;
 width + height in DIP plus the boolean flag). No window position is stored;
 `WindowStartupLocation` stays `CenterScreen`.
 
@@ -504,7 +504,7 @@ The command set:
   file/folder `DragDrop` handlers (which stay external-only).
 - **Order lock** (`ToggleOrderLock`): toggles `ModListEntry.OrderLocked` through
   `IProfileService.SetModOrderLocked`. A locked row keeps its exact zero-based
-  position across any reorder or auto-sort; its grip stops intercepting pointer
+  position across any reorder; its grip stops intercepting pointer
   input (the area falls through to touch scrolling) and both move buttons
   disable. Lock metadata alone does NOT set `IProfileSession.HasPendingChanges`:
   it does not change the staged mod tree or `mods.lst`.
@@ -516,12 +516,6 @@ The command set:
 - **Remove** (`Remove`): a confirm gate, then `IProfileService.RemoveMod`.
   The repository copy survives; the confirm is about the profile edit, not
   data loss.
-- **Auto-sort** (`AutoSort`): applies the `IModOrderResolver` and persists. The
-  current resolver is the identity resolver (order unchanged); a real
-  dependency-driven resolver is a separate concern. The seam is DI-swappable, so
-  the UI wires against the abstraction, and a locked row keeps its position
-  through auto-sort because the resolver routes through the lock-projecting
-  `SetModOrder`.
 - **Add** (inline import workflow): the Add split button's four flyout items are
   all modes that set themselves as the default on click (the face label tracks
   the mode): "Add Nexus Mods" (the default; opens the Darktide Nexus Mods games
@@ -744,7 +738,7 @@ reads the persisted state, and renders.
 ### Reading the result (profile-scoped + persisted)
 
 Per-row update flags are the profile-scoped known-update state held in
-`IUpdateStateStore` (backed by `IAppStateStore.KnownUpdates` in
+`IUpdateStateStore` (backed by `IKnownUpdateState.KnownUpdates` in
 `app-state.json`), NOT the single in-memory `IUpdateCheckService.LastResult`.
 The check service records each authoritative outcome through the store at
 publish time; `ModListViewModel` reads the store on reload, on profile switch,
@@ -790,7 +784,7 @@ switch to in-app install).
   surfaces a user-facing alert. The finally block clears `row.IsUpdating` and
   releases the coordinator.
 - **Regular / unknown:** `OpenFilesPage` opens the mod's Nexus files page in
-  the user's browser via an injectable external-launcher seam. A launch failure
+  the user's browser via the shared `IExternalLauncher`. A launch failure
   surfaces a user-facing fallback alert (with the URL for manual copy) rather
   than being swallowed.
 
@@ -829,7 +823,7 @@ re-hydrates from the store when the result lands.
 ### View affordances
 
 - **The Mods toolbar.** Refresh + an indeterminate spinner (the manual "check
-  now" affordance), the rate-limit notice pill, the hidden auto-sort seam, the
+  now" affordance), the rate-limit notice pill, the
   Compact/Detailed density selector, and the Add split button, in that order.
   The rate-limit pill occupies the toolbar's single flexible (`*`) column with
   `HorizontalAlignment=Left`: at normal and wide widths it keeps its content
@@ -874,7 +868,7 @@ re-hydrates from the store when the result lands.
   untracked, which the `HyperlinkButton` treats as a no-op click). A linked row
   replaces this badge with a two-state indicator in the same cell: available
   shows an "External" pill whose click opens the OS file manager at the
-  external folder (`OpenFolder`, via a testable path-launcher seam with a
+  external folder (`OpenFolder`, via the shared `IExternalLauncher` with a
   fallback alert on failure); broken (the external folder is missing) shows a
   non-clickable "Folder unavailable" text in the caution brush. The broken
   state is pushed from `IModRepository.IsExternalAvailable` at Reload
@@ -943,7 +937,7 @@ apply.
 ## First-run Welcome onboarding (`OnboardingService`)
 
 The first-run Welcome coordinator shows a compact modal over the main window the
-first time the app starts with `IAppStateStore.OnboardingCompleted` still
+first time the app starts with `IOnboardingState.OnboardingCompleted` still
 `false`. It explains that Nexus setup is optional, describes the update-check,
 download-link, and Premium in-app update capabilities it enables, and summarizes
 the sign-in/API-key plus download-link settings available in Integrations. It
@@ -965,7 +959,7 @@ modal dialogs require a shown owner): `App` subscribes to the main window's
 `Opened` event once, resolves `OnboardingService`, and fires the call; a failure
 inside onboarding is logged and swallowed so it never crashes startup. The
 coordinator stays unit-testable through the `IDialogService.ShowWelcomeAsync`
-seam (returns a typed `WelcomeChoice`) and the `IAppStateStore` flag.
+seam (returns a typed `WelcomeChoice`) and the `IOnboardingState` flag.
 
 ## The DMF install prompt (`DmfPromptService`)
 

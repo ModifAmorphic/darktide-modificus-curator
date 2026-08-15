@@ -359,28 +359,6 @@ public sealed class ModListViewModelTests
         Assert.Empty(profiles.SetModOrderCalls);
     }
 
-    // ---- auto-sort (identity no-op) ----------------------------------------
-
-    [Fact]
-    public void AutoSort_runs_the_resolver_and_persists_the_order()
-    {
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var repo = new FakeModRepository();
-        var dmf = Seed(repo, new UntrackedSource(), "DMF");
-        var sound = Seed(repo, new UntrackedSource(), "SoundPack");
-        profiles.WithMods(a.Id,
-            new ModListEntry { ContainerId = dmf.Id, Order = 0 },
-            new ModListEntry { ContainerId = sound.Id, Order = 1 });
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var vm = Build(profiles, session, repo);
-
-        vm.AutoSortCommand.Execute(null);
-
-        // Identity resolver returns the current order unchanged (by container id).
-        Assert.Equal(new[] { dmf.Id, sound.Id }, Assert.Single(profiles.SetModOrderCalls));
-    }
-
     // ---- remove (confirm / cancel) -----------------------------------------
 
     [Fact]
@@ -1489,7 +1467,7 @@ public sealed class ModListViewModelTests
     /// and the row lookup helpers.
     /// </summary>
     private static (ModListViewModel Vm, FakeUpdateCheckService UpdateCheck, FakeUpdateStateStore UpdateState, List<Uri> Launches, FakeDialogService Dialogs)
-        BuildForRowAction(bool premium = true, Func<Uri, bool>? launchExternal = null)
+        BuildForRowAction(bool premium = true, FakeExternalLauncher? launcher = null)
     {
         var a = Profile("Alpha");
         var profiles = TestDoubles.Profiles(a);
@@ -1508,7 +1486,7 @@ public sealed class ModListViewModelTests
         var updateState = new FakeUpdateStateStore(profiles, repo);
         var dialogs = new FakeDialogService();
         var launches = new List<Uri>();
-        var launcher = launchExternal ?? (uri => { launches.Add(uri); return true; });
+        launcher ??= FakeExternalLauncher.RecordingUris(launches);
         var auth = new FakeNexusAuthService
         {
             State = premium
@@ -1517,7 +1495,7 @@ public sealed class ModListViewModelTests
         };
         var vm = TestDoubles.BuildModList(profiles, session, repo,
             updateCheck: updateCheck, updateState: updateState, auth: auth,
-            dialogs: dialogs, launchExternal: launcher);
+            dialogs: dialogs, launcher: launcher);
         return (vm, updateCheck, updateState, launches, dialogs);
     }
 
@@ -1637,7 +1615,7 @@ public sealed class ModListViewModelTests
     {
         var (vm, updateCheck, _, _, dialogs) = BuildForRowAction(
             premium: false,
-            launchExternal: _ => false); // simulate launch failure
+            launcher: new FakeExternalLauncher { OpenUriResult = _ => false }); // simulate launch failure
         var nexusLatestId = Row(vm, "NexusLatest").ContainerId;
         updateCheck.RaiseCheckCompleted(new UpdateCheckResult(
             new[] { new ModUpdateInfo(nexusLatestId, 8, "NexusLatest", "1.0", DateTimeOffset.UtcNow) },
@@ -1696,22 +1674,19 @@ public sealed class ModListViewModelTests
         Assert.False(Row(vm, "NexusLatest").UpdateAvailable);
     }
 
-    // ---- test-safety: omitted launcher seam never shell-opens --------------
+    // ---- test-safety: omitted launcher never shell-opens --------------------
 
     [Fact]
-    public async Task BuildModList_omitted_launcher_defaults_to_a_harmless_noop_not_process_start()
+    public async Task BuildModList_omitted_launcher_is_safe_and_the_open_completes_in_memory()
     {
         // SAFETY regression guard: when a test builds the VM through BuildModList
-        // WITHOUT passing a launchExternal seam, the builder must wire its
-        // harmless no-op recorder (TestLauncher.NoOp), never the production
-        // Process.Start fallback. A non-Premium update click triggers the
-        // external-open path; proving the shared recorder captured the URL (and
-        // no OS process was touched) is the guarantee. The production fallback
-        // would NOT record into TestLauncher.Opens, so a non-empty result proves
-        // the no-op ran instead. This test performs no OS process.
-        TestLauncher.Reset();
-
-        // Build WITHOUT a launchExternal argument (the leak path before the fix).
+        // WITHOUT passing a launcher, the builder must wire its harmless
+        // in-memory FakeExternalLauncher, never anything that touches the OS
+        // shell. The VM itself has no production fallback (the OS shell-open
+        // lives only in the injected IExternalLauncher), so a non-Premium update
+        // click completing here proves the default path is exercised without any
+        // OS process. The URL-routing assertions live in the tests that inject
+        // their own recording launcher.
         var a = Profile("Alpha");
         var profiles = TestDoubles.Profiles(a);
         var repo = new FakeModRepository();
@@ -1733,15 +1708,10 @@ public sealed class ModListViewModelTests
         var row = Row(vm, "DMF");
         Assert.True(row.UpdateAvailable);
 
-        // The non-Premium branch opens the files page via the launcher seam.
-        // Because the omitted seam defaults to TestLauncher.NoOp, this records
-        // the URL in memory and shells NOTHING open.
+        // The non-Premium branch opens the files page through the builder's
+        // in-memory default launcher; nothing shells open.
         await vm.UpdateCommand.ExecuteAsync(row);
-
-        var opened = Assert.Single(TestLauncher.Opens);
-        Assert.Equal("https://www.nexusmods.com/warhammer40kdarktide/mods/8?tab=files",
-            opened.AbsoluteUri);
-        TestLauncher.Reset();
+        Assert.False(row.IsUpdating);
     }
 
     // ---- add Nexus Mods (AddNexusModsCommand) ------------------------------
@@ -1751,7 +1721,7 @@ public sealed class ModListViewModelTests
     {
         var launches = new List<Uri>();
         var vm = TestDoubles.BuildModList(localization: Localization,
-            launchExternal: uri => { launches.Add(uri); return true; });
+            launcher: FakeExternalLauncher.RecordingUris(launches));
 
         vm.AddNexusModsCommand.Execute(null);
 
@@ -1765,7 +1735,7 @@ public sealed class ModListViewModelTests
         var dialogs = new FakeDialogService();
         var vm = TestDoubles.BuildModList(localization: Localization,
             dialogs: dialogs,
-            launchExternal: _ => false); // simulate launch failure
+            launcher: new FakeExternalLauncher { OpenUriResult = _ => false }); // simulate launch failure
 
         vm.AddNexusModsCommand.Execute(null);
 
@@ -1852,7 +1822,7 @@ public sealed class ModListViewModelTests
         BuildForLinked(
             FakeModImportService? import = null,
             FakeDialogService? dialogs = null,
-            Func<string, bool>? launchExternalPath = null,
+            FakeExternalLauncher? launcher = null,
             FakeModRepository? repo = null)
     {
         var a = Profile("Alpha");
@@ -1862,7 +1832,7 @@ public sealed class ModListViewModelTests
         dialogs ??= new FakeDialogService();
         var session = new FakeProfileSession { ActiveProfileId = a.Id };
         var vm = TestDoubles.BuildModList(profiles, session, repo, import,
-            dialogs: dialogs, localization: Localization, launchExternalPath: launchExternalPath);
+            dialogs: dialogs, localization: Localization, launcher: launcher);
         return (vm, profiles, repo, import, dialogs, session, a.Id);
     }
 
@@ -2081,21 +2051,17 @@ public sealed class ModListViewModelTests
     public async Task OpenFolder_launches_the_file_manager_at_the_external_path()
     {
         // An available linked row's open-folder click routes the external path
-        // to the injectable launcher seam.
+        // to the injected launcher.
         const string externalPath = "/external/DMF";
-        var openedPaths = new List<string>();
-        var (vm, _, repo, _, _, _, _) = BuildForLinked(launchExternalPath: path =>
-        {
-            openedPaths.Add(path);
-            return true;
-        });
+        var launcher = new FakeExternalLauncher();
+        var (vm, _, repo, _, _, _, _) = BuildForLinked(launcher: launcher);
         await vm.LinkModsCommand.ExecuteAsync(new[] { externalPath });
         var row = Row(vm, "DMF");
 
         await vm.OpenFolderCommand.ExecuteAsync(row);
 
         Assert.Equal(repo.List().Single(c => c.Source is LinkedSource).Id, row.ContainerId);
-        var opened = Assert.Single(openedPaths);
+        var opened = Assert.Single(launcher.OpenedPaths);
         // LinkFolder normalizes via Path.GetFullPath, so the launched path is
         // the canonical form: assert equality on the same normalization rather
         // than a suffix match.
@@ -2106,7 +2072,9 @@ public sealed class ModListViewModelTests
     public async Task OpenFolder_shows_an_alert_when_the_launcher_fails()
     {
         var dialogs = new FakeDialogService();
-        var (vm, _, _, _, _, _, _) = BuildForLinked(dialogs: dialogs, launchExternalPath: _ => false);
+        var (vm, _, _, _, _, _, _) = BuildForLinked(
+            dialogs: dialogs,
+            launcher: new FakeExternalLauncher { OpenPathResult = _ => false });
         await vm.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
         var row = Row(vm, "DMF");
 
@@ -2119,7 +2087,7 @@ public sealed class ModListViewModelTests
     [Fact]
     public async Task OpenFolder_is_a_noop_for_a_non_linked_row()
     {
-        var openedPaths = new List<string>();
+        var launcher = new FakeExternalLauncher();
         var a = Profile("Alpha");
         var profiles = TestDoubles.Profiles(a);
         var repo = new FakeModRepository();
@@ -2128,22 +2096,22 @@ public sealed class ModListViewModelTests
             new ModListEntry { ContainerId = nexus.Id, Enabled = true, Order = 0 });
         var vm = TestDoubles.BuildModList(profiles,
             new FakeProfileSession { ActiveProfileId = a.Id }, repo,
-            launchExternalPath: path => { openedPaths.Add(path); return true; });
+            launcher: launcher);
         var row = Row(vm, "DMF");
 
         await vm.OpenFolderCommand.ExecuteAsync(row);
 
-        Assert.Empty(openedPaths);
+        Assert.Empty(launcher.OpenedPaths);
     }
 
     [Fact]
     public async Task OpenFolder_is_a_noop_for_a_broken_linked_row()
     {
-        var openedPaths = new List<string>();
+        var launcher = new FakeExternalLauncher();
         var dialogs = new FakeDialogService();
         var (vm, profiles, repo, _, _, _, profileId) = BuildForLinked(
             dialogs: dialogs,
-            launchExternalPath: path => { openedPaths.Add(path); return true; });
+            launcher: launcher);
         await vm.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
         var container = repo.List().Single(c => c.Source is LinkedSource);
         // Mark the external folder unavailable + reload so the row reflects it.
@@ -2156,7 +2124,7 @@ public sealed class ModListViewModelTests
         Assert.True(row.IsLinkedBroken);
         await vm.OpenFolderCommand.ExecuteAsync(row);
 
-        Assert.Empty(openedPaths);
+        Assert.Empty(launcher.OpenedPaths);
         Assert.Empty(dialogs.AlertCalls);
     }
 
@@ -2386,17 +2354,6 @@ public sealed class ModListViewModelTests
         Assert.False(session.HasPendingChanges);
 
         await vm.RemoveCommand.ExecuteAsync(Row(vm, "DMF"));
-
-        Assert.True(session.HasPendingChanges);
-    }
-
-    [Fact]
-    public void AutoSort_sets_HasPendingChanges()
-    {
-        var (vm, session, _) = BuildWithOneMod();
-        Assert.False(session.HasPendingChanges);
-
-        vm.AutoSortCommand.Execute(null);
 
         Assert.True(session.HasPendingChanges);
     }

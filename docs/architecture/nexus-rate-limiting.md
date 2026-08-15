@@ -111,7 +111,7 @@ the mechanisms:
 - **Persisted last-check interval gate.** Every automatic trigger (startup,
   profile switch, periodic timer) shares one interval check against a
   last-check timestamp persisted across restarts, so a rapid open/close loop
-  does not fire a call per launch. Owned by `IAppStateStore` and
+  does not fire a call per launch. Owned by `IUpdateCheckScheduleState` and
   `UpdateCheckRunner`.
 - **Metadata-backfill 24-hour gate + attempt cap.** The stable-v1 display-
   metadata backfill runs at most one real pass per persisted 24-hour window

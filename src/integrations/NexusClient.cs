@@ -61,27 +61,6 @@ internal sealed class NexusClient : INexusClient
     }
 
     /// <inheritdoc />
-    public async Task<Response<ModUpdate[]>> ModUpdatesAsync(
-        string gameDomain,
-        NexusPeriod period,
-        CancellationToken ct = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(gameDomain);
-        var periodString = period switch
-        {
-            NexusPeriod.Day => "1d",
-            NexusPeriod.Week => "1w",
-            NexusPeriod.Month => "1m",
-            _ => throw new ArgumentOutOfRangeException(nameof(period), period, null),
-        };
-
-        // This endpoint returns a top-level JSON array, not an object.
-        var uri = RelativeUri($"v1/games/{gameDomain}/mods/updated.json?period={periodString}");
-        var (response, _) = await SendArrayAsync<ModUpdate>(HttpMethod.Get, uri, ct).ConfigureAwait(false);
-        return response;
-    }
-
-    /// <inheritdoc />
     public async Task<Response<DownloadLink[]>> DownloadLinksAsync(
         string gameDomain,
         int modId,
@@ -224,7 +203,7 @@ internal sealed class NexusClient : INexusClient
 
     /// <summary>
     /// Sends a request that deserializes to a top-level JSON array (the shape of
-    /// <c>updated.json</c> + <c>download_link.json</c>). Mirrors
+    /// <c>download_link.json</c>). Mirrors
     /// <see cref="SendAsync{T}"/> for auth + retry.
     /// </summary>
     private async Task<(Response<T[]> Response, bool WasRetry)> SendArrayAsync<T>(

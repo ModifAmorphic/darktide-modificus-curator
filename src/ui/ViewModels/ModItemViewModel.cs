@@ -1,5 +1,6 @@
 using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Modificus.Curator.General;
 using Modificus.Curator.Mods;
 using Modificus.Curator.UI.Localization;
 
@@ -608,7 +609,7 @@ public partial class ModItemViewModel : ObservableObject
     /// </summary>
     public string? SourceUrl => Source switch
     {
-        NexusSource n => $"https://www.nexusmods.com/warhammer40kdarktide/mods/{n.ModId}",
+        NexusSource n => $"https://www.nexusmods.com/{NexusGameIdentity.DarktideDomain}/mods/{n.ModId}",
         _ => null,
     };
 

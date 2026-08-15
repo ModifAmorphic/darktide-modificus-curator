@@ -226,23 +226,10 @@ public interface IModRepository
     /// <see cref="LinkedSource"/> (managed containers have no external content;
     /// their availability is checked separately at stage time) and for unknown
     /// ids (defensive; callers should only query linked rows they hold). The
-    /// value is a transient, in-memory snapshot recomputed on each
-    /// <see cref="Rescan"/>; staging re-checks <c>Directory.Exists</c>
-    /// independently and does not rely on this cached flag.
+    /// value is a transient, in-memory snapshot seeded when the container is
+    /// recorded and recomputed when the index is rebuilt; staging re-checks
+    /// <c>Directory.Exists</c> independently and does not rely on this cached
+    /// flag.
     /// </summary>
     bool IsExternalAvailable(Guid containerId);
-
-    /// <summary>
-    /// Rebuilds the in-memory index from the <b>live</b> mods root (the path
-    /// <see cref="General.IConfigLoader.Load()"/>.<c>ModsFolder</c> currently
-    /// returns). Clears the existing index first, then re-scans the directory
-    /// tree exactly as the constructor did.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Useful after any out-of-band change to the mods folder (a hand-edit, an
-    /// external tool, a backup restore) so the index reflects whatever is
-    /// actually on disk.</para>
-    /// </remarks>
-    void Rescan();
 }

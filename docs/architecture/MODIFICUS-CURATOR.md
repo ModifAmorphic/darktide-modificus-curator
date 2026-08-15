@@ -46,7 +46,6 @@ src/
   steam/                  Steam library -- Steam/Darktide/Proton discovery + IsGameRunning
   integrations/           Integrations library -- Nexus v1 client/auth + mod acquisition + update check
   relay-client/           Relay-client library -- the launch façade
-  launcher/               stub launcher -- the Steam non-steam-shortcut target placeholder
   nxm/                    Nxm library: nxm:// scheme-handler plumbing (URL parser, IPC
                           server, single-instance guard, router + handler seams, OS
                           registrar, relay helper)
@@ -117,9 +116,8 @@ library interfaces.
       store + the loopback `IBrowser`.
     - `AddSteam()`: Steam discovery + the platform process-lookup seam.
     - `AddRelayClient()`: the launch façade + the process-launcher seam.
-    - `AddLauncher()`: the launcher stub.
     - `AddSingleton<MainWindow>()`: the UI surface. Registered through an
-      explicit factory that supplies `IAppStateStore` via the internal
+      explicit factory that supplies `IMainWindowStatePersistence` via the internal
       production constructor before the window is returned/shown; the public
       parameterless constructor stays available for Avalonia's XAML
       runtime/designer loader (see the UI architecture for the
@@ -399,8 +397,8 @@ use.
 **Storage location:** because paths are derived, changing `<ModsFolder>` is a
 physical move of the tree plus a config update; no manifest rewriting, no drift
 detection. Curator does not offer the move from the UI (the operator edits the
-config + moves the folder by hand); `Rescan` rebuilds the in-memory index from
-the new location.
+config + moves the folder by hand); the in-memory index follows the new
+location on the next start.
 
 ## Mod sources / integrations
 
@@ -480,7 +478,8 @@ placement, and OS registration) is in
 The `IUpdateCheckService` (Integrations) is the Nexus-only update check.
 On profile load it calls the v2 GraphQL `modsByUid` batch query once (1 API call
 for all checkable mods), passing the UIDs of the active profile's `LatestPolicy` +
-`NexusSource` mods (uid = `game_id * 2^32 + mod_id`, Darktide game_id = 4943).
+`NexusSource` mods (uid = `game_id * 2^32 + mod_id`, the Darktide game id in
+`NexusGameIdentity.DarktideGameId`).
 The server returns the `viewerUpdateAvailable` field for each mod: a
 server-computed Boolean that is true if the mod has been updated since the viewer
 (current user) last downloaded it. This eliminates the v1 approach's
@@ -547,10 +546,9 @@ is in [UI reference](../reference/ui.md).
 - Per-mod: enable / disable, remove, update (when the source reports a newer
   version), pin to version, per-mod auto-update override. The pinned-vs-latest
   policy drives version resolution at stage time (see [Mod repository](#mod-repository)).
-- Auto-sort (dependency-driven; toggleable); manual reorder (drag the per-row
-  grip at the left edge, or the Move Up / Move Down buttons) overrides
-  auto-sort. A mod can be locked to its exact zero-based position; a locked row
-  keeps its position across any reorder or auto-sort, and its grip stops
+- Manual reorder: drag the per-row grip at the left edge, or use the Move Up /
+  Move Down buttons. A mod can be locked to its exact zero-based position; a
+  locked row keeps its position across any reorder, and its grip stops
   intercepting pointer input so its area falls through to touch scrolling.
 - A freshly added DMF lands first and order-locked (the profile add
   boundary's placement default; updateable). The lock is a default the user
@@ -812,7 +810,7 @@ Per-profile settings live with the profile, not in the global config.
 - Profiles (create / edit / remove / switch -- switch blocked while the game is
   running).
 - Mod list: enable / disable / remove, update indicators, version pinning,
-  per-mod auto-update override, auto-sort + manual sequential reorder.
+  per-mod auto-update override, manual sequential reorder.
 - Mod storage (unified repository keyed by `(source, identity)`, version resolution by policy).
 - Mod sources: Nexus Mods (primary) + local; DMF via the
   new-profile prompt (Nexus mod 8).

@@ -15,10 +15,7 @@ public static class ServiceCollectionExtensions
     /// defensively, <see cref="IModRepository"/> via <c>AddMods()</c>
     /// so a lone <c>AddProfiles()</c> yields a resolvable
     /// <see cref="IProfileService"/> (idempotent; the composition root also
-    /// calls <c>AddMods()</c> for discoverability). Also registers
-    /// <see cref="IModOrderResolver"/> → <see cref="IdentityModOrderResolver"/>
-    /// (the auto-sort seam; identity stub now, real dependency-driven resolver
-    /// later, DI-swappable without a UI change).
+    /// calls <c>AddMods()</c> for discoverability).
     /// </summary>
     /// <remarks>
     /// Resolves <c>IConfigLoader</c> (the live config reader) + <c>ILogger&lt;&gt;</c>
@@ -36,10 +33,6 @@ public static class ServiceCollectionExtensions
         // (e.g. tests inject a throwing delegate to exercise the staging-link
         // IOException path without platform hacks).
         services.TryAddSingleton<StagingLinkCreator>(_ => CreateStagingLink);
-
-        // Auto-sort seam: identity stub for now (no-op). TryAdd so a caller may
-        // pre-register the real dependency-driven resolver when it lands.
-        services.TryAddSingleton<IModOrderResolver, IdentityModOrderResolver>();
 
         services.AddSingleton<IProfileService, ProfileService>();
         return services;

@@ -44,7 +44,6 @@ src/
   integrations/                   Modificus.Curator.Integrations      Nexus v1 client/auth + mod acquisition + update check
   steam/                          Modificus.Curator.Steam             Steam/Darktide/Proton discovery + IsGameRunning
   relay-client/                   Modificus.Curator.RelayClient       the launch façade
-  launcher/                       Modificus.Curator.Launcher          stub (Steam non-steam-shortcut target placeholder)
   tests/
     Modificus.Curator.General.Tests/         xUnit tests for the general library
     Modificus.Curator.Profiles.Tests/        xUnit tests for the profiles library (incl. staging)
@@ -162,8 +161,7 @@ Linux has two permanent distributions:
   framework-dependent archive, with two top-level folders extracted into the
   Linux app-data root (`~/.local/share/Modificus Curator`):
 
-- `app/` - the Curator UI + the `nxm://` handler (+ the launcher stub, pending
-  later cleanup).
+- `app/` - the Curator UI + the `nxm://` handler.
 - `relay/` - the bundled Relay runtime, which seeds the default `RelayDir`.
 
 See [`docs/reference/release-strategy.md`](../docs/reference/release-strategy.md)

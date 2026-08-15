@@ -3,6 +3,7 @@ using Modificus.Curator.Config;
 using Modificus.Curator.General;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Modificus.Curator.Mods.Tests;
 
@@ -1190,6 +1191,9 @@ public sealed class ModRepositoryTests
     [Fact]
     public void IsExternalAvailable_tracks_linked_external_folder_presence()
     {
+        // Availability is seeded when the container is recorded and recomputed
+        // when the index is rebuilt (construction). Drive the rebuild by
+        // constructing a second repository over the same mods folder.
         using var fx = new RepoFixture();
         var external = Path.Combine(fx.Folder, "LinkedMod");
         Directory.CreateDirectory(external);
@@ -1200,16 +1204,35 @@ public sealed class ModRepositoryTests
         // Available while the folder exists.
         Assert.True(fx.Repo.IsExternalAvailable(container.Id));
 
-        // Missing folder: availability flips to false after a rescan (the cached
-        // signal is recomputed on rebuild; the constructor/Rescan drives it).
+        // Missing folder: a fresh index build over the same root sees it gone.
         Directory.Delete(external);
-        fx.Repo.Rescan();
-        Assert.False(fx.Repo.IsExternalAvailable(container.Id));
+        var missingView = new ModRepository(fx.ConfigLoader, NullLogger<ModRepository>.Instance);
+        Assert.False(missingView.IsExternalAvailable(container.Id));
 
-        // Missing-then-returned: availability flips back on the next rescan.
+        // Missing-then-returned: the next index build sees it back.
         Directory.CreateDirectory(external);
-        fx.Repo.Rescan();
-        Assert.True(fx.Repo.IsExternalAvailable(container.Id));
+        var returnedView = new ModRepository(fx.ConfigLoader, NullLogger<ModRepository>.Instance);
+        Assert.True(returnedView.IsExternalAvailable(container.Id));
+    }
+
+    [Fact]
+    public void Index_rebuild_leaves_the_linked_external_target_untouched()
+    {
+        // Building the index enumerates linked containers but must never read
+        // beyond or write into the external target.
+        using var fx = new RepoFixture();
+        var external = Path.Combine(fx.Folder, "LinkedMod");
+        Directory.CreateDirectory(external);
+        File.WriteAllText(Path.Combine(external, "LinkedMod.mod"), "LinkedMod");
+        var sentinel = Path.Combine(external, "sentinel.txt");
+        File.WriteAllText(sentinel, "untouched");
+        var container = fx.Repo.CreateContainer(
+            new LinkedSource { ExternalPath = Path.GetFullPath(external) },
+            "LinkedMod");
+
+        var fresh = new ModRepository(fx.ConfigLoader, NullLogger<ModRepository>.Instance);
+        Assert.NotNull(fresh.Get(container.Id));
+        Assert.Equal("untouched", File.ReadAllText(sentinel));
     }
 
     // ---- LinkedSource: PruneUnreferenced keep/drop -------------------------
@@ -1336,64 +1359,6 @@ public sealed class ModRepositoryTests
         // Source untouched (copy does not delete).
         Assert.True(File.Exists(Path.Combine(source, "a.txt")));
         Assert.True(File.Exists(Path.Combine(source, "sub", "deep", "c.txt")));
-    }
-
-    // ---- Rescan ------------------------------------------------------------
-
-    [Fact]
-    public void Rescan_drops_index_entries_for_containers_removed_from_disk()
-    {
-        // Rescan clears the index first, so a container deleted out-of-band
-        // (between scans) disappears from the index. Without a clear, the prior
-        // entry would survive as stale.
-        using var fx = new RepoFixture();
-        var keep = fx.Repo.CreateContainer(new UntrackedSource(), "Keep");
-        var drop = fx.Repo.CreateContainer(new UntrackedSource(), "Drop");
-
-        // Out-of-band delete of the "Drop" container dir.
-        Directory.Delete(Path.Combine(fx.Folder, drop.Id.ToString()), recursive: true);
-
-        fx.Repo.Rescan();
-
-        Assert.NotNull(fx.Repo.Get(keep.Id));
-        Assert.Null(fx.Repo.Get(drop.Id));
-        Assert.Single(fx.Repo.List());
-    }
-
-    [Fact]
-    public void Rescan_picks_up_containers_added_out_of_band()
-    {
-        // A container.json copied into the mods folder by an external tool
-        // (backup restore, sync) appears in the index after Rescan.
-        using var fx = new RepoFixture();
-        var first = fx.Repo.CreateContainer(new UntrackedSource(), "First");
-
-        // Simulate an external copy: write a fresh container.json for a new UUID
-        // directly to disk (the manifest format the repo reads).
-        var externalId = Guid.NewGuid();
-        var externalDir = Path.Combine(fx.Folder, externalId.ToString());
-        Directory.CreateDirectory(externalDir);
-        File.WriteAllText(
-            Path.Combine(externalDir, "container.json"),
-            $$"""
-            {
-              "$kind": "untracked",
-              "Id": "{{externalId}}",
-              "Name": "External",
-              "Source": { "$kind": "untracked" },
-              "Versions": []
-            }
-            """);
-
-        // Before rescan: only the originally-created container is indexed.
-        Assert.Single(fx.Repo.List());
-
-        fx.Repo.Rescan();
-
-        // After rescan: both are indexed.
-        Assert.Equal(2, fx.Repo.List().Count);
-        Assert.NotNull(fx.Repo.Get(first.Id));
-        Assert.NotNull(fx.Repo.Get(externalId));
     }
 
     // ---- fixture + helpers -------------------------------------------------

@@ -685,7 +685,7 @@ public sealed class NexusModMetadataServiceTests
         var repo = new FakeModRepository();
         repo.Add(NexusContainer(Guid.NewGuid(), 101, "A", "1.0"));
         var throwingConfig = new ThrowingConfigLoader(new InvalidOperationException("config disk gone"));
-        var appState = new FakeAppStateStore();
+        var appState = new FakeBackfillState();
         var service = new NexusModMetadataService(
             nexus, repo, throwingConfig, appState,
             NullLogger<NexusModMetadataService>.Instance, getNow: () => BaseNow);
@@ -824,7 +824,7 @@ public sealed class NexusModMetadataServiceTests
             ImportedAt = DateTimeOffset.UtcNow,
         };
 
-    private static (NexusModMetadataService Service, FakeNexusClient Nexus, IModRepository Repo, FakeAppStateStore AppState)
+    private static (NexusModMetadataService Service, FakeNexusClient Nexus, IModRepository Repo, FakeBackfillState AppState)
         CreateService(
             FakeNexusClient? nexus = null,
             IModRepository? repository = null,
@@ -838,7 +838,7 @@ public sealed class NexusModMetadataServiceTests
         var config = CuratorConfig.CreateDefault();
         config.Integrations.Nexus.AuthMethod = authMethod;
         var configLoader = new FakeConfigLoader { Config = config };
-        var appState = new FakeAppStateStore { LastNexusMetadataBackfillUtc = backfillStamp };
+        var appState = new FakeBackfillState { LastNexusMetadataBackfillUtc = backfillStamp };
 
         var service = new NexusModMetadataService(
             nexus, repository, configLoader, appState,
@@ -894,7 +894,6 @@ public sealed class NexusModMetadataServiceTests
         }
 
         public Task<Response<ValidateInfo>> ValidateAsync(CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<Response<ModUpdate[]>> ModUpdatesAsync(string gameDomain, NexusPeriod period, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<Response<DownloadLink[]>> DownloadLinksAsync(string gameDomain, int modId, int fileId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<Response<DownloadLink[]>> DownloadLinksAsync(string gameDomain, int modId, int fileId, string nxmKey, long expiresEpoch, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<Response<ModFile[]>> ListModFilesAsync(string gameDomain, int modId, CancellationToken ct = default) => throw new NotImplementedException();
@@ -940,7 +939,6 @@ public sealed class NexusModMetadataServiceTests
         public string GetVersionFolderPath(Guid containerId, string versionFolder) => throw new NotImplementedException();
         public void PruneUnreferenced(IReadOnlySet<(Guid ContainerId, string VersionFolder)> referenced) => throw new NotImplementedException();
         public bool IsExternalAvailable(Guid containerId) => throw new NotImplementedException();
-        public void Rescan() => throw new NotImplementedException();
     }
 
     /// <summary>An <see cref="IConfigLoader"/> that throws on every
@@ -971,7 +969,6 @@ public sealed class NexusModMetadataServiceTests
         public string GetVersionFolderPath(Guid containerId, string versionFolder) => throw new NotImplementedException();
         public void PruneUnreferenced(IReadOnlySet<(Guid ContainerId, string VersionFolder)> referenced) => throw new NotImplementedException();
         public bool IsExternalAvailable(Guid containerId) => throw new NotImplementedException();
-        public void Rescan() => throw new NotImplementedException();
         public bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata) => throw new NotImplementedException();
     }
 }

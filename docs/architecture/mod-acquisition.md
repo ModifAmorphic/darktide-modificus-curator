@@ -222,7 +222,8 @@ the platform implementations.
 
 Curator supports only Warhammer 40,000: Darktide Nexus downloads. The handler
 rejects any `NxmModDownloadUrl` whose game domain is not
-`warhammer40kdarktide` (case-insensitive) before the auth, active-profile, and
+the Darktide domain (`NexusGameIdentity.DarktideDomain`, case-insensitive)
+before the auth, active-profile, and
 acquisition gates, surfacing a localized alert that names the link's game. No
 auth read, acquisition call, or profile registration happens for a non-Darktide
 link.

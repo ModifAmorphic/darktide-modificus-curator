@@ -8,7 +8,7 @@ namespace Modificus.Curator.UI.Session;
 
 /// <summary>
 /// Production <see cref="IProfileSession"/>. Owns the active id (restored from
-/// <see cref="IAppStateStore"/> at startup, persisted on every change), the
+/// <see cref="IProfileActivationState"/> at startup, persisted on every change), the
 /// can-change gate (<see cref="RequestActive"/>), and the live running-state (a
 /// <see cref="DispatcherTimer"/> polling <see cref="ISteamService.IsGameRunning"/>
 /// roughly every 3 seconds; a cheap process scan that catches external game
@@ -28,7 +28,7 @@ public sealed partial class ProfileSession : ObservableObject, IProfileSession
 
     private readonly ISteamService _steam;
     private readonly IProfileService _profiles;
-    private readonly IAppStateStore _appState;
+    private readonly IProfileActivationState _appState;
 
     /// <param name="steam">The running-state source (<see cref="IsGameRunning"/>).</param>
     /// <param name="profiles">Used by <see cref="ReconcileActive"/> to detect delete-of-active.</param>
@@ -39,7 +39,7 @@ public sealed partial class ProfileSession : ObservableObject, IProfileSession
     public ProfileSession(
         ISteamService steam,
         IProfileService profiles,
-        IAppStateStore appState,
+        IProfileActivationState appState,
         Action<Action>? startTimer = null)
     {
         _steam = steam;

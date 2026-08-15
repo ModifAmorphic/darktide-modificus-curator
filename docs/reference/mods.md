@@ -41,7 +41,6 @@ public interface IModRepository
     void PruneUnreferenced(IReadOnlySet<(Guid ContainerId, string VersionFolder)> referenced);
     string GetVersionFolderPath(Guid containerId, string versionFolder);  // derived, never stored
     bool IsExternalAvailable(Guid containerId);        // linked external-folder availability (true for managed/unknown)
-    void Rescan();                 // rebuild the index from the live ModsFolder
 }
 ```
 
@@ -128,14 +127,10 @@ public interface IModRepository
 - `IsExternalAvailable(containerId)`: reports whether a linked container's
   external folder is currently on disk. Returns `true` for managed containers
   and unknown ids (default-safe; callers should only query linked rows). The
-  value is a transient, in-memory snapshot recomputed on each `Rescan`; staging
-  re-checks `Directory.Exists` independently and does not rely on this cached
+  value is a transient, in-memory snapshot seeded when the container is
+  recorded and recomputed when the index is rebuilt; staging re-checks
+  `Directory.Exists` independently and does not rely on this cached
   flag.
-- `Rescan()`: rebuild the in-memory index from the **live** `ModsFolder` (the
-  path `IConfigLoader.Load().ModsFolder` currently returns), clearing first.
-  The defensive guarantee the index reflects whatever is actually on disk.
-  Useful after an out-of-band change (hand-edit, external tool, backup
-  restore).
 
 The repository builds an in-memory index at construction by scanning every
 `<ModsFolder>/*/container.json` (dozens of containers, cheap). There is no
@@ -403,7 +398,7 @@ throws: malformed input returns `false`.
 ```csharp
 public static class ModSourceParser
 {
-    // "https://www.nexusmods.com/warhammer40kdarktide/mods/12345"  -> NexusSource(12345)
+    // "https://www.nexusmods.com/<darktide-domain>/mods/12345"  -> NexusSource(12345)
     public static bool TryParseNexus(string input, out NexusSource source);
 }
 ```
@@ -474,8 +469,8 @@ absent; an older manifest without it deserializes to `null` (see
   `FindUntrackedByName`, manifest round-trip + in-memory index rebuild from a
   scan (skips non-container dirs + corrupt manifests), `PruneUnreferenced`
   (drops unreferenced version folders + empty containers, keeps referenced),
-  opaque version-folder naming, derived paths, and `Rescan`
-  (drops/adds index entries to match the live disk state).
+  opaque version-folder naming, derived paths, and the linked-external
+  availability snapshot (recomputed on index rebuild, target left untouched).
 - `DirectoryCopy`: faithful recursive copy (files + nested subdirs reproduced,
   target created as it goes).
 - `ModSource` JSON `$kind` round-trip (untracked/nexus/linked) + defaults + record

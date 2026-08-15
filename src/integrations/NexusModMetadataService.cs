@@ -32,14 +32,13 @@ namespace Modificus.Curator.Integrations;
 /// </remarks>
 internal sealed class NexusModMetadataService : INexusModMetadataService
 {
-    private const string GameDomain = "warhammer40kdarktide";
     private const int MaxAttempts = 25;
     private static readonly TimeSpan Interval = TimeSpan.FromHours(24);
 
     private readonly INexusClient _nexus;
     private readonly IModRepository _repository;
     private readonly IConfigLoader _configLoader;
-    private readonly IAppStateStore _appState;
+    private readonly INexusMetadataBackfillState _appState;
     private readonly ILogger<NexusModMetadataService> _logger;
     private readonly Func<DateTimeOffset> _getNow;
 
@@ -49,7 +48,7 @@ internal sealed class NexusModMetadataService : INexusModMetadataService
         INexusClient nexus,
         IModRepository repository,
         IConfigLoader configLoader,
-        IAppStateStore appState,
+        INexusMetadataBackfillState appState,
         ILogger<NexusModMetadataService> logger,
         Func<DateTimeOffset>? getNow = null)
     {
@@ -125,7 +124,7 @@ internal sealed class NexusModMetadataService : INexusModMetadataService
                 attempted++;
                 try
                 {
-                    response = await _nexus.GetModInfoAsync(GameDomain, modId, ct)
+                    response = await _nexus.GetModInfoAsync(NexusGameIdentity.DarktideDomain, modId, ct)
                         .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)

@@ -16,7 +16,6 @@ using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.ViewModels;
 using Modificus.Curator.UI.Views;
 using Modificus.Curator.RelayClient;
-using Modificus.Curator.Launcher;
 using Modificus.Curator.UI.Nxm;
 
 namespace Modificus.Curator.UI;
@@ -62,7 +61,6 @@ public static class CuratorComposition
         services.AddIntegrations();
         services.AddSteam();
         services.AddRelayClient();
-        services.AddLauncher();
         // The nxm scheme-handler plumbing: IPC server (single-instance via
         // process enumeration, pipe bind degrades gracefully on failure), router
         // + no-op handler defaults, and the platform OS registrar. The IPC
@@ -103,7 +101,7 @@ public static class CuratorComposition
         services.AddSingleton<IProfileSession>(sp => new ProfileSession(
             sp.GetRequiredService<ISteamService>(),
             sp.GetRequiredService<IProfileService>(),
-            sp.GetRequiredService<IAppStateStore>(),
+            sp.GetRequiredService<IProfileActivationState>(),
             StartRunningStatePolling));
         services.AddSingleton<LocalizationService>();
         // Whether the app runs inside a Steam Deck Gaming Mode session,
@@ -115,15 +113,16 @@ public static class CuratorComposition
         services.AddSingleton<IPreferencesService, PreferencesService>();
         // MainWindow is a singleton resolved as desktop.MainWindow + the modal
         // dialog owner. Built through an explicit factory that supplies
-        // IAppStateStore via the internal production constructor before the
-        // window is returned/shown; the public parameterless constructor stays
-        // available for Avalonia's XAML runtime/designer loader (AVLN3001
-        // clean), and production construction never uses a service locator.
+        // IMainWindowStatePersistence via the internal production constructor
+        // before the window is returned/shown; the public parameterless
+        // constructor stays available for Avalonia's XAML runtime/designer
+        // loader (AVLN3001 clean), and production construction never uses a
+        // service locator.
         services.AddSingleton<MainWindow>(sp => new MainWindow(
-            sp.GetRequiredService<IAppStateStore>()));
+            sp.GetRequiredService<IMainWindowStatePersistence>()));
         // The active profile's mod-list VM: a singleton (one list, the dominant
-        // content area). Resolves IModImportService (via AddMods) +
-        // IModOrderResolver (via AddProfiles), both already registered above.
+        // content area). Resolves IModImportService (via AddMods),
+        // already registered above.
         // The UI-thread marshal seam for ModListViewModel's CheckCompleted handler
         // (the event fires on a threadpool thread; the handler iterates the
         // UI-bound Mods collection). Production wires Dispatcher.UIThread.Post.
@@ -215,7 +214,6 @@ public static class CuratorComposition
                 sp.GetRequiredService<IProfileSession>(),
                 sp.GetRequiredService<IModRepository>(),
                 sp.GetRequiredService<IModImportService>(),
-                sp.GetRequiredService<IModOrderResolver>(),
                 sp.GetRequiredService<IDialogService>(),
                 sp.GetRequiredService<LocalizationService>(),
                 sp.GetRequiredService<IUpdateCheckService>(),
@@ -235,6 +233,9 @@ public static class CuratorComposition
                 // Gaming Mode gates the Add split button's picker paths + the
                 // linked-row open-folder badge.
                 sp.GetRequiredService<IGamingModeState>(),
+                // The OS shell-open launcher: the Add NexusMods browser open +
+                // the linked-row open-folder action.
+                sp.GetRequiredService<IExternalLauncher>(),
                 startCountdownTimer,
                 stopCountdownTimer);
         });
@@ -274,6 +275,7 @@ public static class CuratorComposition
             // platforms without one); the shared state carries the status.
             sp.GetService<INxmHandlerRegistrar>(),
             sp.GetRequiredService<INxmRegistrationState>(),
+            sp.GetRequiredService<IExternalLauncher>(),
             sp.GetRequiredService<ILogger<IntegrationsViewModel>>()));
         services.AddSingleton(sp => new PreferencesViewModel(
             sp.GetRequiredService<IPreferencesService>(),
@@ -290,7 +292,8 @@ public static class CuratorComposition
             // open-folder buttons; manual path entry stays available.
             sp.GetRequiredService<IGamingModeState>(),
             sp.GetRequiredService<Action<Action>>(),
-            sp.GetRequiredService<ILogger<SettingsViewModel>>()));
+            sp.GetRequiredService<ILogger<SettingsViewModel>>(),
+            sp.GetRequiredService<IExternalLauncher>()));
 
         // The DMF (Darktide Mod Framework) install-prompt coordinator.
         // Subscribes to the synchronous IProfileService.ProfileCreated event at
@@ -318,7 +321,8 @@ public static class CuratorComposition
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<ILogger<DmfPromptService>>(),
             sp.GetRequiredService<INxmRegistrationState>(),
-            sp.GetRequiredService<IGamingModeState>()));
+            sp.GetRequiredService<IGamingModeState>(),
+            sp.GetRequiredService<IExternalLauncher>()));
 
         // ShellViewModel owns navigation + the deferred DMF trigger (consumed on
         // a real Mods entry). The concrete DmfPromptService is injected (not a
@@ -357,7 +361,7 @@ public static class CuratorComposition
         // active-profile switch, and a periodic timer. All three share one
         // shared interval gate (read live from config) so a rapid
         // open/close loop or rapid profile switching cannot burn API calls;
-        // the gate's last-check timestamp is persisted via IAppStateStore so
+        // the gate's last-check timestamp is persisted via the app-state
         // it survives a close/reopen. The toggle gates only the periodic
         // timer. Subscribes to IProfileSession.PropertyChanged for switches
         // + fires the opening check for the restored active id. Started after
@@ -370,7 +374,7 @@ public static class CuratorComposition
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IUpdateCheckService>(),
             sp.GetRequiredService<IConfigLoader>(),
-            sp.GetRequiredService<IAppStateStore>(),
+            sp.GetRequiredService<IUpdateCheckScheduleState>(),
             sp.GetRequiredService<IAutomaticUpdateService>(),
             sp.GetRequiredService<ILogger<UpdateCheckRunner>>(),
             StartUpdateCheckPolling));
@@ -420,7 +424,7 @@ public static class CuratorComposition
         // in-process "already shown" guard. Started from App after the main
         // window opens; best-effort, never blocks startup.
         services.AddSingleton(sp => new OnboardingService(
-            sp.GetRequiredService<IAppStateStore>(),
+            sp.GetRequiredService<IOnboardingState>(),
             sp.GetRequiredService<IDialogService>(),
             () => sp.GetRequiredService<ShellViewModel>().NavigateToIntegrationsAsync(),
             sp.GetRequiredService<ILogger<OnboardingService>>()));

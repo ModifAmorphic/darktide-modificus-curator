@@ -257,7 +257,7 @@
                 Classes="link"
                 HorizontalAlignment="Left"
                 Margin="0,0,0,4"
-                Click="ApiKeyHelp_Click"
+                Command="{Binding OpenApiKeyHelpCommand}"
                 Padding="0"
                 ToolTip.Tip="{Binding ApiKeyHelpLink}" />
 

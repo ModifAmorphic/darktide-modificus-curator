@@ -33,7 +33,7 @@ public sealed class UpdateCheckServiceTests
     private const int UnlistedModId = 200;
     private const int PinnedModId = 300;
 
-    // Must match UpdateCheckService.GameId (Darktide = 4943).
+    // Must match NexusGameIdentity.DarktideGameId (Darktide = 4943).
     private const int GameId = 4943;
 
     // ---- happy path + flagging --------------------------------------------
@@ -1420,7 +1420,7 @@ public sealed class UpdateCheckServiceTests
         // Mirrors AddUpdateCheck (the interface-to-impl registration under test
         // + the IUpdateStateStore registration that ships alongside it); the
         // unregistered Func<DateTimeOffset>? param must fall back to its default.
-        services.AddSingleton<IAppStateStore, AppStateStore>();
+        services.AddSingleton<IKnownUpdateState, AppStateStore>();
         services.AddSingleton<IUpdateStateStore, UpdateStateStore>();
         services.AddSingleton<IUpdateCheckService, UpdateCheckService>();
 
@@ -1599,9 +1599,6 @@ public sealed class UpdateCheckServiceTests
 
         public Task<Response<ValidateInfo>> ValidateAsync(CancellationToken ct = default)
             => throw new NotImplementedException();
-        public Task<Response<ModUpdate[]>> ModUpdatesAsync(
-            string gameDomain, NexusPeriod period, CancellationToken ct = default)
-            => throw new NotImplementedException();
         public Task<Response<DownloadLink[]>> DownloadLinksAsync(
             string gameDomain, int modId, int fileId, CancellationToken ct = default)
             => throw new NotImplementedException();
@@ -1732,7 +1729,6 @@ public sealed class UpdateCheckServiceTests
             => throw new NotImplementedException();
         public void PruneUnreferenced(IReadOnlySet<(Guid ContainerId, string VersionFolder)> referenced)
             => throw new NotImplementedException();
-        public void Rescan() => throw new NotImplementedException();
         public bool IsExternalAvailable(Guid containerId) => throw new NotImplementedException();
     }
 

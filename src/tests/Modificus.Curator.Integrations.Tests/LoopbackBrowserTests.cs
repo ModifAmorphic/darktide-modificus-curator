@@ -24,7 +24,7 @@ public sealed class LoopbackBrowserTests
     [Fact]
     public void Constructor_pre_binds_an_ephemeral_port_in_the_redirect_uri()
     {
-        var browser = new LoopbackBrowser();
+        var browser = new LoopbackBrowser(new FakeExternalLauncher());
 
         Assert.StartsWith("http://127.0.0.1:", browser.RedirectUri);
         Assert.EndsWith(NexusOAuthConstants.CallbackPath, browser.RedirectUri);
@@ -37,13 +37,13 @@ public sealed class LoopbackBrowserTests
     [Fact]
     public async Task InvokeAsync_opens_browser_at_start_url_and_returns_callback_query()
     {
-        // The browser launcher is a recorder: it captures the authorize URL
+        // The external launcher is a recorder: it captures the authorize URL
         // OidcClient would build + hand to the OS shell-open.
-        string? openedUrl = null;
+        var launcher = new FakeExternalLauncher();
         var browser = new LoopbackBrowser(
             timeout: TimeSpan.FromSeconds(10),
             createListener: opts => new HttpListenerLoopbackListener(opts),
-            openBrowser: url => openedUrl = url);
+            externalLauncher: launcher);
 
         // A background task that, once the browser is "opened" (the listener is
         // bound), simulates the OAuth provider redirecting to the callback URL
@@ -56,7 +56,7 @@ public sealed class LoopbackBrowserTests
             // fires after the listener has bound, so this is mostly immediate).
             // Cap at 5s so a binding failure fails the test rather than hangs.
             var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-            while (DateTime.UtcNow < deadline && openedUrl is null)
+            while (DateTime.UtcNow < deadline && launcher.OpenedUris.Count == 0)
             {
                 await Task.Delay(20);
             }
@@ -75,19 +75,19 @@ public sealed class LoopbackBrowserTests
         Assert.Equal(BrowserResultType.Success, result.ResultType);
         Assert.Contains("code=fake-code", result.Response, StringComparison.Ordinal);
         Assert.Contains("state=fake-state", result.Response, StringComparison.Ordinal);
-        Assert.NotNull(openedUrl);
-        Assert.Contains("users.nexusmods.com/oauth/authorize", openedUrl!, StringComparison.Ordinal);
+        var openedUrl = Assert.Single(launcher.OpenedUris).AbsoluteUri;
+        Assert.Contains("users.nexusmods.com/oauth/authorize", openedUrl, StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task InvokeAsync_returns_Timeout_when_no_callback_arrives()
     {
-        // Tight timeout + a no-op browser launcher + no HttpClient redirecting
+        // Tight timeout + an in-memory launcher + no HttpClient redirecting
         // to the callback. InvokeAsync must surface Timeout rather than hang.
         var browser = new LoopbackBrowser(
             timeout: TimeSpan.FromMilliseconds(200),
             createListener: opts => new HttpListenerLoopbackListener(opts),
-            openBrowser: _ => { });
+            externalLauncher: new FakeExternalLauncher());
 
         var result = await browser.InvokeAsync(new BrowserOptions(
             startUrl: "https://users.nexusmods.com/oauth/authorize",
@@ -98,10 +98,28 @@ public sealed class LoopbackBrowserTests
     }
 
     [Fact]
+    public async Task InvokeAsync_maps_a_failed_browser_launch_to_UnknownError()
+    {
+        // A launcher that cannot start the browser (false) ends the flow as
+        // UnknownError: the OAuth consent cannot proceed without a browser.
+        var browser = new LoopbackBrowser(
+            timeout: TimeSpan.FromSeconds(5),
+            createListener: opts => new HttpListenerLoopbackListener(opts),
+            externalLauncher: new FakeExternalLauncher { OpenUriResult = _ => false });
+
+        var result = await browser.InvokeAsync(new BrowserOptions(
+            startUrl: "https://users.nexusmods.com/oauth/authorize",
+            endUrl: "http://127.0.0.1:1/callback"));
+
+        Assert.Equal(BrowserResultType.UnknownError, result.ResultType);
+        Assert.NotNull(result.Error);
+    }
+
+    [Fact]
     public void Constructor_rejects_non_positive_timeout()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new LoopbackBrowser(TimeSpan.Zero, _ => null!, _ => { }));
+            new LoopbackBrowser(TimeSpan.Zero, _ => null!, new FakeExternalLauncher()));
     }
 
     [Fact]

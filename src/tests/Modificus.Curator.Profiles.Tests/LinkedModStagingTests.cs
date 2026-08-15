@@ -83,11 +83,9 @@ public sealed class LinkedModStagingTests
             : Array.Empty<string>();
         Assert.DoesNotContain("Gone", lst);
         // The container still exists (Curator does not auto-remove it); staging
-        // just skipped it. The cached availability flips to false on a rescan
-        // (the staging skip itself re-checks Directory.Exists independently).
+        // just skipped it (the staging skip re-checks Directory.Exists
+        // independently of the cached availability signal).
         Assert.NotNull(fx.Repo.Get(containerId));
-        fx.Repo.Rescan();
-        Assert.False(fx.Repo.IsExternalAvailable(containerId));
     }
 
     [Fact]

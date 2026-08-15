@@ -95,27 +95,90 @@ public sealed class ConfigLoader : IConfigLoader
   `AppPaths.AppDataDir` (`%LOCALAPPDATA%\ModifAmorphic\Modificus Curator` on
   Windows, `~/.local/share/Modificus Curator` on Linux).
 
-### `IAppStateStore` / `AppStateStore`
+### `IExternalLauncher` / `ShellExternalLauncher`
 
-Persists **runtime application state**: values that capture "where the app left
-off" rather than user system settings. Kept deliberately narrow: the first-run
-onboarding flag, the active profile id, the last update-check timestamp, the
-manual-refresh throttle window, the persisted known-update snapshots, the last
-Nexus display-metadata backfill timestamp, and the main window's persisted
-geometry (its last unmaximized size and whether the last meaningful state was
-maximized). A separate file (not `CuratorConfig`) holds it so the settings
-schema stays pure (system settings vs. runtime state).
+The one OS shell-open seam: opens a URL in the default browser or a folder in
+the file manager. Shared by every caller that hands a target to the OS (the
+mod list's files-page + games-page + open-external-folder actions, the DMF
+prompt's browser path, the Settings open-folder buttons, the Integrations
+API-key help link, and the OAuth loopback browser).
 
 ```csharp
-public interface IAppStateStore
+public interface IExternalLauncher
 {
-    bool OnboardingCompleted { get; set; }                          // set persists immediately
-    Guid? ActiveProfileId { get; set; }                             // set persists immediately
-    DateTimeOffset? LastUpdateCheckUtc { get; set; }                // set persists immediately
-    IReadOnlyList<DateTimeOffset>? ManualRefreshTimestamps { get; set; } // set persists immediately
-    IReadOnlyDictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? KnownUpdates { get; set; } // set persists immediately
-    DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }      // set persists immediately
-    AppWindowState? MainWindowState { get; set; }                   // set persists immediately
+    bool OpenUri(Uri uri);     // default browser (http/https)
+    bool OpenPath(string path); // file manager
+}
+
+public sealed class ShellExternalLauncher : IExternalLauncher
+{
+    public ShellExternalLauncher(ILogger<ShellExternalLauncher> logger);
+}
+```
+
+- Returns `false` when the OS could not start the shell launch (no default
+  handler, a headless session, a missing target); callers surface their own
+  fallback (typically a localized alert carrying the target for manual copy).
+- The failure set mapped to `false` is exactly the narrow shell-launch trio
+  (`Win32Exception`, `PlatformNotSupportedException`,
+  `FileNotFoundException`), caught + logged inside. Every other exception
+  propagates, so a real wiring bug stays visible instead of being swallowed as
+  a launch failure.
+- `ShellExternalLauncher` shells out via `Process.Start` with
+  `UseShellExecute = true` (the OS routes a URL to the browser, a folder to
+  the file manager). Stateless; registered as a singleton.
+
+### `NexusGameIdentity`
+
+The Nexus Mods identity of the game Curator manages, as shared constants:
+the game domain (the URL slug + the v1 API path segment) and the game id (the
+v2 GraphQL UID high bits, `uid = game_id * 2^32 + mod_id`). Curator is
+Darktide-only by design, so these are fixed facts, not configuration; every
+surface (the update check, the acquisition paths, the mod-page URLs, the nxm
+domain check, the URL parser) reads them from here.
+
+```csharp
+public static class NexusGameIdentity
+{
+    public const string DarktideDomain = ...;   /* the Darktide URL slug + v1 API path segment */
+    public const int DarktideGameId = ...;      /* identifies Darktide to the v2 GraphQL API */
+}
+```
+
+### App-state role interfaces / `AppStateStore`
+
+Persists **runtime application state**: values that capture "where the app left
+off" rather than user system settings. The surface is split into six role
+interfaces, one per actual consumer slice; the single JSON-backed
+`AppStateStore` implements them all, and every role resolves to that one
+singleton (one cached model, one writer). A separate file (not `CuratorConfig`)
+holds it so the settings schema stays pure (system settings vs. runtime state).
+
+```csharp
+public interface IOnboardingState          // the first-run Welcome flag
+{
+    bool OnboardingCompleted { get; set; }             // set persists immediately
+}
+public interface IProfileActivationState    // the active profile id
+{
+    Guid? ActiveProfileId { get; set; }                // set persists immediately
+}
+public interface IUpdateCheckScheduleState  // the update-check gates
+{
+    DateTimeOffset? LastUpdateCheckUtc { get; set; }   // set persists immediately
+    IReadOnlyList<DateTimeOffset>? ManualRefreshTimestamps { get; set; }
+}
+public interface IKnownUpdateState          // per-profile known-update snapshots
+{
+    IReadOnlyDictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>? KnownUpdates { get; set; }
+}
+public interface INexusMetadataBackfillState // the 24h backfill gate
+{
+    DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
+}
+public interface IMainWindowStatePersistence // the main window's geometry
+{
+    AppWindowState? MainWindowState { get; set; }      // set persists immediately
 }
 
 public sealed record KnownUpdateSnapshot(
@@ -127,7 +190,9 @@ public sealed record KnownUpdateSnapshot(
 /// (no Avalonia type) so the General library stays source-agnostic.
 public sealed record AppWindowState(double Width, double Height, bool IsMaximized);
 
-public sealed class AppStateStore : IAppStateStore
+public sealed class AppStateStore :
+    IOnboardingState, IProfileActivationState, IUpdateCheckScheduleState,
+    IKnownUpdateState, INexusMetadataBackfillState, IMainWindowStatePersistence
 {
     public AppStateStore(string? path = null);
     public string Path { get; }
@@ -153,24 +218,28 @@ public sealed class AppStateStore : IAppStateStore
   is swallowed rather than crashing the app). An old file written before a field
   existed deserializes that field as its default, so a first run after upgrade
   sees no recorded value and the consumers seed cleanly.
-- `OnboardingCompleted` is used by the UI-layer onboarding coordinator
-  (`OnboardingService`) to decide whether to show the first-run Welcome modal:
-  it reads the flag at startup and sets it to `true` once the user has chosen
-  (Set up Nexus or Continue without Nexus), persisting before any further UI so
-  navigating away from Nexus (or the navigation failing) can never
-  cause Welcome to repeat.
-- `ActiveProfileId` is used by `IProfileSession` (the active-profile authority)
-  to restore the active profile on construction and persist it on changes.
-- `LastUpdateCheckUtc` + `ManualRefreshTimestamps` are used by `UpdateCheckRunner`
+- `IOnboardingState.OnboardingCompleted` is used by the UI-layer onboarding
+  coordinator (`OnboardingService`) to decide whether to show the first-run
+  Welcome modal: it reads the flag at startup and sets it to `true` once the
+  user has chosen (Set up Nexus or Continue without Nexus), persisting before
+  any further UI so navigating away from Nexus (or the navigation failing) can
+  never cause Welcome to repeat.
+- `IProfileActivationState.ActiveProfileId` is used by `IProfileSession` (the
+  active-profile authority) to restore the active profile on construction and
+  persist it on changes.
+- `IUpdateCheckScheduleState.LastUpdateCheckUtc` +
+  `ManualRefreshTimestamps` are used by `UpdateCheckRunner`
   to seed and persist the last update-check timestamp (so the interval gate
   survives a close/reopen) and the manual throttle's sliding-window timestamps
   (so the manual free-refresh budget survives a close/reopen).
-- `KnownUpdates` is used by the Integrations-layer `IUpdateStateStore` to persist
+- `IKnownUpdateState.KnownUpdates` is used by the Integrations-layer
+  `IUpdateStateStore` to persist
   profile-scoped known-update snapshots (so a restart inside the interval gate
   shows prior update flags before any API call). The shell and the Profiles
   destination read the active id through the session; they do not touch this
   store.
-- `LastNexusMetadataBackfillUtc` is used by the Integrations-layer
+- `INexusMetadataBackfillState.LastNexusMetadataBackfillUtc` is used by the
+  Integrations-layer
   `INexusModMetadataService` (see [integrations](integrations.md#metadata-backfill-service))
   to gate the missing-metadata backfill pass to at most one real pass per 24-hour
   window. It is a **repository-wide** gate (not profile-scoped like
@@ -184,7 +253,8 @@ public sealed class AppStateStore : IAppStateStore
   default for an absent nullable member), so the first run after upgrade proceeds
   normally. See
   [rate-limiting strategy: metadata-backfill gate](rate-limiting-strategy.md#metadata-backfill-gate).
-- `MainWindowState` is used by the UI-layer `MainWindow` to persist the main
+- `IMainWindowStatePersistence.MainWindowState` is used by the UI-layer
+  `MainWindow` to persist the main
   window's last unmaximized (Normal) client size in device-independent pixels and
   whether the last meaningful state was Maximized. The record is atomic: width,
   height, and the maximized flag are written together so a partial triple can
@@ -208,14 +278,10 @@ public sealed class AppStateStore : IAppStateStore
 General library can persist it without depending on the Integrations
 update-check domain. The Integrations `IUpdateStateStore` owns the rules (when to
 record, when to clear, how to filter on hydration); this record is the persisted
-shape. Each field exists to identify the flagged mod and invalidate stale
-knowledge after a local version change without re-querying Nexus. Display names
-are not persisted (they continue to come from repository persistence).
-
-`AppWindowState` is likewise a plain serializable DTO (no Avalonia type) so the
-General library can persist the window geometry without taking a UI dependency.
-The UI (`MainWindow`) owns the meaning and the lifetime policy over it; this
-record is the persisted shape.
+shape. `AppWindowState` is likewise a plain serializable DTO (no Avalonia type)
+so the General library can persist the window geometry without taking a UI
+dependency. The UI (`MainWindow`) owns the meaning and the lifetime policy over
+it; this record is the persisted shape.
 
 ## DI registration
 
@@ -236,15 +302,21 @@ needs them). It registers:
   instance it used for its one-off startup snapshot (one shared live-read
   singleton) before calling `AddGeneral`; the typed default is the fallback for
   hosts that do not pre-register (tests, smoke harnesses).
-- `TryAddSingleton<IAppStateStore, AppStateStore>()`: the runtime app-state
-  store. `TryAdd` (not `Add`) so a test or host may pre-register an override
-  (e.g. an in-memory or temp-path store) before `AddGeneral` runs.
+- `TryAddSingleton<IExternalLauncher, ShellExternalLauncher>()`: the OS
+  shell-open seam (URLs to the default browser, folders to the file manager).
+- `TryAddSingleton<AppStateStore>()` + one `TryAddSingleton` forward per
+  app-state role interface (`IOnboardingState`, `IProfileActivationState`,
+  `IUpdateCheckScheduleState`, `IKnownUpdateState`,
+  `INexusMetadataBackfillState`, `IMainWindowStatePersistence`), each resolving
+  the same store singleton: one cached model, one file writer behind every
+  consumer. `TryAdd` per role (not `Add`) so a test or host may pre-register an
+  override (e.g. an in-memory or temp-path store) before `AddGeneral` runs.
 
 `CuratorConfig` is intentionally **not** registered as a singleton here: config is
 read live from disk via `IConfigLoader` on each access (the startup snapshot used
 to build the logger is a one-off; logging config does not change at runtime in
 v1). `loggerFactory` is a constructed object passed in; `IConfigLoader` +
-`IAppStateStore` are the seams (overridable via pre-registration).
+the app-state roles are the seams (overridable via pre-registration).
 
 ## Dependencies
 
@@ -266,8 +338,9 @@ old-file-without-field compatibility for every field including
 atomic-record write, and the whole-model rewrite preserving sibling fields on
 each assignment), `LoggingBootstrap` (level parsing, Serilog
 day-rolling file creation and the append-within-a-day behavior at
-`RetainedLogFileCount`), and the `AddGeneral` DI wiring (including the `TryAdd` `IConfigLoader` + `IAppStateStore`
-overrides, so the composition root + tests may pre-register their own instances).
+`RetainedLogFileCount`), and the `AddGeneral` DI wiring (including the `TryAdd`
+`IConfigLoader` + per-role app-state overrides, so the composition root + tests
+may pre-register their own instances).
 
 ```sh
 dotnet test src/modificus-curator.sln -c Release

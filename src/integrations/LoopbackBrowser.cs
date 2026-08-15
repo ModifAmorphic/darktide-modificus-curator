@@ -1,8 +1,8 @@
-using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using Duende.IdentityModel.OidcClient.Browser;
+using Modificus.Curator.General;
 
 namespace Modificus.Curator.Integrations;
 
@@ -38,24 +38,26 @@ namespace Modificus.Curator.Integrations;
 /// <see cref="BrowserResultType.UnknownError"/>, which the service maps to a
 /// user-visible "Login failed". Not worth a retry loop in v1.</para>
 /// <para>
-/// <b>Browser launch uses <c>UseShellExecute = true</c>.</b> This is correct
-/// here (opening a URL in the user's default browser), in contrast to the
-/// <c>nxm://</c> handler exe launch where <c>UseShellExecute = false</c> is
-/// correct. The convention scopes the choice to the operation: shell-open a
-/// URL vs. launch an executable.</para>
+/// <b>Browser launch goes through <see cref="IExternalLauncher"/>.</b> The
+/// shell-open (the OS default browser) is the shared General-library launcher;
+/// a launch that could not start maps to
+/// <see cref="BrowserResultType.UnknownError"/> (the flow cannot proceed
+/// without a browser), as does any other exception thrown during
+/// <see cref="InvokeAsync"/>.</para>
 /// <para>
 /// <b>Testability.</b> The <see cref="IBrowser"/> seam is the production
 /// boundary; OAuth-flow tests inject a fake <see cref="IBrowser"/> that returns
 /// a preset authorization response (no real listener). The
 /// <see cref="HttpListenerLoopbackListener"/> is independently testable against
-/// an ephemeral port; the LoopbackBrowser tests inject a no-op browser launcher
-/// and hit the real listener with an <c>HttpClient</c>.</para>
+/// an ephemeral port; the LoopbackBrowser tests inject a fake
+/// <see cref="IExternalLauncher"/> and hit the real listener with an
+/// <c>HttpClient</c>.</para>
 /// </remarks>
 internal sealed class LoopbackBrowser : IBrowser
 {
     private readonly TimeSpan _timeout;
     private readonly Func<LoopbackListenerOptions, ILoopbackListener> _createListener;
-    private readonly Action<string> _openBrowser;
+    private readonly IExternalLauncher _externalLauncher;
 
     /// <summary>
     /// The loopback redirect URI (<c>http://127.0.0.1:&lt;port&gt;/callback</c>)
@@ -67,20 +69,19 @@ internal sealed class LoopbackBrowser : IBrowser
     public string RedirectUri { get; }
 
     /// <summary>
-    /// Creates the loopback browser with the default 3-minute flow timeout + the
-    /// production <see cref="HttpListener"/> factory + the production
-    /// <see cref="Process.Start(ProcessStartInfo)"/> browser launcher. Pre-grabs
-    /// the ephemeral port.
+    /// Creates the loopback browser with the default 3-minute flow timeout +
+    /// the production <see cref="HttpListener"/> factory + the shared OS
+    /// shell-open launcher. Pre-grabs the ephemeral port.
     /// </summary>
-    public LoopbackBrowser()
-        : this(NexusOAuthConstants.DefaultFlowTimeout, CreateHttpListener, OpenBrowserInDefaultApp)
+    public LoopbackBrowser(IExternalLauncher externalLauncher)
+        : this(NexusOAuthConstants.DefaultFlowTimeout, CreateHttpListener, externalLauncher)
     {
     }
 
     /// <summary>
     /// Creates the loopback browser with explicit seams + pre-grabs the ephemeral
     /// port. Production uses the defaults; tests inject fakes for the listener
-    /// factory + the browser launcher so the OAuth flow runs entirely offline.
+    /// factory + the external launcher so the OAuth flow runs entirely offline.
     /// </summary>
     /// <param name="timeout">How long to wait for the user to complete the
     /// browser consent. On expiry, returns
@@ -88,13 +89,13 @@ internal sealed class LoopbackBrowser : IBrowser
     /// <param name="createListener">Factory that builds the loopback listener
     /// for the given options (port + path). Production wires
     /// <see cref="CreateHttpListener"/>; tests inject a fake.</param>
-    /// <param name="openBrowser">Invoked with the authorize URL OidcClient built.
-    /// Production wires <see cref="OpenBrowserInDefaultApp"/>; tests inject a
-    /// no-op or recorder.</param>
+    /// <param name="externalLauncher">Opens the authorize URL OidcClient built
+    /// in the user's default browser. Production wires the shared
+    /// <see cref="IExternalLauncher"/>; tests inject a fake.</param>
     internal LoopbackBrowser(
         TimeSpan timeout,
         Func<LoopbackListenerOptions, ILoopbackListener> createListener,
-        Action<string> openBrowser)
+        IExternalLauncher externalLauncher)
     {
         if (timeout <= TimeSpan.Zero)
         {
@@ -102,7 +103,7 @@ internal sealed class LoopbackBrowser : IBrowser
         }
         _timeout = timeout;
         _createListener = createListener ?? throw new ArgumentNullException(nameof(createListener));
-        _openBrowser = openBrowser ?? throw new ArgumentNullException(nameof(openBrowser));
+        _externalLauncher = externalLauncher ?? throw new ArgumentNullException(nameof(externalLauncher));
 
         // Pre-grab the port + build the redirect URI. The HttpListener itself
         // binds in InvokeAsync (so the listener is alive only while a flow is
@@ -123,7 +124,17 @@ internal sealed class LoopbackBrowser : IBrowser
 
         try
         {
-            _openBrowser(options.StartUrl);
+            // A browser launch that could not start (false) or threw lands in
+            // the catch below as UnknownError; both mean the flow cannot
+            // proceed without a browser.
+            if (!_externalLauncher.OpenUri(new Uri(options.StartUrl)))
+            {
+                return new BrowserResult
+                {
+                    ResultType = BrowserResultType.UnknownError,
+                    Error = "Could not open the user's default browser.",
+                };
+            }
 
             // Combine the flow timeout + the caller's cancellation token. The
             // listener returns null on timeout (no callback arrived in time) or
@@ -178,23 +189,6 @@ internal sealed class LoopbackBrowser : IBrowser
     /// </summary>
     private static ILoopbackListener CreateHttpListener(LoopbackListenerOptions options)
         => new HttpListenerLoopbackListener(options);
-
-    /// <summary>
-    /// Opens <paramref name="url"/> in the user's default browser via the OS
-    /// shell-open. <c>UseShellExecute = true</c> is correct here: this is a URL
-    /// (the shell routes to the registered handler, xdg-open / explorer / open),
-    /// not an executable launch.
-    /// </summary>
-    private static void OpenBrowserInDefaultApp(string url)
-    {
-        // UseShellExecute=true on Windows routes to the default browser via the
-        // shell; on Linux it routes via xdg-open; on macOS via open. The
-        // cross-platform behavior is in-box on .NET 10.
-        Process.Start(new ProcessStartInfo(url)
-        {
-            UseShellExecute = true,
-        });
-    }
 
     /// <summary>
     /// Reserves an ephemeral loopback port via a one-shot TcpListener, then

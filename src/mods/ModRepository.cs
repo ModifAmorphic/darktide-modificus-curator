@@ -32,7 +32,10 @@ namespace Modificus.Curator.Mods;
 /// The mods root folder is read live from <see cref="IConfigLoader"/> on each
 /// operation (one snapshot per op), so a runtime folder change via the Settings
 /// window takes effect immediately; <see cref="Directory.CreateDirectory"/>
-/// runs per-op (idempotent) on the live path. All public methods are
+/// runs per-op (idempotent) on the live path. The index itself is built once at
+/// construction from the mods root configured at that moment: a mid-session
+/// change to the mods-repo location in config requires a restart for the index
+/// to follow. All public methods are
 /// synchronized via an internal lock (<c>_sync</c>), serializing reads and
 /// writes so a background-thread mutation (e.g. a reconciliation write from
 /// <c>UpdateCheckService</c>) cannot race a UI-thread mutation on the in-memory
@@ -77,9 +80,9 @@ internal sealed class ModRepository : IModRepository
     // Nexus lookups scan _byId (identity is fully on the source record).
     private readonly Dictionary<string, Guid> _untrackedByName = new(StringComparer.Ordinal);
 
-    // Linked containerId -> whether its ExternalPath was available on disk at
-    // the last index build. Recomputed on every RebuildIndex/Rescan (transient,
-    // not persisted): linked availability is a live filesystem question, and
+    // Linked containerId -> whether its ExternalPath was available on disk when
+    // the container was recorded or the index was last built (transient, not
+    // persisted): linked availability is a live filesystem question, and
     // staging re-checks Directory.Exists independently at stage time. Absent
     // entries mean "not a linked container" (IsExternalAvailable returns true).
     private readonly Dictionary<Guid, bool> _externalAvailable = new();
@@ -656,24 +659,6 @@ internal sealed class ModRepository : IModRepository
         }
     }
 
-    /// <inheritdoc />
-    public void Rescan()
-    {
-        lock (_sync)
-        {
-            // Read the live mods root (the path the config currently points at) and
-            // rebuild the index from it. Clear first: RebuildIndex only adds, so
-            // without a clear a container removed from disk between scans would
-            // survive as a stale entry.
-            var baseFolder = EnsureBaseFolder();
-            _byId.Clear();
-            _untrackedByName.Clear();
-            _externalAvailable.Clear();
-            RebuildIndex(baseFolder);
-            _logger.LogInformation("Rescanned mods repository at {Path} ({Count} containers).", baseFolder, _byId.Count);
-        }
-    }
-
     /// <summary>
     /// Ordinal, case-insensitive path equality after full-path normalization.
     /// Used to compare linked external-path identities. Trailing directory
@@ -694,9 +679,7 @@ internal sealed class ModRepository : IModRepository
     private void RebuildIndex(string baseFolder)
     {
         // Clear the availability index at the start of a rebuild: it is fully
-        // recomputed below from the linked containers the scan loads. (Rescan
-        // also clears it before calling this; clearing here too keeps
-        // RebuildIndex self-contained for any caller.)
+        // recomputed below from the linked containers the scan loads.
         _externalAvailable.Clear();
 
         foreach (var dir in Directory.EnumerateDirectories(baseFolder))

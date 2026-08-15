@@ -88,11 +88,11 @@ update-checks both call through it.
 `LoopbackBrowser` (the production `IBrowser` impl) pre-grabs an ephemeral
 loopback port, binds an `HttpListener` on that port, opens the authorize URL
 (built by OidcClient from the PKCE challenge and state) in the user's default
-browser via `Process.Start(UseShellExecute=true)` (correct here: opening a URL
-via the OS shell-open, not launching an executable), awaits the callback, and
-returns the authorization response. OidcClient exchanges the code for tokens;
-the store persists them. Three-minute flow timeout; on expiry the service
-surfaces "Login timed out".
+browser via the shared `IExternalLauncher` (the OS shell-open; a launch that
+could not start surfaces `BrowserResultType.UnknownError`), awaits the
+callback, and returns the authorization response. OidcClient exchanges the
+code for tokens; the store persists them. Three-minute flow timeout; on expiry
+the service surfaces "Login timed out".
 
 Loopback redirect (not `nxm://`) is the RFC 8252 standard and needs no
 scheme-handler involvement. This is independent of the
@@ -224,8 +224,6 @@ shape. v3 is Experimental for the surfaces we need, so v1 + v2 only:
 
 v1 REST:
 - `GET /v1/users/validate.json` (API-key validate)
-- `GET /v1/games/{domain}/mods/updated.json?period={1d|1w|1m}` (retained on the
-  interface; the update check no longer calls it)
 - `GET /v1/games/{domain}/mods/{modId}/files/{fileId}/download_link.json`
   (premium download links); same endpoint with
   `?key={nxmKey}&expires={epoch}` for free users

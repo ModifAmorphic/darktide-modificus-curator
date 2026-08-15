@@ -28,7 +28,7 @@ namespace Modificus.Curator.UI.Views;
 /// so unit tests can exercise it without a live Window.</para>
 /// <para><b>Persisted window geometry.</b> The last unmaximized (Normal) client
 /// size in DIP and whether the last meaningful state was Maximized are read from
-/// <see cref="IAppStateStore.MainWindowState"/> on the production path, clamped
+/// <see cref="IMainWindowStatePersistence.MainWindowState"/> on the production path, clamped
 /// via the pure <see cref="NormalizeSavedSize"/> helper to the XAML minimum and
 /// (when available) the primary screen's working area in DIP, and applied as
 /// <c>Width</c>/<c>Height</c> before first Show so the platform has the right
@@ -77,7 +77,7 @@ public partial class MainWindow : Window
     private bool _measuring; // reentrancy guard for OpenPaneLength layout feedback
 
     // Persisted-window-geometry tracking. All UI-thread affine.
-    private readonly IAppStateStore? _stateStore;
+    private readonly IMainWindowStatePersistence? _stateStore;
     private Size _lastNormalSize;            // freshest trusted Normal client size, DIP
     private bool _lastMeaningfulMaximized;   // Normal=false, Maximized=true, Minimized/FullScreen=unchanged
     private bool _maximizeOnFirstOpen;       // persisted maximized flag routes a one-shot OnOpened maximize
@@ -95,7 +95,7 @@ public partial class MainWindow : Window
     /// XAML and safe in-memory defaults but does not create or locate a store,
     /// so load/save is cleanly skipped on this path (no service locator, no
     /// fake store). Production construction goes through the internal
-    /// <see cref="MainWindow(IAppStateStore)"/> overload.
+    /// <see cref="MainWindow(IMainWindowStatePersistence)"/> overload.
     /// </summary>
     public MainWindow()
     {
@@ -110,7 +110,7 @@ public partial class MainWindow : Window
     /// composition-root factory so the store is supplied before the window is
     /// returned/shown.
     /// </summary>
-    internal MainWindow(IAppStateStore stateStore) : this()
+    internal MainWindow(IMainWindowStatePersistence stateStore) : this()
     {
         _stateStore = stateStore;
         ApplyPersistedWindowState();

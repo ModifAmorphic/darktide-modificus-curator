@@ -119,11 +119,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           runtime/designer loader path; loads XAML + safe
                           in-memory defaults, no store, AVLN3001 clean) and an
                           internal production constructor that supplies
-                          `IAppStateStore` (resolved via an explicit singleton
+                          `IMainWindowStatePersistence` (resolved via an explicit singleton
                           factory in CuratorComposition, no service locator). It
                           persists its last unmaximized client size + whether the
                           last meaningful state was maximized under
-                          `IAppStateStore.MainWindowState` (validated + clamped
+                          `IMainWindowStatePersistence.MainWindowState` (validated + clamped
                           to the XAML minimums + the primary work area in DIP,
                           applied before first Show, maximized on first open
                           when flagged, tracked through deferred coalesced
@@ -223,8 +223,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           sorting, and app restarts;
                           the Mods destination (`ModListViewModel` + `ModListView`):
                           the active profile's mod list (the dominant content area),
-                          with its own toolbar (refresh, rate-limit notice, auto-
-                          sort, the Compact/Detailed density selector, the Add split
+                          with its own toolbar (refresh, rate-limit notice,
+                          the Compact/Detailed density selector, the Add split
                           button) shown only on Mods, and the
                           inline import card (`ImportWorkflowViewModel` +
                           `ImportWorkflowView`, an application-lifetime singleton
@@ -525,7 +525,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           IProfileSession.PropertyChanged filtered to
                           ActiveProfileId + a periodic timer), all interval-gated
                           via a shared last-check persisted to
-                          `IAppStateStore.LastUpdateCheckUtc` (so a close/reopen
+                          `IUpdateCheckScheduleState.LastUpdateCheckUtc` (so a close/reopen
                           loop does not fire a call per launch); the
                           `AutoUpdateCheckEnabled` toggle gates ONLY the periodic
                           timer, and the manual `CheckNowAsync` carries its own
@@ -536,7 +536,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           signal + per-mod update action. `ModListViewModel` subscribes
                           to `IUpdateCheckService.CheckCompleted` and reads the
                           profile-scoped `IUpdateStateStore` (persisted in
-                          `IAppStateStore.KnownUpdates` / app-state.json, so a
+                          `IKnownUpdateState.KnownUpdates` / app-state.json, so a
                           restart inside the interval gate shows prior flags
                           before any API call) for per-row `UpdateAvailable`
                           (matched by ContainerId) + the list-level `IsRateLimited`
@@ -559,8 +559,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `IModAcquisitionService.AcquireLatestNexusAsync` +
                           `AcknowledgeUpdateAndReload` (clears the persisted
                           known-update entry, no extra API check); regular/unknown
-                          opens the mod's Nexus files page via a testable
-                          external-launcher seam (fallback alert on failure).
+                          opens the mod's Nexus files page via the shared
+                          IExternalLauncher (fallback alert on failure).
                           `CheckForUpdatesNowCommand` awaits the runner's
                           thorough check (driving an `IsCheckingNow` spinner on
                           the Mods toolbar refresh button; the await now also covers the
@@ -738,7 +738,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           The first-run `OnboardingService` (ui/Session/) owns
                           the one-time Nexus setup offer: it shows the
                           `WelcomeWindow` (ui/Views/) once on first startup
-                          (persisted via `IAppStateStore.OnboardingCompleted`),
+                          (persisted via `IOnboardingState.OnboardingCompleted`),
                           and on a "Set up Nexus" choice persists completion
                           first, then navigates the shell to Nexus
                           (wired from `App` after the main window opens,
@@ -761,7 +761,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         Serilog day-rolling log (RollingInterval.Day writes
                         curator-<yyyyMMdd>.log, appended across starts within a day,
                         rolled at midnight, pruned to RetainedLogFileCount),
-                        config loader, app-state store (active profile id +
+                        config loader, the shared OS shell-open launcher
+                        (IExternalLauncher/ShellExternalLauncher: browser for a
+                        URL, file manager for a folder, narrow failure filter),
+                        the NexusGameIdentity constants (the Darktide game
+                        domain + game id),
+                        app-state store (active profile id +
                         last update-check timestamp + manual-refresh throttle
                         window + profile-scoped known-update snapshots +
                         last Nexus display-metadata backfill timestamp +
@@ -826,9 +831,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         RELAY_LUA_LOGS + RELAY_SKIP_SPLASH); backward-
                         compat null/missing normalization to empty, mirroring Mods;
                         GetLaunchSettings is the focused read the launch path uses;
-                        apply at launch) + the auto-sort seam
-                        (IModOrderResolver/IdentityModOrderResolver, identity stub now;
-                        real dependency-driven resolver later) + ModCleanup (the startup
+                        apply at launch) + ModCleanup (the startup
                         prune orchestration; keeps a referenced linked container by
                         containerId sentinel, since a linked container has no versions)
   mods/          Modificus.Curator.Mods -- the unified mod repository
@@ -914,7 +917,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         atomic TryInitializeDisplayMetadata); IUpdateCheckService the Nexus-only
                         update-check service (1 v2 GraphQL `modsByUid` batch
                         query per check, 1 API call for all mods; computes UIDs
-                        from game_id * 2^32 + mod_id, Darktide game_id = 4943;
+                        from game_id * 2^32 + mod_id, the Darktide game id in
+                        General's NexusGameIdentity.DarktideGameId;
                         the server-computed `viewerUpdateAvailable` field
                         replaces the v1 Month-endpoint intersect, timestamp
                         tolerance, per-mod reconciliation, + reconciliation
@@ -953,7 +957,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         Failed) so authoritative success is distinguishable +
                         records each result through the `IUpdateStateStore`
                         (the profile-scoped known-update persistence rules over
-                        `IAppStateStore.KnownUpdates`: Success replaces/clears,
+                        `IKnownUpdateState.KnownUpdates`: Success replaces/clears,
                         NoNexusMods clears, no-auth/rate-limit/failed preserve,
                         hydration self-heals removed/pinned/source-changed/
                         version-changed entries, AcknowledgeInstall clears a
@@ -1035,8 +1039,6 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         app-local relay/ shipped inside a Velopack payload at
                         <BaseDirectory>/relay/, then uses the portable sibling fallback
                         on Windows only)
-  launcher/             Modificus.Curator.Launcher -- stub (the Steam non-steam-shortcut
-                          target placeholder)
   nxm/                  Modificus.Curator.Nxm -- the nxm:// scheme-handler plumbing:
                         NxmUrlParser (mod-download / oauth-callback /
                         collection URL types), NxmIpcFraming (length-prefixed UTF-8 frames),
@@ -1456,12 +1458,12 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   runs), global
   Preferences + i18n infrastructure, the mod-list UI (view mods with
   source/version badges, enable/disable, remove-with-confirm, reorder (drag the
-  per-row grip at the left edge, Move Up / Move Down buttons, or auto-sort;
+  per-row grip at the left edge, or Move Up / Move Down buttons;
   profile-scoped per-row order locks keep a row's exact zero-based position
-  across any reorder or auto-sort, toggled by a lock button beside Move Up /
+  across any reorder, toggled by a lock button beside Move Up /
   Move Down; the grip is the only surface that initiates a drag so the rest of
   every row stays touch-scrolling surface), per-mod
-  Latest/Pinned policy, auto-sort identity stub, local folder/archive import
+  Latest/Pinned policy, local folder/archive import
   via file picker + drag-and-drop, and linking an external mod folder without
   copying it, joined to containers via `IModRepository` by
   `ContainerId`; a persisted Compact/Detailed row density with cached
@@ -1493,9 +1495,9 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   wait for). The
   first-run `OnboardingService` (ui/Session/) owns the one-time Nexus setup
   offer: it shows the `WelcomeWindow` (ui/Views/) once on first startup
-  (persisted via `IAppStateStore.OnboardingCompleted`), and on a "Set up Nexus"
+  (persisted via `IOnboardingState.OnboardingCompleted`), and on a "Set up Nexus"
   choice persists completion first, then navigates the shell to Nexus
-  Integrations (wired from `App` after the main window opens, exception-safe). The **Launcher** is a stub. See
+  Integrations (wired from `App` after the main window opens, exception-safe). See
   `docs/architecture/MODIFICUS-CURATOR.md`.
 
 ## Key docs

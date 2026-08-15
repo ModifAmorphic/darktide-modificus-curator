@@ -4,7 +4,13 @@ using Modificus.Curator.Config;
 namespace Modificus.Curator.General;
 
 /// <summary>
-/// Default <see cref="IAppStateStore"/>. Loads + saves a single JSON file at
+/// The JSON-backed runtime app-state store: one implementation covering every
+/// app-state role interface (<see cref="IOnboardingState"/>,
+/// <see cref="IProfileActivationState"/>,
+/// <see cref="IUpdateCheckScheduleState"/>, <see cref="IKnownUpdateState"/>,
+/// <see cref="INexusMetadataBackfillState"/>,
+/// <see cref="IMainWindowStatePersistence"/>). Loads + saves a single JSON
+/// file at
 /// <c>&lt;app-data&gt;/app-state.json</c> (<c>{ "OnboardingCompleted": true | false,
 /// "ActiveProfileId": "&lt;guid&gt;" | null,
 /// "LastUpdateCheckUtc": "&lt;iso-8601&gt;" | null,
@@ -29,7 +35,7 @@ namespace Modificus.Curator.General;
 /// writer of the file, so an in-memory cache is the honest model.</para>
 /// <para><b>First-run safe:</b> a missing or corrupt state file never throws;
 /// the cache just seeds as defaults (every field <c>null</c>, except
-/// <see cref="IAppStateStore.OnboardingCompleted"/> which defaults to
+/// <see cref="IOnboardingState.OnboardingCompleted"/> which defaults to
 /// <c>false</c>). Writes are best-effort; runtime app-state is non-critical, so
 /// a persistence failure (unwritable dir, full disk) is swallowed rather than
 /// crashing the app mid-interaction. Any field absent from an older
@@ -37,7 +43,13 @@ namespace Modificus.Curator.General;
 /// for an absent nullable member), so a first run after upgrade sees no recorded
 /// value and the consumers seed cleanly.</para>
 /// </remarks>
-public sealed class AppStateStore : IAppStateStore
+public sealed class AppStateStore :
+    IOnboardingState,
+    IProfileActivationState,
+    IUpdateCheckScheduleState,
+    IKnownUpdateState,
+    INexusMetadataBackfillState,
+    IMainWindowStatePersistence
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {

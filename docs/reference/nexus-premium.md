@@ -253,7 +253,7 @@ time the prompt reaches this branch.
   alert containing the files-page URL.
 
 DMF's files page is
-`https://www.nexusmods.com/warhammer40kdarktide/mods/8?tab=files`.
+`https://www.nexusmods.com/<darktide-domain>/mods/8?tab=files`.
 
 Relevant implementation:
 

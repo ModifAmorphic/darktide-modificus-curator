@@ -46,24 +46,6 @@ public sealed record NexusRateLimits(
     public static NexusRateLimits Unknown { get; } = new(0, 0, null, 0, 0, null);
 }
 
-// ---- time period ------------------------------------------------------------
-
-/// <summary>
-/// The aggregation window for <c>ModUpdatesAsync</c>. Nexus caches each window
-/// server-side, so only these three values are accepted.
-/// </summary>
-public enum NexusPeriod
-{
-    /// <summary>Updated in the past day.</summary>
-    Day,
-
-    /// <summary>Updated in the past week.</summary>
-    Week,
-
-    /// <summary>Updated in the past month.</summary>
-    Month,
-}
-
 // ---- DTOs (snake_case JSON, mirrors NMA's wire schema) ----------------------
 
 // NOTE: DTO property names are bound to the Nexus v1 wire schema (snake_case).
@@ -123,34 +105,6 @@ public enum NexusMembershipRole
 
     /// <summary>Lifetime premium (legacy or redeemed from Donation Points).</summary>
     LifetimePremium,
-}
-
-/// <summary>
-/// One entry in the <c>GET /v1/games/{domain}/mods/updated.json</c> response.
-/// Carries the mod id + two activity timestamps (server-side Unix seconds).
-/// </summary>
-public sealed class ModUpdate
-{
-    [JsonPropertyName("mod_id")]
-    public long ModId { get; set; }
-
-    /// <summary>The last file-update time, as Unix seconds.</summary>
-    [JsonPropertyName("latest_file_update")]
-    public long LatestFileUpdate { get; set; }
-
-    /// <summary>Convenience UTC conversion of <see cref="LatestFileUpdate"/>.</summary>
-    [JsonIgnore]
-    public DateTimeOffset LatestFileUpdateUtc =>
-        DateTimeOffset.FromUnixTimeSeconds(LatestFileUpdate);
-
-    /// <summary>The last mod-page activity, as Unix seconds.</summary>
-    [JsonPropertyName("latest_mod_activity")]
-    public long LatestModActivity { get; set; }
-
-    /// <summary>Convenience UTC conversion of <see cref="LatestModActivity"/>.</summary>
-    [JsonIgnore]
-    public DateTimeOffset LatestModActivityUtc =>
-        DateTimeOffset.FromUnixTimeSeconds(LatestModActivity);
 }
 
 /// <summary>

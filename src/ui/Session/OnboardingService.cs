@@ -6,7 +6,7 @@ namespace Modificus.Curator.UI.Session;
 
 /// <summary>
 /// The first-run Welcome onboarding coordinator. Shows the Welcome modal once,
-/// the first time the app starts with <see cref="IAppStateStore.OnboardingCompleted"/>
+/// the first time the app starts with <see cref="IOnboardingState.OnboardingCompleted"/>
 /// still <c>false</c>, persists completion, and navigates the shell to Nexus
 /// Integrations when the user chooses "Set up Nexus". After the first run, the
 /// call is a no-op for the lifetime of the process.
@@ -14,7 +14,7 @@ namespace Modificus.Curator.UI.Session;
 /// <remarks>
 /// <para>
 /// <b>One-shot, persisted.</b> <see cref="ShowWelcomeIfFirstRunAsync"/> reads
-/// the persisted <see cref="IAppStateStore.OnboardingCompleted"/> flag; when it
+/// the persisted <see cref="IOnboardingState.OnboardingCompleted"/> flag; when it
 /// is already <c>true</c> (a returning user, or a second call in the same
 /// process after the first run persisted it) the method returns without showing
 /// anything. The completion flag is persisted BEFORE the navigation runs, so
@@ -41,7 +41,7 @@ namespace Modificus.Curator.UI.Session;
 /// </remarks>
 public sealed class OnboardingService
 {
-    private readonly IAppStateStore _appState;
+    private readonly IOnboardingState _appState;
     private readonly IDialogService _dialogs;
     private readonly Func<Task> _navigateToIntegrations;
     private readonly ILogger<OnboardingService> _logger;
@@ -53,7 +53,7 @@ public sealed class OnboardingService
     private bool _shown;
 
     public OnboardingService(
-        IAppStateStore appState,
+        IOnboardingState appState,
         IDialogService dialogs,
         Func<Task> navigateToIntegrations,
         ILogger<OnboardingService> logger)

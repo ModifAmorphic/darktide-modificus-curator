@@ -35,7 +35,7 @@ public sealed class ModListGamingModeTests
         FakeDialogService? dialogs = null,
         FakeNxmRegistrationState? nxmRegistration = null,
         FakeModAcquisitionService? acquisition = null,
-        Func<Uri, bool>? launchExternal = null)
+        FakeExternalLauncher? launcher = null)
     {
         var a = Profile("Alpha");
         var profiles = TestDoubles.Profiles(a);
@@ -59,7 +59,7 @@ public sealed class ModListGamingModeTests
             dialogs: dialogs,
             nxmRegistration: nxmRegistration,
             acquisition: acquisition,
-            launchExternal: launchExternal,
+            launcher: launcher,
             gamingMode: gamingMode);
         return (vm, session);
     }
@@ -162,7 +162,7 @@ public sealed class ModListGamingModeTests
     {
         // The badge is disabled in the view, but the command is the source of
         // truth: a programmatic invocation must not open a file manager.
-        var opened = 0;
+        var launcher = new FakeExternalLauncher();
         var a = Profile("Alpha");
         var profiles = TestDoubles.Profiles(a);
         var repo = new FakeModRepository();
@@ -172,14 +172,14 @@ public sealed class ModListGamingModeTests
         var vm = TestDoubles.BuildModList(
             profiles, new FakeProfileSession { ActiveProfileId = a.Id }, repo,
             localization: Localization,
-            launchExternalPath: _ => { opened++; return true; },
+            launcher: launcher,
             gamingMode: new GamingModeState(true));
         var row = vm.Mods.Single(m => m.Name == "DMF");
         Assert.True(row.IsLinkedAvailable); // the row is otherwise a valid target
 
         await vm.OpenFolderCommand.ExecuteAsync(row);
 
-        Assert.Equal(0, opened);
+        Assert.Empty(launcher.OpenedPaths);
     }
 
     // ---- Add Nexus Mods command (browser guidance) --------------------------
@@ -191,7 +191,7 @@ public sealed class ModListGamingModeTests
         var dialogs = new FakeDialogService();
         var (vm, _) = Build(new GamingModeState(true),
             dialogs: dialogs,
-            launchExternal: uri => { launches.Add(uri); return true; });
+            launcher: FakeExternalLauncher.RecordingUris(launches));
 
         await vm.AddNexusModsCommand.ExecuteAsync(null);
 
@@ -208,7 +208,7 @@ public sealed class ModListGamingModeTests
         var dialogs = new FakeDialogService();
         var (vm, _) = Build(new GamingModeState(false),
             dialogs: dialogs,
-            launchExternal: uri => { launches.Add(uri); return true; });
+            launcher: FakeExternalLauncher.RecordingUris(launches));
 
         await vm.AddNexusModsCommand.ExecuteAsync(null);
 
@@ -260,7 +260,7 @@ public sealed class ModListGamingModeTests
             withNexusRow: true,
             auth: auth,
             dialogs: dialogs,
-            launchExternal: uri => { launches.Add(uri); return true; });
+            launcher: FakeExternalLauncher.RecordingUris(launches));
         var row = vm.Mods.Single(m => m.Name == "SoundPack");
         Assert.False(vm.IsPremiumUser);
         row.UpdateAvailable = true; // the flag the persisted store drives
@@ -290,7 +290,7 @@ public sealed class ModListGamingModeTests
             auth: auth,
             dialogs: dialogs,
             acquisition: acquisition,
-            launchExternal: uri => { launches.Add(uri); return true; });
+            launcher: FakeExternalLauncher.RecordingUris(launches));
         var row = vm.Mods.Single(m => m.Name == "SoundPack");
         Assert.True(vm.IsPremiumUser);
         row.UpdateAvailable = true;
