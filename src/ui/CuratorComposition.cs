@@ -431,15 +431,17 @@ public static class CuratorComposition
         // The first-run Welcome onboarding coordinator. Shows the Welcome modal
         // once, the first time the app starts with onboarding not yet complete,
         // persists completion, and on a "Set up Nexus" choice navigates the shell
-        // to Nexus (resolved lazily through ShellViewModel's
-        // navigation entry point, so the leave-Integrations nxm/mod-list refresh
+        // to Nexus through IShellNavigation (a plain forward to the shell
+        // singleton below, resolved lazily so the registration introduces no
+        // construction-time cycle; the leave-Integrations nxm/mod-list refresh
         // applies after the Welcome-driven visit too). Singleton: owns the
         // in-process "already shown" guard. Started from App after the main
         // window opens; best-effort, never blocks startup.
+        services.AddSingleton<IShellNavigation>(sp => sp.GetRequiredService<ShellViewModel>());
         services.AddSingleton(sp => new OnboardingService(
             sp.GetRequiredService<IOnboardingState>(),
             sp.GetRequiredService<IDialogService>(),
-            () => sp.GetRequiredService<ShellViewModel>().NavigateToIntegrationsAsync(),
+            sp.GetRequiredService<IShellNavigation>(),
             sp.GetRequiredService<ILogger<OnboardingService>>()));
 
         var provider = services.BuildServiceProvider();

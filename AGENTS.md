@@ -758,9 +758,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `WelcomeWindow` (ui/Views/) once on first startup
                           (persisted via `IOnboardingState.OnboardingCompleted`),
                           and on a "Set up Nexus" choice persists completion
-                          first, then navigates the shell to Nexus
-                          (wired from `App` after the main window opens,
-                          exception-safe).
+                          first, then navigates the shell to Nexus through
+                          `IShellNavigation` (ui/Session/, implemented by
+                          ShellViewModel + forwarded by the composition root as
+                          a plain interface forward; wired from `App` after the
+                          main window opens, exception-safe).
                           `IDialogService.ShowProgressAsync<T>`
                           runs the supplied work under a non-closeable spinner +
                           closes it on completion; `DialogTitleBar.ShowClose`
@@ -1536,7 +1538,9 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   offer: it shows the `WelcomeWindow` (ui/Views/) once on first startup
   (persisted via `IOnboardingState.OnboardingCompleted`), and on a "Set up Nexus"
   choice persists completion first, then navigates the shell to Nexus
-  Integrations (wired from `App` after the main window opens, exception-safe). See
+  Integrations through `IShellNavigation` (ui/Session/, implemented by
+  ShellViewModel + forwarded by the composition root; wired from `App` after
+  the main window opens, exception-safe). See
   `docs/architecture/MODIFICUS-CURATOR.md`.
 
 ## Key docs

@@ -167,9 +167,11 @@ owned by `IProfileSession`; launch availability derives directly from
   already Mods, then reload the mod list when a trigger was consumed). The
   destination is switched before any enter await so it stays active even if a
   refresh or the DMF prompt reports an error.
-- `NavigateToIntegrationsAsync()`: the internal awaitable entry point the
-  first-run onboarding reuses for its "Set up Nexus" choice, so onboarding-
-  completion persistence and Integrations activation share one navigation path.
+- `IShellNavigation` (implemented by the shell, registered as a lazy forward
+  to the shell singleton): the guarded navigation surface UI-layer services
+  consume; the first-run onboarding reuses it for its "Set up Nexus" choice, so
+  onboarding-completion persistence and Integrations activation share one
+  navigation path.
 - `Profiles` / `ModList` / `Integrations` / `Preferences` / `Settings`: the
   five hosted page view models (singletons, injected into the shell).
 - Launch + status-strip surface (`IsGameRunning`, `HasPendingStagedChanges`,
@@ -591,7 +593,7 @@ public sealed class OnboardingService
     public OnboardingService(
         IOnboardingState appState,
         IDialogService dialogs,
-        Func<Task> navigateToIntegrations,   // resolves to ShellViewModel.NavigateToIntegrationsAsync
+        IShellNavigation navigation,         // the shell's guarded navigation surface
         ILogger<OnboardingService> logger);
 
     public Task ShowWelcomeIfFirstRunAsync();
@@ -604,12 +606,13 @@ public sealed class OnboardingService
   further UI (so navigating away from Nexus, or the navigation
   failing, can never cause Welcome to repeat), and on a
   `WelcomeChoice.SetUpNexus` choice navigates the shell to Nexus
-  via the injected `navigateToIntegrations` delegate.
-- `navigateToIntegrations`: resolved lazily through
-  `ShellViewModel.NavigateToIntegrationsAsync` at composition, so the
-  destination's auth + registration-state refresh runs and the
-  leave-Integrations mod-list reload applies after the Welcome-driven visit
-  too. Kept as a delegate so the coordinator stays unit-testable.
+  via the injected `IShellNavigation`.
+- `IShellNavigation`: implemented by `ShellViewModel` and registered by the
+  composition root as a plain forward to the shell singleton (resolved lazily,
+  no construction-time cycle), so the destination's auth +
+  registration-state refresh runs and the leave-Integrations mod-list reload
+  applies after the Welcome-driven visit too. An interface (not a delegate) so
+  the seam is a named capability the shell owns.
 - `WelcomeChoice`: the typed result returned through
   `IDialogService.ShowWelcomeAsync`. `Continue` (the default; also ESC, the
   title-bar close button, and a window close) persists completion and leaves the
@@ -1625,10 +1628,11 @@ services.AddSingleton<IAppUpdateService, NoopAppUpdateService>();
 #endif
 services.AddSingleton(sp => new AppUpdateCheckRunner(/* IAppUpdateService, IConfigLoader, logger */));
 services.AddSingleton(sp => new DmfPromptService(/* … */, sp.GetRequiredService<INxmRegistrationState>()));
+services.AddSingleton<IShellNavigation>(sp => sp.GetRequiredService<ShellViewModel>()); // plain forward
 services.AddSingleton(sp => new OnboardingService(
     sp.GetRequiredService<IOnboardingState>(),
     sp.GetRequiredService<IDialogService>(),
-    () => sp.GetRequiredService<ShellViewModel>().NavigateToIntegrationsAsync(),
+    sp.GetRequiredService<IShellNavigation>(),
     sp.GetRequiredService<ILogger<OnboardingService>>()));
 ```
 
