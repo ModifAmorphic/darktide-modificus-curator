@@ -7,6 +7,7 @@ using Modificus.Curator.Integrations;
 using Modificus.Curator.Nxm;
 using Modificus.Curator.UI.Dialogs;
 using Modificus.Curator.UI.Localization;
+using Modificus.Curator.UI.Session;
 using Microsoft.Extensions.Logging;
 
 namespace Modificus.Curator.UI.ViewModels;
@@ -78,6 +79,7 @@ public partial class IntegrationsViewModel : ObservableObject
     private readonly IConfigLoader _configLoader;
     private readonly IDialogService _dialogs;
     private readonly INxmHandlerRegistrar? _nxmRegistrar;
+    private readonly INxmRegistrationState _nxmRegistration;
     private readonly ILogger<IntegrationsViewModel> _logger;
 
     // Backs the in-flight OAuth login or API-key validate. Swapped per attempt
@@ -92,6 +94,7 @@ public partial class IntegrationsViewModel : ObservableObject
         IConfigLoader configLoader,
         IDialogService dialogs,
         INxmHandlerRegistrar? nxmRegistrar,
+        INxmRegistrationState nxmRegistration,
         ILogger<IntegrationsViewModel> logger)
     {
         _auth = auth ?? throw new ArgumentNullException(nameof(auth));
@@ -99,6 +102,7 @@ public partial class IntegrationsViewModel : ObservableObject
         _configLoader = configLoader ?? throw new ArgumentNullException(nameof(configLoader));
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
         _nxmRegistrar = nxmRegistrar;
+        _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         _localization.PropertyChanged += OnCultureChanged;
@@ -526,8 +530,9 @@ public partial class IntegrationsViewModel : ObservableObject
     /// Refreshes the status line + active-method indicator + masked-key field
     /// from the persisted auth state, the update-check toggle + interval from
     /// the persisted config, and the nxm handler registration state from the OS
-    /// registrar. Called on dialog open (after construction) + after each auth
-    /// command + after a register/unregister. Resolves the display name +
+    /// (one bounded probe through the shared registration state). Called on
+    /// dialog open (after construction) + after each auth command + after a
+    /// register/unregister. Resolves the display name +
     /// premium state by method: OAuth reads it from the access token's JWT
     /// payload in memory; API key hits <c>/v1/users/validate.json</c>.
     /// </summary>
@@ -604,21 +609,21 @@ public partial class IntegrationsViewModel : ObservableObject
     // ---- nxm handler registration ----------------------------------------
 
     /// <summary>
-    /// Whether a platform <see cref="INxmHandlerRegistrar"/> is available. Null
-    /// (no registrar) on platforms other than Windows + Linux; the NXM controls
-    /// show an unavailable state + the toggle is disabled. Drives
-    /// <see cref="CanToggleNxmHandler"/>.
+    /// Whether a platform <see cref="INxmHandlerRegistrar"/> is available.
+    /// Mirrored from the shared registration state (false on platforms other
+    /// than Windows + Linux); the NXM controls show an unavailable state + the
+    /// toggle is disabled. Drives <see cref="CanToggleNxmHandler"/>.
     /// </summary>
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ToggleNxmHandlerCommand))]
     private bool _isNxmAvailable = true;
 
     /// <summary>
-    /// Whether Curator is currently the OS <c>nxm://</c> handler, per the
-    /// registrar's <see cref="INxmHandlerRegistrar.IsRegistered"/>. Drives the
-    /// status line, the toggle button label, and which branch the toggle
-    /// command takes (register vs unregister). Refreshed on dialog open + after
-    /// each toggle.
+    /// Whether Curator is currently the OS <c>nxm://</c> handler, mirrored from
+    /// the shared registration state after each of its deliberate probes (the
+    /// Nexus-enter refresh + each register/release action). Drives the status
+    /// line, the toggle button label, and which branch the toggle command takes
+    /// (register vs unregister).
     /// </summary>
     [ObservableProperty]
     private bool _isNxmRegistered;
@@ -663,13 +668,13 @@ public partial class IntegrationsViewModel : ObservableObject
     /// first shows a confirmation dialog (it is a system-wide change that can
     /// affect Vortex / Mod Organizer 2 / Nexus Mod Manager / other managers),
     /// then calls <see cref="INxmHandlerRegistrar.Register"/>. The unregister
-    /// path only releases Curator's own registration: it re-checks
-    /// <see cref="INxmHandlerRegistrar.IsRegistered"/> before
-    /// <see cref="INxmHandlerRegistrar.Unregister"/> so it never deletes
-    /// another program's handler. A failure surfaces a localized alert; the
-    /// state is refreshed after either branch. Unavailable (no registrar) is a
-    /// no-op (the command is also disabled). Usable while Darktide runs (only
-    /// launch + active-profile changes are blocked).
+    /// path delegates directly to <see cref="INxmHandlerRegistrar.Unregister"/>:
+    /// the registrar self-guards ownership (a logged no-op when Curator is not
+    /// the current handler), so the VM performs no pre-check probe. A failure
+    /// surfaces a localized alert; either way the shared registration state is
+    /// refreshed once (one probe) so every consumer re-syncs. Unavailable (no
+    /// registrar) is a no-op (the command is also disabled). Usable while
+    /// Darktide runs (only launch + active-profile changes are blocked).
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanToggleNxmHandler))]
     private async Task ToggleNxmHandler()
@@ -705,16 +710,8 @@ public partial class IntegrationsViewModel : ObservableObject
         }
         else
         {
-            // Unregister path: only release Curator's own registration. The
-            // registrar's IsRegistered returns true only when Curator is the
-            // current owner, so this guard never deletes another program's
-            // handler.
-            if (!_nxmRegistrar.IsRegistered())
-            {
-                RefreshNxmState();
-                return;
-            }
-
+            // Unregister path: the registrar's own ownership guard decides
+            // whether anything is released (Curator's registration only).
             try
             {
                 _nxmRegistrar.Unregister();
@@ -735,27 +732,17 @@ public partial class IntegrationsViewModel : ObservableObject
     private bool CanToggleNxmHandler() => IsNxmAvailable;
 
     /// <summary>
-    /// Re-reads the registrar state into <see cref="IsNxmAvailable"/> +
-    /// <see cref="IsNxmRegistered"/> + fires change notifications for the
-    /// derived status/label/tooltip so the view refreshes. Safe when no
-    /// registrar is present (sets unavailable + not registered). Called on
-    /// dialog open + after each toggle.
+    /// Refreshes the shared registration state from the OS (its one deliberate
+    /// probe point per Nexus enter / post-action), then copies
+    /// <see cref="IsNxmAvailable"/> + <see cref="IsNxmRegistered"/> from it and
+    /// fires the change notifications for the derived status/label/tooltip so
+    /// the view refreshes.
     /// </summary>
     private void RefreshNxmState()
     {
-        IsNxmAvailable = _nxmRegistrar is not null;
-        try
-        {
-            IsNxmRegistered = _nxmRegistrar?.IsRegistered() ?? false;
-        }
-        catch (Exception ex)
-        {
-            // The platform registrars catch their own probe exceptions; this is
-            // defensive only. Treat a throw as "not registered" so the user can
-            // retry the register path.
-            _logger.LogWarning(ex, "IsRegistered probe threw; treating as not registered.");
-            IsNxmRegistered = false;
-        }
+        _nxmRegistration.RefreshFromOs();
+        IsNxmAvailable = _nxmRegistration.IsAvailable;
+        IsNxmRegistered = _nxmRegistration.IsRegistered;
 
         OnPropertyChanged(nameof(NxmStatusText));
         OnPropertyChanged(nameof(NxmActionLabel));

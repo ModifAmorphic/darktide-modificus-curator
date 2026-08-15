@@ -157,34 +157,56 @@ public sealed class ModListViewModelTests
         Assert.False(vm.ShowAddModsHint);
     }
 
-    // ---- nxm registration probe (drives the empty-state Nexus hint) --------
+    // ---- nxm registration state (drives the empty-state Nexus hint) --------
 
     [Fact]
-    public void IsNxmRegistered_true_when_the_registrar_reports_registered()
+    public void IsNxmRegistered_follows_the_shared_registration_state()
     {
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var registrar = new FakeNxmHandlerRegistrar { Registered = true };
-
-        var vm = TestDoubles.BuildModList(profiles, session,
-            nxmRegistrar: registrar);
+        var state = new FakeNxmRegistrationState { IsAvailable = true, IsRegistered = true };
+        var vm = TestDoubles.BuildModList(nxmRegistration: state);
 
         Assert.True(vm.IsNxmRegistered);
+
+        state.IsRegistered = false;
+        state.RaiseChanged();
+
+        Assert.False(vm.IsNxmRegistered);
     }
 
     [Fact]
-    public void IsNxmRegistered_false_when_no_registrar_is_wired()
+    public void IsNxmRegistered_is_false_when_no_registrar_exists()
     {
-        // The default Build path: no registrar passed, so the probe is a no-op
-        // and the empty-state Nexus hint stays hidden.
+        // The default Build path: no registrar wired, so the shared state is
+        // unavailable and the empty-state Nexus hint stays hidden.
+        var vm = TestDoubles.BuildModList();
+
+        Assert.False(vm.IsNxmRegistered);
+    }
+
+    [Fact]
+    public void Construction_and_Reload_perform_zero_registration_probes()
+    {
+        // Every Reload path (populated profile, no active profile) plus the
+        // constructor must never touch the OS registration; the hint reads the
+        // shared last-known state only.
+        var registrar = new FakeNxmHandlerRegistrar { Registered = true };
+        var state = new FakeNxmRegistrationState(registrar);
         var a = Profile("Alpha");
         var profiles = TestDoubles.Profiles(a);
         var session = new FakeProfileSession { ActiveProfileId = a.Id };
 
-        var vm = TestDoubles.BuildModList(profiles, session);
+        // The constructor runs Reload (populated-profile path).
+        var vm = TestDoubles.BuildModList(profiles, session, nxmRegistration: state);
 
-        Assert.False(vm.IsNxmRegistered);
+        // The no-profile path, then back to a populated profile (the
+        // session-driven reloads fire too; every path must stay probe-free).
+        session.ActiveProfileId = null;
+        vm.Reload();
+        session.ActiveProfileId = a.Id;
+        vm.Reload();
+
+        Assert.Equal(0, state.RefreshFromOsCalls);
+        Assert.Equal(0, registrar.IsRegisteredCalls);
     }
 
     [Fact]

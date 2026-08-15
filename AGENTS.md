@@ -141,12 +141,14 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           the current destination's leave effects first (leaving
                           Profiles awaits the unsaved-changes three-choice
                           guard, Cancel/Save-failure keeps the destination
-                          unchanged; leaving Nexus
-                          calls `IntegrationsViewModel.Deactivate` which cancels
-                          the in-flight auth + the shell re-reads nxm status +
-                          reloads the mod list; leaving Settings reloads the mod
-                          list + re-reads the startup-check toggle + refreshes the
-                          app-update notice), then switches the destination, then
+                           unchanged; leaving Nexus
+                           calls `IntegrationsViewModel.Deactivate` which cancels
+                           the in-flight auth + the shell reloads the mod list
+                           (no nxm probe on leave; the registration state
+                           refreshes at Nexus ENTER, its deliberate probe
+                           point); leaving Settings reloads the mod
+                           list + re-reads the startup-check toggle + refreshes the
+                           app-update notice), then switches the destination, then
                           runs the target's enter effects (Settings calls
                           `SettingsViewModel.RefreshFromConfig` synchronously;
                           Nexus awaits `IntegrationsViewModel.RefreshAsync`
@@ -166,7 +168,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           (bounded detector handoff, no process handle; the
                           state clears in all completion/exception paths)), and
                           the global status strip (running + pending + nxm-handler
-                          + app-update notice). The hosted page VMs are
+                          + app-update notice; the nxm indicator mirrors the
+                          shared `INxmRegistrationState`, seeded by its one
+                          startup probe + updated on each publish). The hosted page VMs are
                           application-lifetime singletons; navigation never calls an
                           old Window-close Detach path. The active profile is owned
                           by `IProfileSession`; launch availability derives directly
@@ -396,11 +400,16 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           usable while Darktide runs (only launch + active-profile
                           changes are blocked); the destination also owns the
                           explicit `nxm://` handler registration (a "Nexus download
-                          links" section over `INxmHandlerRegistrar`: register
-                          confirms first since it is a system-wide change that can
-                          affect other mod managers; unregister only releases
-                          Curator's own registration); entering the destination
-                          refreshes auth state, leaving cancels in-flight auth via
+                          links" section over `INxmHandlerRegistrar` for the
+                          mutations + the shared `INxmRegistrationState` for the
+                          status: register confirms first since it is a system-wide
+                          change that can affect other mod managers; unregister
+                          delegates straight to the self-guarded registrar, which
+                          releases only Curator's own registration; after either
+                          action one refresh publishes the state to every
+                          consumer); entering the destination
+                          refreshes auth state (one registration probe per
+                          enter), leaving cancels in-flight auth via
                           `Deactivate`;
                           the Preferences destination (`PreferencesViewModel` +
                           `PreferencesView`): theme + font scale + language + the
@@ -455,6 +464,22 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           coordinating IDialogService + IProfileSession + Dispatcher.UIThread) that
                           replaces the no-op default via DI last-registration-wins, registered after
                           AddNxm() in CuratorComposition;
+                          the shared `INxmRegistrationState` (ui/Session/, an
+                          application-lifetime singleton): the last-known OS
+                          `nxm://` registration for every UI surface (shell
+                          status strip, Mods empty-state hint, Nexus page, DMF
+                          prompt wording). `RefreshFromOs` is its only writer
+                          + the UI's only probe: one seed at shell
+                          construction, one per Nexus enter, one after each
+                          register/release action; each publishes `Changed`
+                          (marshaled to the UI thread) so every surface
+                          updates together. All other consumers read
+                          last-known + accept staleness (the OS association is
+                          racy by nature); `ModListViewModel.Reload()` and all
+                          navigation-leave effects perform zero probes;
+                          `DmfPromptService` reads the state + never probes;
+                          only `IntegrationsViewModel` still injects the
+                          registrar (for the register/release mutations);
                           `UpdateCheckRunner` (ui/Session/) the
                           UI-layer glue that fires `IUpdateCheckService.CheckAsync`
                           fire-and-forget on the three automatic triggers
@@ -636,9 +661,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           profile that becomes active (no persisted flag: a
                           fresh ask per profile). Two cases: DMF in the repo
                           but not the profile -> instant add (case 1); DMF not
-                          in the repo -> a download confirm (the message
-                          tailors to whether Curator owns the `nxm://` handler:
-                          manager-download vs. manual-import guidance); on
+                           in the repo -> a download confirm (the message
+                           tailors to whether Curator owns the `nxm://` handler,
+                           read from the shared `INxmRegistrationState` with no
+                           probe:
+                           manager-download vs. manual-import guidance); on
                           confirm, premium users get the in-app API download
                           under a spinner + add, while everyone else (no auth,
                           regular, or unknown premium state) gets the DMF Nexus
@@ -796,12 +823,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         (INexusClient over the v1 REST endpoints with per-request
                         auth via INexusAuthMessageFactory selector -- ApiKey /
                         OAuth / None factories, the latter doing 401-reactive
-                        refresh; NexusAuthService the OAuth loopback + API-key
-                        validate + sign-out orchestrator (raises
-                        AuthStateChanged on every persisted method change so
-                        the shell's Integrations flow refreshes the nxm handler
-                        status after the dialog closes; the DMF prompt is
-                        profile-creation-only and does not subscribe); NexusOAuthTokenStore
+                         refresh; NexusAuthService the OAuth loopback + API-key
+                         validate + sign-out orchestrator (raises
+                         AuthStateChanged on every persisted method change; the
+                         DMF prompt is
+                         profile-creation-only and does not subscribe); NexusOAuthTokenStore
                         owns the OidcClient + token persistence; LoopbackBrowser
                         the IBrowser impl with an HttpListener on an ephemeral
                         port; Duende.IdentityModel.OidcClient 7.1.0 for the
@@ -960,10 +986,18 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         scheme-handler registrar
                         (INxmHandlerRegistrar: WindowsNxmHandlerRegistrar writes
                         HKCU\Software\Classes\nxm; LinuxNxmHandlerRegistrar writes a .desktop
-                        file + xdg-mime default; AppImage registration atomically copies the
+                        file + xdg-mime default; every xdg-mime invocation runs through one
+                        bounded, sanitized runner: the child's env is the parent's with ONLY
+                        LD_PRELOAD removed (Steam's overlay preload slows host utilities
+                        ~10x; Curator's own env untouched) + a bounded wait (default 5s;
+                        on expiry the process tree is killed + the call fails), so a wedged
+                        helper can never hang the caller; AppImage registration atomically copies the
                         handler to a durable per-user directory + creates a sibling symlink
                         to $APPIMAGE; startup maintenance refreshes those files only while
-                        Curator owns the active association), + NxmHandlerRelay (the testable core the
+                        Curator owns the active association; Unregister is self-guarded on
+                        both platforms: it releases only Curator's own registration + is a
+                        logged no-op when Curator is not the current handler, so callers
+                        never pre-check), + NxmHandlerRelay (the testable core the
                         handler exe calls: hot-path IPC delivery + cold-start launch+retry,
                         UseShellExecute=false on both OSes). AOT-friendly (IsAotCompatible;
                         only raw byte/UTF-8 IO in the handler path).
@@ -1045,9 +1079,17 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             dirty-Profiles-draft navigation cancellation, entering
                                             Settings rehydrates + leaving Settings runs the mod-list
                                             + app-update refresh, entering Integrations refreshes +
-                                            leaving cancels auth + refreshes nxm/mod-list, Launch
+                                            leaving cancels auth + reloads the mod list with zero
+                                            registration refreshes on any leave, exactly one seed
+                                            refresh at shell construction + the strip following a
+                                            shared-state publish, Launch
                                             CanExecute + execution following
                                             IProfileSession.ActiveProfileId directly) + the
+                                            NxmRegistrationStateTests (the production shared-state
+                                            contract: unavailable-without-registrar publishes, the
+                                            registrar read on refresh, a probe throw treated as
+                                            not-registered, Changed marshaled through the UI seam)
+                                            + the
                                             ShellLaunchAttemptTests (the launch-attempt state via
                                             deterministic yield + timeout seams: attempt set +
                                             CanExecute false before the launch service runs, false
@@ -1110,7 +1152,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             browser-open, the new-profile trigger, the
                                             decline path, the premium in-app download,
                                             the non-premium/unknown/no-auth browser-open
-                                            regardless of the nxm registrar state, and the
+                                            regardless of the registration state (the
+                                            confirm wording follows the shared state
+                                            with zero probes), and the
                                             prompt-timing-after-create)
                                             + the OnboardingService (already complete no-op,
                                             Continue persists + skips Integrations, Set up Nexus
@@ -1133,8 +1177,15 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             Minimized/FullScreen)
     Modificus.Curator.Nxm.Tests/             xUnit tests for the nxm library (parser, framing,
                                             IPC server resilience, SingleInstanceGuard, router,
-                                            relay helper, standalone + AppImage Linux registrar,
-                                            owned-registration maintenance, AddNxm wiring;
+                                            relay helper, standalone + AppImage Linux registrar
+                                            (incl. the child-env sanitizer dropping exactly
+                                            LD_PRELOAD + the bounded runner killing a wedged
+                                            executable's process tree on timeout with a
+                                            sleeping stand-in script), owned-registration
+                                            maintenance, the Windows registrar's self-guarded
+                                            unregister (absent no-op / foreign preserved / own
+                                            deleted, via the base-key seam over a temp subkey;
+                                            Windows-gated), AddNxm wiring;
                                             serialized via DisableTestParallelization since
                                             real named pipes are an OS-level shared resource)
 docs/               architecture/ + reference/ (src/ per-library API refs + the release strategy reference)

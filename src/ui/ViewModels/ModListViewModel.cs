@@ -4,9 +4,10 @@ using System.Diagnostics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Modificus.Curator.Integrations;
-using Modificus.Curator.Nxm;
-using Modificus.Curator.Profiles;
+using Modificus.Curator.Config;
+using Modificus.Curator.General;
 using Modificus.Curator.Mods;
+using Modificus.Curator.Profiles;
 using Modificus.Curator.UI.Dialogs;
 using Modificus.Curator.UI.Localization;
 using Modificus.Curator.UI.Session;
@@ -155,7 +156,7 @@ public partial class ModListViewModel : ObservableObject
     private readonly Func<DateTimeOffset> _getNow;
     private readonly Func<Uri, bool> _launchExternal;
     private readonly Func<string, bool> _launchExternalPath;
-    private readonly INxmHandlerRegistrar? _nxmRegistrar;
+    private readonly INxmRegistrationState _nxmRegistration;
 
     /// <summary>
     /// Creates the list VM, subscribes to the session (reload on active-profile
@@ -185,12 +186,12 @@ public partial class ModListViewModel : ObservableObject
         DetailedModRowsViewModel detailedRows,
         Action<Action> invokeOnUi,
         ILogger<ModListViewModel> logger,
+        INxmRegistrationState nxmRegistration,
         Action<Action>? startCountdownTimer = null,
         Action? stopCountdownTimer = null,
         Func<DateTimeOffset>? getNow = null,
         Func<Uri, bool>? launchExternal = null,
-        Func<string, bool>? launchExternalPath = null,
-        INxmHandlerRegistrar? nxmRegistrar = null)
+        Func<string, bool>? launchExternalPath = null)
     {
         _profiles = profiles;
         _session = session;
@@ -215,7 +216,7 @@ public partial class ModListViewModel : ObservableObject
         _getNow = getNow ?? (() => DateTimeOffset.UtcNow);
         _launchExternal = launchExternal ?? LaunchExternalDefault;
         _launchExternalPath = launchExternalPath ?? LaunchExternalPathDefault;
-        _nxmRegistrar = nxmRegistrar;
+        _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
 
         _session.PropertyChanged += OnSessionPropertyChanged;
         _localization.PropertyChanged += OnCultureChanged;
@@ -241,14 +242,12 @@ public partial class ModListViewModel : ObservableObject
         // mid-session needing a restart for the install behavior to change is acceptable).
         _ = LoadPremiumStateAsync();
 
-        Reload();
+        // The empty-state Nexus hint reads the shared last-known nxm
+        // registration state; no OS probe happens here or in Reload.
+        IsNxmRegistered = _nxmRegistration.IsRegistered;
+        _nxmRegistration.Changed += OnNxmRegistrationChanged;
 
-        // Probe the nxm:// handler registration so the empty-state Nexus hint
-        // shows the correct state on first paint (Reload already calls this at
-        // its end; the explicit call here makes the construction-time intent
-        // unmissable even if Reload's ordering changes). Cheap: a registry read
-        // on Windows, an xdg-mime query on Linux.
-        RefreshNxmRegistered();
+        Reload();
     }
 
     /// <summary>
@@ -522,12 +521,12 @@ public partial class ModListViewModel : ObservableObject
     public string NxmDownloadHintText => _localization["ModList_NxmDownloadHint"];
 
     /// <summary>
-    /// Whether Curator is the registered OS handler for nxm:// links. Probed at
-    /// construction + on each Reload. Read once per probe (no live watcher); a
-    /// mid-session Integrations toggle is picked up at the next Reload point.
-    /// False on platforms with no registrar (not Windows or Linux) and on a
-    /// probe failure (defensive; the platform registrars catch their own
-    /// exceptions).
+    /// Whether Curator is the registered OS handler for nxm:// links, mirrored
+    /// from the shared <see cref="INxmRegistrationState"/> (last-known).
+    /// Seeded at construction + re-read on each publish (the startup seed, the
+    /// Nexus-enter probe, and register/release actions). Reload never probes
+    /// the OS. False on platforms with no registrar; may be stale if an
+    /// external app changed ownership.
     /// </summary>
     [ObservableProperty]
     private bool _isNxmRegistered;
@@ -779,30 +778,10 @@ public partial class ModListViewModel : ObservableObject
     partial void OnAnyRowUpdatingChanged(bool value) => PushGlobalStateToRows();
 
     /// <summary>
-    /// Re-reads the OS <c>nxm://</c> handler registration into
-    /// <see cref="IsNxmRegistered"/>. No-op when the platform has no registrar
-    /// (not Windows or Linux); the empty-state Nexus hint stays hidden there.
-    /// A probe throw is treated as "not registered" (defensive; the platform
-    /// registrars catch their own common probe exceptions). Mirrors the
-    /// <c>RefreshNxmHandlerStatus</c> pattern in <c>ShellViewModel</c>.
+    /// The shared nxm registration state published a new last-known value
+    /// (already on the UI thread). Re-read it into the empty-state hint flag.
     /// </summary>
-    private void RefreshNxmRegistered()
-    {
-        if (_nxmRegistrar is null)
-        {
-            return;
-        }
-
-        try
-        {
-            IsNxmRegistered = _nxmRegistrar.IsRegistered();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "IsRegistered probe threw; treating as not registered.");
-            IsNxmRegistered = false;
-        }
-    }
+    private void OnNxmRegistrationChanged() => IsNxmRegistered = _nxmRegistration.IsRegistered;
 
     /// <summary>
     /// Rebuilds <see cref="Mods"/> from the active profile. Each row's source +
@@ -829,9 +808,6 @@ public partial class ModListViewModel : ObservableObject
             ModCount = 0;
             // Hand an empty snapshot so old work is cancelled.
             _ = DetailedRows.SetRowsAsync(Array.Empty<ModItemViewModel>());
-            // Still refresh the nxm registration so a profile-less state shows
-            // the correct hint if/when a profile becomes active next.
-            RefreshNxmRegistered();
             return;
         }
 
@@ -890,12 +866,6 @@ public partial class ModListViewModel : ObservableObject
         // flags without waiting for the next check.
         PushGlobalStateToRows();
         ApplyKnownUpdateState();
-
-        // Re-probe the nxm handler registration so a mid-session Integrations
-        // toggle is reflected at the next reload point (profile switch, culture
-        // change, post-batch install). Cheap: a registry read on Windows, an
-        // xdg-mime query on Linux.
-        RefreshNxmRegistered();
 
         // Hand the final row snapshot to the density coordinator so it can push
         // the current density, clear thumbnails on Compact, or start thumbnail

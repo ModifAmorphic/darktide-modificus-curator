@@ -319,8 +319,10 @@ DI registration time (mirroring `IPlatformLaunchStrategy`, `IProcessLookup`, and
   `(Default) = "URL:Nexus Mods Link"` and `URL Protocol = ""`, and
   `HKCU\Software\Classes\nxm\shell\open\command` with
   `(Default) = "<handler-exe>" "%1"`. `IsRegistered` checks the command value
-  points at the handler exe; `Unregister` deletes the key tree (idempotent on an
-  absent key).
+  points at the handler exe; `Unregister` is self-guarded: it deletes the key
+  tree only when `IsRegistered` is true (Curator's own registration), is a
+  logged no-op when the key belongs to another program, and idempotent on an
+  absent key.
 - **`LinuxNxmHandlerRegistrar`** (`[SupportedOSPlatform("linux")]`): writes
   `~/.local/share/applications/modificus-curator-nxm-handler.desktop` (the source of truth
   most desktops honor) with `Exec="<handler-exe>" %u` and
@@ -335,15 +337,43 @@ DI registration time (mirroring `IPlatformLaunchStrategy`, `IProcessLookup`, and
   owner-only executable permissions, creates a sibling `Modificus.Curator`
   symlink to the validated absolute `$APPIMAGE` path, and records the persistent
   copied handler in Exec. `Unregister` removes only those exact managed files
-  and removes the managed directory only when empty; it never follows the
-  symlink or recursively deletes unexpected content.
+  and removes the managed directory only when empty; it invokes no `xdg-mime`
+  command; it never follows the symlink or recursively deletes unexpected
+  content.
+
+**Bounded, sanitized `xdg-mime` runner (Linux).** Every `xdg-mime` invocation
+(query, default, maintenance) runs through one runner that:
+
+- **Sanitizes the child environment only**: the child's environment is the
+  parent's with exactly `LD_PRELOAD` removed (nothing else). Steam injects its
+  game-overlay libraries through `LD_PRELOAD`, and an unrelated host utility
+  inheriting it runs roughly an order of magnitude slower (measured ~2.3 s vs
+  ~0.1 s per query under Steam). Curator's own environment is untouched; the
+  removal is the same child-only pattern Steam Runtime's own host helpers use.
+- **Bounds the wait**: `WaitForExit(5s)` by default; on expiry the process tree
+  is killed (`Kill(entireProcessTree: true)` + reaped), a warning is logged, and
+  the call returns a failure result (nonzero exit code, empty output) so
+  `IsRegistered` maps to false and maintenance skips. A wedged desktop helper
+  can never hang the caller.
+- Keeps the arguments exactly the single-string `xdg-mime` invocation (no
+  shell), with stdout redirected and stderr unredirected.
+
+The runner's executable name and wait timeout are optional constructor
+parameters alongside the existing test seams (dirs, `runXdg` delegate,
+`$APPIMAGE` accessor), so the timeout path is testable with a sleeping script.
+`IsRegistered` is therefore synchronous and potentially slow on Linux (it
+spawns the bounded external process); UI consumers read shared last-known state
+instead of probing incidentally (see the
+[ui reference](ui.md#shared-nxm-registration-state)).
 
 `MaintainRegistration()` is a no-op on Windows and standalone Linux. In an
 AppImage run it refreshes changed handler bytes and a stale AppImage symlink
 only after proving Curator owns the active registration: the desktop file must
 exist and `xdg-mime query default x-scheme-handler/nxm` must return Curator's
 exact desktop id. It never creates the desktop file, calls `xdg-mime default`,
-or replaces another manager's association. Failures are logged and swallowed.
+or replaces another manager's association. Failures are logged and swallowed;
+the call is synchronous but bounded (the sanitized, timeout-bounded runner), so
+a wedged helper cannot hang startup maintenance.
 
 The handler-exe path is derived from `AppContext.BaseDirectory` plus the fixed
 handler assembly name via `NxmHandlerPaths.GetHandlerExePath()` (the handler ships
@@ -356,11 +386,14 @@ OS `nxm://` handler is an explicit user action from the Nexus destination (a
 `CuratorComposition.Build()` does on startup. The register path confirms first
 (it is a system-wide change that can affect Vortex, Mod Organizer 2, Nexus Mod
 Manager, or other mod managers); the unregister path only releases Curator's
-own registration (it re-checks `IsRegistered()` before `Unregister()`). The
+own registration (the registrar self-guards ownership: a logged no-op when
+Curator is not the current handler, so callers never pre-check). The
 composition root never calls `Register()` automatically. It does call
 `MaintainRegistration()` once after the fatal single-instance check succeeds;
-that operation cannot claim ownership. The registrar is also resolved by the
-Integrations view model and the shell status strip.
+that operation cannot claim ownership. The registrar is resolved by the
+Integrations view model (the register/release mutations) and by the shared UI
+registration state (see the [ui reference](ui.md#shared-nxm-registration-state)),
+which is the sole probe surface for the UI.
 
 ## DI registration
 
@@ -491,7 +524,15 @@ Process model:
   executable handler and creates the cold-start symlink; maintenance is
   ownership-gated and atomically refreshes changed bytes and moved-AppImage
   links; conservative unregister preserves unexpected files and the AppImage
-  target; a missing `xdg-mime` is tolerated.
+  target and invokes no `xdg-mime` command; a missing `xdg-mime` is tolerated;
+  the child-env sanitizer drops exactly `LD_PRELOAD` (every other variable
+  preserved, absent-key no-op, source untouched); and the bounded runner kills
+  a wedged executable's process tree on timeout, returning promptly with a
+  failure result and no orphan (a sleeping stand-in script).
+- **`WindowsNxmHandlerRegistrar`** (Windows-gated, through the base-key test
+  seam over a temp subkey): `Unregister` is a no-op on an absent key, preserves
+  a foreign handler's registration, and deletes the tree only when the command
+  points at Curator's handler.
 - **`AddNxm`** (service collection): the no-op mod-download default, router,
   server, and the platform registrar are registered; the override
   (last-registration-wins) convention is exercised for the mod-download handler.

@@ -18,8 +18,16 @@ namespace Modificus.Curator.Nxm;
 /// by <c>AddNxm()</c>. Resolves the applications dir + the Curator-managed
 /// handler dir via <see cref="Environment.SpecialFolder.LocalApplicationData"/>
 /// (the codebase convention for per-user data, honoring <c>$XDG_DATA_HOME</c>).
-/// The dirs, the <c>xdg</c> runner, and the <c>$APPIMAGE</c> accessor are
-/// overridable for deterministic testing.
+/// The dirs, the <c>xdg</c> runner + executable, the runner wait timeout, and
+/// the <c>$APPIMAGE</c> accessor are overridable for deterministic testing.
+/// </para>
+/// <para>
+/// <b>Bounded, sanitized runner.</b> Every <c>xdg-mime</c> invocation runs with
+/// a child environment from which only <c>LD_PRELOAD</c> is removed (Steam
+/// injects its overlay via <c>LD_PRELOAD</c>, which slows unrelated host
+/// utilities by an order of magnitude; Curator's own environment is untouched)
+/// and a bounded wait: a wedged helper is killed with its process tree and
+/// mapped to a failure result instead of hanging the caller.
 /// </para>
 /// <para>
 /// <b>Two execution modes.</b> Standalone (no <c>$APPIMAGE</c>): the desktop
@@ -36,12 +44,25 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
 {
     private const string XdgHandlerDesktopEntry = "[Desktop Entry]";
 
-    /// <summary>
-    /// The per-user data segment under the local-application-data folder, shared
+    /// <summary>The per-user data segment under the local-application-data folder, shared
     /// with <c>AppPaths.AppDataDir</c> on Linux so the managed handler dir lives
-    /// alongside the rest of Curator's user data.
-    /// </summary>
+    /// alongside the rest of Curator's user data.</summary>
     private const string LinuxDataSegment = "Modificus Curator";
+
+    /// <summary>
+    /// The only environment variable removed from the <c>xdg-mime</c> child's
+    /// environment. Steam injects its game-overlay libraries through
+    /// <c>LD_PRELOAD</c>; inherited by an unrelated host utility they slow it by
+    /// roughly an order of magnitude. Nothing else is stripped (measured; do
+    /// not broaden without re-measuring the target environment).
+    /// </summary>
+    private const string SteamOverlayPreloadVar = "LD_PRELOAD";
+
+    /// <summary>
+    /// Default bound on each <c>xdg-mime</c> wait. A sanitized query runs in
+    /// roughly 0.1 s; 5 s bounds a wedged helper without flaking slow hardware.
+    /// </summary>
+    internal const int DefaultXdgWaitTimeoutMs = 5000;
 
     /// <summary>The managed subfolder holding the copied handler + symlink.</summary>
     private const string ManagedHandlerFolder = "nxm-handler";
@@ -61,6 +82,8 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
     private readonly string _applicationsDir;
     private readonly string _managedDir;
     private readonly Func<string, (int exitCode, string output)> _runXdg;
+    private readonly string _xdgExecutable;
+    private readonly int _xdgWaitTimeoutMs;
     private readonly Func<string?> _appImagePathAccessor;
     private readonly ILogger<LinuxNxmHandlerRegistrar> _logger;
 
@@ -70,7 +93,9 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
         string? applicationsDir = null,
         Func<string, (int exitCode, string output)>? runXdg = null,
         string? managedDir = null,
-        Func<string?>? appImagePathAccessor = null)
+        Func<string?>? appImagePathAccessor = null,
+        string? xdgExecutable = null,
+        int? xdgWaitTimeoutMs = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(handlerExePath);
         _handlerExePath = handlerExePath;
@@ -89,6 +114,8 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
                 ManagedHandlerFolder);
         _appImagePathAccessor = appImagePathAccessor
             ?? (() => Environment.GetEnvironmentVariable("APPIMAGE"));
+        _xdgExecutable = xdgExecutable ?? "xdg-mime";
+        _xdgWaitTimeoutMs = xdgWaitTimeoutMs ?? DefaultXdgWaitTimeoutMs;
     }
 
     private string DesktopFilePath => Path.Combine(_applicationsDir, NxmHandlerPaths.LinuxDesktopFileId);
@@ -178,18 +205,6 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
         // symlink points at, and the managed dir is removed only when empty.
         TryCleanupManagedFiles();
 
-        // Best-effort: ask xdg-mime to forget (it has no "unset" verb; the
-        // scheme simply falls back to whatever else claims it once our file is
-        // gone). We invoke query to surface the state, but do not throw.
-        try
-        {
-            _runXdg("query default x-scheme-handler/nxm");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "xdg-mime query after unregister failed (ignored).");
-        }
-
         _logger.LogInformation("Unregistered nxm:// handler desktop file.");
     }
 
@@ -241,7 +256,7 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
 
         // Curator owns the active registration. Refresh the persistent handler
         // bytes and the AppImage symlink. All best-effort: a failure is logged
-        // and swallowed so maintenance never blocks startup.
+        // and swallowed (non-fatal; the next startup retries).
         try
         {
             RefreshManagedHandler();
@@ -503,18 +518,61 @@ internal sealed class LinuxNxmHandlerRegistrar : INxmHandlerRegistrar
     // unquoted so the shell substitutes it verbatim.
     private static string FormatExec(string execPath) => $"\"{execPath}\" %u";
 
-    private static (int exitCode, string output) RunXdgDefault(string arguments)
+    /// <summary>
+    /// Builds the child environment for an <c>xdg-mime</c> invocation: a copy
+    /// of <paramref name="source"/> with only <c>LD_PRELOAD</c> removed. The
+    /// source dictionary is left untouched, so the parent (Curator's)
+    /// environment is unaffected. Pure; unit-tested directly.
+    /// </summary>
+    internal static Dictionary<string, string?> SanitizeChildEnvironment(IDictionary<string, string?> source)
     {
-        var psi = new ProcessStartInfo("xdg-mime", arguments)
+        var sanitized = new Dictionary<string, string?>(source.Count, StringComparer.Ordinal);
+        foreach (var pair in source)
+        {
+            if (!string.Equals(pair.Key, SteamOverlayPreloadVar, StringComparison.Ordinal))
+                sanitized[pair.Key] = pair.Value;
+        }
+        return sanitized;
+    }
+
+    private (int exitCode, string output) RunXdgDefault(string arguments)
+    {
+        var psi = new ProcessStartInfo(_xdgExecutable, arguments)
         {
             RedirectStandardOutput = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        // psi.Environment lazily snapshots the parent env at first access;
+        // replace its contents with the sanitized copy so exactly the child
+        // (and its descendants) loses LD_PRELOAD.
+        var childEnv = SanitizeChildEnvironment(psi.Environment);
+        psi.Environment.Clear();
+        foreach (var pair in childEnv)
+            psi.Environment[pair.Key] = pair.Value;
+
         using var proc = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start xdg-mime.");
+            ?? throw new InvalidOperationException($"Failed to start {_xdgExecutable}.");
+        if (!proc.WaitForExit(_xdgWaitTimeoutMs))
+        {
+            _logger.LogWarning(
+                "{Executable} did not exit within {TimeoutMs}ms; killing the process tree and treating the call as failed.",
+                _xdgExecutable, _xdgWaitTimeoutMs);
+            try
+            {
+                proc.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+                // Raced to exit between the timeout expiring and the kill.
+            }
+            proc.WaitForExit();
+            // Failure result: a nonzero exit code so IsRegistered maps to
+            // false and maintenance skips (the wedged helper's output is not
+            // trustworthy).
+            return (-1, string.Empty);
+        }
         var output = proc.StandardOutput.ReadToEnd().Trim();
-        proc.WaitForExit();
         return (proc.ExitCode, output);
     }
 }

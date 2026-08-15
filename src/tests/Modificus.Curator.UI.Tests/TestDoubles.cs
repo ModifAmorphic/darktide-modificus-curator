@@ -39,6 +39,9 @@ internal static class TestDoubles
     /// recorder that NEVER shell-opens, so the case-2 non-premium browser path
     /// can never reach the production <c>Process.Start</c> fallback. Pass a spy
     /// to assert on the opened URL.</param>
+    /// <param name="nxmRegistration">Optional shared registration-state
+    /// override. When omitted, a plain fake (unavailable, not registered) is
+    /// wired; the DMF wording follows it without probing.</param>
     public static DmfPromptService BuildDmfPromptService(
         FakeProfileService? profiles = null,
         FakeProfileSession? session = null,
@@ -47,7 +50,7 @@ internal static class TestDoubles
         FakeNexusAuthService? auth = null,
         FakeDialogService? dialogs = null,
         LocalizationService? localization = null,
-        FakeNxmHandlerRegistrar? nxmRegistrar = null,
+        FakeNxmRegistrationState? nxmRegistration = null,
         Func<Uri, bool>? launchExternal = null)
     {
         profiles ??= Profiles();
@@ -57,6 +60,7 @@ internal static class TestDoubles
         auth ??= new FakeNexusAuthService();
         dialogs ??= new FakeDialogService();
         localization ??= new LocalizationService();
+        nxmRegistration ??= new FakeNxmRegistrationState();
         // SAFETY: an omitted launcher seam defaults to the harmless no-op
         // recorder (never the production Process.Start fallback).
         launchExternal ??= TestLauncher.NoOp;
@@ -70,7 +74,7 @@ internal static class TestDoubles
             dialogs,
             localization,
             NullLogger<DmfPromptService>.Instance,
-            nxmRegistrar,
+            nxmRegistration,
             launchExternal);
     }
 
@@ -90,10 +94,11 @@ internal static class TestDoubles
     /// open-external-folder seam). When omitted, wires
     /// <see cref="TestLauncher.NoOpPath"/> so a linked-row badge click can never
     /// reach the production file-manager launch.</param>
-    /// <param name="nxmRegistrar">Optional <see cref="INxmHandlerRegistrar"/>
-    /// override. When omitted (the default), the VM's <c>IsNxmRegistered</c>
-    /// stays <c>false</c> (no registrar wired). Pass a
-    /// <see cref="FakeNxmHandlerRegistrar"/> to drive the empty-state Nexus
+    /// <param name="nxmRegistration">Optional shared registration-state
+    /// override. When omitted (the default), the VM's
+    /// <c>IsNxmRegistered</c> reads a plain fake (unavailable, not registered)
+    /// and no OS probe can happen. Pass a registrar-wired or value-set
+    /// <see cref="FakeNxmRegistrationState"/> to drive the empty-state Nexus
     /// hint's visibility.</param>
     public static ModListViewModel BuildModList(
         FakeProfileService? profiles = null,
@@ -118,7 +123,7 @@ internal static class TestDoubles
         Action? stopCountdownTimer = null,
         Func<Uri, bool>? launchExternal = null,
         Func<string, bool>? launchExternalPath = null,
-        INxmHandlerRegistrar? nxmRegistrar = null)
+        FakeNxmRegistrationState? nxmRegistration = null)
     {
         profiles ??= Profiles();
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
@@ -168,6 +173,9 @@ internal static class TestDoubles
         // SAFETY: the path-launcher seam (open-external-folder) defaults to the
         // harmless path recorder for the same reason.
         launchExternalPath ??= TestLauncher.NoOpPath;
+        // The shared nxm registration state: default is a plain fake
+        // (unavailable, not registered, no probe possible).
+        nxmRegistration ??= new FakeNxmRegistrationState();
         // Wire the state store + a record-profile-id tracker into the fake
         // update-check service so RaiseCheckCompleted / CheckAsync record the
         // result through the store (mirroring the real service's publish-time
@@ -215,12 +223,12 @@ internal static class TestDoubles
             detailedRows,
             invokeOnUi,
             NullLogger<ModListViewModel>.Instance,
+            nxmRegistration,
             startCountdownTimer,
             stopCountdownTimer,
             getNow,
             launchExternal,
-            launchExternalPath,
-            nxmRegistrar);
+            launchExternalPath);
     }
 
     /// <summary>
@@ -241,6 +249,7 @@ internal static class TestDoubles
         FakeConfigLoader Config,
         FakeNexusAuthService Auth,
         FakeNxmHandlerRegistrar? NxmRegistrar,
+        FakeNxmRegistrationState NxmRegistration,
         ProfilesViewModel ProfilesPage,
         ModListViewModel ModsPage,
         IntegrationsViewModel IntegrationsPage,
@@ -255,8 +264,8 @@ internal static class TestDoubles
     /// page VMs are real (not mocks), so navigation lifecycle effects
     /// (Profiles dirty guard, Integrations auth refresh, Settings rehydrate,
     /// mod-list reload) are exercised end-to-end. The shared fakes let a test
-    /// seed state + assert on call counts (RefreshAsync calls, IsRegistered
-    /// probes, reload side effects, launch calls).
+    /// seed state + assert on call counts (RefreshAsync calls, registration
+    /// refreshes, reload side effects, launch calls).
     /// </summary>
     /// <param name="yieldForLaunchRender">The pre-launch render-yield seam.
     /// When omitted, completes immediately (a real Avalonia dispatcher yield
@@ -265,6 +274,10 @@ internal static class TestDoubles
     /// <param name="launchHandoffTimeout">The post-spawn handoff timeout seam.
     /// When omitted, elapses immediately (no real 30-second wait), so a
     /// Launched result resolves its handoff via timeout by default.</param>
+    /// <param name="nxmRegistration">Optional shared registration-state
+    /// override. When omitted, a fake wired to the (possibly null)
+    /// <paramref name="nxmRegistrar"/> is created so registrar-backed values
+    /// flow through it.</param>
     public static ShellParts BuildShell(
         FakeProfileService? profiles = null,
         FakeProfileSession? session = null,
@@ -274,6 +287,7 @@ internal static class TestDoubles
         FakeConfigLoader? config = null,
         FakeNexusAuthService? auth = null,
         FakeNxmHandlerRegistrar? nxmRegistrar = null,
+        FakeNxmRegistrationState? nxmRegistration = null,
         LocalizationService? localization = null,
         FakeModRepository? repo = null,
         FakeSteamService? steam = null,
@@ -293,6 +307,7 @@ internal static class TestDoubles
         profiles.RepoLookup = repo;
         yieldForLaunchRender ??= static () => Task.CompletedTask;
         launchHandoffTimeout ??= static () => Task.CompletedTask;
+        nxmRegistration ??= new FakeNxmRegistrationState(nxmRegistrar);
 
         var modsPage = BuildModList(
             profiles, session, repo,
@@ -301,18 +316,18 @@ internal static class TestDoubles
             auth: auth,
             configLoader: config,
             appState: new FakeAppStateStore(),
-            nxmRegistrar: nxmRegistrar);
+            nxmRegistration: nxmRegistration);
         var dmf = BuildDmfPromptService(
             profiles, session, repo,
             dialogs: dialogs,
             localization: localization,
             auth: auth,
-            nxmRegistrar: nxmRegistrar);
+            nxmRegistration: nxmRegistration);
         var profilesPage = new ProfilesViewModel(
             profiles, session, dialogs, localization,
             NullLogger<ProfilesViewModel>.Instance);
         var integrationsPage = new IntegrationsViewModel(
-            auth, localization, config, dialogs, nxmRegistrar,
+            auth, localization, config, dialogs, nxmRegistrar, nxmRegistration,
             NullLogger<IntegrationsViewModel>.Instance);
         var preferencesPage = new PreferencesViewModel(
             new FakePreferencesService(), config, localization,
@@ -332,13 +347,13 @@ internal static class TestDoubles
             dmf,
             invokeOnUi: static action => action(),
             NullLogger<ShellViewModel>.Instance,
-            config, nxmRegistrar,
+            config, nxmRegistration,
             yieldForLaunchRender,
             launchHandoffTimeout);
 
         return new ShellParts(
             shell, profiles, session, dialogs, launch, appUpdate, config,
-            auth, nxmRegistrar, profilesPage, modsPage, integrationsPage,
+            auth, nxmRegistrar, nxmRegistration, profilesPage, modsPage, integrationsPage,
             preferencesPage, settingsPage, steam, dmf);
     }
 }
@@ -2105,10 +2120,13 @@ internal sealed class FakeNexusAuthService : INexusAuthService
 }
 
 /// <summary>
-/// Recording <see cref="INxmHandlerRegistrar"/> for the Integrations + DMF +
-/// shell tests. The real registrar probes the OS; this one returns a settable
+/// Recording <see cref="INxmHandlerRegistrar"/> for the Integrations + shell
+/// tests. The real registrar probes the OS; this one returns a settable
 /// <see cref="Registered"/> flag and records Register/Unregister calls. Can be
-/// configured to throw on Register to exercise the failure path.
+/// configured to throw on Register to exercise the failure path. Its
+/// <see cref="Unregister"/> mirrors the registrar self-guard contract: the call
+/// is always recorded, but <see cref="Registered"/> only flips to false when it
+/// was true (another owner's registration is never released).
 /// </summary>
 internal sealed class FakeNxmHandlerRegistrar : INxmHandlerRegistrar
 {
@@ -2156,7 +2174,11 @@ internal sealed class FakeNxmHandlerRegistrar : INxmHandlerRegistrar
         {
             throw ThrowOnUnregister;
         }
-        Registered = false;
+        // Self-guard contract: only Curator's own registration is released.
+        if (Registered)
+        {
+            Registered = false;
+        }
     }
 
     public void MaintainRegistration()
@@ -2166,6 +2188,55 @@ internal sealed class FakeNxmHandlerRegistrar : INxmHandlerRegistrar
         {
             throw ThrowOnMaintain;
         }
+    }
+}
+
+/// <summary>
+/// Recording <see cref="INxmRegistrationState"/> for the VM tests: settable
+/// values, counts <see cref="RefreshFromOs"/> calls, and raises
+/// <see cref="Changed"/> when refreshed (or on demand via
+/// <see cref="RaiseChanged"/>). When constructed with a
+/// <see cref="FakeNxmHandlerRegistrar"/>, a refresh reads the registrar's
+/// probe (mirroring the production state's read) so register/release flows
+/// propagate exactly as they do in the app.
+/// </summary>
+internal sealed class FakeNxmRegistrationState : INxmRegistrationState
+{
+    private readonly INxmHandlerRegistrar? _registrar;
+
+    public FakeNxmRegistrationState(INxmHandlerRegistrar? registrar = null)
+    {
+        _registrar = registrar;
+        IsAvailable = registrar is not null;
+    }
+
+    /// <summary>
+    /// Whether a registrar is available. Pre-set from the constructor wiring
+    /// (false with no registrar); settable for explicit scenarios.
+    /// </summary>
+    public bool IsAvailable { get; set; }
+
+    /// <summary>The last-known value; overwritten by a refresh when a
+    /// registrar is wired, manual otherwise.</summary>
+    public bool IsRegistered { get; set; }
+
+    /// <summary>The number of <see cref="RefreshFromOs"/> calls so far.</summary>
+    public int RefreshFromOsCalls { get; private set; }
+
+    public event Action? Changed;
+
+    /// <summary>Raises <see cref="Changed"/> without recording a refresh (an
+    /// out-of-band publish).</summary>
+    public void RaiseChanged() => Changed?.Invoke();
+
+    public void RefreshFromOs()
+    {
+        RefreshFromOsCalls++;
+        if (_registrar is not null)
+        {
+            IsRegistered = _registrar.IsRegistered();
+        }
+        Changed?.Invoke();
     }
 }
 

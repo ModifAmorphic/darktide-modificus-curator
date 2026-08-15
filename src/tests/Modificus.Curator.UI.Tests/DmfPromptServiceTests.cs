@@ -38,6 +38,9 @@ public sealed class DmfPromptServiceTests
     /// <c>TestLauncher</c> shared state). Tests that assert on the browser-open
     /// path pass their own per-test spy so the assertion cannot race with
     /// unrelated classes that also use <c>TestLauncher</c>.</param>
+    /// <param name="nxmRegistration">The shared registration state the
+    /// download-confirm wording follows (last-known; the prompt never probes
+    /// the OS).</param>
     private static (DmfPromptService Service, FakeProfileService Profiles, FakeProfileSession Session,
         FakeModRepository Repo, FakeModAcquisitionService Acquisition, FakeNexusAuthService Auth,
         FakeDialogService Dialogs) Build(
@@ -47,7 +50,7 @@ public sealed class DmfPromptServiceTests
             FakeModAcquisitionService? acquisition = null,
             FakeNexusAuthService? auth = null,
             FakeDialogService? dialogs = null,
-            FakeNxmHandlerRegistrar? nxmRegistrar = null,
+            FakeNxmRegistrationState? nxmRegistration = null,
             Func<Uri, bool>? launchExternal = null)
     {
         profiles ??= TestDoubles.Profiles();
@@ -56,12 +59,13 @@ public sealed class DmfPromptServiceTests
         acquisition ??= new FakeModAcquisitionService();
         auth ??= new FakeNexusAuthService();
         dialogs ??= new FakeDialogService();
+        nxmRegistration ??= new FakeNxmRegistrationState();
         // SAFETY: an omitted launcher seam defaults to a local no-op that
         // returns success without touching the OS shell or any shared static
         // state. Tests that assert on opens pass their own per-test spy.
         var service = new DmfPromptService(
             profiles, session, repo, acquisition, auth, dialogs,
-            Localization, NullLogger<DmfPromptService>.Instance, nxmRegistrar,
+            Localization, NullLogger<DmfPromptService>.Instance, nxmRegistration,
             launchExternal ?? LocalNoOpLauncher);
         return (service, profiles, session, repo, acquisition, auth, dialogs);
     }
@@ -258,11 +262,13 @@ public sealed class DmfPromptServiceTests
             State = new NexusAuthState(NexusAuthMethod.ApiKey, "free", IsPremium: false),
         };
         var dialogs = new FakeDialogService(); // ConfirmResult default = true
-        var registrar = new FakeNxmHandlerRegistrar { Registered = true };
+        // Registered last-known state: the manager-download wording, read
+        // without probing the OS.
+        var nxmRegistration = new FakeNxmRegistrationState { IsAvailable = true, IsRegistered = true };
 
         var launchedUris = new List<Uri>();
         var (service, _, _, _, _, _, _) =
-            Build(profiles, session, repo, acquisition, auth, dialogs, registrar,
+            Build(profiles, session, repo, acquisition, auth, dialogs, nxmRegistration,
                 launchExternal: NewRecordingSpy(launchedUris));
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
@@ -270,8 +276,11 @@ public sealed class DmfPromptServiceTests
 
         await service.ProcessPendingAsync();
 
-        // The download confirm fired (the user accepted).
+        // The download confirm fired (the user accepted) with the
+        // manager-download guidance; zero OS probes back it.
         Assert.Equal(1, dialogs.ConfirmCalls);
+        Assert.Equal(Localization["Dmf_DownloadMessage"], dialogs.LastConfirmMessage);
+        Assert.Equal(0, nxmRegistration.RefreshFromOsCalls);
         // The browser launcher was called exactly once with DMF's files URL.
         var launched = Assert.Single(launchedUris);
         Assert.Equal("https://www.nexusmods.com/warhammer40kdarktide/mods/8?tab=files", launched.ToString());
@@ -298,11 +307,11 @@ public sealed class DmfPromptServiceTests
             State = new NexusAuthState(NexusAuthMethod.ApiKey, "name", IsPremium: null),
         };
         var dialogs = new FakeDialogService();
-        var registrar = new FakeNxmHandlerRegistrar { Registered = true };
+        var nxmRegistration = new FakeNxmRegistrationState { IsAvailable = true, IsRegistered = true };
 
         var launchedUris = new List<Uri>();
         var (service, _, _, _, _, _, _) =
-            Build(profiles, session, repo, acquisition, auth, dialogs, registrar,
+            Build(profiles, session, repo, acquisition, auth, dialogs, nxmRegistration,
                 launchExternal: NewRecordingSpy(launchedUris));
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
@@ -330,11 +339,13 @@ public sealed class DmfPromptServiceTests
             State = new NexusAuthState(NexusAuthMethod.ApiKey, "free", IsPremium: false),
         };
         var dialogs = new FakeDialogService();
-        var registrar = new FakeNxmHandlerRegistrar { Registered = false };
+        // Not-registered last-known state: the manual-import wording, read
+        // without probing the OS.
+        var nxmRegistration = new FakeNxmRegistrationState { IsAvailable = true, IsRegistered = false };
 
         var launchedUris = new List<Uri>();
         var (service, _, _, _, _, _, _) =
-            Build(profiles, session, repo, acquisition, auth, dialogs, registrar,
+            Build(profiles, session, repo, acquisition, auth, dialogs, nxmRegistration,
                 launchExternal: NewRecordingSpy(launchedUris));
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
@@ -343,6 +354,8 @@ public sealed class DmfPromptServiceTests
         await service.ProcessPendingAsync();
 
         Assert.Equal(1, dialogs.ConfirmCalls);
+        Assert.Equal(Localization["Dmf_DownloadMessageManual"], dialogs.LastConfirmMessage);
+        Assert.Equal(0, nxmRegistration.RefreshFromOsCalls);
         // Browser opened regardless of registrar state.
         Assert.Single(launchedUris);
         Assert.Empty(acquisition.LatestNexusCalls);
@@ -423,12 +436,12 @@ public sealed class DmfPromptServiceTests
             State = new NexusAuthState(NexusAuthMethod.ApiKey, "free", IsPremium: false),
         };
         var dialogs = new FakeDialogService();
-        var registrar = new FakeNxmHandlerRegistrar { Registered = true };
+        var nxmRegistration = new FakeNxmRegistrationState { IsAvailable = true, IsRegistered = true };
 
         Func<Uri, bool> failingLauncher = _ => false; // shell-open failed
 
         var (service, _, _, _, _, _, _) =
-            Build(profiles, session, repo, acquisition, auth, dialogs, registrar, failingLauncher);
+            Build(profiles, session, repo, acquisition, auth, dialogs, nxmRegistration, failingLauncher);
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;

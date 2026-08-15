@@ -122,6 +122,16 @@ public static class CuratorComposition
         // (the event fires on a threadpool thread; the handler iterates the
         // UI-bound Mods collection). Production wires Dispatcher.UIThread.Post.
         services.AddSingleton<Action<Action>>(_ => action => Dispatcher.UIThread.Post(action));
+        // The shared last-known OS nxm:// registration state. Its deliberate
+        // probe points: one seed refresh at shell construction, one refresh on
+        // each Nexus-enter, one after each register/release action. Every other
+        // consumer surface (shell status strip, Mods empty-state hint, DMF
+        // prompt wording) reads last-known and accepts staleness. Registered
+        // before the VMs/services that inject it.
+        services.AddSingleton<INxmRegistrationState>(sp => new NxmRegistrationState(
+            sp.GetService<INxmHandlerRegistrar>(),
+            sp.GetRequiredService<Action<Action>>(),
+            sp.GetRequiredService<ILogger<NxmRegistrationState>>()));
         // The global install coordinator: shared between the manual per-row update
         // action and the automatic Premium updater so only one install runs at a
         // time. Singleton: holds the single-slot semaphore for the app lifetime.
@@ -213,14 +223,11 @@ public static class CuratorComposition
                 sp.GetRequiredService<DetailedModRowsViewModel>(),
                 sp.GetRequiredService<Action<Action>>(),
                 sp.GetRequiredService<ILogger<ModListViewModel>>(),
+                // The shared last-known nxm registration state feeds the
+                // empty-state Nexus hint; the mod list never probes the OS.
+                sp.GetRequiredService<INxmRegistrationState>(),
                 startCountdownTimer,
-                stopCountdownTimer,
-                // Optional: null on platforms with no registrar (not Windows or
-                // Linux). Resolved via GetService so unsupported platforms do not
-                // throw on activation; the mod-list empty-state Nexus hint stays
-                // hidden there. Passed by name so launchExternal /
-                // launchExternalPath fall back to their production defaults.
-                nxmRegistrar: sp.GetService<INxmHandlerRegistrar>());
+                stopCountdownTimer);
         });
 
         // The hosted destination view models: singletons (one instance per page,
@@ -254,7 +261,10 @@ public static class CuratorComposition
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<IConfigLoader>(),
             sp.GetRequiredService<IDialogService>(),
+            // The registrar performs the register/release mutations (null on
+            // platforms without one); the shared state carries the status.
             sp.GetService<INxmHandlerRegistrar>(),
+            sp.GetRequiredService<INxmRegistrationState>(),
             sp.GetRequiredService<ILogger<IntegrationsViewModel>>()));
         services.AddSingleton(sp => new PreferencesViewModel(
             sp.GetRequiredService<IPreferencesService>(),
@@ -279,10 +289,11 @@ public static class CuratorComposition
         // the DMF prompt runs as the topmost modal with Mods already selected
         // underneath + the post-prompt mod-list reload surfaces an accepted
         // existing/Premium DMF add. Singleton: owns the event subscription for
-        // the app lifetime. Takes the optional nxm registrar so the download
-        // confirm can tailor its message to whether Curator owns the nxm handler
-        // (manager-download vs. manual-import guidance). Registered BEFORE
-        // ShellViewModel so ShellViewModel's factory can resolve it eagerly.
+        // the app lifetime. Takes the shared nxm registration state so the
+        // download confirm can tailor its message to the last-known handler
+        // ownership (manager-download vs. manual-import guidance; no probe).
+        // Registered BEFORE ShellViewModel so ShellViewModel's factory can
+        // resolve it eagerly.
         services.AddSingleton(sp => new DmfPromptService(
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IProfileSession>(),
@@ -292,13 +303,15 @@ public static class CuratorComposition
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<ILogger<DmfPromptService>>(),
-            sp.GetService<INxmHandlerRegistrar>()));
+            sp.GetRequiredService<INxmRegistrationState>()));
 
         // ShellViewModel owns navigation + the deferred DMF trigger (consumed on
         // a real Mods entry). The concrete DmfPromptService is injected (not a
         // delegate or navigation interface) so the shell can call
         // ProcessPendingAsync at its chosen point without coupling the
-        // coordinator to navigation sequencing.
+        // coordinator to navigation sequencing. The shell's nxm status strip
+        // reads the shared registration state (seeded by the one startup probe
+        // inside its constructor).
         services.AddSingleton(sp => new ShellViewModel(
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IRelayLaunchService>(),
@@ -314,10 +327,7 @@ public static class CuratorComposition
             sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<ShellViewModel>>(),
             sp.GetRequiredService<IConfigLoader>(),
-            // Optional: null on platforms with no registrar (not Windows or
-            // Linux). Resolved via GetService so unsupported platforms do not
-            // throw on activation; the shell shows an "unavailable" status.
-            sp.GetService<INxmHandlerRegistrar>()));
+            sp.GetRequiredService<INxmRegistrationState>()));
         services.AddSingleton<IDialogService>(sp =>
             new DialogService(
                 sp.GetRequiredService<MainWindow>(),
@@ -432,7 +442,8 @@ public static class CuratorComposition
         // non-fatal case. A NxmSingleInstanceException propagates out of
         // StartNxmServer (and out of Build) without reaching this call, so a
         // single-instance violation never triggers maintenance. Best-effort:
-        // failures are logged + swallowed so maintenance never blocks startup.
+        // failures are logged + swallowed, and the call is synchronous but
+        // bounded (its xdg-mime child runs sanitized with a bounded wait).
         // On Linux AppImage runs this refreshes the durable handler copy + the
         // AppImage symlink; everywhere else it is a no-op.
         MaintainNxmRegistration(provider, loggerFactory);
@@ -672,7 +683,9 @@ public static class CuratorComposition
     /// Calls <see cref="INxmHandlerRegistrar.MaintainRegistration"/> once after
     /// <see cref="StartNxmServer"/> has returned, so the fatal process-
     /// enumeration single-instance check has already succeeded. Best-effort: any
-    /// failure is logged + swallowed so maintenance never blocks app startup.
+    /// failure is logged + swallowed (non-fatal). The call is synchronous but
+    /// bounded: on Linux it may spawn the registrar's sanitized
+    /// <c>xdg-mime</c> child under a bounded wait.
     /// </summary>
     /// <remarks>
     /// <para>

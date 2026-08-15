@@ -28,7 +28,7 @@ public sealed class IntegrationsViewModelTests
     [Fact]
     public async Task RefreshAsync_shows_not_signed_in_when_None()
     {
-        var (vm, _, _, _) = await BuildAndRefresh(state: null);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null);
 
         Assert.Equal(Localization["Integrations_StatusNotSignedIn"], vm.StatusLine);
         Assert.False(vm.IsAuthenticated);
@@ -40,7 +40,7 @@ public sealed class IntegrationsViewModelTests
     [Fact]
     public async Task RefreshAsync_shows_signed_in_via_oauth_when_OAuth_premium_user()
     {
-        var (vm, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
             NexusAuthMethod.OAuth, "OAuthUser", IsPremium: true));
 
         Assert.Equal(
@@ -55,7 +55,7 @@ public sealed class IntegrationsViewModelTests
     [Fact]
     public async Task RefreshAsync_shows_signed_in_via_oauth_when_non_premium()
     {
-        var (vm, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
             NexusAuthMethod.OAuth, "OAuthUser", IsPremium: false));
 
         Assert.Equal(
@@ -67,7 +67,7 @@ public sealed class IntegrationsViewModelTests
     [Fact]
     public async Task RefreshAsync_shows_signed_in_via_apikey_when_ApiKey_user()
     {
-        var (vm, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
             NexusAuthMethod.ApiKey, "ApiUser", IsPremium: false, ApiKey: "the-key"));
 
         Assert.Equal(
@@ -80,7 +80,7 @@ public sealed class IntegrationsViewModelTests
     [Fact]
     public async Task RefreshAsync_shows_signed_in_via_apikey_when_premium_ApiKey_user()
     {
-        var (vm, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
             NexusAuthMethod.ApiKey, "ApiUser", IsPremium: true, ApiKey: "the-key"));
 
         Assert.Equal(
@@ -97,13 +97,13 @@ public sealed class IntegrationsViewModelTests
         // user knows WHICH method is configured-but-unverifiable, not a generic
         // "signed in").
         var oauthState = new NexusAuthState(NexusAuthMethod.OAuth, Name: null, IsPremium: null);
-        var (oauthVm, _, _, _) = await BuildAndRefresh(state: oauthState);
+        var (oauthVm, _, _, _, _) = await BuildAndRefresh(state: oauthState);
         Assert.Equal(Localization["Integrations_StatusSignedInOAuthUnverified"], oauthVm.StatusLine);
         Assert.True(oauthVm.IsOAuthActive);
 
         var apiKeyState = new NexusAuthState(
             NexusAuthMethod.ApiKey, Name: null, IsPremium: null, ApiKey: "the-key");
-        var (apiKeyVm, _, _, _) = await BuildAndRefresh(state: apiKeyState);
+        var (apiKeyVm, _, _, _, _) = await BuildAndRefresh(state: apiKeyState);
         Assert.Equal(Localization["Integrations_StatusSignedInApiKeyUnverified"], apiKeyVm.StatusLine);
         Assert.True(apiKeyVm.IsApiKeyActive);
     }
@@ -116,7 +116,7 @@ public sealed class IntegrationsViewModelTests
         // The masked field shows the persisted key (so the user sees one is
         // configured, without re-entering). The value is real (the masking is
         // purely visual via PasswordChar).
-        var (vm, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
             NexusAuthMethod.ApiKey, "U", false, ApiKey: "persisted-key"));
 
         Assert.Equal("persisted-key", vm.ApiKey);
@@ -128,7 +128,7 @@ public sealed class IntegrationsViewModelTests
     [Fact]
     public async Task RefreshAsync_clears_ApiKey_when_method_is_None()
     {
-        var (vm, _, _, _) = await BuildAndRefresh(state: null);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null);
 
         Assert.Equal(string.Empty, vm.ApiKey);
     }
@@ -138,7 +138,7 @@ public sealed class IntegrationsViewModelTests
     {
         // When OAuth is active, the API-key field is empty (the placeholder
         // shows; the field is the inactive alternative).
-        var (vm, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
             NexusAuthMethod.OAuth, "U", false));
 
         Assert.Equal(string.Empty, vm.ApiKey);
@@ -149,7 +149,7 @@ public sealed class IntegrationsViewModelTests
     {
         // After a refresh (e.g. post-action), the field is masked again even if
         // the user had revealed it (no surprise plaintext after a state change).
-        var (vm, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
             NexusAuthMethod.ApiKey, "U", false, ApiKey: "k"));
         vm.ToggleApiKeyRevealCommand.Execute(null);
         Assert.True(vm.IsApiKeyRevealed);
@@ -165,7 +165,7 @@ public sealed class IntegrationsViewModelTests
     [Fact]
     public async Task ToggleApiKeyReveal_flips_mask_char()
     {
-        var (vm, _, _, _) = await BuildAndRefresh(state: null);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null);
 
         Assert.False(vm.IsApiKeyRevealed);
         Assert.Equal('\u2022', vm.ApiKeyMaskChar);
@@ -185,7 +185,7 @@ public sealed class IntegrationsViewModelTests
     public async Task ToggleApiKeyReveal_disabled_while_login_in_flight()
     {
         // Block the OAuth login on a TCS so we can observe the IsBusy state.
-        var (vm, auth, _, _) = await BuildAndRefresh(state: null);
+        var (vm, auth, _, _, _) = await BuildAndRefresh(state: null);
         var tcs = new TaskCompletionSource<NexusAuthResult>();
         auth.NextOAuthTask = tcs.Task;
 
@@ -205,7 +205,7 @@ public sealed class IntegrationsViewModelTests
     [Fact]
     public async Task ValidateApiKey_invokes_service_and_updates_status_on_success()
     {
-        var (vm, auth, _, _) = await BuildAndRefresh(state: null);
+        var (vm, auth, _, _, _) = await BuildAndRefresh(state: null);
         auth.NextApiKeyResult = NexusAuthResult.Success("ApiUser", isPremium: false);
         auth.NextStateAfterApiKey = new NexusAuthState(
             NexusAuthMethod.ApiKey, "ApiUser", false, ApiKey: "the-key");
@@ -230,7 +230,7 @@ public sealed class IntegrationsViewModelTests
     [Fact]
     public async Task ValidateApiKey_with_empty_key_shows_message_without_calling_service()
     {
-        var (vm, auth, _, _) = await BuildAndRefresh(state: null);
+        var (vm, auth, _, _, _) = await BuildAndRefresh(state: null);
 
         vm.ApiKey = "   ";
         await vm.ValidateApiKeyCommand.ExecuteAsync(null);
@@ -242,7 +242,7 @@ public sealed class IntegrationsViewModelTests
     [Fact]
     public async Task ValidateApiKey_surfaces_failure_inline_without_clearing_key()
     {
-        var (vm, auth, _, _) = await BuildAndRefresh(state: null);
+        var (vm, auth, _, _, _) = await BuildAndRefresh(state: null);
         auth.NextApiKeyResult = NexusAuthResult.Failed("HTTP 401: invalid");
 
         vm.ApiKey = "bad-key";
@@ -260,7 +260,7 @@ public sealed class IntegrationsViewModelTests
         // ApiKey method, the field shows the persisted key (masked), and the
         // user clicks Validate without typing anything new. The VM passes the
         // existing key (held in ApiKey from the state) back into the service.
-        var (vm, auth, _, _) = await BuildAndRefresh(state: new NexusAuthState(
+        var (vm, auth, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
             NexusAuthMethod.ApiKey, "U", false, ApiKey: "existing-key"));
         auth.NextApiKeyResult = NexusAuthResult.Success("U2", isPremium: true);
         auth.NextStateAfterApiKey = new NexusAuthState(
@@ -280,7 +280,7 @@ public sealed class IntegrationsViewModelTests
     [Fact]
     public async Task LoginWithOAuth_invokes_service_and_updates_status()
     {
-        var (vm, auth, _, _) = await BuildAndRefresh(state: null);
+        var (vm, auth, _, _, _) = await BuildAndRefresh(state: null);
         auth.NextOAuthResult = NexusAuthResult.Success("OAuthUser", isPremium: false);
         auth.NextStateAfterOAuth = new NexusAuthState(NexusAuthMethod.OAuth, "OAuthUser", false);
 
@@ -309,7 +309,7 @@ public sealed class IntegrationsViewModelTests
         // promptly instead of waiting out the 3-minute flow timeout (the
         // retry-without-restart bug). The fake's login task completes as
         // canceled when the token it was handed fires.
-        var (vm, auth, _, _) = await BuildAndRefresh(state: null);
+        var (vm, auth, _, _, _) = await BuildAndRefresh(state: null);
         auth.CancelOAuthOnToken = true;
 
         var commandTask = vm.LoginWithOAuthCommand.ExecuteAsync(null);
@@ -331,7 +331,7 @@ public sealed class IntegrationsViewModelTests
     [Fact]
     public async Task LoginWithOAuth_surfaces_failure_inline()
     {
-        var (vm, auth, _, _) = await BuildAndRefresh(state: null);
+        var (vm, auth, _, _, _) = await BuildAndRefresh(state: null);
         auth.NextOAuthResult = NexusAuthResult.Failed("User cancelled.");
 
         await vm.LoginWithOAuthCommand.ExecuteAsync(null);
@@ -346,7 +346,7 @@ public sealed class IntegrationsViewModelTests
     [Fact]
     public async Task SignOut_clears_state_and_resets_status()
     {
-        var (vm, auth, _, _) = await BuildAndRefresh(state: new NexusAuthState(
+        var (vm, auth, _, _, _) = await BuildAndRefresh(state: new NexusAuthState(
             NexusAuthMethod.ApiKey, "U", false, ApiKey: "k"));
         Assert.True(vm.IsAuthenticated); // signed in to start
         Assert.True(vm.IsApiKeyActive);
@@ -371,7 +371,7 @@ public sealed class IntegrationsViewModelTests
         // active-profile changes are blocked while Darktide runs). The VM has
         // no IsGameRunning/IsEnabled surface; the commands are gated only by
         // IsBusy (+ IsAuthenticated for sign-out).
-        var (vm, _, _, _) = await BuildAndRefresh(state: null);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null);
 
         Assert.True(vm.LoginWithOAuthCommand.CanExecute(null));
         Assert.True(vm.ValidateApiKeyCommand.CanExecute(null));
@@ -382,7 +382,7 @@ public sealed class IntegrationsViewModelTests
     [Fact]
     public async Task SignOut_only_enabled_when_authenticated()
     {
-        var (vm, _, _, _) = await BuildAndRefresh(state: null);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null);
         Assert.False(vm.SignOutCommand.CanExecute(null)); // not authenticated
     }
 
@@ -396,7 +396,7 @@ public sealed class IntegrationsViewModelTests
         // _isAuthenticated, Sign out stays disabled even though the status line
         // shows signed-in. The notification makes the post-IsAuthenticated
         // re-evaluation fire.
-        var (vm, _, _, _) = await BuildAndRefresh(
+        var (vm, _, _, _, _) = await BuildAndRefresh(
             state: new NexusAuthState(NexusAuthMethod.OAuth, "OAuthUser", IsPremium: true));
 
         Assert.True(vm.IsAuthenticated);
@@ -411,7 +411,7 @@ public sealed class IntegrationsViewModelTests
         // The OAuth block's signed-in state is a "Clear Nexus sign-in" button
         // bound to SignOutCommand. Its label resolves through the localization
         // service like the other bound labels, so a culture flip refreshes it.
-        var (vm, _, _, _) = await BuildAndRefresh(state: null);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null);
 
         Assert.Equal(Localization["Integrations_ClearNexusSignIn"], vm.ClearNexusSignInLabel);
     }
@@ -424,11 +424,11 @@ public sealed class IntegrationsViewModelTests
         // the sign-in path; signed in via OAuth shows the clear path. The
         // underlying IsOAuthActive + SignOutCommand + LoginWithOAuthCommand are
         // unchanged (the API-key block's Sign out depends on the same command).
-        var (signedOut, _, _, _) = await BuildAndRefresh(state: null);
+        var (signedOut, _, _, _, _) = await BuildAndRefresh(state: null);
         Assert.False(signedOut.IsOAuthActive);
         Assert.True(signedOut.LoginWithOAuthCommand.CanExecute(null));
 
-        var (signedIn, _, _, _) = await BuildAndRefresh(
+        var (signedIn, _, _, _, _) = await BuildAndRefresh(
             state: new NexusAuthState(NexusAuthMethod.OAuth, "U", IsPremium: false));
         Assert.True(signedIn.IsOAuthActive);
         Assert.True(signedIn.SignOutCommand.CanExecute(null));
@@ -440,7 +440,7 @@ public sealed class IntegrationsViewModelTests
     public async Task IsBusy_disables_commands_during_flight()
     {
         // Block the OAuth login on a TCS so we can observe the IsBusy state.
-        var (vm, auth, _, _) = await BuildAndRefresh(state: null);
+        var (vm, auth, _, _, _) = await BuildAndRefresh(state: null);
         var tcs = new TaskCompletionSource<NexusAuthResult>();
         auth.NextOAuthTask = tcs.Task;
 
@@ -464,7 +464,7 @@ public sealed class IntegrationsViewModelTests
     {
         // Deactivate is the navigation-away operation. With nothing in flight it
         // must be a safe no-op that does not throw.
-        var (vm, _, _, _) = await BuildAndRefresh(state: null);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null);
 
         vm.Deactivate();
     }
@@ -474,7 +474,7 @@ public sealed class IntegrationsViewModelTests
     {
         // Repeated navigation-away must not throw (e.g. deactivate -> deactivate
         // on a confirm-cancel path).
-        var (vm, auth, _, _) = await BuildAndRefresh(state: null);
+        var (vm, auth, _, _, _) = await BuildAndRefresh(state: null);
         auth.CancelOAuthOnToken = true;
 
         var commandTask = vm.LoginWithOAuthCommand.ExecuteAsync(null);
@@ -494,7 +494,7 @@ public sealed class IntegrationsViewModelTests
         // application-lifetime VM from localization. A culture flip after
         // Deactivate still re-resolves the bound labels (OnCultureChanged fires
         // OnPropertyChanged for each localized property).
-        var (vm, _, _, _) = await BuildAndRefresh(state: null);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null);
         vm.Deactivate();
 
         string? fired = null;
@@ -517,7 +517,7 @@ public sealed class IntegrationsViewModelTests
         // After Deactivate cancels an in-flight attempt, the VM must remain
         // usable: a later RefreshAsync (activation) + a fresh auth attempt must
         // work, proving Deactivate did not permanently disable the VM.
-        var (vm, auth, _, _) = await BuildAndRefresh(state: null);
+        var (vm, auth, _, _, _) = await BuildAndRefresh(state: null);
         auth.CancelOAuthOnToken = true;
 
         var firstAttempt = vm.LoginWithOAuthCommand.ExecuteAsync(null);
@@ -550,7 +550,7 @@ public sealed class IntegrationsViewModelTests
         configLoader.Config.Integrations.Nexus.AutoUpdateCheckEnabled = false;
         configLoader.Config.Integrations.Nexus.AutoUpdateCheckIntervalMinutes = 25;
 
-        var (vm, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
 
         Assert.False(vm.AutoUpdateCheckEnabled);
         Assert.Equal(25m, vm.AutoUpdateCheckIntervalMinutes);
@@ -564,7 +564,7 @@ public sealed class IntegrationsViewModelTests
         // loader records zero saves from a pure RefreshAsync.
         var configLoader = new FakeConfigLoader();
 
-        var (_, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
+        var (_, _, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
 
         Assert.Equal(0, configLoader.SaveCalls);
     }
@@ -573,7 +573,7 @@ public sealed class IntegrationsViewModelTests
     public async Task Toggling_auto_check_persists_through_config_save()
     {
         var configLoader = new FakeConfigLoader();
-        var (vm, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
         Assert.True(vm.AutoUpdateCheckEnabled); // default
 
         vm.AutoUpdateCheckEnabled = false;
@@ -588,7 +588,7 @@ public sealed class IntegrationsViewModelTests
         // The NumericUpDown bound value is decimal?; the save clamps + casts to
         // int so the config (an int field) stays consistent.
         var configLoader = new FakeConfigLoader();
-        var (vm, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
 
         vm.AutoUpdateCheckIntervalMinutes = 30m;
 
@@ -602,7 +602,7 @@ public sealed class IntegrationsViewModelTests
     public async Task AutomaticUpdates_defaults_false_and_round_trips_config()
     {
         var configLoader = new FakeConfigLoader();
-        var (vm, _, _, _) = await BuildAndRefresh(
+        var (vm, _, _, _, _) = await BuildAndRefresh(
             state: new NexusAuthState(NexusAuthMethod.OAuth, "prem", IsPremium: true),
             configLoader: configLoader);
 
@@ -613,7 +613,7 @@ public sealed class IntegrationsViewModelTests
         Assert.Equal(1, configLoader.SaveCalls);
         Assert.True(configLoader.LastSaved!.Integrations.Nexus.AutomaticUpdatesEnabled);
         // And the persisted value reloads on a fresh open.
-        var (vm2, _, _, _) = await BuildAndRefresh(
+        var (vm2, _, _, _, _) = await BuildAndRefresh(
             state: new NexusAuthState(NexusAuthMethod.OAuth, "prem", IsPremium: true),
             configLoader: configLoader);
         Assert.True(vm2.AutomaticUpdatesEnabled);
@@ -623,7 +623,7 @@ public sealed class IntegrationsViewModelTests
     public async Task AutomaticUpdates_is_independent_of_AutoUpdateCheckEnabled()
     {
         var configLoader = new FakeConfigLoader();
-        var (vm, _, _, _) = await BuildAndRefresh(
+        var (vm, _, _, _, _) = await BuildAndRefresh(
             state: new NexusAuthState(NexusAuthMethod.OAuth, "prem", IsPremium: true),
             configLoader: configLoader);
 
@@ -642,7 +642,7 @@ public sealed class IntegrationsViewModelTests
     public async Task AutomaticUpdates_enabled_only_for_verified_premium_with_premium_required_tooltip()
     {
         // Regular account: visible, disabled, with the premium-required tooltip.
-        var (vmRegular, _, _, _) = await BuildAndRefresh(
+        var (vmRegular, _, _, _, _) = await BuildAndRefresh(
             state: new NexusAuthState(NexusAuthMethod.ApiKey, "free", IsPremium: false));
         Assert.False(vmRegular.CanEditAutomaticUpdates);
         Assert.Equal(
@@ -650,7 +650,7 @@ public sealed class IntegrationsViewModelTests
             vmRegular.AutomaticUpdatesTooltip);
 
         // Verified Premium account: enabled, with the normal tooltip.
-        var (vmPremium, _, _, _) = await BuildAndRefresh(
+        var (vmPremium, _, _, _, _) = await BuildAndRefresh(
             state: new NexusAuthState(NexusAuthMethod.OAuth, "prem", IsPremium: true));
         Assert.True(vmPremium.CanEditAutomaticUpdates);
         Assert.Equal(
@@ -666,7 +666,7 @@ public sealed class IntegrationsViewModelTests
         // execution re-verifies before installing.
         var configLoader = new FakeConfigLoader();
         configLoader.Config.Integrations.Nexus.AutomaticUpdatesEnabled = true;
-        var (vm, _, _, _) = await BuildAndRefresh(
+        var (vm, _, _, _, _) = await BuildAndRefresh(
             state: new NexusAuthState(NexusAuthMethod.ApiKey, "free", IsPremium: false),
             configLoader: configLoader);
 
@@ -680,7 +680,7 @@ public sealed class IntegrationsViewModelTests
         // A cleared NumericUpDown (null) defaults to 10 on save; values above
         // 1440 clamp down so the runner never gets an unreasonable interval.
         var configLoader = new FakeConfigLoader();
-        var (vm, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
 
         vm.AutoUpdateCheckIntervalMinutes = null;
         Assert.Equal(10, configLoader.LastSaved!.Integrations.Nexus.AutoUpdateCheckIntervalMinutes);
@@ -695,7 +695,7 @@ public sealed class IntegrationsViewModelTests
         // Values below the 5-minute compliance floor (here 0) clamp up to
         // NexusConfig.MinAutoUpdateCheckIntervalMinutes on save.
         var configLoader = new FakeConfigLoader();
-        var (vm, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
 
         vm.AutoUpdateCheckIntervalMinutes = 0m;
 
@@ -717,7 +717,7 @@ public sealed class IntegrationsViewModelTests
     public async Task RefreshAsync_shows_not_registered_status_when_registrar_reports_false()
     {
         var registrar = new FakeNxmHandlerRegistrar { Registered = false };
-        var (vm, _, _, _) = await BuildAndRefresh(state: null, registrar: registrar);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null, registrar: registrar);
 
         Assert.True(vm.IsNxmAvailable);
         Assert.False(vm.IsNxmRegistered);
@@ -730,7 +730,7 @@ public sealed class IntegrationsViewModelTests
     public async Task RefreshAsync_shows_registered_status_when_registrar_reports_true()
     {
         var registrar = new FakeNxmHandlerRegistrar { Registered = true };
-        var (vm, _, _, _) = await BuildAndRefresh(state: null, registrar: registrar);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null, registrar: registrar);
 
         Assert.True(vm.IsNxmRegistered);
         Assert.Equal(Localization["Integrations_NxmStatusRegistered"], vm.NxmStatusText);
@@ -742,7 +742,7 @@ public sealed class IntegrationsViewModelTests
     {
         // No registrar (unsupported platform): unavailable status + the toggle
         // command is disabled.
-        var (vm, _, _, _) = await BuildAndRefresh(state: null, registrar: null);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null, registrar: null);
 
         Assert.False(vm.IsNxmAvailable);
         Assert.False(vm.IsNxmRegistered);
@@ -757,7 +757,7 @@ public sealed class IntegrationsViewModelTests
         // first and only call Register() on Yes.
         var registrar = new FakeNxmHandlerRegistrar { Registered = false };
         var dialogs = new FakeDialogService { ConfirmResult = true };
-        var (vm, _, _, _) = await BuildAndRefresh(state: null, dialogs: dialogs, registrar: registrar);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null, dialogs: dialogs, registrar: registrar);
 
         await vm.ToggleNxmHandlerCommand.ExecuteAsync(null);
 
@@ -773,7 +773,7 @@ public sealed class IntegrationsViewModelTests
     {
         var registrar = new FakeNxmHandlerRegistrar { Registered = false };
         var dialogs = new FakeDialogService { ConfirmResult = false }; // user says No
-        var (vm, _, _, _) = await BuildAndRefresh(state: null, dialogs: dialogs, registrar: registrar);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null, dialogs: dialogs, registrar: registrar);
 
         await vm.ToggleNxmHandlerCommand.ExecuteAsync(null);
 
@@ -791,7 +791,7 @@ public sealed class IntegrationsViewModelTests
             ThrowOnRegister = new UnauthorizedAccessException("denied"),
         };
         var dialogs = new FakeDialogService { ConfirmResult = true };
-        var (vm, _, _, _) = await BuildAndRefresh(state: null, dialogs: dialogs, registrar: registrar);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null, dialogs: dialogs, registrar: registrar);
 
         await vm.ToggleNxmHandlerCommand.ExecuteAsync(null);
 
@@ -805,14 +805,14 @@ public sealed class IntegrationsViewModelTests
     }
 
     [Fact]
-    public async Task ToggleNxmHandler_unregister_only_calls_when_curator_owns_handler()
+    public async Task ToggleNxmHandler_unregister_calls_the_registrar_directly()
     {
-        // Unregister only runs when IsRegistered() is true (Curator is the
-        // current owner). The toggle is in the registered state, so the user
-        // clicked Release.
+        // The unregister branch delegates straight to Unregister (the
+        // registrar self-guards ownership; no UI-side pre-check probe). The
+        // toggle is in the registered state, so the user clicked Release.
         var registrar = new FakeNxmHandlerRegistrar { Registered = true };
         var dialogs = new FakeDialogService();
-        var (vm, _, _, _) = await BuildAndRefresh(state: null, dialogs: dialogs, registrar: registrar);
+        var (vm, _, _, _, state) = await BuildAndRefresh(dialogs: dialogs, registrar: registrar);
 
         await vm.ToggleNxmHandlerCommand.ExecuteAsync(null);
 
@@ -821,25 +821,32 @@ public sealed class IntegrationsViewModelTests
         Assert.Equal(0, dialogs.ConfirmCalls);
         Assert.Equal(1, registrar.UnregisterCalls);
         Assert.False(vm.IsNxmRegistered); // state refreshed
+        // Exactly two probes total: the build refresh + the single post-action
+        // publish. A UI-side pre-check would have added a third.
+        Assert.Equal(2, registrar.IsRegisteredCalls);
+        Assert.Equal(2, state.RefreshFromOsCalls);
     }
 
     [Fact]
-    public async Task ToggleNxmHandler_unregister_skips_when_curator_no_longer_owner()
+    public async Task ToggleNxmHandler_unregister_delegates_when_ownership_changed_out_of_band()
     {
         // The toggle is in the registered state, but the OS state changed
-        // out-of-band so the pre-unregister probe reports false. Unregister
-        // must NOT be called (Curator is no longer the owner); the VM just
-        // refreshes its state.
+        // out-of-band so the registrar no longer reports ownership. The VM
+        // still delegates to Unregister (the registrar's own guard decides
+        // whether anything is released); the refresh re-syncs the visible
+        // state to the real owner.
         var registrar = new FakeNxmHandlerRegistrar { Registered = true };
         var dialogs = new FakeDialogService();
-        var (vm, _, _, _) = await BuildAndRefresh(state: null, dialogs: dialogs, registrar: registrar);
+        var (vm, _, _, _, _) = await BuildAndRefresh(dialogs: dialogs, registrar: registrar);
 
         // Simulate another manager taking over between the refresh + the click.
         registrar.Registered = false;
 
         await vm.ToggleNxmHandlerCommand.ExecuteAsync(null);
 
-        Assert.Equal(0, registrar.UnregisterCalls);
+        // The call went through; the registrar's self-guard (not the VM)
+        // decided what was released.
+        Assert.Equal(1, registrar.UnregisterCalls);
         Assert.False(vm.IsNxmRegistered); // state re-synced to the real owner
     }
 
@@ -855,7 +862,7 @@ public sealed class IntegrationsViewModelTests
             ThrowOnUnregister = new UnauthorizedAccessException("locked"),
         };
         var dialogs = new FakeDialogService();
-        var (vm, _, _, _) = await BuildAndRefresh(state: null, dialogs: dialogs, registrar: registrar);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null, dialogs: dialogs, registrar: registrar);
 
         await vm.ToggleNxmHandlerCommand.ExecuteAsync(null);
 
@@ -873,7 +880,7 @@ public sealed class IntegrationsViewModelTests
     {
         // With no registrar, ToggleNxmHandlerCommand.CanExecute is false and the
         // command is a defensive no-op when invoked directly.
-        var (vm, _, dialogs, _) = await BuildAndRefresh(state: null, registrar: null);
+        var (vm, _, dialogs, _, _) = await BuildAndRefresh(state: null, registrar: null);
 
         Assert.False(vm.ToggleNxmHandlerCommand.CanExecute(null));
 
@@ -891,7 +898,7 @@ public sealed class IntegrationsViewModelTests
         // The developer toggle defaults to false: no UI control sets it, so a
         // default config hides the Integrations dialog's API-key block (OAuth
         // is the sole sign-in path).
-        var (vm, _, _, _) = await BuildAndRefresh(state: null);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null);
 
         Assert.False(vm.IsApiKeyAuthEnabled);
     }
@@ -904,14 +911,14 @@ public sealed class IntegrationsViewModelTests
         var configLoader = new FakeConfigLoader();
         configLoader.Config.Integrations.Nexus.ApiKeyAuthEnabled = true;
 
-        var (vm, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
+        var (vm, _, _, _, _) = await BuildAndRefresh(state: null, configLoader: configLoader);
 
         Assert.True(vm.IsApiKeyAuthEnabled);
     }
 
     // ---- helpers -----------------------------------------------------------
 
-    private static async Task<(IntegrationsViewModel vm, FakeNexusAuthService auth, FakeDialogService dialogs, FakeNxmHandlerRegistrar? registrar)> BuildAndRefresh(
+    private static async Task<(IntegrationsViewModel vm, FakeNexusAuthService auth, FakeDialogService dialogs, FakeNxmHandlerRegistrar? registrar, FakeNxmRegistrationState state)> BuildAndRefresh(
         NexusAuthState? state = null,
         FakeConfigLoader? configLoader = null,
         FakeDialogService? dialogs = null,
@@ -920,10 +927,13 @@ public sealed class IntegrationsViewModelTests
         var auth = new FakeNexusAuthService { CurrentState = state };
         configLoader ??= new FakeConfigLoader();
         dialogs ??= new FakeDialogService();
+        // The shared registration state mirrors the registrar's probe (a
+        // registrar-less wiring is unavailable, like an unsupported platform).
+        var nxmRegistration = new FakeNxmRegistrationState(registrar);
 
-        var vm = new IntegrationsViewModel(auth, Localization, configLoader, dialogs, registrar, Logger);
+        var vm = new IntegrationsViewModel(auth, Localization, configLoader, dialogs, registrar, nxmRegistration, Logger);
         await vm.RefreshAsync(); // resolve the initial status line + nxm state
-        return (vm, auth, dialogs, registrar);
+        return (vm, auth, dialogs, registrar, nxmRegistration);
     }
 
     /// <summary>

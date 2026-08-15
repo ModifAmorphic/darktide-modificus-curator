@@ -4,7 +4,6 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Modificus.Curator.Config;
 using Modificus.Curator.General;
-using Modificus.Curator.Nxm;
 using Modificus.Curator.RelayClient;
 using Modificus.Curator.UI.AppUpdate;
 using Modificus.Curator.UI.Dialogs;
@@ -28,8 +27,8 @@ namespace Modificus.Curator.UI.ViewModels;
 /// <para><b>Navigation lifecycle:</b> a real destination change runs the current
 /// destination's leave effects before switching. Leaving Profiles awaits the
 /// unsaved-changes three-choice guard (Cancel/Save-failure keeps the destination
-/// unchanged); leaving Nexus cancels in-flight auth + refreshes nxm
-/// status + reloads the mod list; leaving Settings reloads the mod list +
+/// unchanged); leaving Nexus cancels in-flight auth + reloads the mod list;
+/// leaving Settings reloads the mod list +
 /// re-reads the startup-check toggle + refreshes the app-update notice. Enter
 /// effects: Settings rehydrates from config synchronously; Nexus
 /// awaits its auth refresh so the page paints while its state resolves. Entering
@@ -86,7 +85,7 @@ public partial class ShellViewModel : ObservableObject
     private readonly IAppUpdateService _appUpdate;
     private readonly IConfigLoader _configLoader;
     private readonly Action<Action> _invokeOnUi;
-    private readonly INxmHandlerRegistrar? _nxmRegistrar;
+    private readonly INxmRegistrationState _nxmRegistration;
     private readonly DmfPromptService _dmfPrompt;
     private readonly ILogger<ShellViewModel> _logger;
     private readonly Func<Task> _yieldForLaunchRender;
@@ -115,7 +114,7 @@ public partial class ShellViewModel : ObservableObject
         Action<Action> invokeOnUi,
         ILogger<ShellViewModel> logger,
         IConfigLoader configLoader,
-        INxmHandlerRegistrar? nxmRegistrar = null,
+        INxmRegistrationState nxmRegistration,
         Func<Task>? yieldForLaunchRender = null,
         Func<Task>? launchHandoffTimeout = null)
     {
@@ -133,7 +132,7 @@ public partial class ShellViewModel : ObservableObject
         _invokeOnUi = invokeOnUi ?? throw new ArgumentNullException(nameof(invokeOnUi));
         _logger = logger;
         _configLoader = configLoader ?? throw new ArgumentNullException(nameof(configLoader));
-        _nxmRegistrar = nxmRegistrar;
+        _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
         // Timing seams for the launch attempt: production defaults yield once
         // to the Avalonia dispatcher (Loaded priority) and bound the post-spawn
         // handoff with a real 30s delay; tests inject completed or
@@ -146,9 +145,12 @@ public partial class ShellViewModel : ObservableObject
         _isGameRunning = _session.IsRunning;
         _hasPendingStagedChanges = _session.HasPendingChanges;
 
-        // Resolve the initial nxm handler status so the status strip paints the
-        // right label on startup (enabled / disabled / unavailable).
-        RefreshNxmHandlerStatus();
+        // Seed the nxm handler status strip from the shared registration state.
+        // The RefreshFromOs call is THE startup seed probe; later publishes (the
+        // Nexus-enter probe + register/release actions) arrive via Changed.
+        IsNxmRegistered = _nxmRegistration.IsAvailable ? _nxmRegistration.IsRegistered : null;
+        _nxmRegistration.Changed += OnNxmRegistrationChanged;
+        _nxmRegistration.RefreshFromOs();
 
         _session.PropertyChanged += OnSessionPropertyChanged;
         // Re-resolve the localized strings (status strip + page title) when the
@@ -282,11 +284,13 @@ public partial class ShellViewModel : ObservableObject
         }
 
         // Leave effects owned here (the former post-dialog effects for these
-        // destinations). Each runs exactly once, at the leave point.
+        // destinations). Each runs exactly once, at the leave point. Leaving
+        // Nexus cancels in-flight auth + reloads the mod list; the nxm
+        // registration state is refreshed at Nexus ENTER (its deliberate probe
+        // point), never on the way out.
         if (from == ShellDestination.NexusIntegrations)
         {
             _integrations.Deactivate();
-            RefreshNxmHandlerStatus();
             _modList.Reload();
         }
         else if (from == ShellDestination.Settings)
@@ -415,11 +419,12 @@ public partial class ShellViewModel : ObservableObject
     // ---- nxm handler status -----------------------------------------------
 
     /// <summary>
-    /// Whether Curator is currently the OS <c>nxm://</c> handler (per the
-    /// registrar's <see cref="INxmHandlerRegistrar.IsRegistered"/>), or
-    /// <c>null</c> when no platform registrar is available. Refreshed at
-    /// startup + when leaving Nexus (the only place the
-    /// registration can change in-app). No polling.
+    /// Whether Curator is currently the OS <c>nxm://</c> handler, mirrored from
+    /// the shared <see cref="INxmRegistrationState"/> (last-known), or
+    /// <c>null</c> when no platform registrar is available. Seeded by the one
+    /// startup probe in the constructor and re-read on each publish (the
+    /// Nexus-enter probe + register/release actions). No polling; may be stale
+    /// if an external app changed ownership.
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(NxmHandlerStatusText))]
@@ -542,27 +547,14 @@ public partial class ShellViewModel : ObservableObject
 
     /// <summary>
     /// Re-reads the OS <c>nxm://</c> handler registration into
-    /// <see cref="IsNxmRegistered"/>. Null when no platform registrar is
-    /// available. A probe throw is treated as "not registered" (defensive).
+    /// <see cref="IsNxmRegistered"/> from the shared registration state, which
+    /// publishes on the UI thread after each deliberate probe (the startup
+    /// seed, the Nexus-enter refresh, and register/release actions).
     /// </summary>
-    private void RefreshNxmHandlerStatus()
-    {
-        if (_nxmRegistrar is null)
-        {
-            IsNxmRegistered = null;
-            return;
-        }
-
-        try
-        {
-            IsNxmRegistered = _nxmRegistrar.IsRegistered();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "IsRegistered probe threw; treating as not registered.");
-            IsNxmRegistered = false;
-        }
-    }
+    private void OnNxmRegistrationChanged() =>
+        IsNxmRegistered = _nxmRegistration.IsAvailable
+            ? _nxmRegistration.IsRegistered
+            : null;
 
     /// <summary>
     /// The app self-update service published new state (a check resolved an
