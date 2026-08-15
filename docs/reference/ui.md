@@ -488,6 +488,14 @@ by the Relay launcher to decide whether to hide the console window. Safe to
 call at startup (the values may match the loaded config, which is a no-op
 apply).
 
+The theme mapping honors Gaming Mode: `ThemeMode.System` normally maps to
+`ThemeVariant.Default` (follow the OS), but while running in a Steam Deck
+Gaming Mode session (see `IGamingModeState`) it applies `ThemeVariant.Dark`
+as the effective runtime theme, because the Gaming Mode session reports no
+usable desktop appearance preference. The stored preference stays `System`;
+explicit Light and Dark remain authoritative everywhere. The pure mapping
+(`ResolveThemeVariant(theme, isGamingMode)`) is the policy seam.
+
 `ThemeMode` and `PreferencesConfig` live in the [config](config.md) library.
 
 ### `PreferencesService`
@@ -644,6 +652,48 @@ public interface INxmRegistrationState
   performs the mutations through the registrar it still injects), and the DMF
   download-prompt wording (reads the state; never probes). All of them accept
   staleness between deliberate refreshes by design.
+
+## Gaming Mode state
+
+Steam Deck Gaming Mode sessions cannot host desktop workflows: file/folder
+pickers are unusable, file-manager opens depend on a desktop shell, and Steam's
+built-in Gaming Mode browser does not hand `nxm://` links to Curator. The UI
+therefore gates those surfaces. One application-lifetime singleton,
+`GamingModeState` (`src/ui/Session/`), captures the answer once:
+
+```csharp
+public interface IGamingModeState
+{
+    bool IsGamingMode { get; }   // fixed for the process lifetime
+}
+```
+
+- **Single source of truth:** `GamingModeState` reads
+  `GamingModeDetector.IsGamingMode()` (the [steam](steam.md) library's
+  environment-signature detector: `SteamOS=1`, `SteamGamepadUI=1`,
+  `XDG_CURRENT_DESKTOP=gamescope`, all required) once at construction. Nothing
+  else in the UI layer touches the environment; every gate flows from the
+  injected state. The value is immutable because a session cannot change from
+  Gaming Mode to Desktop Mode (or back) without restarting Curator.
+- **Effective theme:** `PreferencesService` maps `ThemeMode.System` to
+  `ThemeVariant.Dark` while gaming (see
+  [Preferences service](#preferences-service)); the stored preference stays
+  `System`.
+- **Picker and file-manager gating:** the Mods Add split button (archive,
+  folder, link-external), the Settings + escape-hatch discovery Browse
+  buttons, the Settings open-folder buttons, and a linked row's open-folder
+  badge are disabled while gaming, each carrying a Desktop Mode tooltip that
+  shows even on the disabled control (`ToolTip.ShowOnDisabled`) plus an inline
+  per-section hint reachable by touch/controller. Every gated path also has a
+  code-level guard (view handlers early-return; the open-folder commands
+  early-return), so a programmatic invocation launches no picker or file
+  manager. Manual discovery-path entry and submission stay available.
+- **Nexus browser-flow gating:** while gaming, Add Nexus Mods, the per-mod
+  update action for regular/unverified accounts, and the DMF download prompt
+  for regular/unverified/unauthenticated accounts surface localized Desktop
+  Mode guidance (alerts, tooltips, the empty-state hint) instead of launching
+  the browser. Premium update installs and the Premium DMF download run their
+  normal in-app acquisition paths in Gaming Mode.
 
 ## The DMF prompt coordinator
 

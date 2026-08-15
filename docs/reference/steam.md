@@ -126,6 +126,16 @@ every OS-specific input + platform seam is injected:
   behind the `SteamDiscoveryOptions.IsSteamDeck` platform identity input (see
   above). Quoted values are tolerated; IO/access failures degrade to "not a
   Deck".
+- `GamingModeDetector` (public static) -- detects a Steam Deck Gaming Mode
+  session from the environment: the complete signature `SteamOS=1`,
+  `SteamGamepadUI=1`, `XDG_CURRENT_DESKTOP=gamescope` (all three, exact
+  ordinal values; anything missing or different is not Gaming Mode, so an
+  unrelated Linux gamescope session does not match). Independent of
+  `SteamDeckDetector`: hardware identity (os-release) vs. session identity
+  (environment); a Deck in Desktop Mode is not Gaming Mode. The UI layer
+  captures it once through `GamingModeState` (see the
+  [ui](ui.md) reference) and never reads the environment itself. An
+  environment-accessor overload is the test seam.
 - `SteamTextVdf` (internal static) -- the single entry point for Steam text KV1
   parsing (`config.vdf`, `compatibilitytool.vdf`, `appmanifest_*.acf`). Wraps
   ValveKeyValue with `HasEscapeSequences = true` always on (Steam files

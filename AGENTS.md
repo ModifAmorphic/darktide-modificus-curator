@@ -420,6 +420,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `IPreferencesService` + the i18n infrastructure
                           (`Strings.resx` + `LocalizationService` for dynamic culture
                           switching); each change applies + persists immediately;
+                          the theme mapping honors Gaming Mode: `ThemeMode.System`
+                          applies Dark as the effective runtime theme while gaming
+                          (the Gaming Mode session reports no desktop appearance
+                          preference; the pure `ResolveThemeVariant` mapping is the
+                          policy seam) + the stored preference stays `System`, while
+                          explicit Light/Dark stay authoritative everywhere;
                           the Settings destination (`SettingsViewModel` +
                           `SettingsView`): discovery write-through over the shared
                           `Settings/DiscoveryField` descriptor + the global
@@ -437,7 +443,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           seed the picker at the row's current value via
                           `SuggestedStartLocation`; the Storage section has two
                           buttons that open the OS file manager at the Curator
-                          data root + profiles root paths) +
+                          data root + profiles root paths; in Gaming Mode the
+                          Browse + open-folder buttons disable (Desktop Mode
+                          tooltip via `ToolTip.ShowOnDisabled` + an inline
+                          per-section hint; row `IsBrowseEnabled` + command +
+                          code-behind guards launch nothing) while manual
+                          discovery-path entry + submission stay available) +
                           the app-update "Updates" section (current version + Check
                           for Updates + startup-check toggle + inline result +
                           Download and Restart); `RefreshFromConfig` is the enter
@@ -480,6 +491,24 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `DmfPromptService` reads the state + never probes;
                           only `IntegrationsViewModel` still injects the
                           registrar (for the register/release mutations);
+                          the shared `IGamingModeState` (ui/Session/, an
+                          application-lifetime singleton): the one source of
+                          truth for whether Curator is running in a Steam Deck
+                          Gaming Mode session. `GamingModeState` captures
+                          `GamingModeDetector.IsGamingMode()` (steam lib, the
+                          complete env signature) once at construction +
+                          nothing else in the UI reads the environment; the
+                          value is process-immutable. Consumers: the
+                          Preferences theme mapping (System applies Dark while
+                          gaming), the picker/file-manager gating (Add split
+                          button, Settings + escape-hatch Browse, open-folder
+                          buttons + the linked-row badge; disabled controls
+                          with Desktop Mode tooltips via ShowOnDisabled +
+                          inline hints + code-level guards), and the
+                          browser-flow gating (Add Nexus Mods, regular/
+                          unverified update action, non-Premium DMF prompt,
+                          the Mods empty-state Nexus hint swaps to Desktop
+                          Mode guidance);
                           `UpdateCheckRunner` (ui/Session/) the
                           UI-layer glue that fires `IUpdateCheckService.CheckAsync`
                           fire-and-forget on the three automatic triggers
@@ -541,22 +570,29 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           regardless of tier (disabled + neutral when no update,
                           enabled + accent-blue arrow when flagged); Pinned/
                           Untracked rows keep the reserved cell but no button. The
-                          rate-limit notice sits in the Mods toolbar. The Add split
-                          button has four flyout items, all modes that set
-                          the default on click (the face label tracks the
-                          mode): "Add Nexus Mods" (the default; opens the
-                          Darktide Nexus Mods games page in the browser), "Add
-                          Mod (archive)", "Add Mod (folder)", and "Link
-                          external folder" (folder picker, no modal);
-                          `LinkModsCommand` peeks the base name, runs the
-                          collision check (excluding a re-link),
-                          then `LinkFolder` + `AddMod(LatestPolicy)`. A linked row's
-                          badge cell is a two-state indicator: available shows an
-                          "External" pill (`OpenFolderCommand` opens the OS file
-                          manager at the external folder), broken shows a
-                          non-clickable "Folder unavailable" text in the same cell
-                          (caution brush; `IsExternalBroken` pushed from
-                          `IsExternalAvailable` at Reload). The policy ComboBox is
+                           rate-limit notice sits in the Mods toolbar. The Add split
+                           button has four flyout items, all modes that set
+                           the default on click (the face label tracks the
+                           mode): "Add Nexus Mods" (the default; opens the
+                           Darktide Nexus Mods games page in the browser), "Add
+                           Mod (archive)", "Add Mod (folder)", and "Link
+                           external folder" (folder picker, no modal);
+                           `LinkModsCommand` peeks the base name, runs the
+                           collision check (excluding a re-link),
+                           then `LinkFolder` + `AddMod(LatestPolicy)`. In Gaming
+                           Mode the Add button disables entirely (every mode is
+                           desktop-dependent; `IsAddEnabled` + a Desktop Mode
+                           tooltip on the disabled button + an inline toolbar
+                           hint + early-returns in the picker paths +
+                           `AddNexusModsCommand` shows Desktop Mode guidance
+                           instead of launching the browser). A linked row's
+                           badge cell is a two-state indicator: available shows an
+                           "External" pill (`OpenFolderCommand` opens the OS file
+                           manager at the external folder; disabled with a
+                           Desktop Mode tooltip while gaming), broken shows a
+                           non-clickable "Folder unavailable" text in the same cell
+                           (caution brush; `IsExternalBroken` pushed from
+                           `IsExternalAvailable` at Reload). The policy ComboBox is
                           disabled for linked rows + the update-action cell stays
                           empty (space preserved). A Nexus + Latest row's source
                           badge appends the installed release tag inline
@@ -567,9 +603,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           carries the INPC state + derived `SourceUrl`/`UpdatePageUrl`/
                           `IsNexusLatest`/`CanShowUpdateAction`/
                           `UpdateActionEnabled`/`UpdateActionTooltip`/`NexusModId`;
-                          `IsPremiumUser` + `AnyRowUpdating` are pushed down so the
-                          per-row enabled state + tooltip recompute without a parent
-                          walk. The `UpdateCoordinator` (ui/Session/) is the
+                           `IsPremiumUser` + `AnyRowUpdating` + `IsGamingMode` are
+                           pushed down so the per-row enabled state + tooltip
+                           recompute without a parent walk (while gaming, a
+                           regular/unverified flagged row's update action +
+                           tooltip carry Desktop Mode guidance instead of the
+                           files-page launch; Premium rows keep the in-app
+                           install path). The `UpdateCoordinator` (ui/Session/) is the
                           single one-install-at-a-time gate shared with the
                           `IAutomaticUpdateService` (ui/Session/), the opt-in
                           Premium automatic installer chained after each check from
@@ -673,13 +713,19 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           setup (when Curator owns the handler, the user clicks
                           Download there + the handler picks up the URL + adds
                           DMF to the active profile via the standard nxm flow;
-                          when Curator does not own it, the user downloads the
-                          archive and imports it via the normal add flow; on a
-                          browser-launch failure, a fallback alert carries the
-                          files-page URL) (case 2).
-                          Decline is respected; DMF can be added later via the
-                          normal add flow. The DMF flow never opens Nexus
-                          Integrations or stops at an informational dead-end.
+                           when Curator does not own it, the user downloads the
+                           archive and imports it via the normal add flow; on a
+                           browser-launch failure, a fallback alert carries the
+                           files-page URL) (case 2).
+                           In Gaming Mode, case 2 resolves the Premium state
+                           first: premium users get the same confirm + in-app
+                           download, while everyone else (no auth, regular, or
+                           unknown) gets an informational Desktop Mode alert
+                           (no confirm, no browser launch, no acquisition
+                           call; no nxm probe).
+                           Decline is respected; DMF can be added later via the
+                           normal add flow. The DMF flow never opens Nexus
+                           Integrations or stops at an informational dead-end.
                           The first-run `OnboardingService` (ui/Session/) owns
                           the one-time Nexus setup offer: it shows the
                           `WelcomeWindow` (ui/Views/) once on first startup
@@ -917,12 +963,17 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         scan collects both the compat_tools registry + the
                         recommendation; an invalid/unreadable mapping or a
                         native/missing recommendation fails unresolved without falling
-                        through); Steam Deck identity (SteamDeckDetector +
-                        SteamDiscoveryOptions.IsSteamDeck, detected from OS release
-                        metadata ID=steamos + VARIANT_ID=steamdeck, host file first)
-                        is a generic platform identity input, not Proton policy;
-                        Steam text KV1 parsing centralized through SteamTextVdf with
-                        HasEscapeSequences always on, ValveKeyValue 0.70.0.499), the
+                         through); Steam Deck identity (SteamDeckDetector +
+                         SteamDiscoveryOptions.IsSteamDeck, detected from OS release
+                         metadata ID=steamos + VARIANT_ID=steamdeck, host file first)
+                         is a generic platform identity input, not Proton policy;
+                         Gaming Mode session identity (GamingModeDetector, public
+                         static: the complete environment signature SteamOS=1 +
+                         SteamGamepadUI=1 + XDG_CURRENT_DESKTOP=gamescope, all three
+                         exact values required, independent of Deck hardware
+                         identity); the UI captures it once via GamingModeState;
+                         Steam text KV1 parsing centralized through SteamTextVdf with
+                         HasEscapeSequences always on, ValveKeyValue 0.70.0.499), the
                         ISteamService.Discover automatic/manual mode policy + Rediscover
                         forced-automatic surface, IsGameRunning (WinProcessLookup
                         via process comm on Windows; LinuxProcessLookup via /proc
@@ -1051,10 +1102,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             (incl. the Proton selection precedence: app-specific,
                                             global, invalid-entry no-fall-through, + the appinfo
                                             recommended-runtime fallback end-to-end, identical
-                                            regardless of Deck identity; the appinfo reader
-                                            one-pass snapshot against a realistic multi-entry
-                                            fixture matching the live shape; + the OS-release
-                                            Deck detector)
+                                             regardless of Deck identity; the appinfo reader
+                                             one-pass snapshot against a realistic multi-entry
+                                             fixture matching the live shape; + the OS-release
+                                             Deck detector + the Gaming Mode session detector
+                                             (the complete three-variable signature, wrong/
+                                             missing values rejected))
     Modificus.Curator.RelayClient.Tests/ xUnit tests for the launch façade (dual-purpose:
                                             `dotnet test` = xUnit; `dotnet run` = composition smoke harness);
                                             covers RelayLaunchServiceTests (Windows + Linux arg
@@ -1155,8 +1208,25 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             the non-premium/unknown/no-auth browser-open
                                             regardless of the registration state (the
                                             confirm wording follows the shared state
-                                            with zero probes), and the
+                                            with zero probes), the Gaming Mode branch
+                                            (non-premium tiers get the Desktop Mode
+                                            alert with zero browser/acquisition calls;
+                                            premium keeps the in-app download; case 1
+                                            unchanged), and the
                                             prompt-timing-after-create)
+                                            + the Gaming Mode gating (ModListGamingModeTests:
+                                            Add-button availability, the gaming guidance
+                                            alerts for AddNexusMods + regular-tier
+                                            updates with zero launcher calls, the
+                                            empty-state hint matrix, row push-down;
+                                            GamingModeGatingXamlTests: XAML-source
+                                            assertions on the disabled bindings +
+                                            ShowOnDisabled + inline hints + the resx
+                                            keys; Settings/escape-hatch browse gating
+                                            with manual submission preserved; the
+                                            PreferencesService theme mapping
+                                            ResolveThemeVariant + the stored-System
+                                            guarantee under gaming)
                                             + the OnboardingService (already complete no-op,
                                             Continue persists + skips Integrations, Set up Nexus
                                             persists before navigating to Integrations once, close
