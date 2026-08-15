@@ -578,13 +578,16 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           for the per-row premium behavior (`IsPremiumUser` pushed
                           down to rows; no mid-session refresh),
                           and exposes an async `UpdateCommand(row)` that branches on
-                          premium: Premium acquires the global `UpdateCoordinator`
-                          (one install at a time, shared with the automatic updater)
-                          then calls
-                          `IModAcquisitionService.AcquireLatestNexusAsync` +
-                          `AcknowledgeUpdateAndReload` (clears the persisted
-                          known-update entry, no extra API check); regular/unknown
-                          opens the mod's Nexus files page via the shared
+                          premium: Premium hands the install to
+                          `IModUpdateInstaller.TryInstallLatestAsync` (the
+                          single install path in Integrations:
+                          coordinator-gated one-install-at-a-time, in-gate
+                          eligibility revalidation, acquire + acknowledge-on-
+                          success, per-row progress; Busy + NotEligible are
+                          silent no-ops, Failed surfaces the localized alert
+                          with the exception's message, Installed reloads +
+                          flags HasPendingChanges); regular/unknown opens the
+                          mod's Nexus files page via the shared
                           IExternalLauncher (fallback alert on failure).
                           `CheckForUpdatesNowCommand` awaits the runner's
                           thorough check (driving an `IsCheckingNow` spinner on
