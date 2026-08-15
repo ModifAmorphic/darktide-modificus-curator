@@ -6,6 +6,7 @@ using Modificus.Curator.UI.Dialogs;
 using Modificus.Curator.UI.Localization;
 using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.ViewModels;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Modificus.Curator.UI.Tests;
 
@@ -763,11 +764,13 @@ public sealed class ModListViewModelTests
     }
 
     [Fact]
-    public void CheckCompleted_with_a_rate_limited_result_sets_the_list_level_notice_flag()
+    public void Gate_fed_rate_limited_result_sets_the_list_level_notice_flag()
     {
-        var (vm, _, _, uc, _, _, _) = BuildForUpdateFlow();
+        // The rate-limit tracking is owned by the runner's refresh gate (every
+        // captured result flows through it); the VM renders the state.
+        var (vm, _, gate, _, _) = BuildForRateLimit();
 
-        uc.RaiseCheckCompleted(new UpdateCheckResult(
+        gate.ApplyResult(new UpdateCheckResult(
             Array.Empty<ModUpdateInfo>(), DateTimeOffset.UtcNow, RateLimited: true, Thorough: false,
             Outcome: CheckOutcome.RateLimited));
 
@@ -1256,13 +1259,12 @@ public sealed class ModListViewModelTests
     // ---- rate-limit coupling (refresh button + pill gated by active reset) --
 
     /// <summary>
-    /// Builds a VM wired with a controllable clock (shared by the runner + the
-    /// VM's rate-limit-active decision) + a captured countdown-timer tick, and
-    /// exposes the fake update-check service so a test can raise rate-limited
-    /// results. Mirrors <see cref="BuildForThrottle"/> but returns the
-    /// <see cref="FakeUpdateCheckService"/> for result injection.
+    /// Builds a VM whose runner (and therefore its refresh gate) is wired with a
+    /// controllable clock + a captured countdown-timer tick, and returns the
+    /// gate so a test can feed results the way the runner does. The gate owns
+    /// the rate-limit policy; the VM renders it.
     /// </summary>
-    private static (ModListViewModel Vm, FakeUpdateCheckService UpdateCheck, Action Tick, Action<DateTimeOffset> SetClock)
+    private static (ModListViewModel Vm, FakeUpdateCheckService UpdateCheck, UpdateRefreshGate Gate, Action Tick, Action<DateTimeOffset> SetClock)
         BuildForRateLimit()
     {
         var a = Profile("Alpha");
@@ -1276,14 +1278,19 @@ public sealed class ModListViewModelTests
         var updateCheck = new FakeUpdateCheckService();
         var now = DateTimeOffset.UtcNow;
         Action? capturedTick = null;
+        var runner = new UpdateCheckRunner(
+            session, profiles, updateCheck, new FakeConfigLoader(),
+            new FakeAppStateStore(), new FakeAutomaticUpdateService(),
+            NullLogger<UpdateCheckRunner>.Instance,
+            getNow: () => now,
+            startCountdownTimer: t => capturedTick ??= t);
         var vm = TestDoubles.BuildModList(
             profiles: profiles,
             session: session,
             repo: repo,
             updateCheck: updateCheck,
-            getNow: () => now,
-            startCountdownTimer: t => capturedTick ??= t);
-        return (vm, updateCheck, () => capturedTick!.Invoke(), value => now = value);
+            runner: runner);
+        return (vm, updateCheck, runner.RefreshGate, () => capturedTick!.Invoke(), value => now = value);
     }
 
     [Fact]
@@ -1292,12 +1299,12 @@ public sealed class ModListViewModelTests
         // A rate-limited result carrying a future server reset sets the raw +
         // active rate-limit flags, disables the refresh button, and reads the
         // coupled pill text. The tooltip names the local retry time.
-        var (vm, uc, _, setClock) = BuildForRateLimit();
+        var (vm, _, gate, _, setClock) = BuildForRateLimit();
         var now = DateTimeOffset.UtcNow;
         setClock(now);
         var reset = now.AddMinutes(5);
 
-        uc.RaiseCheckCompleted(new UpdateCheckResult(
+        gate.ApplyResult(new UpdateCheckResult(
             Array.Empty<ModUpdateInfo>(), now, RateLimited: true, Thorough: false,
             Outcome: CheckOutcome.RateLimited, RateLimitResetsAt: reset));
 
@@ -1315,12 +1322,12 @@ public sealed class ModListViewModelTests
         // Driving the countdown tick after advancing the shared clock past the
         // reset flips IsRateLimitActive off, re-enables the refresh button, and
         // would hide the pill (the pill binds IsRateLimitActive).
-        var (vm, uc, tick, setClock) = BuildForRateLimit();
+        var (vm, _, gate, tick, setClock) = BuildForRateLimit();
         var now = DateTimeOffset.UtcNow;
         setClock(now);
         var reset = now.AddMinutes(5);
 
-        uc.RaiseCheckCompleted(new UpdateCheckResult(
+        gate.ApplyResult(new UpdateCheckResult(
             Array.Empty<ModUpdateInfo>(), now, RateLimited: true, Thorough: false,
             Outcome: CheckOutcome.RateLimited, RateLimitResetsAt: reset));
         Assert.True(vm.IsRateLimitActive);
@@ -1346,11 +1353,11 @@ public sealed class ModListViewModelTests
         // When Nexus stayed silent about the reset (null), the active state
         // lasts CheckedAt + the fallback cooldown (1 minute). The tooltip then
         // uses the time-free "Try again later." form (no specific time promised).
-        var (vm, uc, tick, setClock) = BuildForRateLimit();
+        var (vm, _, gate, tick, setClock) = BuildForRateLimit();
         var now = DateTimeOffset.UtcNow;
         setClock(now);
 
-        uc.RaiseCheckCompleted(new UpdateCheckResult(
+        gate.ApplyResult(new UpdateCheckResult(
             Array.Empty<ModUpdateInfo>(), now, RateLimited: true, Thorough: false,
             Outcome: CheckOutcome.RateLimited, RateLimitResetsAt: null));
         Assert.True(vm.IsRateLimitActive);
@@ -1376,17 +1383,17 @@ public sealed class ModListViewModelTests
         // A later non-rate-limited result clears IsRateLimited + the reset +
         // the active flag, so the refresh button re-enables immediately (no
         // waiting for a server reset the next check superseded).
-        var (vm, uc, _, setClock) = BuildForRateLimit();
+        var (vm, _, gate, _, setClock) = BuildForRateLimit();
         var now = DateTimeOffset.UtcNow;
         setClock(now);
 
-        uc.RaiseCheckCompleted(new UpdateCheckResult(
+        gate.ApplyResult(new UpdateCheckResult(
             Array.Empty<ModUpdateInfo>(), now, RateLimited: true, Thorough: false,
             Outcome: CheckOutcome.RateLimited, RateLimitResetsAt: now.AddMinutes(5)));
         Assert.True(vm.IsRateLimited);
         Assert.True(vm.IsRateLimitActive);
 
-        uc.RaiseCheckCompleted(new UpdateCheckResult(
+        gate.ApplyResult(new UpdateCheckResult(
             Array.Empty<ModUpdateInfo>(), now, RateLimited: false, Thorough: false,
             Outcome: CheckOutcome.Success));
 
@@ -1403,7 +1410,7 @@ public sealed class ModListViewModelTests
         // rate-limited result active both keep the button disabled. The refresh
         // button tooltip shows the rate-limit reason (the more informative,
         // server-driven cause), not the throttle countdown.
-        var (vm, uc, _, setClock) = BuildForRateLimit();
+        var (vm, _, gate, _, setClock) = BuildForRateLimit();
         Assert.True(vm.IsRefreshEnabled); // nothing active at construction
 
         await DriveIntoThrottleAsync(vm, setClock);
@@ -1411,7 +1418,7 @@ public sealed class ModListViewModelTests
 
         var now = DateTimeOffset.UtcNow;
         setClock(now);
-        uc.RaiseCheckCompleted(new UpdateCheckResult(
+        gate.ApplyResult(new UpdateCheckResult(
             Array.Empty<ModUpdateInfo>(), now, RateLimited: true, Thorough: false,
             Outcome: CheckOutcome.RateLimited, RateLimitResetsAt: now.AddMinutes(5)));
 

@@ -536,7 +536,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            the call site (one small internal UI extension), so
                            Integrations holds no Profiles reference + a pull
                            failure (a deleted/unreadable profile) is logged +
-                           skipped without mutating LastResult; the
+                           skipped without mutating LastResult; the runner owns
+                           + exposes the `UpdateRefreshGate` (fed by every
+                           captured check result; the mod-list VM renders its
+                           state); the
                            `AutoUpdateCheckEnabled` toggle gates ONLY the periodic
                            timer, and the manual `CheckNowAsync` carries its own
                            sliding-window throttle (10 free/hour then 1/2min,
@@ -549,16 +552,28 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `IKnownUpdateState.KnownUpdates` / app-state.json, so a
                           restart inside the interval gate shows prior flags
                           before any API call) for per-row `UpdateAvailable`
-                          (matched by ContainerId) + the list-level `IsRateLimited`
-                          notice + the coupled `IsRateLimitActive` gate (the
-                          latter still from the in-memory LastResult, session-only;
-                          a rate-limited check disables the refresh button until
+                          (matched by ContainerId; the VM passes the entries
+                          its last Reload loaded as the hydration candidates),
+                          while the refresh-gate policy lives in the
+                          runner-owned `UpdateRefreshGate` (ui/Session/): the
+                          rate-limit tracking fed by every captured check
+                          result, the effective-reset computation (server
+                          reset governs, 1-minute fallback when silent), the
+                          manual-throttle read, the shared 1-second countdown
+                          timer lifecycle, + the IsRateLimitActive /
+                          IsManualThrottled / IsRefreshEnabled decisions; the
+                          VM keeps only the localized rendering (tooltip
+                          priority rate-limit > throttle > normal,
+                          BuildThrottleTooltip, FormatRemaining, IsCheckingNow)
+                          driven by the gate's marshaled StateChanged. A
+                          rate-limited check disables the refresh button until
                           the server-reported reset in `UpdateCheckResult.RateLimitResetsAt`
-                          elapses, with a 1-minute client-side fallback when Nexus
-                          sent no reset, and the pill reads "Refresh disabled due
-                          to rate-limiting" exactly while the button is rate-limit-blocked,
-                          distinct from the client-side manual fire-count throttle
-                          which remains), reads
+                          elapses (1-minute client-side fallback when Nexus
+                          sent no reset), and the pill reads "Refresh disabled
+                          due to rate-limiting" exactly while the button is
+                          rate-limit-blocked, distinct from the client-side
+                          manual fire-count throttle which remains. The VM
+                          reads
                           `INexusAuthService.GetCurrentStateAsync` once at construction
                           for the per-row premium behavior (`IsPremiumUser` pushed
                           down to rows; no mid-session refresh),
@@ -1232,7 +1247,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             wiring + the mod-list update flow: profile-scoped
                                             known-update persistence/hydration, the
                                             UpdateCheckRunner candidate pull + the
-                                            unreadable-profile skip, the stable
+                                            unreadable-profile skip, the
+                                            UpdateRefreshGate (server reset
+                                            governs, fallback cooldown, timer
+                                            lifecycle, marshaled StateChanged,
+                                            throttle coupling), the stable
                                             per-row update action (no-update disabled, flagged
                                             accent, Premium install, regular/unknown files-page
                                             open, launcher failure alert, unsupported rows),

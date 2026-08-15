@@ -104,7 +104,9 @@ the mechanisms:
 - **Manual sliding-window throttle.** The manual "check now" refresh carries its
   own throttle that persists across restarts: a rolling free budget per hour,
   then a per-refresh cooldown once spent. A blocked attempt makes no API call.
-  Owned by `UpdateCheckRunner`.
+  Owned by `UpdateCheckRunner`; the coupled refresh-button gating + countdown
+  rendering policy lives in its `UpdateRefreshGate` (fed by every check
+  result).
 - **Auto-check interval floor.** The user-configurable periodic-check interval
   has a named minimum (5 minutes), enforced on save and at tick time. Owned by
   `NexusConfig`.

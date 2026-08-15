@@ -827,14 +827,24 @@ public sealed class UpdateCheckRunner
         IAutomaticUpdateService autoUpdate,
         ILogger<UpdateCheckRunner> logger,
         Action<Action>? startTimer = null,
-        Func<DateTimeOffset>? getNow = null);
+        Func<DateTimeOffset>? getNow = null,
+        Action<Action>? invokeOnUi = null,          // the gate's StateChanged marshal
+        Action<Action>? startCountdownTimer = null, // the gate's 1-second countdown
+        Action? stopCountdownTimer = null);
 
+    public UpdateRefreshGate RefreshGate { get; }
     public DateTimeOffset? NextManualRefreshAllowedAt { get; }
 
     public void Start();
     public Task CheckNowAsync();
 }
 ```
+
+- `RefreshGate`: the runner-owned refresh-gate policy (see
+  [UpdateRefreshGate](#updaterefreshgate)). Every check result the runner
+  captures is fed into it (`ApplyResult`), and a throttled manual attempt
+  re-evaluates it so the countdown engages; the mod-list VM renders its state
+  through the marshaled `StateChanged` event.
 
 - `TickInterval`: the periodic timer's fixed tick granularity (1 minute).
   The user-configured interval
@@ -901,16 +911,46 @@ on every successful fire, so closing and reopening the app does not reset the
 free-refresh budget. See
 [the rate-limiting strategy](rate-limiting-strategy.md) for the thresholds.
 
-The header rate-limit pill is coupled to the refresh button, not the raw result
-flag: when a check result is rate-limited, the button stays disabled until the
-server-reported reset in `UpdateCheckResult.RateLimitResetsAt` elapses (or a
-1-minute client-side fallback when Nexus sent no reset, e.g. an HTTP 429 with no
-`x-rl-*` headers), and the pill reads "Refresh disabled due to rate-limiting"
-exactly while the button is rate-limit-blocked. Both clear together the moment
-the reset passes (the list VM re-evaluates `IsRateLimitActive` on each shared
-1-second countdown tick). The rate-limit reason takes tooltip precedence when
-both the rate limit and the manual fire-count throttle are active; the two
-causes share one countdown timer, so either keeps the button disabled.
+### `UpdateRefreshGate`
+
+The refresh-gate policy for the manual "check now" affordance, owned + exposed
+by the runner. Absorbs everything the list VM used to compute itself: the
+rate-limit tracking (fed by every check result the runner captures), the
+effective-reset computation (the server-reported reset governs; a 1-minute
+client-side fallback when Nexus sent no reset, e.g. an HTTP 429 with no
+`x-rl-*` headers), the manual-throttle read
+(`NextManualRefreshAllowedAt`), the shared 1-second countdown timer lifecycle,
+and the functional decisions.
+
+```csharp
+public sealed class UpdateRefreshGate
+{
+    public void ApplyResult(UpdateCheckResult? result);  // the runner's feed
+    public void Reevaluate();                            // results, blocked attempts, ticks
+
+    public bool IsRateLimited { get; }                   // the last result was rate-limited
+    public DateTimeOffset? RateLimitResetsAt { get; }    // the raw server reset
+    public bool IsRateLimitActive { get; }               // blocked until the effective reset elapses
+    public bool IsManualThrottled { get; }               // the sliding-window cooldown holds
+    public DateTimeOffset? ManualThrottleClearsAt { get; }
+    public bool IsRefreshEnabled { get; }                // !IsRateLimitActive && !IsManualThrottled
+
+    public event Action? StateChanged;                   // marshaled to the UI thread; readers pull
+}
+```
+
+- The list VM keeps ONLY the localized rendering: the tooltip priority
+  (rate-limit > throttle > normal), the `m:ss` countdown format, and the
+  `IsCheckingNow` affordance. It re-fires its bound properties when
+  `StateChanged` fires and composes `IsRefreshEnabled` with its own
+  `IsCheckingNow`.
+- The header rate-limit pill is coupled to the refresh button, not the raw
+  result flag: the pill reads "Refresh disabled due to rate-limiting" exactly
+  while `IsRateLimitActive` holds, and both clear together the moment the
+  effective reset passes (each 1-second countdown tick re-evaluates). The
+  rate-limit reason takes tooltip precedence when both the rate limit and the
+  manual fire-count throttle are active; the two causes share one countdown
+  timer, so either keeps the button disabled.
 
 The runner never blocks on a check beyond the await the manual trigger opts
 into, never surfaces its result (the mod list reads
@@ -1823,12 +1863,16 @@ No backend library references the UI (the dependency direction is one-way).
   available/broken, disabled policy edit, empty update-action cell,
   `IsExternalBroken` on Reload), `CheckCompleted` per-row state,
   `UpdateCommand` success / failure / one-at-a-time / premium gating,
-  `CheckForUpdatesNow`, `IsRateLimited` + the coupled `IsRateLimitActive`
-  refresh-button/pill gating (server reset + fallback cooldown, precedence over
-  the manual throttle), the `NamesChanged` in-place row
+  `CheckForUpdatesNow`, the gate-fed `IsRateLimited` + the coupled
+  `IsRateLimitActive` refresh-button/pill rendering (server reset + fallback
+  cooldown, precedence over the manual throttle), the `NamesChanged` in-place row
   name refresh (refreshed when the flag is set, untouched when it is not), and
   the empty-state Nexus hint (construction + both `Reload` paths perform zero
   registration probes; `IsNxmRegistered` follows the shared state).
+- **`UpdateRefreshGateTests`**: the gate directly -- server-reset governance,
+  the 1-minute fallback cooldown, immediate clearing on a non-rate-limited
+  result, the null-result no-op, the shared countdown-timer lifecycle, the
+  marshaled `StateChanged` event, and the manual-throttle coupling.
 - **`ModListOrderLockTests`**: the profile-scoped load-order lock + drag-reorder
   surface through the VM, against the lock-aware `FakeProfileService` projection:
   `OrderLocked` + move/grip availability on reload, `ToggleOrderLock` persists

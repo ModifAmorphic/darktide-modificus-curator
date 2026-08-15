@@ -194,59 +194,36 @@ public static class CuratorComposition
             sp.GetRequiredService<IModImportService>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<ILogger<ImportWorkflowViewModel>>()));
-        // The manual-refresh countdown timer seams (the throttle's live m:ss
-        // tooltip). Production manages a single 1-second DispatcherTimer, created
-        // lazily on first start, with Tick wired once; Start/Stop control whether
-        // it runs (mirrors StartUpdateCheckPolling's established timer pattern).
-        // The start delegate is idempotent: a second start while the timer is
-        // running is a no-op (DispatcherTimer.Start is safe to re-call, and the
-        // Tick handler is wired exactly once). Composition happens on the UI
-        // thread during app startup, so the DispatcherTimer affinity is correct.
-        services.AddSingleton(sp =>
-        {
-            DispatcherTimer? countdownTimer = null;
-            Action<Action> startCountdownTimer = tick =>
-            {
-                if (countdownTimer is null)
-                {
-                    countdownTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-                    countdownTimer.Tick += (_, _) => tick();
-                }
-                countdownTimer.Start();
-            };
-            Action stopCountdownTimer = () => countdownTimer?.Stop();
-            return new ModListViewModel(
-                sp.GetRequiredService<IProfileService>(),
-                sp.GetRequiredService<IProfileSession>(),
-                sp.GetRequiredService<IModRepository>(),
-                sp.GetRequiredService<IModImportService>(),
-                sp.GetRequiredService<IDialogService>(),
-                sp.GetRequiredService<LocalizationService>(),
-                sp.GetRequiredService<IUpdateCheckService>(),
-                // The single install path for the manual Premium update action:
-                // coordinator-gated, revalidating, acknowledging, progress-
-                // reporting (shared with the automatic batch).
-                sp.GetRequiredService<IModUpdateInstaller>(),
-                sp.GetRequiredService<INexusAuthService>(),
-                sp.GetRequiredService<IUpdateStateStore>(),
-                sp.GetRequiredService<UpdateCheckRunner>(),
-                sp.GetRequiredService<IAutomaticUpdateService>(),
-                sp.GetRequiredService<ImportWorkflowViewModel>(),
-                sp.GetRequiredService<DetailedModRowsViewModel>(),
-                sp.GetRequiredService<Action<Action>>(),
-                sp.GetRequiredService<ILogger<ModListViewModel>>(),
-                // The shared last-known nxm registration state feeds the
-                // empty-state Nexus hint; the mod list never probes the OS.
-                sp.GetRequiredService<INxmRegistrationState>(),
-                // Gaming Mode gates the Add split button's picker paths + the
-                // linked-row open-folder badge.
-                sp.GetRequiredService<IGamingModeState>(),
-                // The OS shell-open launcher: the Add NexusMods browser open +
-                // the linked-row open-folder action.
-                sp.GetRequiredService<IExternalLauncher>(),
-                startCountdownTimer,
-                stopCountdownTimer);
-        });
+        services.AddSingleton(sp => new ModListViewModel(
+            sp.GetRequiredService<IProfileService>(),
+            sp.GetRequiredService<IProfileSession>(),
+            sp.GetRequiredService<IModRepository>(),
+            sp.GetRequiredService<IModImportService>(),
+            sp.GetRequiredService<IDialogService>(),
+            sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<IUpdateCheckService>(),
+            // The single install path for the manual Premium update action:
+            // coordinator-gated, revalidating, acknowledging, progress-
+            // reporting (shared with the automatic batch).
+            sp.GetRequiredService<IModUpdateInstaller>(),
+            sp.GetRequiredService<INexusAuthService>(),
+            sp.GetRequiredService<IUpdateStateStore>(),
+            // The runner owns the refresh gate; the VM renders its state.
+            sp.GetRequiredService<UpdateCheckRunner>(),
+            sp.GetRequiredService<IAutomaticUpdateService>(),
+            sp.GetRequiredService<ImportWorkflowViewModel>(),
+            sp.GetRequiredService<DetailedModRowsViewModel>(),
+            sp.GetRequiredService<Action<Action>>(),
+            sp.GetRequiredService<ILogger<ModListViewModel>>(),
+            // The shared last-known nxm registration state feeds the
+            // empty-state Nexus hint; the mod list never probes the OS.
+            sp.GetRequiredService<INxmRegistrationState>(),
+            // Gaming Mode gates the Add split button's picker paths + the
+            // linked-row open-folder badge.
+            sp.GetRequiredService<IGamingModeState>(),
+            // The OS shell-open launcher: the Add NexusMods browser open +
+            // the linked-row open-folder action.
+            sp.GetRequiredService<IExternalLauncher>()));
 
         // The hosted destination view models: singletons (one instance per page,
         // kept alive + subscribed for the application lifetime). Each page VM is
@@ -382,15 +359,43 @@ public static class CuratorComposition
         // app lifetime. The periodic timer is wired to a DispatcherTimer (the
         // established ProfileSession pattern); the runner takes the timer-start
         // delegate as a seam so it stays unit-testable.
-        services.AddSingleton(sp => new UpdateCheckRunner(
-            sp.GetRequiredService<IProfileSession>(),
-            sp.GetRequiredService<IProfileService>(),
-            sp.GetRequiredService<IUpdateCheckService>(),
-            sp.GetRequiredService<IConfigLoader>(),
-            sp.GetRequiredService<IUpdateCheckScheduleState>(),
-            sp.GetRequiredService<IAutomaticUpdateService>(),
-            sp.GetRequiredService<ILogger<UpdateCheckRunner>>(),
-            StartUpdateCheckPolling));
+        // The manual-refresh countdown timer seams (the throttle's live m:ss
+        // tooltip + the rate-limit pill's clearing), owned by the runner's
+        // UpdateRefreshGate. Production manages a single 1-second
+        // DispatcherTimer, created lazily on first start, with Tick wired once;
+        // Start/Stop control whether it runs (mirrors
+        // StartUpdateCheckPolling's established timer pattern). The start
+        // delegate is idempotent: a second start while the timer is running is
+        // a no-op (DispatcherTimer.Start is safe to re-call, and the Tick
+        // handler is wired exactly once). Composition happens on the UI thread
+        // during app startup, so the DispatcherTimer affinity is correct. The
+        // gate's StateChanged marshals through the shared Action<Action> seam.
+        services.AddSingleton(sp =>
+        {
+            DispatcherTimer? countdownTimer = null;
+            Action<Action> startCountdownTimer = tick =>
+            {
+                if (countdownTimer is null)
+                {
+                    countdownTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                    countdownTimer.Tick += (_, _) => tick();
+                }
+                countdownTimer.Start();
+            };
+            Action stopCountdownTimer = () => countdownTimer?.Stop();
+            return new UpdateCheckRunner(
+                sp.GetRequiredService<IProfileSession>(),
+                sp.GetRequiredService<IProfileService>(),
+                sp.GetRequiredService<IUpdateCheckService>(),
+                sp.GetRequiredService<IConfigLoader>(),
+                sp.GetRequiredService<IUpdateCheckScheduleState>(),
+                sp.GetRequiredService<IAutomaticUpdateService>(),
+                sp.GetRequiredService<ILogger<UpdateCheckRunner>>(),
+                StartUpdateCheckPolling,
+                invokeOnUi: sp.GetRequiredService<Action<Action>>(),
+                startCountdownTimer: startCountdownTimer,
+                stopCountdownTimer: stopCountdownTimer);
+        });
 
         // The Curator self-update service (Velopack). Conditional on
         // CURATOR_VELOPACK: a Velopack-packaged build (Windows install or Linux

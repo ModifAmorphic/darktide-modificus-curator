@@ -216,7 +216,10 @@ public sealed class UpdateCheckRunner
         IAutomaticUpdateService autoUpdate,
         ILogger<UpdateCheckRunner> logger,
         Action<Action>? startTimer = null,
-        Func<DateTimeOffset>? getNow = null)
+        Func<DateTimeOffset>? getNow = null,
+        Action<Action>? invokeOnUi = null,
+        Action<Action>? startCountdownTimer = null,
+        Action? stopCountdownTimer = null)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
@@ -227,7 +230,19 @@ public sealed class UpdateCheckRunner
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _startTimer = startTimer;
         _getNow = getNow ?? (() => DateTimeOffset.UtcNow);
+        RefreshGate = new UpdateRefreshGate(
+            this, invokeOnUi, startCountdownTimer, stopCountdownTimer, _getNow);
     }
+
+    /// <summary>
+    /// The refresh-gate policy for the manual "check now" affordance: the
+    /// rate-limit tracking (fed by every check result this runner captures),
+    /// the manual-throttle read, the effective-reset computation, the shared
+    /// 1-second countdown timer, and the IsRateLimitActive / IsManualThrottled
+    /// / IsRefreshEnabled decisions. The list VM renders this state; it does
+    /// not compute it.
+    /// </summary>
+    public UpdateRefreshGate RefreshGate { get; }
 
     /// <summary>
     /// Subscribes to the session's active-profile changes, starts the periodic
@@ -328,9 +343,10 @@ public sealed class UpdateCheckRunner
         if (!CanRefreshManually(now))
         {
             // Throttled: a blocked attempt consumes nothing (no API call, no
-            // timestamp stamp, no persistence change). The VM reads
-            // NextManualRefreshAllowedAt to drive the countdown tooltip + the
-            // disabled button.
+            // timestamp stamp, no persistence change). Re-evaluate the refresh
+            // gate so the countdown timer engages + listeners re-read the
+            // throttled state.
+            RefreshGate.Reevaluate();
             return Task.CompletedTask;
         }
 
@@ -606,13 +622,17 @@ public sealed class UpdateCheckRunner
 
         // The thread-pool task returned the result. The outer await resumes on
         // the captured UI context (no ConfigureAwait(false) on it, per the
-        // UI-layer convention). Invoke the automatic-update service here, on the
-        // UI context, so its dialog + event callbacks land on the UI thread +
-        // the manual CheckNow (which awaits this task) keeps its spinner active
-        // through the installations. The service gates itself; a no-op call is
-        // cheap, so no need to pre-filter here.
+        // UI-layer convention). Feed the refresh gate first (every check
+        // result flows through it: the rate-limit tracking + the coupled
+        // button/pill state update even while installs run), then invoke the
+        // automatic-update service here, on the UI context, so its dialog +
+        // event callbacks land on the UI thread + the manual CheckNow (which
+        // awaits this task) keeps its spinner active through the installations.
+        // The service gates itself; a no-op call is cheap, so no need to
+        // pre-filter here.
         if (result is not null)
         {
+            RefreshGate.ApplyResult(result);
             try
             {
                 await _autoUpdate.RunAfterCheckAsync(result, profileId);

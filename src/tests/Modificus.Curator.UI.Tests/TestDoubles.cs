@@ -123,7 +123,8 @@ internal static class TestDoubles
         Action? stopCountdownTimer = null,
         FakeExternalLauncher? launcher = null,
         FakeNxmRegistrationState? nxmRegistration = null,
-        IGamingModeState? gamingMode = null)
+        IGamingModeState? gamingMode = null,
+        UpdateCheckRunner? runner = null)
     {
         profiles ??= Profiles();
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
@@ -190,12 +191,16 @@ internal static class TestDoubles
                 updateCheck.RecordProfileId = session.ActiveProfileId;
             }
         };
-        // The runner wires the manual CheckNow path; constructed with the
-        // test's fakes + no periodic timer (the manual trigger does not depend
-        // on the timer being started). An optional getNow lets the throttle
-        // tests drive the sliding window deterministically. The profiles fake
-        // backs the runner's candidate pull.
-        var runner = new UpdateCheckRunner(
+        // The runner wires the manual CheckNow path + owns the refresh gate;
+        // constructed with the test's fakes + no periodic timer (the manual
+        // trigger does not depend on the timer being started). An optional
+        // getNow lets the throttle tests drive the sliding window + the gate's
+        // rate-limit clock deterministically; the countdown-timer seams are
+        // forwarded to the runner's gate. The profiles fake backs the
+        // runner's candidate pull. A test that needs to drive the gate
+        // directly (the rate-limit tests) passes its own pre-constructed
+        // runner.
+        runner ??= new UpdateCheckRunner(
             session,
             profiles,
             updateCheck,
@@ -204,7 +209,9 @@ internal static class TestDoubles
             automaticUpdates,
             NullLogger<UpdateCheckRunner>.Instance,
             startTimer: null,
-            getNow: getNow);
+            getNow: getNow,
+            startCountdownTimer: startCountdownTimer,
+            stopCountdownTimer: stopCountdownTimer);
         return new ModListViewModel(
             profiles,
             session,
@@ -224,10 +231,7 @@ internal static class TestDoubles
             NullLogger<ModListViewModel>.Instance,
             nxmRegistration,
             gamingMode,
-            launcher,
-            startCountdownTimer,
-            stopCountdownTimer,
-            getNow);
+            launcher);
     }
 
     /// <summary>
