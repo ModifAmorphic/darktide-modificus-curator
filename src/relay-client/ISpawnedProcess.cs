@@ -11,7 +11,7 @@ public interface ISpawnedProcess : IDisposable
     /// Completes when the spawned process exits (any exit code). Never starts
     /// or signals the process. Implementations may throw if the handle is
     /// already disposed; callers that only need the exit signal should absorb
-    /// faults (an unobservable process is treated as exited).
+    /// faults.
     /// </summary>
     Task WaitForExitAsync();
 }

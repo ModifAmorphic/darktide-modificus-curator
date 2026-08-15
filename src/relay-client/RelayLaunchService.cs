@@ -296,7 +296,8 @@ internal sealed class RelayLaunchService : IRelayLaunchService
     {
         try
         {
-            await process.WaitForExitAsync();
+            // Background observation in a backend library (the ConfigureAwait(false) ban is src/ui-only): keeps the continuation and finally off the UI dispatcher.
+            await process.WaitForExitAsync().ConfigureAwait(false);
         }
         catch
         {
@@ -304,8 +305,10 @@ internal sealed class RelayLaunchService : IRelayLaunchService
         }
         finally
         {
-            exited.TrySetResult();
+            // Release the handle before completing: the exit task's awaiters
+            // must never observe completion ahead of the owed disposal.
             process.Dispose();
+            exited.TrySetResult();
         }
     }
 

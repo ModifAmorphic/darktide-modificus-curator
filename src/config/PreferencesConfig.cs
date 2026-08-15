@@ -61,8 +61,8 @@ public sealed class PreferencesConfig
     /// <see cref="IPreferencesService.ApplyAndPersist"/>; the coordinator does
     /// its own focused read-modify-save so the density field does not widen that
     /// method's parameter list. Absent or undefined values normalize to
-    /// Detailed when read; Compact survives only when explicitly persisted or
-    /// selected.
+    /// Detailed when read; Compact survives only when persisted or selected,
+    /// and a persisted valid value wins over the default.
     /// </summary>
     public ModRowDensity ModRowDensity { get; set; } = ModRowDensity.Detailed;
 }

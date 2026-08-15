@@ -633,7 +633,8 @@ the parameter. The active button carries the `selected` class (bound to
 `IsCompact` / `IsDetailed`, the shell's conditional-class pattern, not a
 ToggleButton). The selection persists in `CuratorConfig.Preferences.ModRowDensity`
 (absent or unknown normalizes to `Detailed`, the default; Compact survives only
-when explicitly persisted or selected).
+when persisted or selected, and a persisted valid value wins over the
+default).
 
 `DetailedModRowsViewModel` is an application-lifetime singleton child VM of
 `ModListViewModel`, analogous to `ImportWorkflowViewModel` and registered

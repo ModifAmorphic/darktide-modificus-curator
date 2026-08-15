@@ -1151,7 +1151,7 @@ configured `true` here.
 The Compact/Detailed row-density choice for the Mods destination. Detailed is
 the default: the multi-line row with the Nexus summary + a cached thumbnail,
 preserving every existing row action; Compact is the dense one-line row,
-surviving only when explicitly persisted or selected. Three UI-layer
+surviving only when persisted or selected. Three UI-layer
 components cooperate: the
 `DetailedModRowsViewModel` coordinator (the lifecycle + orchestration owner),
 `ModListViewModel` (which exposes it read-only + hands it the row snapshot on

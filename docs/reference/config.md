@@ -258,12 +258,16 @@ public enum ModRowDensity
 - `ModRowDensity`: the mod-list row density. `Detailed` (the default) is the
   multi-line row with the Nexus summary + a cached thumbnail, preserving every
   existing row action; `Compact` is the dense one-line row, surviving only when
-  explicitly persisted or selected. Persisted by camelCase string name via the
+  persisted or selected. Persisted by camelCase string name via the
   same JSON-string enum conversion as `ThemeMode`, so the numeric values are
   irrelevant to stored configs. Absent or undefined values normalize to
   `Detailed` when the coordinator reads the value, so a hand-edit or an old
   config file without the field yields Detailed; a config that persisted
-  `compact` keeps Compact. Owned by the Mods toolbar's density coordinator
+  `compact` keeps Compact. Because startup persistence writes the whole
+  Preferences section, a config that has run an earlier build carries a
+  persisted `compact` even when the density was never selected, so existing
+  installs keep Compact until Detailed is selected. Owned by the Mods
+  toolbar's density coordinator
   (`DetailedModRowsViewModel`, a child of `ModListViewModel`), which normalizes,
   applies, and persists only this property. See
   [ui: mod list density](ui.md#mod-list-density--detailed-rows).

@@ -555,9 +555,10 @@ is in [UI reference](../reference/ui.md).
 - A freshly added DMF lands first and order-locked (the profile add
   boundary's placement default; updateable). The lock is a default the user
   can clear, not a protected state.
-- **Row density.** The list has a persisted Compact/Detailed density (Compact
-  is the default and the absent/unknown value; Detailed is the multi-line
-  variant). Compact is the unchanged one-line row. Detailed renders a rounded
+- **Row density.** The list has a persisted Compact/Detailed density: Detailed
+  is the default (the multi-line row with summary + thumbnail), and an absent
+  or unknown value normalizes to it; Compact is the dense one-line variant,
+  surviving only when persisted or selected. Detailed renders a rounded
   card per row laid out as one adaptive Grid (the card root is a named width
   container, so an Avalonia `ContainerQuery max-width:680` in the view's styles
   swaps the layout at the 680-DIP card-width breakpoint): column 0 is the
