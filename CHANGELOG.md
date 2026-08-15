@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.2](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.29.1...v0.29.2) (2026-08-15)
+
+
+### Bug Fixes
+
+* **nxm:** sanitize + bound the xdg-mime runner, decouple UI probes into shared state ([#201](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/201)) ([ce2fbd9](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/ce2fbd9f3b622812aebc92441108504d33dbfbe2))
+
 ## [0.29.1](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.29.0...v0.29.1) (2026-08-15)
 
 
