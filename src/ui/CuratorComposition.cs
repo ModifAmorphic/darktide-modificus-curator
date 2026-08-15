@@ -16,7 +16,6 @@ using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.ViewModels;
 using Modificus.Curator.UI.Views;
 using Modificus.Curator.RelayClient;
-using Modificus.Curator.Launcher;
 using Modificus.Curator.UI.Nxm;
 
 namespace Modificus.Curator.UI;
@@ -62,7 +61,6 @@ public static class CuratorComposition
         services.AddIntegrations();
         services.AddSteam();
         services.AddRelayClient();
-        services.AddLauncher();
         // The nxm scheme-handler plumbing: IPC server (single-instance via
         // process enumeration, pipe bind degrades gracefully on failure), router
         // + no-op handler defaults, and the platform OS registrar. The IPC

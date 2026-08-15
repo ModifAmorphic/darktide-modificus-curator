@@ -74,7 +74,6 @@
     <ProjectReference Include="..\relay-client\Modificus.Curator.RelayClient.csproj" />
     <ProjectReference Include="..\general\Modificus.Curator.General.csproj" />
     <ProjectReference Include="..\integrations\Modificus.Curator.Integrations.csproj" />
-    <ProjectReference Include="..\launcher\Modificus.Curator.Launcher.csproj" />
     <ProjectReference Include="..\nxm\Modificus.Curator.Nxm.csproj" />
     <ProjectReference Include="..\profiles\Modificus.Curator.Profiles.csproj" />
     <ProjectReference Include="..\steam\Modificus.Curator.Steam.csproj" />

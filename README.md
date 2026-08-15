@@ -29,7 +29,7 @@ unmodified).
    Up and Move Down buttons; lock a mod's load-order position so reordering and
    auto-sort leave it in place.
    On first startup a one-time Welcome window introduces Curator and offers to
-  set up the Nexus integration. The Launcher is a stub. See
+  set up the Nexus integration. See
   [`src/README.md`](src/README.md) for developer/build
   details.
 - **Mod Relay** (separate repo):
@@ -155,7 +155,7 @@ replaces only `app/` and `relay/` under
 
 The Linux release archive contains two top-level folders:
 
-- `app/` - the Curator UI, the `nxm://` handler, and the launcher stub.
+- `app/` - the Curator UI and the `nxm://` handler.
 - `relay/` - the bundled Mod Relay runtime.
 
 Extracting it into Curator's default data folder seeds both the app and the

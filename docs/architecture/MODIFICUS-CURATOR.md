@@ -46,7 +46,6 @@ src/
   steam/                  Steam library -- Steam/Darktide/Proton discovery + IsGameRunning
   integrations/           Integrations library -- Nexus v1 client/auth + mod acquisition + update check
   relay-client/           Relay-client library -- the launch façade
-  launcher/               stub launcher -- the Steam non-steam-shortcut target placeholder
   nxm/                    Nxm library: nxm:// scheme-handler plumbing (URL parser, IPC
                           server, single-instance guard, router + handler seams, OS
                           registrar, relay helper)
@@ -117,7 +116,6 @@ library interfaces.
       store + the loopback `IBrowser`.
     - `AddSteam()`: Steam discovery + the platform process-lookup seam.
     - `AddRelayClient()`: the launch façade + the process-launcher seam.
-    - `AddLauncher()`: the launcher stub.
     - `AddSingleton<MainWindow>()`: the UI surface. Registered through an
       explicit factory that supplies `IAppStateStore` via the internal
       production constructor before the window is returned/shown; the public

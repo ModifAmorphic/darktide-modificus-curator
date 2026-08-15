@@ -1035,8 +1035,6 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         app-local relay/ shipped inside a Velopack payload at
                         <BaseDirectory>/relay/, then uses the portable sibling fallback
                         on Windows only)
-  launcher/             Modificus.Curator.Launcher -- stub (the Steam non-steam-shortcut
-                          target placeholder)
   nxm/                  Modificus.Curator.Nxm -- the nxm:// scheme-handler plumbing:
                         NxmUrlParser (mod-download / oauth-callback /
                         collection URL types), NxmIpcFraming (length-prefixed UTF-8 frames),
@@ -1495,7 +1493,7 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   offer: it shows the `WelcomeWindow` (ui/Views/) once on first startup
   (persisted via `IAppStateStore.OnboardingCompleted`), and on a "Set up Nexus"
   choice persists completion first, then navigates the shell to Nexus
-  Integrations (wired from `App` after the main window opens, exception-safe). The **Launcher** is a stub. See
+  Integrations (wired from `App` after the main window opens, exception-safe). See
   `docs/architecture/MODIFICUS-CURATOR.md`.
 
 ## Key docs

@@ -12,7 +12,7 @@ unmodified).
 - **Modificus Curator (`src/`)**: the user-facing app:
   staging-directory management, load order, profiles, dependency resolution,
   mod-source integrations, the Launch flow. The backend libraries and the UI
-  are implemented (the app is user-usable); the Launcher is a stub. See
+  are implemented (the app is user-usable). See
   [`MODIFICUS-CURATOR.md`](MODIFICUS-CURATOR.md) for the architecture.
 - **Mod Relay** (external): the injected modding runtime + its launcher.
   Lives in a separate repo,
