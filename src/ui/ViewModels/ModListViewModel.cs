@@ -155,6 +155,7 @@ public partial class ModListViewModel : ObservableObject
     private readonly Func<Uri, bool> _launchExternal;
     private readonly Func<string, bool> _launchExternalPath;
     private readonly INxmRegistrationState _nxmRegistration;
+    private readonly IGamingModeState _gamingMode;
 
     /// <summary>
     /// Creates the list VM, subscribes to the session (reload on active-profile
@@ -185,6 +186,7 @@ public partial class ModListViewModel : ObservableObject
         Action<Action> invokeOnUi,
         ILogger<ModListViewModel> logger,
         INxmRegistrationState nxmRegistration,
+        IGamingModeState gamingMode,
         Action<Action>? startCountdownTimer = null,
         Action? stopCountdownTimer = null,
         Func<DateTimeOffset>? getNow = null,
@@ -215,6 +217,7 @@ public partial class ModListViewModel : ObservableObject
         _launchExternal = launchExternal ?? LaunchExternalDefault;
         _launchExternalPath = launchExternalPath ?? LaunchExternalPathDefault;
         _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
+        _gamingMode = gamingMode ?? throw new ArgumentNullException(nameof(gamingMode));
 
         _session.PropertyChanged += OnSessionPropertyChanged;
         _localization.PropertyChanged += OnCultureChanged;
@@ -223,6 +226,11 @@ public partial class ModListViewModel : ObservableObject
         _automaticUpdates.UpdatesApplied += OnAutomaticUpdatesApplied;
         _automaticUpdates.ModUpdateProgress += OnAutomaticUpdateProgress;
         ImportWorkflow.ItemImported += OnItemImported;
+        // The Add split button's enabled state combines the workflow's activity
+        // with the Gaming Mode gate, so the workflow's own IsActive flips must
+        // re-fire it. Both VMs are application-lifetime singletons; the
+        // subscription is never undone (mirrors the neighboring subscriptions).
+        ImportWorkflow.PropertyChanged += OnImportWorkflowPropertyChanged;
 
         // The refresh button's tooltip defaults to the normal "check now"
         // string. ReevaluateRefreshGate owns the tooltip once a rate limit or
@@ -320,6 +328,33 @@ public partial class ModListViewModel : ObservableObject
     /// on every reload.
     /// </summary>
     public DetailedModRowsViewModel DetailedRows { get; }
+
+    /// <summary>
+    /// Whether the app runs inside a Steam Deck Gaming Mode session (fixed for
+    /// the process lifetime). Gates the Add split button's picker-based paths
+    /// and each linked row's open-folder badge, and is pushed down to every row
+    /// (mirroring the premium push) so the per-row badge state recomputes
+    /// without a parent walk in the binding.
+    /// </summary>
+    public bool IsGamingMode => _gamingMode.IsGamingMode;
+
+    /// <summary>
+    /// Whether the Add split button is enabled: not while the inline import
+    /// workflow is active (editing, processing, or failure) and not inside a
+    /// Steam Deck Gaming Mode session (the picker-based add paths are unusable
+    /// there). Re-fires when the workflow's <c>IsActive</c> flips; the gaming
+    /// half is constant for the process lifetime.
+    /// </summary>
+    public bool IsAddEnabled => !ImportWorkflow.IsActive && !IsGamingMode;
+
+    /// <summary>
+    /// The Add split button's tooltip: the Gaming Mode guidance while gaming
+    /// (shown on the disabled button), otherwise the ordinary add tooltip.
+    /// Re-resolves on a culture change.
+    /// </summary>
+    public string AddButtonTooltip => IsGamingMode
+        ? _localization["ModList_AddGamingModeHint"]
+        : _localization["ModList_AddButtonTooltip"];
 
     /// <summary>
     /// Whether a profile is active. Drives the header + the "no profile" empty
@@ -609,6 +644,7 @@ public partial class ModListViewModel : ObservableObject
         OnPropertyChanged(nameof(NxmDownloadHintText));
         OnPropertyChanged(nameof(AddModeLabel));
         OnPropertyChanged(nameof(RateLimitedNoticeText));
+        OnPropertyChanged(nameof(AddButtonTooltip));
         // Re-resolve the refresh-gate state so the rate-limit + throttle
         // tooltips pick up the new culture immediately (the countdown tick will
         // also re-resolve on its next fire, but this keeps the UI honest without
@@ -617,6 +653,19 @@ public partial class ModListViewModel : ObservableObject
         foreach (var row in Mods)
         {
             row.Refresh();
+        }
+    }
+
+    /// <summary>
+    /// The import workflow's activity flipped (batch started / ended). Re-fires
+    /// <see cref="IsAddEnabled"/> so the Add split button's disabled state
+    /// tracks the workflow without the view walking into the child VM.
+    /// </summary>
+    private void OnImportWorkflowPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ImportWorkflowViewModel.IsActive))
+        {
+            OnPropertyChanged(nameof(IsAddEnabled));
         }
     }
 
@@ -725,9 +774,12 @@ public partial class ModListViewModel : ObservableObject
         _invokeOnUi(() => AnyRowUpdating = _updateCoordinator.IsBusy);
 
     /// <summary>
-    /// Pushes the current <see cref="IsPremiumUser"/> + <see cref="AnyRowUpdating"/>
-    /// down to every row so each row's enabled state + tooltip recompute without
-    /// a parent walk in the binding. Called on reload + whenever either flips.
+    /// Pushes the current <see cref="IsPremiumUser"/>, <see cref="AnyRowUpdating"/>,
+    /// and <see cref="IsGamingMode"/> down to every row so each row's enabled
+    /// state + tooltip recompute without a parent walk in the binding. Called on
+    /// reload + whenever either observable half flips. The gaming half is
+    /// constant for the process lifetime (riding the same push keeps one
+    /// row-state path instead of a second per-row assignment site).
     /// </summary>
     private void PushGlobalStateToRows()
     {
@@ -735,6 +787,7 @@ public partial class ModListViewModel : ObservableObject
         {
             row.IsPremiumUser = IsPremiumUser;
             row.AnyRowUpdating = AnyRowUpdating;
+            row.IsGamingMode = IsGamingMode;
         }
     }
 
@@ -1765,14 +1818,21 @@ public partial class ModListViewModel : ObservableObject
     /// Opens the OS file manager at a linked row's external folder via the
     /// injectable path-launcher seam, surfacing a fallback alert on launch
     /// failure. No-op for a non-linked row, a broken row (the folder is missing),
-    /// or a row whose source carries no path. The row carries state only; this
-    /// command owns the launch + alert, mirroring the regular/unknown
-    /// files-page open path.
+    /// a row whose source carries no path, or while inside a Steam Deck Gaming
+    /// Mode session (file-manager opens depend on a desktop shell; the disabled
+    /// badge is the first gate, this is the programmatic one). The row carries
+    /// state only; this command owns the launch + alert, mirroring the
+    /// regular/unknown files-page open path.
     /// </summary>
     [RelayCommand]
     private async Task OpenFolder(ModItemViewModel? row)
     {
         if (row is null || row.Source is not LinkedSource || row.IsExternalBroken)
+        {
+            return;
+        }
+
+        if (IsGamingMode)
         {
             return;
         }

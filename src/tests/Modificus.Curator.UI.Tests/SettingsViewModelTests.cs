@@ -2,6 +2,7 @@ using System.IO;
 using Modificus.Curator.Config;
 using Modificus.Curator.Steam;
 using Modificus.Curator.UI.Localization;
+using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.Settings;
 using Modificus.Curator.UI.ViewModels;
 using Microsoft.Extensions.Logging;
@@ -12,8 +13,9 @@ namespace Modificus.Curator.UI.Tests;
 /// <summary>
 /// Tests for <see cref="SettingsViewModel"/>: the discovery section's global
 /// override mode + forced Discover, platform-gated rows + their editability,
-/// manual-mode write-through, the Storage section commands, and the rehydrate
-/// behavior. The app-update section has its own test file.
+/// manual-mode write-through, the Storage section commands (including the
+/// Gaming Mode gating), and the rehydrate behavior. The app-update section has
+/// its own test file.
 /// </summary>
 public sealed class SettingsViewModelTests
 {
@@ -27,7 +29,8 @@ public sealed class SettingsViewModelTests
         FakeAppUpdateService? appUpdate = null,
         FakeDialogService? dialogs = null,
         Func<string, bool>? launchExternalPath = null,
-        FakeSteamService? steam = null)
+        FakeSteamService? steam = null,
+        GamingModeState? gamingMode = null)
     {
         var config = CuratorConfig.CreateDefault();
         if (discovery is not null) config.Discovery = discovery;
@@ -39,6 +42,7 @@ public sealed class SettingsViewModelTests
             loader, steam, Localization,
             appUpdate ?? new FakeAppUpdateService(),
             dialogs,
+            gamingMode ?? new GamingModeState(false),
             invokeOnUi: static action => action(),
             Logger,
             launchExternalPath);
@@ -232,6 +236,7 @@ public sealed class SettingsViewModelTests
         var vm = new SettingsViewModel(
             loader, steam, Localization,
             new FakeAppUpdateService(), new FakeDialogService(),
+            new GamingModeState(false),
             invokeOnUi: static action => action(), Logger);
 
         vm.OverrideAutomaticDiscovery = false;
@@ -293,6 +298,7 @@ public sealed class SettingsViewModelTests
         var vm = new SettingsViewModel(
             loader, steam, Localization,
             new FakeAppUpdateService(), new FakeDialogService(),
+            new GamingModeState(false),
             invokeOnUi: static action => action(), Logger);
 
         Assert.Equal("/stale", Row(vm, "SteamInstallPath").Value);
@@ -576,5 +582,95 @@ public sealed class SettingsViewModelTests
         var alert = Assert.Single(dialogs.AlertCalls);
         Assert.Equal(Localization["Settings_OpenFolderFailedTitle"], alert.Title);
         Assert.Contains(Path.GetTempPath(), alert.Message);
+    }
+
+    // ---- Gaming Mode gating (Steam Deck) ----------------------------------
+    //
+    // Inside a Gaming Mode session the discovery Browse buttons and the two
+    // Storage open-folder buttons disable (pickers + file-manager opens are
+    // unusable there), while the discovery TextBoxes stay editable so manual
+    // path entry + submission keep working.
+
+    [Fact]
+    public void Gaming_mode_disables_Browse_even_in_manual_mode_while_TextBoxes_stay_editable()
+    {
+        var (vm, _, _, _) = Build(
+            new DiscoveryConfig { OverrideAutomaticDiscovery = true },
+            gamingMode: new GamingModeState(true));
+
+        Assert.All(vm.DiscoveryRows, row =>
+        {
+            Assert.True(row.IsEditable);
+            Assert.False(row.IsBrowseEnabled);
+            Assert.NotNull(row.BrowseTooltip);
+        });
+    }
+
+    [Fact]
+    public void Non_gaming_keeps_Browse_enabled_in_manual_mode_with_no_guidance_tooltip()
+    {
+        var (vm, _, _, _) = Build(
+            new DiscoveryConfig { OverrideAutomaticDiscovery = true });
+
+        Assert.All(vm.DiscoveryRows, row =>
+        {
+            Assert.True(row.IsEditable);
+            Assert.True(row.IsBrowseEnabled);
+            Assert.Null(row.BrowseTooltip);
+        });
+    }
+
+    [Fact]
+    public void Gaming_mode_toggling_the_discovery_mode_refreshes_rows_with_the_gate_intact()
+    {
+        // A mode toggle (or forced Discover) refreshes rows in place through
+        // RefreshDiscoveryRows; the gaming push rides the same path so the
+        // Browse gate can never go stale after a refresh.
+        var (vm, loader, _, _) = Build(
+            gamingMode: new GamingModeState(true));
+
+        vm.OverrideAutomaticDiscovery = true;
+
+        Assert.True(loader.LastSaved!.Discovery.OverrideAutomaticDiscovery);
+        Assert.All(vm.DiscoveryRows, row =>
+        {
+            Assert.True(row.IsEditable);
+            Assert.False(row.IsBrowseEnabled);
+        });
+    }
+
+    [Fact]
+    public void Gaming_mode_exposes_the_flag_and_the_localized_storage_tooltip()
+    {
+        var (vm, _, _, _) = Build(gamingMode: new GamingModeState(true));
+
+        Assert.True(vm.IsGamingMode);
+        Assert.Equal(Localization["GamingMode_FileManagerGuidance"], vm.StorageButtonsTooltip);
+    }
+
+    [Fact]
+    public void Non_gaming_storage_tooltip_is_null_so_working_buttons_carry_no_tooltip()
+    {
+        var (vm, _, _, _) = Build();
+
+        Assert.False(vm.IsGamingMode);
+        Assert.Null(vm.StorageButtonsTooltip);
+    }
+
+    [Fact]
+    public async Task Gaming_mode_open_folder_commands_never_call_the_launcher_seam()
+    {
+        Directory.CreateDirectory(AppPaths.AppDataDir);
+        var called = 0;
+        var (vm, _, dialogs, _) = Build(
+            profilesBaseFolder: Path.GetTempPath(),
+            launchExternalPath: _ => { called++; return true; },
+            gamingMode: new GamingModeState(true));
+
+        await vm.OpenDataFolderCommand.ExecuteAsync(null);
+        await vm.OpenProfilesFolderCommand.ExecuteAsync(null);
+
+        Assert.Equal(0, called);
+        Assert.Empty(dialogs.AlertCalls);
     }
 }

@@ -232,6 +232,9 @@ public static class CuratorComposition
                 // The shared last-known nxm registration state feeds the
                 // empty-state Nexus hint; the mod list never probes the OS.
                 sp.GetRequiredService<INxmRegistrationState>(),
+                // Gaming Mode gates the Add split button's picker paths + the
+                // linked-row open-folder badge.
+                sp.GetRequiredService<IGamingModeState>(),
                 startCountdownTimer,
                 stopCountdownTimer);
         });
@@ -283,6 +286,9 @@ public static class CuratorComposition
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<IAppUpdateService>(),
             sp.GetRequiredService<IDialogService>(),
+            // Gaming Mode gates the discovery Browse buttons + the Storage
+            // open-folder buttons; manual path entry stays available.
+            sp.GetRequiredService<IGamingModeState>(),
             sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<SettingsViewModel>>()));
 
@@ -339,7 +345,8 @@ public static class CuratorComposition
                 sp.GetRequiredService<MainWindow>(),
                 sp.GetRequiredService<LocalizationService>(),
                 sp.GetRequiredService<IConfigLoader>(),
-                sp.GetRequiredService<ISteamService>()));
+                sp.GetRequiredService<ISteamService>(),
+                sp.GetRequiredService<IGamingModeState>()));
 
         // The UI-layer glue that fires an update check
         // (IUpdateCheckService, registered above via AddIntegrations) on the

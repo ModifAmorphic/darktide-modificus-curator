@@ -6,6 +6,7 @@ using Modificus.Curator.Config;
 using Modificus.Curator.General;
 using Modificus.Curator.Steam;
 using Modificus.Curator.UI.Localization;
+using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.Settings;
 
 namespace Modificus.Curator.UI.ViewModels;
@@ -50,6 +51,7 @@ public partial class DiscoveryEscapeHatchViewModel : ObservableObject
     private readonly IConfigLoader _configLoader;
     private readonly ISteamService _steam;
     private readonly LocalizationService _localization;
+    private readonly IGamingModeState _gamingMode;
 
     /// <summary>True while rehydrating the rows so the toggle handler + row
     /// callbacks do not save. The values already match what is persisted.</summary>
@@ -67,15 +69,21 @@ public partial class DiscoveryEscapeHatchViewModel : ObservableObject
     /// service; this VM only orchestrates user actions + display state.</param>
     /// <param name="localization">The localization service; handed to each row so
     /// its label resolves + refreshes on a culture change.</param>
+    /// <param name="gamingMode">Whether the app runs inside a Steam Deck Gaming
+    /// Mode session. Gates each row's Browse button (pickers are unusable
+    /// there); the TextBoxes + Submit stay fully available so manual path entry
+    /// keeps working.</param>
     public DiscoveryEscapeHatchViewModel(
         IReadOnlyList<string> missingFields,
         IConfigLoader configLoader,
         ISteamService steamService,
-        LocalizationService localization)
+        LocalizationService localization,
+        IGamingModeState gamingMode)
     {
         _configLoader = configLoader;
         _steam = steamService ?? throw new ArgumentNullException(nameof(steamService));
         _localization = localization;
+        _gamingMode = gamingMode ?? throw new ArgumentNullException(nameof(gamingMode));
 
         var discovery = _configLoader.Load().Discovery;
 
@@ -101,6 +109,7 @@ public partial class DiscoveryEscapeHatchViewModel : ObservableObject
             foreach (var row in Rows)
             {
                 row.IsEditable = discovery.OverrideAutomaticDiscovery;
+                row.IsGamingMode = IsGamingMode;
             }
         }
         finally
@@ -118,9 +127,26 @@ public partial class DiscoveryEscapeHatchViewModel : ObservableObject
     /// </summary>
     public ObservableCollection<DiscoveryFieldRowViewModel> Rows { get; }
 
-    /// <summary>The localized header (the friendly "couldn't discover everything"
+    /// <summary>
+    /// Whether the app runs inside a Steam Deck Gaming Mode session. Gates each
+    /// row's Browse button (via each row's pushed-down flag); manual entry +
+    /// Submit are deliberately unaffected.
+    /// </summary>
+    public bool IsGamingMode => _gamingMode.IsGamingMode;
+
+    /// <summary>
+    /// The localized header (the friendly "couldn't discover everything"
     /// message). Re-resolves on a culture change.</summary>
     public string Header => _localization["EscapeHatch_Header"];
+
+    /// <summary>
+    /// The Gaming Mode guidance shown inline under the header while gaming
+    /// (pickers disabled; manual entry still works), or <c>null</c> in normal
+    /// mode. Re-resolves on a culture change.
+    /// </summary>
+    public string? PickerGatingHint => IsGamingMode
+        ? _localization["GamingMode_PickerGuidance"]
+        : null;
 
     /// <summary>The localized "click Launch to retry" hint. Re-resolves on a
     /// culture change.</summary>
@@ -191,6 +217,7 @@ public partial class DiscoveryEscapeHatchViewModel : ObservableObject
             {
                 row.Value = InitialValue(row.Field, discovery);
                 row.IsEditable = discovery.OverrideAutomaticDiscovery;
+                row.IsGamingMode = IsGamingMode;
             }
         }
         finally
@@ -234,6 +261,7 @@ public partial class DiscoveryEscapeHatchViewModel : ObservableObject
 
         OnPropertyChanged(nameof(Header));
         OnPropertyChanged(nameof(RetryHint));
+        OnPropertyChanged(nameof(PickerGatingHint));
     }
 
     /// <summary>

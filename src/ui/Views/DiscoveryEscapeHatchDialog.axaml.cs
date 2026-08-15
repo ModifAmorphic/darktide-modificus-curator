@@ -66,7 +66,9 @@ public partial class DiscoveryEscapeHatchDialog : Window
     /// A row's Browse button. The button carries the field's
     /// <see cref="DiscoveryBrowseKind"/> as its <c>CommandParameter</c>; this
     /// opens the matching picker, takes the first selection, and sets the row's
-    /// <c>Value</c>.
+    /// <c>Value</c>. No-op inside a Steam Deck Gaming Mode session (pickers are
+    /// unusable there; the disabled button is the first gate, this covers a
+    /// programmatic or stale-click invocation).
     /// </summary>
     /// <remarks>
     /// The picker's <c>SuggestedStartLocation</c> is derived from the row's
@@ -78,6 +80,11 @@ public partial class DiscoveryEscapeHatchDialog : Window
     {
         if (sender is not Button b
             || b.DataContext is not DiscoveryFieldRowViewModel row)
+        {
+            return;
+        }
+
+        if (ViewModel?.IsGamingMode is true)
         {
             return;
         }

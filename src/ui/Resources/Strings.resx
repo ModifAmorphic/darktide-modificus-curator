@@ -123,6 +123,24 @@
   </data>
 
   <!-- ============================================================ -->
+  <!-- Steam Deck Gaming Mode gating (picker + file-manager         -->
+  <!--  affordances disabled while inside a Gaming Mode session)    -->
+  <!-- ============================================================ -->
+
+  <data name="GamingMode_GuidanceTitle" xml:space="preserve">
+    <value>Desktop Mode required</value>
+    <comment>Short title for the Gaming Mode guidance: the operation the user attempted is only available in Steam Deck Desktop Mode.</comment>
+  </data>
+  <data name="GamingMode_PickerGuidance" xml:space="preserve">
+    <value>File and folder pickers are only available in Steam Deck Desktop Mode. Exit Gaming Mode, then use this from Desktop Mode.</value>
+    <comment>Guidance shown next to (and as the tooltip on) picker-dependent controls while a Steam Deck Gaming Mode session is detected.</comment>
+  </data>
+  <data name="GamingMode_FileManagerGuidance" xml:space="preserve">
+    <value>Opening folders is only available in Steam Deck Desktop Mode.</value>
+    <comment>Guidance shown next to (and as the tooltip on) file-manager-dependent controls while a Steam Deck Gaming Mode session is detected.</comment>
+  </data>
+
+  <!-- ============================================================ -->
   <!-- App self-update (ShellViewModel status-strip notice +        -->
   <!--  download flow; SettingsViewModel manual check + version)    -->
   <!-- ============================================================ -->
@@ -353,6 +371,10 @@
   <data name="ModList_AddButtonTooltip" xml:space="preserve">
     <value>Add a mod to this profile</value>
     <comment>Tooltip on the Add split button in the mod list header (the primary click runs the current mode's action).</comment>
+  </data>
+  <data name="ModList_AddGamingModeHint" xml:space="preserve">
+    <value>Adding mods requires Steam Deck Desktop Mode.</value>
+    <comment>Inline toolbar hint (and the Add split button's tooltip) while a Steam Deck Gaming Mode session is detected: the picker-based add paths are disabled there.</comment>
   </data>
   <data name="ModList_AddNexusMods" xml:space="preserve">
     <value>Add Nexus Mods</value>

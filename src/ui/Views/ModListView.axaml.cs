@@ -259,11 +259,13 @@ public partial class ModListView : UserControl
     /// MenuFlyout click should not open the link picker once the workflow is
     /// active) AND rechecked after the picker returns so a linked-folder
     /// mutation does not proceed if an import workflow became active while the
-    /// picker was open (e.g. a drag-and-drop landed in the meantime).
+    /// picker was open (e.g. a drag-and-drop landed in the meantime). Also
+    /// gated on Gaming Mode (pickers are unusable in a Steam Deck Gaming Mode
+    /// session; the disabled split button is the first gate).
     /// </summary>
     private async Task OpenLinkFolderPickerAsync()
     {
-        if (ViewModel is not { } vm || vm.ImportWorkflow.IsActive)
+        if (ViewModel is not { } vm || vm.ImportWorkflow.IsActive || vm.IsGamingMode)
         {
             return;
         }
@@ -321,14 +323,16 @@ public partial class ModListView : UserControl
     /// returns (a native picker is async; the workflow could have become active
     /// while it was open). The SplitButton is also disabled, but a late-returning
     /// picker or a programmatic call could race; StartBatch's VM gate is the
-    /// final defense. The filter offers a curated "Archives" entry (zip/7z/rar)
-    /// plus the built-in "All files" entry, so unsupported-but-real archives (and
-    /// edge cases) are still reachable. The import backend detects the format
-    /// from the file contents, so the filter is a convenience, not a gate.
+    /// final defense. Also gated on Gaming Mode (pickers are unusable in a
+    /// Steam Deck Gaming Mode session). The filter offers a curated "Archives"
+    /// entry (zip/7z/rar) plus the built-in "All files" entry, so
+    /// unsupported-but-real archives (and edge cases) are still reachable. The
+    /// import backend detects the format from the file contents, so the filter
+    /// is a convenience, not a gate.
     /// </summary>
     private async Task OpenArchivePickerAsync()
     {
-        if (ViewModel is not { } vm || vm.ImportWorkflow.IsActive)
+        if (ViewModel is not { } vm || vm.ImportWorkflow.IsActive || vm.IsGamingMode)
         {
             return;
         }
@@ -373,13 +377,14 @@ public partial class ModListView : UserControl
     /// Opens a multi-select folder picker and forwards the selected folder paths
     /// to the inline import workflow's start command. Skipped defensively when
     /// the workflow is already active at entry AND rechecked after the picker
-    /// returns (same late-return contract as the archive picker). The
-    /// cross-platform path for folder import via picker (a native picker cannot
-    /// mix files + folders).
+    /// returns (same late-return contract as the archive picker). Also gated on
+    /// Gaming Mode (pickers are unusable in a Steam Deck Gaming Mode session).
+    /// The cross-platform path for folder import via picker (a native picker
+    /// cannot mix files + folders).
     /// </summary>
     private async Task OpenFolderPickerAsync()
     {
-        if (ViewModel is not { } vm || vm.ImportWorkflow.IsActive)
+        if (ViewModel is not { } vm || vm.ImportWorkflow.IsActive || vm.IsGamingMode)
         {
             return;
         }

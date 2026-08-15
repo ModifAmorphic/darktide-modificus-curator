@@ -235,7 +235,7 @@
          the page's safe left + right insets (the row ScrollViewer below spans to
          the destination edge so its scrollbar sits at the edge, not inset). -->
     <Grid Grid.Row="0"
-          ColumnDefinitions="Auto,*,Auto,Auto,Auto"
+          ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto"
           IsVisible="{Binding HasActiveProfile}"
           Margin="20,12,20,8">
       <!--
@@ -377,12 +377,17 @@
         external folder". The arrow is built-in theme chrome (no authored glyph).
         Disabled while the inline import workflow is active (editing, processing,
         or failure): the VM's StartBatch gate is the final defense, but the
-        disabled button communicates the state visually.
+        disabled button communicates the state visually. Also disabled inside a
+        Steam Deck Gaming Mode session (the picker-based add paths are unusable
+        there); IsAddEnabled covers both, the tooltip carries the Gaming Mode
+        guidance while disabled, and the toolbar hint below explains without
+        hover.
       -->
       <SplitButton Grid.Column="4"
                    Click="Add_Click"
-                   ToolTip.Tip="{ReflectionBinding [ModList_AddButtonTooltip], Source={StaticResource Loc}}"
-                   IsEnabled="{Binding !ImportWorkflow.IsActive}"
+                   ToolTip.Tip="{Binding AddButtonTooltip}"
+                   ToolTip.ShowOnDisabled="True"
+                   IsEnabled="{Binding IsAddEnabled}"
                    Margin="16,0,0,0"
                    VerticalAlignment="Center">
         <SplitButton.Content>
@@ -407,6 +412,20 @@
           </MenuFlyout>
         </SplitButton.Flyout>
       </SplitButton>
+      <!--
+        Gaming Mode toolbar hint (Steam Deck): shown only while a Gaming Mode
+        session is detected, next to the disabled Add split button. The
+        touch/controller-reachable explanation for the whole Add affordance (no
+        hover required); may ellipsize at narrow widths.
+      -->
+      <TextBlock Grid.Column="5"
+                 Text="{ReflectionBinding [ModList_AddGamingModeHint], Source={StaticResource Loc}}"
+                 IsVisible="{Binding IsGamingMode}"
+                 FontSize="11"
+                 Opacity="0.6"
+                 Margin="12,0,0,0"
+                 VerticalAlignment="Center"
+                 TextTrimming="CharacterEllipsis" />
     </Grid>
 
     <!--
@@ -587,11 +606,16 @@
                     <!-- Linked + available: clickable pill opening the external
                          folder in the OS file manager. NavigateUri is
                          intentionally unset; the Click handler routes to the
-                         parent's OpenFolderCommand. -->
+                         parent's OpenFolderCommand. Disabled inside a Steam
+                         Deck Gaming Mode session (file-manager opens depend on
+                         a desktop shell); the tooltip swaps to the Gaming Mode
+                         guidance there. -->
                     <HyperlinkButton Classes="badge"
                                      IsVisible="{Binding IsLinkedAvailable}"
                                      Click="OpenFolder_Click"
-                                     ToolTip.Tip="{ReflectionBinding [ModRow_LinkedOpenTooltip], Source={StaticResource Loc}}">
+                                     IsEnabled="{Binding !IsGamingMode}"
+                                     ToolTip.Tip="{Binding LinkedBadgeTooltip}"
+                                     ToolTip.ShowOnDisabled="True">
                       <TextBlock Text="{Binding SourceBadgeText}" FontSize="11" />
                     </HyperlinkButton>
                     <!-- Linked + broken: non-clickable warning text in a pill,
@@ -930,11 +954,15 @@
                                              ToolTip.Tip="{ReflectionBinding [ModRow_SourceBadgeLinkTooltip], Source={StaticResource Loc}}">
                               <TextBlock Text="{Binding SourceBadgeText}" FontSize="11" />
                             </HyperlinkButton>
-                            <!-- Linked + available: opens the external folder. -->
+                            <!-- Linked + available: opens the external folder.
+                                 Same Gaming Mode gating + tooltip swap as the
+                                 Compact root's badge. -->
                             <HyperlinkButton Classes="badge"
                                              IsVisible="{Binding IsLinkedAvailable}"
                                              Click="OpenFolder_Click"
-                                             ToolTip.Tip="{ReflectionBinding [ModRow_LinkedOpenTooltip], Source={StaticResource Loc}}">
+                                             IsEnabled="{Binding !IsGamingMode}"
+                                             ToolTip.Tip="{Binding LinkedBadgeTooltip}"
+                                             ToolTip.ShowOnDisabled="True">
                               <TextBlock Text="{Binding SourceBadgeText}" FontSize="11" />
                             </HyperlinkButton>
                             <!-- Linked + broken: non-clickable warning text. -->

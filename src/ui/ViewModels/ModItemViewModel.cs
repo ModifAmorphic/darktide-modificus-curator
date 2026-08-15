@@ -254,6 +254,27 @@ public partial class ModItemViewModel : ObservableObject
     private bool _isExternalBroken;
 
     /// <summary>
+    /// Whether the app runs inside a Steam Deck Gaming Mode session. Pushed down
+    /// by the parent (constant for the process lifetime). Disables the linked
+    /// row's "External" badge (its click opens the OS file manager, which depends
+    /// on a desktop shell); the non-interactive "Folder unavailable" text is
+    /// unaffected either way.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(LinkedBadgeTooltip))]
+    private bool _isGamingMode;
+
+    /// <summary>
+    /// The linked badge's tooltip: the localized Gaming Mode guidance while
+    /// gaming (shown on the disabled badge), or the ordinary open-folder tooltip
+    /// in normal mode (preserving the badge's pre-existing affordance hint).
+    /// Re-resolves on a culture change (via <see cref="Refresh"/>).
+    /// </summary>
+    public string LinkedBadgeTooltip => IsGamingMode
+        ? _localization["GamingMode_FileManagerGuidance"]
+        : _localization["ModRow_LinkedOpenTooltip"];
+
+    /// <summary>
     /// Optional source-agnostic display metadata (summary, thumbnail URL,
     /// adult-content flag) joined from the container at construction and updated
     /// by the detailed-rows coordinator when backfill enriches it. <c>null</c>
@@ -691,6 +712,8 @@ public partial class ModItemViewModel : ObservableObject
         // The lock tooltip + automation name are localized by state; re-fire.
         OnPropertyChanged(nameof(OrderLockTooltip));
         OnPropertyChanged(nameof(OrderLockAutomationName));
+        // The Gaming Mode badge tooltip is localized by state; re-fire.
+        OnPropertyChanged(nameof(LinkedBadgeTooltip));
     }
 }
 

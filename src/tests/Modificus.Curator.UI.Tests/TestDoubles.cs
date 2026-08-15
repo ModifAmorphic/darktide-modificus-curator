@@ -123,7 +123,8 @@ internal static class TestDoubles
         Action? stopCountdownTimer = null,
         Func<Uri, bool>? launchExternal = null,
         Func<string, bool>? launchExternalPath = null,
-        FakeNxmRegistrationState? nxmRegistration = null)
+        FakeNxmRegistrationState? nxmRegistration = null,
+        IGamingModeState? gamingMode = null)
     {
         profiles ??= Profiles();
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
@@ -176,6 +177,9 @@ internal static class TestDoubles
         // The shared nxm registration state: default is a plain fake
         // (unavailable, not registered, no probe possible).
         nxmRegistration ??= new FakeNxmRegistrationState();
+        // Gaming Mode default: not gaming (the ordinary desktop session the
+        // existing tests assume); gaming-gating tests pass a gaming state.
+        gamingMode ??= new GamingModeState(false);
         // Wire the state store + a record-profile-id tracker into the fake
         // update-check service so RaiseCheckCompleted / CheckAsync record the
         // result through the store (mirroring the real service's publish-time
@@ -224,6 +228,7 @@ internal static class TestDoubles
             invokeOnUi,
             NullLogger<ModListViewModel>.Instance,
             nxmRegistration,
+            gamingMode,
             startCountdownTimer,
             stopCountdownTimer,
             getNow,
@@ -337,6 +342,7 @@ internal static class TestDoubles
             steam,
             localization,
             appUpdate, dialogs,
+            new GamingModeState(false),
             invokeOnUi: static action => action(),
             NullLogger<SettingsViewModel>.Instance);
 

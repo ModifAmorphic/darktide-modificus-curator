@@ -33,7 +33,10 @@ public partial class SettingsView : UserControl
     /// <see cref="DiscoveryBrowseKind"/> as its <c>CommandParameter</c>; this
     /// opens the matching picker, takes the first selection (single-select), and
     /// sets the row's <c>Value</c> (which triggers the VM's write-through).
-    /// Multi-select is not meaningful for a single path field.
+    /// Multi-select is not meaningful for a single path field. No-op inside a
+    /// Steam Deck Gaming Mode session (pickers are unusable there; the disabled
+    /// button is the first gate, this covers a programmatic or stale-click
+    /// invocation).
     /// </summary>
     /// <remarks>
     /// The picker's <c>SuggestedStartLocation</c> is derived from the row's
@@ -45,6 +48,11 @@ public partial class SettingsView : UserControl
     {
         if (sender is not Button b
             || b.DataContext is not DiscoveryFieldRowViewModel row)
+        {
+            return;
+        }
+
+        if ((DataContext as SettingsViewModel)?.IsGamingMode is true)
         {
             return;
         }

@@ -1,5 +1,6 @@
 using Modificus.Curator.UI.AppUpdate;
 using Modificus.Curator.UI.Localization;
+using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.ViewModels;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -37,6 +38,7 @@ public sealed class SettingsViewModelAppUpdateTests
             Localization,
             appUpdate,
             dialogs,
+            new GamingModeState(false),
             invokeOnUi: static action => action(),
             NullLogger<SettingsViewModel>.Instance);
     }

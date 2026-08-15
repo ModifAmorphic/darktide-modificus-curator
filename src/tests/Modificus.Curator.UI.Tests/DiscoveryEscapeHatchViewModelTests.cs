@@ -1,5 +1,6 @@
 using Modificus.Curator.Config;
 using Modificus.Curator.UI.Localization;
+using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.ViewModels;
 using Modificus.Curator.UI.Settings;
 
@@ -10,8 +11,9 @@ namespace Modificus.Curator.UI.Tests;
 /// fields are shown (in catalog order); the global override toggle + forced
 /// Discover share Settings' semantics; row editability follows the mode; submit
 /// writes staged paths only in manual mode; cancel never writes staged rows
-/// (already write-through toggle/Discover actions stay applied); and there is
-/// no auto-retry (the caller does not re-launch).
+/// (already write-through toggle/Discover actions stay applied); there is no
+/// auto-retry (the caller does not re-launch); and the Gaming Mode gating
+/// disables the row Browse buttons without touching manual entry + Submit.
 /// </summary>
 public sealed class DiscoveryEscapeHatchViewModelTests
 {
@@ -23,13 +25,15 @@ public sealed class DiscoveryEscapeHatchViewModelTests
     private static (DiscoveryEscapeHatchViewModel vm, FakeConfigLoader loader, FakeSteamService steam) Build(
         IReadOnlyList<string> missingFields,
         DiscoveryConfig? discovery = null,
-        FakeSteamService? steam = null)
+        FakeSteamService? steam = null,
+        GamingModeState? gamingMode = null)
     {
         var config = CuratorConfig.CreateDefault();
         if (discovery is not null) config.Discovery = discovery;
         var loader = new FakeConfigLoader { Config = config };
         steam ??= new FakeSteamService();
-        var vm = new DiscoveryEscapeHatchViewModel(missingFields, loader, steam, Localization);
+        var vm = new DiscoveryEscapeHatchViewModel(
+            missingFields, loader, steam, Localization, gamingMode ?? new GamingModeState(false));
         return (vm, loader, steam);
     }
 
@@ -160,7 +164,8 @@ public sealed class DiscoveryEscapeHatchViewModelTests
             },
         };
         var vm = new DiscoveryEscapeHatchViewModel(
-            new[] { "SteamInstallPath" }, loader, steam, Localization);
+            new[] { "SteamInstallPath" }, loader, steam, Localization,
+            new GamingModeState(false));
 
         vm.OverrideAutomaticDiscovery = false;
 
@@ -194,7 +199,8 @@ public sealed class DiscoveryEscapeHatchViewModelTests
             },
         };
         var vm = new DiscoveryEscapeHatchViewModel(
-            new[] { "SteamInstallPath" }, loader, steam, Localization);
+            new[] { "SteamInstallPath" }, loader, steam, Localization,
+            new GamingModeState(false));
 
         vm.DiscoverCommand.Execute(null);
 
@@ -243,7 +249,8 @@ public sealed class DiscoveryEscapeHatchViewModelTests
             },
         };
         var vm = new DiscoveryEscapeHatchViewModel(
-            new[] { "SteamInstallPath" }, loader, new FakeSteamService(), Localization);
+            new[] { "SteamInstallPath" }, loader, new FakeSteamService(), Localization,
+            new GamingModeState(false));
 
         Row(vm, "SteamInstallPath").Value = "/staged-but-ignored";
         vm.SubmitCommand.Execute(null);
@@ -324,7 +331,8 @@ public sealed class DiscoveryEscapeHatchViewModelTests
             },
         };
         var vm = new DiscoveryEscapeHatchViewModel(
-            new[] { "SteamInstallPath" }, loader, steam, Localization);
+            new[] { "SteamInstallPath" }, loader, steam, Localization,
+            new GamingModeState(false));
 
         vm.DiscoverCommand.Execute(null);
         Assert.Equal("/rediscovered", Row(vm, "SteamInstallPath").Value);
@@ -353,6 +361,64 @@ public sealed class DiscoveryEscapeHatchViewModelTests
 
         vm.SubmitCommand.Execute(null);
 
+        Assert.True(vm.Result);
+    }
+
+    // ---- Gaming Mode gating (Steam Deck) ----------------------------------
+    //
+    // Inside a Gaming Mode session the row Browse buttons disable (pickers are
+    // unusable there) while the TextBoxes + Submit stay fully available, so the
+    // user can still resolve a failed discovery by typing paths manually.
+
+    [Fact]
+    public void Gaming_mode_disables_row_Browse_but_keeps_rows_editable_for_manual_entry()
+    {
+        var (vm, _, _) = Build(
+            new[] { "SteamInstallPath", "ProtonBinaryPath" },
+            new DiscoveryConfig { OverrideAutomaticDiscovery = true },
+            gamingMode: new GamingModeState(true));
+
+        Assert.True(vm.IsGamingMode);
+        Assert.Equal(Localization["GamingMode_PickerGuidance"], vm.PickerGatingHint);
+        Assert.All(vm.Rows, row =>
+        {
+            Assert.True(row.IsEditable);
+            Assert.False(row.IsBrowseEnabled);
+            Assert.NotNull(row.BrowseTooltip);
+        });
+    }
+
+    [Fact]
+    public void Non_gaming_rows_have_no_picker_gating_hint_and_browse_follows_the_mode()
+    {
+        var (vm, _, _) = Build(
+            new[] { "SteamInstallPath" },
+            new DiscoveryConfig { OverrideAutomaticDiscovery = true });
+
+        Assert.False(vm.IsGamingMode);
+        Assert.Null(vm.PickerGatingHint);
+        Assert.All(vm.Rows, row =>
+        {
+            Assert.True(row.IsBrowseEnabled);
+            Assert.Null(row.BrowseTooltip);
+        });
+    }
+
+    [Fact]
+    public void Gaming_mode_manual_submit_still_writes_the_staged_paths()
+    {
+        // The whole point of keeping the TextBoxes alive in Gaming Mode: the
+        // user can resolve a discovery failure by typing the paths.
+        var (vm, loader, _) = Build(
+            new[] { "SteamInstallPath" },
+            new DiscoveryConfig { OverrideAutomaticDiscovery = true },
+            gamingMode: new GamingModeState(true));
+
+        Row(vm, "SteamInstallPath").Value = "/typed/by/hand";
+        vm.SubmitCommand.Execute(null);
+
+        Assert.Equal("/typed/by/hand", loader.LastSaved!.Discovery.SteamInstallPath);
+        Assert.True(loader.LastSaved.Discovery.OverrideAutomaticDiscovery);
         Assert.True(vm.Result);
     }
 }
