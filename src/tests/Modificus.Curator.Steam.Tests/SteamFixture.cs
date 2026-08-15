@@ -245,6 +245,43 @@ internal sealed class SteamFixture : IDisposable
         return this;
     }
 
+    /// <summary>
+    /// Scaffolds the recommended-runtime Proton layout: writes the realistic
+    /// multi-entry <c>appinfo.vdf</c> (the Steam Play manifest's
+    /// <c>compat_tools</c> incl. <c>proton_11</c>, plus Darktide's recommended
+    /// runtime), the tool's <c>appmanifest</c> under a library, and its
+    /// <c>proton</c> file.
+    /// </summary>
+    public SteamFixture WithRecommendedRuntimeProton(
+        string steamRoot,
+        string library,
+        string installDir = "Proton 11.0",
+        string recommendedRuntime = AppInfoFixture.RecommendedRuntime)
+    {
+        var appInfoDir = Path.Combine(steamRoot, "appcache");
+        Directory.CreateDirectory(appInfoDir);
+        File.WriteAllBytes(
+            Path.Combine(appInfoDir, "appinfo.vdf"),
+            AppInfoFixture.BuildRecommendedRuntimeAppInfo(recommendedRuntime));
+
+        // Write the proton_11 appmanifest + proton binary under the library.
+        var steamapps = Path.Combine(library, "steamapps");
+        Directory.CreateDirectory(steamapps);
+        var manifestName = $"appmanifest_{AppInfoFixture.Proton11AppId}.acf";
+        var manifest = new StringBuilder();
+        manifest.AppendLine("\"AppState\"");
+        manifest.AppendLine("{");
+        manifest.AppendLine($"    \"appid\"        \"{AppInfoFixture.Proton11AppId}\"");
+        manifest.AppendLine($"    \"installdir\"   \"{EscapeVdf(installDir)}\"");
+        manifest.AppendLine("}");
+        File.WriteAllText(Path.Combine(steamapps, manifestName), manifest.ToString());
+
+        var commonDir = Path.Combine(steamapps, "common", installDir);
+        Directory.CreateDirectory(commonDir);
+        File.WriteAllText(Path.Combine(commonDir, "proton"), string.Empty);
+        return this;
+    }
+
     // ---- expected-path helpers (assertions) -------------------------------
 
     public string ExpectedDarktidePath(string libraryRoot) => Path.Combine(

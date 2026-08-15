@@ -667,8 +667,11 @@ Responsibilities:
     Steam's `CompatToolMapping` (the app-specific entry for Darktide is
     authoritative; the global entry is the fallback), then resolving that tool
     name to a `proton` binary from a custom `compatibilitytools.d` manifest or a
-    Valve-managed install. This follows Darktide's own Steam compatibility
-    selection rather than guessing from directory names.
+    Valve-managed install. With neither mapping, Darktide's appinfo
+    `recommended_runtime` is Steam's non-user default on any Linux host; an
+    invalid or unreadable mapping fails rather than bypassing a possible user
+    choice. This follows Darktide's own Steam compatibility selection rather
+    than guessing from directory names.
   - **Escape hatch:** when auto-discovery can't resolve any of the above,
     prompt the user for the missing path(s). This is possible only because
     discovery lives in the UI app, not in Relay (which has no UI and could

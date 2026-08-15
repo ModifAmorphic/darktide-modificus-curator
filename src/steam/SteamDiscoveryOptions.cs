@@ -52,6 +52,14 @@ public sealed class SteamDiscoveryOptions
     };
 
     /// <summary>
+    /// Whether the host is a Steam Deck. <see cref="CreateDefault"/> detects it
+    /// from host OS-release metadata (<c>ID=steamos</c> +
+    /// <c>VARIANT_ID=steamdeck</c>); callers constructing non-default options
+    /// may set or pin the value.
+    /// </summary>
+    public bool IsSteamDeck { get; set; }
+
+    /// <summary>
     /// The Windows Steam install fallback path used when the registry yields
     /// nothing (typically <c>C:\Program Files (x86)\Steam</c>). Windows only.
     /// </summary>
@@ -83,11 +91,12 @@ public sealed class SteamDiscoveryOptions
     /// <summary>
     /// Builds the default options for the current OS. Resolves the real user
     /// profile + standard Steam locations; picks <see cref="Platform"/> from the
-    /// runtime OS.
+    /// runtime OS and <see cref="IsSteamDeck"/> from the OS release metadata.
     /// </summary>
     public static SteamDiscoveryOptions CreateDefault() => new()
     {
         Platform = DetectPlatform(),
+        IsSteamDeck = SteamDeckDetector.IsSteamDeck(),
         LinuxDefaultSteamRoot = HomeSubpath(".local/share/Steam"),
         LinuxFlatpakSteamRoot = HomeSubpath(".var/app/com.valvesoftware.Steam/data/Steam"),
         LinuxCompatibilityToolsDir = HomeSubpath(".local/share/Steam/compatibilitytools.d"),

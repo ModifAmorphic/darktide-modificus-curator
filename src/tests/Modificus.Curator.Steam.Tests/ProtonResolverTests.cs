@@ -8,15 +8,18 @@ namespace Modificus.Curator.Steam.Tests;
 /// <summary>
 /// Focused unit tests for <see cref="ProtonResolver"/>: custom-tool resolution
 /// (internal name, display name, relative/absolute install_path, missing-proton
-/// rejection), Valve-tool resolution (canonical key + alias), precedence rules,
-/// and best-effort degradation on missing/corrupt Steam metadata.
+/// rejection), Valve-tool resolution (canonical key + alias), precedence rules
+/// (app-specific, global, invalid, and the recommended-runtime fallback when no
+/// mapping exists), and best-effort degradation on missing/corrupt Steam
+/// metadata.
 /// </summary>
 public sealed class ProtonResolverTests
 {
-    private static SteamDiscoveryOptions Options(string tempRoot) => new()
+    private static SteamDiscoveryOptions Options(string tempRoot, bool isSteamDeck = false) => new()
     {
         Platform = DiscoveryPlatform.Linux,
         DarktideAppId = 1361210,
+        IsSteamDeck = isSteamDeck,
         LinuxCompatibilityToolsDir = Path.Combine(tempRoot, "user-ct"),
         LinuxSystemCompatibilityToolsDirs = new List<string> { Path.Combine(tempRoot, "sys-ct") },
     };
@@ -352,8 +355,11 @@ public sealed class ProtonResolverTests
     }
 
     [Fact]
-    public void Malformed_config_vdf_degrades_gracefully()
+    public void Malformed_config_vdf_fails_without_bypassing_a_mapping()
     {
+        // A config.vdf that exists but cannot be parsed must fail unresolved:
+        // falling through to the recommended runtime would bypass a possible
+        // user tool choice hidden in the unreadable file.
         using var temp = new TempDir();
         var opts = Options(temp.Path);
         var steamRoot = Path.Combine(temp.Path, "steam");
@@ -366,7 +372,7 @@ public sealed class ProtonResolverTests
         var result = resolver.Resolve(steamRoot, new[] { steamRoot }, warnings);
 
         Assert.Null(result);
-        Assert.Contains(warnings, w => w.Contains("No Steam compatibility tool mapping", StringComparison.Ordinal));
+        Assert.Contains(warnings, w => w.Contains("could not be parsed", StringComparison.Ordinal));
     }
 
     // ---- Valve-managed tool resolution --------------------------------------
@@ -685,6 +691,245 @@ public sealed class ProtonResolverTests
         // No malformed-config warning despite the heavy escaped JSON content.
         Assert.DoesNotContain(warnings, w =>
             w.Contains("No Steam compatibility tool mapping", StringComparison.Ordinal));
+    }
+
+    // ---- no-user-mapping recommended-runtime fallback ------------------------
+
+    /// <summary>
+    /// Writes the recommended-runtime layout: the realistic appinfo.vdf (Steam
+    /// Play compat_tools + Darktide's recommended runtime) and the proton_11
+    /// appmanifest + proton binary under the library.
+    /// </summary>
+    private static void WriteRecommendedRuntimeLayout(string steamRoot, string library)
+    {
+        var appcache = Path.Combine(steamRoot, "appcache");
+        Directory.CreateDirectory(appcache);
+        File.WriteAllBytes(
+            Path.Combine(appcache, "appinfo.vdf"), AppInfoFixture.BuildRecommendedRuntimeAppInfo());
+
+        var steamapps = Path.Combine(library, "steamapps");
+        Directory.CreateDirectory(steamapps);
+        File.WriteAllText(Path.Combine(steamapps, $"appmanifest_{AppInfoFixture.Proton11AppId}.acf"), """
+            "AppState"
+            {
+                "appid"        "4628710"
+                "installdir"   "Proton 11.0"
+            }
+            """);
+        PlaceProton(Path.Combine(steamapps, "common", "Proton 11.0"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void No_mapping_resolves_recommended_runtime_regardless_of_deck_identity(bool isSteamDeck)
+    {
+        // The fallback follows Steam's selection metadata alone: toggling
+        // SteamDiscoveryOptions.IsSteamDeck does not change the outcome.
+        using var temp = new TempDir();
+        var opts = Options(temp.Path, isSteamDeck: isSteamDeck);
+        var steamRoot = Path.Combine(temp.Path, "steam");
+        Directory.CreateDirectory(steamRoot);
+        // No config.vdf: no app-specific or global mapping.
+        WriteRecommendedRuntimeLayout(steamRoot, steamRoot);
+
+        var resolver = new ProtonResolver(opts, NullLogger.Instance);
+        var warnings = new List<string>();
+        var result = resolver.Resolve(steamRoot, new[] { steamRoot }, warnings);
+
+        Assert.NotNull(result);
+        Assert.Equal(
+            Path.Combine(steamRoot, "steamapps", "common", "Proton 11.0", "proton"),
+            result!.Value.Path);
+        Assert.Equal("Proton 11.0", result.Value.Version);
+        Assert.DoesNotContain(warnings, w => w.Contains("unresolved", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Recommended_runtime_resolves_custom_tool_first()
+    {
+        // The recommended name resolves as a custom tool when one is installed;
+        // custom-tool-first ordering applies to the recommendation too.
+        using var temp = new TempDir();
+        var opts = Options(temp.Path);
+        var steamRoot = Path.Combine(temp.Path, "steam");
+        Directory.CreateDirectory(steamRoot);
+        WriteRecommendedRuntimeLayout(steamRoot, steamRoot);
+
+        var toolDir = Path.Combine(opts.LinuxCompatibilityToolsDir!, AppInfoFixture.RecommendedRuntime);
+        WriteCustomManifest(toolDir, AppInfoFixture.RecommendedRuntime, ".", "Runtime Custom");
+        PlaceProton(toolDir);
+
+        var resolver = new ProtonResolver(opts, NullLogger.Instance);
+        var result = resolver.Resolve(steamRoot, new[] { steamRoot }, new List<string>());
+
+        Assert.NotNull(result);
+        Assert.Equal(Path.Combine(toolDir, "proton"), result!.Value.Path);
+        Assert.Equal("Runtime Custom", result.Value.Version);
+    }
+
+    [Fact]
+    public void Native_recommended_runtime_yields_unresolved()
+    {
+        using var temp = new TempDir();
+        var opts = Options(temp.Path);
+        var steamRoot = Path.Combine(temp.Path, "steam");
+        Directory.CreateDirectory(steamRoot);
+
+        var appcache = Path.Combine(steamRoot, "appcache");
+        Directory.CreateDirectory(appcache);
+        File.WriteAllBytes(
+            Path.Combine(appcache, "appinfo.vdf"), AppInfoFixture.BuildRecommendedRuntimeAppInfo(recommendedRuntime: "native"));
+
+        var resolver = new ProtonResolver(opts, NullLogger.Instance);
+        var warnings = new List<string>();
+        var result = resolver.Resolve(steamRoot, new[] { steamRoot }, warnings);
+
+        Assert.Null(result);
+        Assert.Contains(warnings, w => w.Contains("native", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Whitespace_recommended_runtime_yields_unresolved()
+    {
+        using var temp = new TempDir();
+        var opts = Options(temp.Path);
+        var steamRoot = Path.Combine(temp.Path, "steam");
+        Directory.CreateDirectory(steamRoot);
+
+        var appcache = Path.Combine(steamRoot, "appcache");
+        Directory.CreateDirectory(appcache);
+        File.WriteAllBytes(
+            Path.Combine(appcache, "appinfo.vdf"), AppInfoFixture.BuildRecommendedRuntimeAppInfo(recommendedRuntime: "   "));
+
+        var resolver = new ProtonResolver(opts, NullLogger.Instance);
+        var warnings = new List<string>();
+        var result = resolver.Resolve(steamRoot, new[] { steamRoot }, warnings);
+
+        Assert.Null(result);
+        Assert.Contains(warnings, w => w.Contains("no usable recommended runtime", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Missing_appinfo_yields_unresolved()
+    {
+        using var temp = new TempDir();
+        var opts = Options(temp.Path);
+        var steamRoot = Path.Combine(temp.Path, "steam");
+        Directory.CreateDirectory(steamRoot);
+        // No config.vdf, no appinfo.vdf.
+
+        var resolver = new ProtonResolver(opts, NullLogger.Instance);
+        var warnings = new List<string>();
+        var result = resolver.Resolve(steamRoot, new[] { steamRoot }, warnings);
+
+        Assert.Null(result);
+        Assert.Contains(warnings, w => w.Contains("no usable recommended runtime", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Unresolvable_recommended_runtime_yields_unresolved()
+    {
+        // The recommendation names a tool that is not installed; no other
+        // runtime is guessed.
+        using var temp = new TempDir();
+        var opts = Options(temp.Path);
+        var steamRoot = Path.Combine(temp.Path, "steam");
+        Directory.CreateDirectory(steamRoot);
+
+        var appcache = Path.Combine(steamRoot, "appcache");
+        Directory.CreateDirectory(appcache);
+        File.WriteAllBytes(
+            Path.Combine(appcache, "appinfo.vdf"),
+            AppInfoFixture.BuildRecommendedRuntimeAppInfo(recommendedRuntime: "proton-12.0-beta"));
+
+        var resolver = new ProtonResolver(opts, NullLogger.Instance);
+        var warnings = new List<string>();
+        var result = resolver.Resolve(steamRoot, new[] { steamRoot }, warnings);
+
+        Assert.Null(result);
+        Assert.Contains(warnings, w => w.Contains("proton-12.0-beta", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Unresolvable_selected_mapping_does_not_fall_through_to_recommendation()
+    {
+        // A syntactically selected mapping whose tool is missing stays
+        // authoritative; the recommended runtime is not consulted.
+        using var temp = new TempDir();
+        var opts = Options(temp.Path);
+        var steamRoot = Path.Combine(temp.Path, "steam");
+        Directory.CreateDirectory(steamRoot);
+        WriteCompatToolMapping(steamRoot, "1361210", "missing-tool");
+        WriteRecommendedRuntimeLayout(steamRoot, steamRoot);
+
+        var resolver = new ProtonResolver(opts, NullLogger.Instance);
+        var warnings = new List<string>();
+        var result = resolver.Resolve(steamRoot, new[] { steamRoot }, warnings);
+
+        Assert.Null(result);
+        Assert.Contains(warnings, w => w.Contains("missing-tool", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Malformed_config_does_not_fall_through_to_recommendation()
+    {
+        using var temp = new TempDir();
+        var opts = Options(temp.Path);
+        var steamRoot = Path.Combine(temp.Path, "steam");
+        Directory.CreateDirectory(steamRoot);
+        var configDir = Path.Combine(steamRoot, "config");
+        Directory.CreateDirectory(configDir);
+        File.WriteAllText(Path.Combine(configDir, "config.vdf"), "this is not valid VDF {{{");
+        WriteRecommendedRuntimeLayout(steamRoot, steamRoot);
+
+        var resolver = new ProtonResolver(opts, NullLogger.Instance);
+        var warnings = new List<string>();
+        var result = resolver.Resolve(steamRoot, new[] { steamRoot }, warnings);
+
+        Assert.Null(result);
+        Assert.Contains(warnings, w => w.Contains("could not be parsed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Non_string_mapping_name_is_invalid_and_does_not_fall_through()
+    {
+        // The app-specific mapping's name is a bare integer, not a string: the
+        // mapping is present but invalid, so resolution fails.
+        using var temp = new TempDir();
+        var opts = Options(temp.Path);
+        var steamRoot = Path.Combine(temp.Path, "steam");
+        var configDir = Path.Combine(steamRoot, "config");
+        Directory.CreateDirectory(configDir);
+        File.WriteAllText(Path.Combine(configDir, "config.vdf"), """
+            "InstallConfigStore"
+            {
+                "Software"
+                {
+                    "Valve"
+                    {
+                        "Steam"
+                        {
+                            "CompatToolMapping"
+                            {
+                                "1361210"
+                                {
+                                    "name"        5
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            """);
+        WriteRecommendedRuntimeLayout(steamRoot, steamRoot);
+
+        var resolver = new ProtonResolver(opts, NullLogger.Instance);
+        var warnings = new List<string>();
+        var result = resolver.Resolve(steamRoot, new[] { steamRoot }, warnings);
+
+        Assert.Null(result);
+        Assert.Contains(warnings, w => w.Contains("non-string tool name", StringComparison.Ordinal));
     }
 
     private sealed class TempDir : IDisposable

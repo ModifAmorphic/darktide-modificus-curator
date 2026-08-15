@@ -882,9 +882,20 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         IProfileService.GetModList)
   steam/                Modificus.Curator.Steam -- Steam + Darktide + Proton discovery
                         (multi-library + compatdata; Linux Proton resolves from Steam's
-                        CompatToolMapping in config.vdf to a custom compatibilitytool.vdf
-                        or a Valve-managed appinfo/appmanifest install, never a directory-name
-                        guess; Steam text KV1 parsing centralized through SteamTextVdf with
+                        CompatToolMapping in config.vdf, app-specific entry first then
+                        the global "0" entry, to a custom compatibilitytool.vdf
+                        or a Valve-managed appinfo/appmanifest install, never a
+                        directory-name guess; with neither mapping, Darktide's appinfo
+                        recommended_runtime (the steam_deck_compatibility metadata) is
+                        Steam's non-user default on any Linux host (one appinfo.vdf
+                        scan collects both the compat_tools registry + the
+                        recommendation; an invalid/unreadable mapping or a
+                        native/missing recommendation fails unresolved without falling
+                        through); Steam Deck identity (SteamDeckDetector +
+                        SteamDiscoveryOptions.IsSteamDeck, detected from OS release
+                        metadata ID=steamos + VARIANT_ID=steamdeck, host file first)
+                        is a generic platform identity input, not Proton policy;
+                        Steam text KV1 parsing centralized through SteamTextVdf with
                         HasEscapeSequences always on, ValveKeyValue 0.70.0.499), the
                         ISteamService.Discover automatic/manual mode policy + Rediscover
                         forced-automatic surface, IsGameRunning (WinProcessLookup
@@ -1002,6 +1013,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           atomic missing-only persistence) + the
                                           ModDisplayMetadataMapper normalization
     Modificus.Curator.Steam.Tests/           xUnit tests for discovery + IsGameRunning
+                                            (incl. the Proton selection precedence: app-specific,
+                                            global, invalid-entry no-fall-through, + the appinfo
+                                            recommended-runtime fallback end-to-end, identical
+                                            regardless of Deck identity; the appinfo reader
+                                            one-pass snapshot against a realistic multi-entry
+                                            fixture matching the live shape; + the OS-release
+                                            Deck detector)
     Modificus.Curator.RelayClient.Tests/ xUnit tests for the launch façade (dual-purpose:
                                             `dotnet test` = xUnit; `dotnet run` = composition smoke harness);
                                             covers RelayLaunchServiceTests (Windows + Linux arg
@@ -1264,7 +1282,7 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   boundary; ordered env-var entries + game args; validated up front via the
   shared `LaunchSettingsValidator`, applied at launch; `GetLaunchSettings` is the
   focused read the launch path uses),
-  **Steam** (Steam + Darktide + Proton discovery via Steam's CompatToolMapping + the automatic/manual mode policy + `Rediscover` + `IsGameRunning`),
+  **Steam** (Steam + Darktide + Proton discovery via Steam's CompatToolMapping with the appinfo recommended-runtime fallback + the automatic/manual mode policy + `Rediscover` + `IsGameRunning`),
   **Integrations** (the Nexus v1 client/auth +
   `IModAcquisitionService` the download + extract + place orchestrator +
   `IUpdateCheckService` the Nexus-only update-check service +

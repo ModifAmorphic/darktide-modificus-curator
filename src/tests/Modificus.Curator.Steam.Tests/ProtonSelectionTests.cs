@@ -8,6 +8,9 @@ namespace Modificus.Curator.Steam.Tests;
 /// - App-specific CompatToolMapping is authoritative.
 /// - Global "0" mapping is used only when the app-specific mapping is absent.
 /// - A present-but-malformed app-specific mapping fails (no fall-through).
+/// - With neither mapping, Darktide's appinfo recommended runtime is Steam's
+///   non-user default and resolves like any selection (identical regardless of
+///   Deck identity).
 /// - Custom tools resolve by internal name from compatibilitytools.d roots.
 /// - Valve-managed tools resolve through appinfo.vdf + appmanifests.
 /// </summary>
@@ -71,7 +74,7 @@ public sealed class ProtonSelectionTests
         fx.WithCompatdata(fx.SteamRoot);
 
         // Write a config.vdf with BOTH app-specific + global mappings.
-        WriteConfigVdfWithBothMappings(fx.SteamRoot, appTool: "app-tool", globalTool: "global-tool");
+        WriteCompatToolMappings(fx.SteamRoot, appTool: "app-tool", globalTool: "global-tool");
         fx.WithCustomProtonTool(fx.CompatToolsDir, "app-tool");
         fx.WithCustomProtonTool(fx.CompatToolsDir, "global-tool");
 
@@ -92,7 +95,7 @@ public sealed class ProtonSelectionTests
         // App-specific mapping with an EMPTY name (present but malformed).
         // Global mapping points at a valid tool. The empty app-specific name
         // must fail resolution without falling through.
-        WriteConfigVdfWithBothMappings(fx.SteamRoot, appTool: "", globalTool: "global-tool");
+        WriteCompatToolMappings(fx.SteamRoot, appTool: "", globalTool: "global-tool");
         fx.WithCustomProtonTool(fx.CompatToolsDir, "global-tool");
 
         var result = fx.Service.Discover();
@@ -316,9 +319,131 @@ public sealed class ProtonSelectionTests
         Assert.Equal(expectedProton, result.ProtonBinaryPath);
     }
 
-    // ---- helper: write config.vdf with both app-specific + global mappings ----
+    // ---- no-user-mapping recommended-runtime fallback (public Discover surface) ----
 
-    private static void WriteConfigVdfWithBothMappings(string steamRoot, string appTool, string globalTool)
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void No_mapping_resolves_recommended_runtime_regardless_of_deck_identity(bool isSteamDeck)
+    {
+        // The exact live shape: Darktide recommends proton-11.0-beta; the
+        // Steam Play manifest's proton_11 entry aliases it to app id 4628710
+        // with display name "Proton 11.0". With no config.vdf mapping and a
+        // resolvable install, discovery is Complete, and toggling Deck
+        // identity does not change that.
+        using var fx = new SteamFixture(configure: o => o.IsSteamDeck = isSteamDeck);
+        fx.WithLibraryFoldersAtSteamRoot();
+        fx.WithDarktide(fx.SteamRoot);
+        fx.WithCompatdata(fx.SteamRoot);
+        // No config.vdf: no app-specific or global mapping.
+        fx.WithRecommendedRuntimeProton(fx.SteamRoot, fx.SteamRoot);
+
+        var result = fx.Service.Discover();
+
+        Assert.Equal(DiscoveryStatus.Complete, result.Status);
+        var expectedProton = Path.Combine(fx.SteamRoot, "steamapps", "common", "Proton 11.0", "proton");
+        Assert.Equal(expectedProton, result.ProtonBinaryPath);
+        Assert.Equal("Proton 11.0", result.ProtonVersion);
+    }
+
+    [Fact]
+    public void App_specific_mapping_wins_over_recommended_runtime()
+    {
+        using var fx = new SteamFixture();
+        fx.WithLibraryFoldersAtSteamRoot();
+        fx.WithDarktide(fx.SteamRoot);
+        fx.WithCompatdata(fx.SteamRoot);
+        fx.WithCompatToolMapping(fx.SteamRoot, "GE-Proton9-3");
+        fx.WithCustomProtonTool(fx.CompatToolsDir, "GE-Proton9-3");
+        fx.WithRecommendedRuntimeProton(fx.SteamRoot, fx.SteamRoot);
+
+        var result = fx.Service.Discover();
+
+        Assert.Equal(DiscoveryStatus.Complete, result.Status);
+        Assert.Equal(fx.ExpectedCustomProtonPath(fx.CompatToolsDir, "GE-Proton9-3"), result.ProtonBinaryPath);
+    }
+
+    [Fact]
+    public void Global_mapping_wins_over_recommended_runtime()
+    {
+        using var fx = new SteamFixture();
+        fx.WithLibraryFoldersAtSteamRoot();
+        fx.WithDarktide(fx.SteamRoot);
+        fx.WithCompatdata(fx.SteamRoot);
+        fx.WithCompatToolMapping(fx.SteamRoot, "GE-Proton9-3", global: true);
+        fx.WithCustomProtonTool(fx.CompatToolsDir, "GE-Proton9-3");
+        fx.WithRecommendedRuntimeProton(fx.SteamRoot, fx.SteamRoot);
+
+        var result = fx.Service.Discover();
+
+        Assert.Equal(DiscoveryStatus.Complete, result.Status);
+        Assert.Equal(fx.ExpectedCustomProtonPath(fx.CompatToolsDir, "GE-Proton9-3"), result.ProtonBinaryPath);
+    }
+
+    [Fact]
+    public void Invalid_app_specific_mapping_blocks_global_and_recommendation()
+    {
+        // The app-specific mapping carries a whitespace-only name: invalid, so
+        // neither the valid global mapping nor the recommended runtime applies.
+        using var fx = new SteamFixture();
+        fx.WithLibraryFoldersAtSteamRoot();
+        fx.WithDarktide(fx.SteamRoot);
+        fx.WithCompatdata(fx.SteamRoot);
+        WriteCompatToolMappings(fx.SteamRoot, appTool: "   ", globalTool: "global-tool");
+        fx.WithCustomProtonTool(fx.CompatToolsDir, "global-tool");
+        fx.WithRecommendedRuntimeProton(fx.SteamRoot, fx.SteamRoot);
+
+        var result = fx.Service.Discover();
+
+        Assert.Equal(DiscoveryStatus.Partial, result.Status);
+        Assert.Null(result.ProtonBinaryPath);
+    }
+
+    [Fact]
+    public void Invalid_global_mapping_blocks_recommendation()
+    {
+        // Only a global mapping exists and its name is empty: invalid, so the
+        // recommended runtime must not be used.
+        using var fx = new SteamFixture();
+        fx.WithLibraryFoldersAtSteamRoot();
+        fx.WithDarktide(fx.SteamRoot);
+        fx.WithCompatdata(fx.SteamRoot);
+        WriteCompatToolMappings(fx.SteamRoot, appTool: null, globalTool: "");
+        fx.WithRecommendedRuntimeProton(fx.SteamRoot, fx.SteamRoot);
+
+        var result = fx.Service.Discover();
+
+        Assert.Equal(DiscoveryStatus.Partial, result.Status);
+        Assert.Null(result.ProtonBinaryPath);
+    }
+
+    [Fact]
+    public void Unresolvable_selected_tool_blocks_recommendation()
+    {
+        // The selected global tool does not exist: the selection stays
+        // authoritative and the recommended runtime is not consulted.
+        using var fx = new SteamFixture();
+        fx.WithLibraryFoldersAtSteamRoot();
+        fx.WithDarktide(fx.SteamRoot);
+        fx.WithCompatdata(fx.SteamRoot);
+        fx.WithCompatToolMapping(fx.SteamRoot, "missing-tool", global: true);
+        fx.WithRecommendedRuntimeProton(fx.SteamRoot, fx.SteamRoot);
+
+        var result = fx.Service.Discover();
+
+        Assert.Equal(DiscoveryStatus.Partial, result.Status);
+        Assert.Null(result.ProtonBinaryPath);
+        Assert.Contains(result.Warnings, w => w.Contains("missing-tool", StringComparison.Ordinal));
+    }
+
+    // ---- helper: write config.vdf CompatToolMapping entries -------------------
+
+    /// <summary>
+    /// Writes a config.vdf CompatToolMapping with an app-specific entry
+    /// (<paramref name="appTool"/>, null to omit) and a global <c>"0"</c> entry
+    /// (<paramref name="globalTool"/>, null to omit).
+    /// </summary>
+    private static void WriteCompatToolMappings(string steamRoot, string? appTool, string? globalTool)
     {
         var dir = Path.Combine(steamRoot, "config");
         Directory.CreateDirectory(dir);
@@ -333,14 +458,20 @@ public sealed class ProtonSelectionTests
         sb.AppendLine("            {");
         sb.AppendLine("                \"CompatToolMapping\"");
         sb.AppendLine("                {");
-        sb.AppendLine("                    \"1361210\"");
-        sb.AppendLine("                    {");
-        sb.AppendLine($"                        \"name\"        \"{appTool}\"");
-        sb.AppendLine("                    }");
-        sb.AppendLine("                    \"0\"");
-        sb.AppendLine("                    {");
-        sb.AppendLine($"                        \"name\"        \"{globalTool}\"");
-        sb.AppendLine("                    }");
+        if (appTool is not null)
+        {
+            sb.AppendLine("                    \"1361210\"");
+            sb.AppendLine("                    {");
+            sb.AppendLine($"                        \"name\"        \"{appTool}\"");
+            sb.AppendLine("                    }");
+        }
+        if (globalTool is not null)
+        {
+            sb.AppendLine("                    \"0\"");
+            sb.AppendLine("                    {");
+            sb.AppendLine($"                        \"name\"        \"{globalTool}\"");
+            sb.AppendLine("                    }");
+        }
         sb.AppendLine("                }");
         sb.AppendLine("            }");
         sb.AppendLine("        }");
