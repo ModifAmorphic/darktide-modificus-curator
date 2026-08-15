@@ -26,6 +26,9 @@ public sealed class IntegrationsServiceCollectionExtensionsTests
     {
         var services = new ServiceCollection();
         services.AddSingleton<IConfigLoader>(new FakeConfigLoader());
+        // LoopbackBrowser ctor-injects the shell-open launcher (AddGeneral
+        // owns the production registration; the tests wire the in-memory fake).
+        services.AddSingleton<IExternalLauncher>(new FakeExternalLauncher());
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
         services.AddIntegrations();
         using var provider = services.BuildServiceProvider();
@@ -43,6 +46,9 @@ public sealed class IntegrationsServiceCollectionExtensionsTests
         // standard, testable HTTP DI pattern is wired.
         var services = new ServiceCollection();
         services.AddSingleton<IConfigLoader>(new FakeConfigLoader());
+        // LoopbackBrowser ctor-injects the shell-open launcher (AddGeneral
+        // owns the production registration; the tests wire the in-memory fake).
+        services.AddSingleton<IExternalLauncher>(new FakeExternalLauncher());
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
         services.AddIntegrations();
         using var provider = services.BuildServiceProvider();
@@ -156,6 +162,9 @@ public sealed class IntegrationsServiceCollectionExtensionsTests
 
         var services = new ServiceCollection();
         services.AddSingleton<IConfigLoader>(new FakeConfigLoader { Config = config });
+        // LoopbackBrowser ctor-injects the shell-open launcher (AddGeneral
+        // owns the production registration; the tests wire the in-memory fake).
+        services.AddSingleton<IExternalLauncher>(new FakeExternalLauncher());
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
         services.AddIntegrations();
         // Attach the stub to the same named typed client AddIntegrations registered.

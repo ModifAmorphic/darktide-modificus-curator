@@ -4,6 +4,32 @@ using Modificus.Curator.General;
 namespace Modificus.Curator.Integrations.Tests;
 
 /// <summary>
+/// In-memory <see cref="IExternalLauncher"/>: records opened URIs + paths and
+/// returns a configurable outcome (success by default). Never touches the OS
+/// shell, so tests can exercise browser-open paths safely.
+/// </summary>
+internal sealed class FakeExternalLauncher : IExternalLauncher
+{
+    private readonly List<Uri> _openedUris = new();
+
+    /// <summary>Decides the OpenUri outcome; defaults to success.</summary>
+    public Func<Uri, bool> OpenUriResult { get; set; } = _ => true;
+
+    /// <summary>Every URI this launcher was asked to open, in order.</summary>
+    public IReadOnlyList<Uri> OpenedUris => _openedUris;
+
+    /// <inheritdoc />
+    public bool OpenUri(Uri uri)
+    {
+        _openedUris.Add(uri);
+        return OpenUriResult(uri);
+    }
+
+    /// <inheritdoc />
+    public bool OpenPath(string path) => true;
+}
+
+/// <summary>
 /// Recording <see cref="IConfigLoader"/> for tests. <see cref="Load"/> returns
 /// a configurable config; <see cref="Save"/> captures the last-written config.
 /// </summary>

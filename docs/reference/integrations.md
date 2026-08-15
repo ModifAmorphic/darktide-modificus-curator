@@ -225,7 +225,8 @@ public sealed class NexusOAuthTokenStore : INexusTokenStore;   // OidcClient + t
 `Duende.IdentityModel.OidcClient`). It pre-grabs an ephemeral loopback port
 (exposed as `RedirectUri`), then on `InvokeAsync` binds an `HttpListener` on
 that port, opens the user's default browser at OidcClient's authorize URL via
-`Process.Start(UseShellExecute=true)`, awaits the callback, and returns the
+the shared `IExternalLauncher` (General library; a launch that could not start
+maps to `BrowserResultType.UnknownError`), awaits the callback, and returns the
 authorization response. Three-minute flow timeout; on expiry it surfaces
 `BrowserResultType.Timeout`. Independent of the `nxm://` scheme handler
 (loopback redirect, not `nxm://`).

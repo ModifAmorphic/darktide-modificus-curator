@@ -559,8 +559,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `IModAcquisitionService.AcquireLatestNexusAsync` +
                           `AcknowledgeUpdateAndReload` (clears the persisted
                           known-update entry, no extra API check); regular/unknown
-                          opens the mod's Nexus files page via a testable
-                          external-launcher seam (fallback alert on failure).
+                          opens the mod's Nexus files page via the shared
+                          IExternalLauncher (fallback alert on failure).
                           `CheckForUpdatesNowCommand` awaits the runner's
                           thorough check (driving an `IsCheckingNow` spinner on
                           the Mods toolbar refresh button; the await now also covers the
@@ -761,7 +761,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         Serilog day-rolling log (RollingInterval.Day writes
                         curator-<yyyyMMdd>.log, appended across starts within a day,
                         rolled at midnight, pruned to RetainedLogFileCount),
-                        config loader, app-state store (active profile id +
+                        config loader, the shared OS shell-open launcher
+                        (IExternalLauncher/ShellExternalLauncher: browser for a
+                        URL, file manager for a folder, narrow failure filter),
+                        app-state store (active profile id +
                         last update-check timestamp + manual-refresh throttle
                         window + profile-scoped known-update snapshots +
                         last Nexus display-metadata backfill timestamp +

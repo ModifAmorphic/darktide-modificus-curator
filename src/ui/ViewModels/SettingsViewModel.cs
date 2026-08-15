@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Diagnostics;
 using System.IO;
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -61,7 +60,7 @@ public partial class SettingsViewModel : ObservableObject
     private readonly IDialogService _dialogs;
     private readonly IGamingModeState _gamingMode;
     private readonly Action<Action> _invokeOnUi;
-    private readonly Func<string, bool> _launchExternalPath;
+    private readonly IExternalLauncher _externalLauncher;
     private readonly ILogger<SettingsViewModel> _logger;
 
     /// <summary>
@@ -117,10 +116,8 @@ public partial class SettingsViewModel : ObservableObject
     /// the UI thread. Production wires <c>Dispatcher.UIThread.Post</c>; tests
     /// inject a synchronous <c>action =&gt; action()</c>.</param>
     /// <param name="logger">Logger for the open-folder flow.</param>
-    /// <param name="launchExternalPath">The OS file-manager launcher seam used by
-    /// the open-folder actions. Production passes null (falls back to the
-    /// static default that shells out via <c>Process.Start</c>); tests inject a
-    /// controllable delegate.</param>
+    /// <param name="externalLauncher">The OS shell-open launcher used by the
+    /// open-folder actions (the file manager for a folder).</param>
     public SettingsViewModel(
         IConfigLoader configLoader,
         ISteamService steam,
@@ -130,7 +127,7 @@ public partial class SettingsViewModel : ObservableObject
         IGamingModeState gamingMode,
         Action<Action> invokeOnUi,
         ILogger<SettingsViewModel> logger,
-        Func<string, bool>? launchExternalPath = null)
+        IExternalLauncher externalLauncher)
     {
         _configLoader = configLoader;
         _steam = steam ?? throw new ArgumentNullException(nameof(steam));
@@ -140,7 +137,7 @@ public partial class SettingsViewModel : ObservableObject
         _gamingMode = gamingMode ?? throw new ArgumentNullException(nameof(gamingMode));
         _invokeOnUi = invokeOnUi ?? throw new ArgumentNullException(nameof(invokeOnUi));
         _logger = logger;
-        _launchExternalPath = launchExternalPath ?? LaunchExternalPathDefault;
+        _externalLauncher = externalLauncher ?? throw new ArgumentNullException(nameof(externalLauncher));
 
         // Build the platform-gated discovery rows once (each carries its
         // write-through callback + localization subscription). Initial values
@@ -471,10 +468,11 @@ public partial class SettingsViewModel : ObservableObject
 
     /// <summary>
     /// Opens the OS file manager at the current profiles root
-    /// (<c>ProfilesBaseFolder</c>, read live from config) via the injectable
-    /// path-launcher seam. Delegates to <see cref="OpenFolderAsync"/> for the
-    /// no-op + alert handling. No-op in a Steam Deck Gaming Mode session (same
-    /// gate as <see cref="OpenDataFolder"/>).
+    /// (<c>ProfilesBaseFolder</c>, read live from config) via the injected
+    /// <see cref="IExternalLauncher"/>. Delegates to
+    /// <see cref="OpenFolderAsync"/> for the no-op + alert handling. No-op in a
+    /// Steam Deck Gaming Mode session (same gate as
+    /// <see cref="OpenDataFolder"/>).
     /// </summary>
     [RelayCommand]
     private async Task OpenProfilesFolder()
@@ -490,9 +488,9 @@ public partial class SettingsViewModel : ObservableObject
     /// <summary>
     /// Shared body of the two open-folder commands: no-op when
     /// <paramref name="path"/> is empty/whitespace or the directory does not
-    /// exist on disk; on a launch failure (the seam returns false or throws),
-    /// surfaces a localized alert that includes the path so the user can open
-    /// it manually; the exception is logged and never propagates.
+    /// exist on disk; on a launch failure (the launcher returns false or
+    /// throws), surfaces a localized alert that includes the path so the user
+    /// can open it manually; the exception is logged and never propagates.
     /// </summary>
     private async Task OpenFolderAsync(string? path)
     {
@@ -503,7 +501,7 @@ public partial class SettingsViewModel : ObservableObject
 
         try
         {
-            if (!_launchExternalPath(path))
+            if (!_externalLauncher.OpenPath(path))
             {
                 _logger.LogWarning("Opening the folder failed: {Path}", path);
                 await ShowOpenFolderFailedAlertAsync(path);
@@ -517,47 +515,14 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Shows the localized open-folder-failure alert (the launcher seam
-    /// returned false or threw). Includes the path so the user can open it
-    /// manually.
+    /// Shows the localized open-folder-failure alert (the launcher returned
+    /// false or threw). Includes the path so the user can open it manually.
     /// </summary>
     private async Task ShowOpenFolderFailedAlertAsync(string path)
     {
         await _dialogs.ShowAlertAsync(
             _localization["Settings_OpenFolderFailedTitle"],
             _localization.Format("Settings_OpenFolderFailedMessage", path));
-    }
-
-    /// <summary>
-    /// The default path-launcher: opens the OS file manager at
-    /// <paramref name="path"/> via <c>Process.Start(UseShellExecute=true)</c>.
-    /// Same narrow exception filter + return contract as
-    /// <c>ModListViewModel.LaunchExternalPathDefault</c> (duplicated here so
-    /// this VM stays self-contained without reaching into the mod-list VM; the
-    /// extraction is a flag-and-review item if a third caller appears). Tests
-    /// inject a controllable seam.
-    /// </summary>
-    private static bool LaunchExternalPathDefault(string path)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = path,
-                UseShellExecute = true,
-            };
-            using (Process.Start(psi))
-            {
-            }
-            return true;
-        }
-        catch (Exception ex) when (
-            ex is Win32Exception
-                or PlatformNotSupportedException
-                or FileNotFoundException)
-        {
-            return false;
-        }
     }
 
     // ---- Updates section: app self-update ---------------------------------

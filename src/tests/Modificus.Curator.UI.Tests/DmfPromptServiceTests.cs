@@ -31,13 +31,11 @@ public sealed class DmfPromptServiceTests
     /// Builds a coordinator + a tuple of its fakes so each test can seed +
     /// assert on the specific dependencies it cares about.
     /// </summary>
-    /// <param name="launchExternal">Optional spy for the browser-launcher seam.
-    /// When omitted the builder wires a local no-op that returns <c>true</c>
-    /// without recording anywhere (never the production
-    /// <c>Process.Start</c> fallback, never the process-wide
-    /// <c>TestLauncher</c> shared state). Tests that assert on the browser-open
-    /// path pass their own per-test spy so the assertion cannot race with
-    /// unrelated classes that also use <c>TestLauncher</c>.</param>
+    /// <param name="launcher">Optional spy for the external launcher. When
+    /// omitted the builder wires a fresh per-test
+    /// <see cref="FakeExternalLauncher"/> (in-memory, never the OS shell). Tests
+    /// that assert on the browser-open path pass their own per-test spy so the
+    /// assertion cannot race with unrelated classes.</param>
     /// <param name="nxmRegistration">The shared registration state the
     /// download-confirm wording follows (last-known; the prompt never probes
     /// the OS).</param>
@@ -54,7 +52,7 @@ public sealed class DmfPromptServiceTests
             FakeDialogService? dialogs = null,
             FakeNxmRegistrationState? nxmRegistration = null,
             GamingModeState? gamingMode = null,
-            Func<Uri, bool>? launchExternal = null)
+            FakeExternalLauncher? launcher = null)
     {
         profiles ??= TestDoubles.Profiles();
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
@@ -64,37 +62,25 @@ public sealed class DmfPromptServiceTests
         dialogs ??= new FakeDialogService();
         nxmRegistration ??= new FakeNxmRegistrationState();
         gamingMode ??= new GamingModeState(false);
-        // SAFETY: an omitted launcher seam defaults to a local no-op that
-        // returns success without touching the OS shell or any shared static
-        // state. Tests that assert on opens pass their own per-test spy.
+        // SAFETY: an omitted launcher defaults to a fresh in-memory fake that
+        // never touches the OS shell. Tests that assert on opens pass their own
+        // per-test spy.
+        launcher ??= new FakeExternalLauncher();
         var service = new DmfPromptService(
             profiles, session, repo, acquisition, auth, dialogs,
             Localization, NullLogger<DmfPromptService>.Instance, nxmRegistration,
             gamingMode,
-            launchExternal ?? LocalNoOpLauncher);
+            launcher);
         return (service, profiles, session, repo, acquisition, auth, dialogs);
     }
 
     /// <summary>
-    /// A local, stateless launcher default: returns <c>true</c> (success)
-    /// without recording and without touching the OS shell. Used only as the
-    /// <c>Build</c> default so DMF tests that don't assert on opens never touch
-    /// the process-wide <c>TestLauncher</c> shared state. Tests that assert on
-    /// opens pass their own per-test spy.
+    /// A per-test recording launcher: appends every opened URI to
+    /// <paramref name="record"/> and succeeds. Each test owns its own list, so
+    /// assertions cannot race with unrelated classes.
     /// </summary>
-    private static readonly Func<Uri, bool> LocalNoOpLauncher = _ => true;
-
-    /// <summary>
-    /// Builds a per-test recorder spy: appends every opened URI to
-    /// <paramref name="record"/> and returns <c>true</c> (success). Each test
-    /// owns its own list, so assertions cannot race with unrelated classes.
-    /// </summary>
-    private static Func<Uri, bool> NewRecordingSpy(List<Uri> record) =>
-        uri =>
-        {
-            record.Add(uri);
-            return true;
-        };
+    private static FakeExternalLauncher NewRecordingSpy(List<Uri> record) =>
+        FakeExternalLauncher.RecordingUris(record);
 
     // ---- case 1: DMF in repo, not in profile -> offer add -----------------
 
@@ -163,7 +149,7 @@ public sealed class DmfPromptServiceTests
         var launchedUris = new List<Uri>();
         var (service, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs,
-                launchExternal: NewRecordingSpy(launchedUris));
+                launcher: NewRecordingSpy(launchedUris));
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
@@ -233,7 +219,7 @@ public sealed class DmfPromptServiceTests
         var launchedUris = new List<Uri>();
         var (service, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs,
-                launchExternal: NewRecordingSpy(launchedUris));
+                launcher: NewRecordingSpy(launchedUris));
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
@@ -274,7 +260,7 @@ public sealed class DmfPromptServiceTests
         var launchedUris = new List<Uri>();
         var (service, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs, nxmRegistration,
-                launchExternal: NewRecordingSpy(launchedUris));
+                launcher: NewRecordingSpy(launchedUris));
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
@@ -317,7 +303,7 @@ public sealed class DmfPromptServiceTests
         var launchedUris = new List<Uri>();
         var (service, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs, nxmRegistration,
-                launchExternal: NewRecordingSpy(launchedUris));
+                launcher: NewRecordingSpy(launchedUris));
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
@@ -351,7 +337,7 @@ public sealed class DmfPromptServiceTests
         var launchedUris = new List<Uri>();
         var (service, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs, nxmRegistration,
-                launchExternal: NewRecordingSpy(launchedUris));
+                launcher: NewRecordingSpy(launchedUris));
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
@@ -385,7 +371,7 @@ public sealed class DmfPromptServiceTests
         var launchedUris = new List<Uri>();
         var (service, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs,
-                launchExternal: NewRecordingSpy(launchedUris));
+                launcher: NewRecordingSpy(launchedUris));
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
@@ -413,7 +399,7 @@ public sealed class DmfPromptServiceTests
         var launchedUris = new List<Uri>();
         var (service, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs,
-                launchExternal: NewRecordingSpy(launchedUris));
+                launcher: NewRecordingSpy(launchedUris));
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
@@ -443,11 +429,11 @@ public sealed class DmfPromptServiceTests
         var dialogs = new FakeDialogService();
         var nxmRegistration = new FakeNxmRegistrationState { IsAvailable = true, IsRegistered = true };
 
-        Func<Uri, bool> failingLauncher = _ => false; // shell-open failed
+        var failingLauncher = new FakeExternalLauncher { OpenUriResult = _ => false }; // shell-open failed
 
         var (service, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs, nxmRegistration,
-                launchExternal: failingLauncher);
+                launcher: failingLauncher);
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
@@ -485,7 +471,7 @@ public sealed class DmfPromptServiceTests
         var (service, _, _, _, _, _, _) = Build(
             profiles, session, repo, acquisition, auth, dialogs,
             gamingMode: gamingMode,
-            launchExternal: NewRecordingSpy(launched));
+            launcher: NewRecordingSpy(launched));
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;

@@ -784,11 +784,9 @@ profile add boundary's fresh-add rule places it first (rank 0) and
 order-locked; the prompt carries no placement choreography (see
 [profiles](profiles.md)).
 
-`launchExternal` is injectable so tests exercise the browser-open failure
-path without launching a real browser. The default uses `Process.Start` with
-`UseShellExecute = true`; the exception filter is narrow
-(`Win32Exception`, `PlatformNotSupportedException`,
-`FileNotFoundException`) so a real wiring bug is not silently swallowed.
+The browser-open runs through the shared `IExternalLauncher` (General library),
+so tests exercise the failure path with an in-memory fake instead of launching
+a real browser.
 
 ## The update check runner
 

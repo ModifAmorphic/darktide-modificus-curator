@@ -80,6 +80,7 @@ public partial class IntegrationsViewModel : ObservableObject
     private readonly IDialogService _dialogs;
     private readonly INxmHandlerRegistrar? _nxmRegistrar;
     private readonly INxmRegistrationState _nxmRegistration;
+    private readonly IExternalLauncher _externalLauncher;
     private readonly ILogger<IntegrationsViewModel> _logger;
 
     // Backs the in-flight OAuth login or API-key validate. Swapped per attempt
@@ -95,6 +96,7 @@ public partial class IntegrationsViewModel : ObservableObject
         IDialogService dialogs,
         INxmHandlerRegistrar? nxmRegistrar,
         INxmRegistrationState nxmRegistration,
+        IExternalLauncher externalLauncher,
         ILogger<IntegrationsViewModel> logger)
     {
         _auth = auth ?? throw new ArgumentNullException(nameof(auth));
@@ -103,6 +105,7 @@ public partial class IntegrationsViewModel : ObservableObject
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
         _nxmRegistrar = nxmRegistrar;
         _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
+        _externalLauncher = externalLauncher ?? throw new ArgumentNullException(nameof(externalLauncher));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         _localization.PropertyChanged += OnCultureChanged;
@@ -380,6 +383,29 @@ public partial class IntegrationsViewModel : ObservableObject
     public string HideApiKeyTooltip => _localization["Integrations_HideApiKeyTooltip"];
 
     // ---- commands --------------------------------------------------------
+
+    /// <summary>
+    /// Opens the Nexus API-keys page (where the user gets their key) in the
+    /// default browser via the injected <see cref="IExternalLauncher"/>. The
+    /// link's tooltip carries the URL (<see cref="ApiKeyHelpLink"/>) so the
+    /// user can copy it manually; a failed or throwing open is silently
+    /// ignored (best-effort; the help link is not a critical action).
+    /// </summary>
+    [RelayCommand]
+    private void OpenApiKeyHelp()
+    {
+        try
+        {
+            if (Uri.TryCreate(ApiKeyHelpLink, UriKind.Absolute, out var uri))
+            {
+                _externalLauncher.OpenUri(uri);
+            }
+        }
+        catch
+        {
+            // Best-effort: the URL stays available in the tooltip.
+        }
+    }
 
     /// <summary>
     /// Starts the Nexus OAuth loopback flow: opens the browser, awaits the

@@ -1,8 +1,8 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Diagnostics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Modificus.Curator.General;
 using Modificus.Curator.Integrations;
 using Modificus.Curator.Mods;
 using Modificus.Curator.Profiles;
@@ -151,8 +151,7 @@ public partial class ModListViewModel : ObservableObject
     /// <c>UpdateCheckRunner</c> + <c>UpdateCheckService</c> clock seams.
     /// </summary>
     private readonly Func<DateTimeOffset> _getNow;
-    private readonly Func<Uri, bool> _launchExternal;
-    private readonly Func<string, bool> _launchExternalPath;
+    private readonly IExternalLauncher _externalLauncher;
     private readonly INxmRegistrationState _nxmRegistration;
     private readonly IGamingModeState _gamingMode;
 
@@ -185,11 +184,10 @@ public partial class ModListViewModel : ObservableObject
         ILogger<ModListViewModel> logger,
         INxmRegistrationState nxmRegistration,
         IGamingModeState gamingMode,
+        IExternalLauncher externalLauncher,
         Action<Action>? startCountdownTimer = null,
         Action? stopCountdownTimer = null,
-        Func<DateTimeOffset>? getNow = null,
-        Func<Uri, bool>? launchExternal = null,
-        Func<string, bool>? launchExternalPath = null)
+        Func<DateTimeOffset>? getNow = null)
     {
         _profiles = profiles;
         _session = session;
@@ -211,8 +209,7 @@ public partial class ModListViewModel : ObservableObject
         _startCountdownTimer = startCountdownTimer;
         _stopCountdownTimer = stopCountdownTimer;
         _getNow = getNow ?? (() => DateTimeOffset.UtcNow);
-        _launchExternal = launchExternal ?? LaunchExternalDefault;
-        _launchExternalPath = launchExternalPath ?? LaunchExternalPathDefault;
+        _externalLauncher = externalLauncher ?? throw new ArgumentNullException(nameof(externalLauncher));
         _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
         _gamingMode = gamingMode ?? throw new ArgumentNullException(nameof(gamingMode));
 
@@ -1516,11 +1513,11 @@ public partial class ModListViewModel : ObservableObject
 
     /// <summary>
     /// The regular / unknown Premium branch of the update action: opens the
-    /// mod's Nexus files page in the user's browser via the injectable
-    /// external-launcher seam, surfacing a fallback alert on launch failure
-    /// (rather than swallowing it). No install coordination is needed (this only
-    /// opens a page); the user picks a file on Nexus + the registered nxm
-    /// handler acquires it through the standard flow.
+    /// mod's Nexus files page in the user's browser via the injected
+    /// <see cref="IExternalLauncher"/>, surfacing a fallback alert on launch
+    /// failure (rather than swallowing it). No install coordination is needed
+    /// (this only opens a page); the user picks a file on Nexus + the
+    /// registered nxm handler acquires it through the standard flow.
     /// </summary>
     private void OpenFilesPage(ModItemViewModel row)
     {
@@ -1531,19 +1528,20 @@ public partial class ModListViewModel : ObservableObject
 
         try
         {
-            if (!_launchExternal(uri))
+            if (!_externalLauncher.OpenUri(uri))
             {
-                // The seam returns false on a launch failure (no default browser,
-                // headless, etc.). Surface a fallback alert rather than swallowing
-                // it so the user can act (the URL is included for manual copy).
+                // The launcher returns false when the OS could not start the
+                // shell launch (no default browser, headless, etc.). Surface a
+                // fallback alert rather than swallowing it so the user can act
+                // (the URL is included for manual copy).
                 _logger.LogWarning("Opening the Nexus files page for {Container} failed.", row.ContainerId);
                 _ = ShowLaunchFailedAlertAsync(row.Name, url);
             }
         }
         catch (Exception ex)
         {
-            // The default launcher's exception filter is narrow; a real wiring
-            // bug surfaces here as a fallback alert rather than being swallowed.
+            // The launcher's exception filter is narrow; a real wiring bug
+            // surfaces here as a fallback alert rather than being swallowed.
             _logger.LogError(ex, "Launching the Nexus files page for {Container} threw.", row.ContainerId);
             _ = ShowLaunchFailedAlertAsync(row.Name, url);
         }
@@ -1564,8 +1562,8 @@ public partial class ModListViewModel : ObservableObject
     /// <summary>
     /// The command behind the "Add Nexus Mods" flyout item + the face button's
     /// NexusMods mode (the Add split button's default): opens the Darktide Nexus
-    /// Mods games page in the user's default browser via the
-    /// <see cref="_launchExternal"/> seam, surfacing a fallback alert (with the
+    /// Mods games page in the user's default browser via the injected
+    /// <see cref="IExternalLauncher"/>, surfacing a fallback alert (with the
     /// URL for manual copy) on a launch failure. Lets the user browse + download
     /// mods; nxm:// links route back into Curator when it owns the OS handler.
     /// Inside a Steam Deck Gaming Mode session the browser flow cannot complete
@@ -1592,19 +1590,20 @@ public partial class ModListViewModel : ObservableObject
 
         try
         {
-            if (!_launchExternal(uri))
+            if (!_externalLauncher.OpenUri(uri))
             {
-                // The seam returns false on a launch failure (no default browser,
-                // headless, etc.). Surface a fallback alert rather than swallowing
-                // it so the user can act (the URL is included for manual copy).
+                // The launcher returns false when the OS could not start the
+                // shell launch (no default browser, headless, etc.). Surface a
+                // fallback alert rather than swallowing it so the user can act
+                // (the URL is included for manual copy).
                 _logger.LogWarning("Opening the Nexus Mods games page failed.");
                 _ = ShowNexusModsLaunchFailedAlertAsync(url);
             }
         }
         catch (Exception ex)
         {
-            // The default launcher's exception filter is narrow; a real wiring
-            // bug surfaces here as a fallback alert rather than being swallowed.
+            // The launcher's exception filter is narrow; a real wiring bug
+            // surfaces here as a fallback alert rather than being swallowed.
             _logger.LogError(ex, "Launching the Nexus Mods games page threw.");
             _ = ShowNexusModsLaunchFailedAlertAsync(url);
         }
@@ -1620,68 +1619,6 @@ public partial class ModListViewModel : ObservableObject
         await _dialogs.ShowAlertAsync(
             _localization["ModList_OpenNexusModsFailedTitle"],
             _localization.Format("ModList_OpenNexusModsFailedMessage", url));
-    }
-
-    /// <summary>
-    /// The default external-launcher: opens <paramref name="uri"/> via the OS
-    /// shell-open (<c>Process.Start(UseShellExecute=true)</c>). Mirrors
-    /// <c>DmfPromptService</c>'s launcher; the narrow exception filter
-    /// (<c>Win32Exception</c>, <c>PlatformNotSupportedException</c>,
-    /// <c>FileNotFoundException</c>) keeps a real wiring bug visible rather than
-    /// silently swallowed. Returns false on a caught launch failure; tests
-    /// inject a controllable seam.
-    /// </summary>
-    private static bool LaunchExternalDefault(Uri uri)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = uri.AbsoluteUri,
-                UseShellExecute = true,
-            };
-            using (Process.Start(psi))
-            {
-            }
-            return true;
-        }
-        catch (Exception ex) when (
-            ex is System.ComponentModel.Win32Exception
-                or PlatformNotSupportedException
-                or FileNotFoundException)
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// The default path-launcher: opens the OS file manager at
-    /// <paramref name="path"/> via <c>Process.Start(UseShellExecute=true)</c>.
-    /// Used by the open-external-folder action on a linked row. Same narrow
-    /// exception filter + return contract as <see cref="LaunchExternalDefault"/>;
-    /// tests inject a controllable seam.
-    /// </summary>
-    private static bool LaunchExternalPathDefault(string path)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = path,
-                UseShellExecute = true,
-            };
-            using (Process.Start(psi))
-            {
-            }
-            return true;
-        }
-        catch (Exception ex) when (
-            ex is System.ComponentModel.Win32Exception
-                or PlatformNotSupportedException
-                or FileNotFoundException)
-        {
-            return false;
-        }
     }
 
     // ---- link-external-folder helper -------------------------------------
@@ -1818,13 +1755,13 @@ public partial class ModListViewModel : ObservableObject
 
     /// <summary>
     /// Opens the OS file manager at a linked row's external folder via the
-    /// injectable path-launcher seam, surfacing a fallback alert on launch
-    /// failure. No-op for a non-linked row, a broken row (the folder is missing),
-    /// a row whose source carries no path, or while inside a Steam Deck Gaming
-    /// Mode session (file-manager opens depend on a desktop shell; the disabled
-    /// badge is the first gate, this is the programmatic one). The row carries
-    /// state only; this command owns the launch + alert, mirroring the
-    /// regular/unknown files-page open path.
+    /// injected <see cref="IExternalLauncher"/>, surfacing a fallback alert on
+    /// launch failure. No-op for a non-linked row, a broken row (the folder is
+    /// missing), a row whose source carries no path, or while inside a Steam
+    /// Deck Gaming Mode session (file-manager opens depend on a desktop shell;
+    /// the disabled badge is the first gate, this is the programmatic one). The
+    /// row carries state only; this command owns the launch + alert, mirroring
+    /// the regular/unknown files-page open path.
     /// </summary>
     [RelayCommand]
     private async Task OpenFolder(ModItemViewModel? row)
@@ -1847,7 +1784,7 @@ public partial class ModListViewModel : ObservableObject
 
         try
         {
-            if (!_launchExternalPath(path))
+            if (!_externalLauncher.OpenPath(path))
             {
                 _logger.LogWarning("Opening the external folder for {Container} failed.", row.ContainerId);
                 await ShowOpenFolderFailedAlertAsync(row.Name, path);
@@ -1861,7 +1798,7 @@ public partial class ModListViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Shows the localized open-folder-failure alert (the launcher seam returned
+    /// Shows the localized open-folder-failure alert (the launcher returned
     /// false or threw). Includes the path so the user can open it manually.
     /// </summary>
     private async Task ShowOpenFolderFailedAlertAsync(string modName, string path)

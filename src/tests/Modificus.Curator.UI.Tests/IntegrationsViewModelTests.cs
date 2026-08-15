@@ -931,7 +931,7 @@ public sealed class IntegrationsViewModelTests
         // registrar-less wiring is unavailable, like an unsupported platform).
         var nxmRegistration = new FakeNxmRegistrationState(registrar);
 
-        var vm = new IntegrationsViewModel(auth, Localization, configLoader, dialogs, registrar, nxmRegistration, Logger);
+        var vm = new IntegrationsViewModel(auth, Localization, configLoader, dialogs, registrar, nxmRegistration, new FakeExternalLauncher(), Logger);
         await vm.RefreshAsync(); // resolve the initial status line + nxm state
         return (vm, auth, dialogs, registrar, nxmRegistration);
     }

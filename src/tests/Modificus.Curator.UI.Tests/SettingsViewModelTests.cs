@@ -28,7 +28,7 @@ public sealed class SettingsViewModelTests
         string? profilesBaseFolder = null,
         FakeAppUpdateService? appUpdate = null,
         FakeDialogService? dialogs = null,
-        Func<string, bool>? launchExternalPath = null,
+        FakeExternalLauncher? launcher = null,
         FakeSteamService? steam = null,
         GamingModeState? gamingMode = null)
     {
@@ -38,6 +38,7 @@ public sealed class SettingsViewModelTests
         var loader = new FakeConfigLoader { Config = config };
         dialogs ??= new FakeDialogService();
         steam ??= new FakeSteamService();
+        launcher ??= new FakeExternalLauncher();
         var vm = new SettingsViewModel(
             loader, steam, Localization,
             appUpdate ?? new FakeAppUpdateService(),
@@ -45,7 +46,7 @@ public sealed class SettingsViewModelTests
             gamingMode ?? new GamingModeState(false),
             invokeOnUi: static action => action(),
             Logger,
-            launchExternalPath);
+            launcher);
         return (vm, loader, dialogs, steam);
     }
 
@@ -237,7 +238,8 @@ public sealed class SettingsViewModelTests
             loader, steam, Localization,
             new FakeAppUpdateService(), new FakeDialogService(),
             new GamingModeState(false),
-            invokeOnUi: static action => action(), Logger);
+            invokeOnUi: static action => action(), Logger,
+            new FakeExternalLauncher());
 
         vm.OverrideAutomaticDiscovery = false;
 
@@ -299,7 +301,8 @@ public sealed class SettingsViewModelTests
             loader, steam, Localization,
             new FakeAppUpdateService(), new FakeDialogService(),
             new GamingModeState(false),
-            invokeOnUi: static action => action(), Logger);
+            invokeOnUi: static action => action(), Logger,
+            new FakeExternalLauncher());
 
         Assert.Equal("/stale", Row(vm, "SteamInstallPath").Value);
 
@@ -475,13 +478,12 @@ public sealed class SettingsViewModelTests
     public async Task OpenDataFolder_calls_the_seam_with_AppPaths_AppDataDir()
     {
         Directory.CreateDirectory(AppPaths.AppDataDir);
-        string? received = null;
-        var (vm, _, dialogs, _) = Build(
-            launchExternalPath: p => { received = p; return true; });
+        var launcher = new FakeExternalLauncher();
+        var (vm, _, dialogs, _) = Build(launcher: launcher);
 
         await vm.OpenDataFolderCommand.ExecuteAsync(null);
 
-        Assert.Equal(AppPaths.AppDataDir, received);
+        Assert.Equal(AppPaths.AppDataDir, Assert.Single(launcher.OpenedPaths));
         Assert.Empty(dialogs.AlertCalls);
     }
 
@@ -489,7 +491,7 @@ public sealed class SettingsViewModelTests
     public async Task OpenDataFolder_alerts_when_the_launcher_returns_false()
     {
         Directory.CreateDirectory(AppPaths.AppDataDir);
-        var (vm, _, dialogs, _) = Build(launchExternalPath: _ => false);
+        var (vm, _, dialogs, _) = Build(launcher: new FakeExternalLauncher { OpenPathResult = _ => false });
 
         await vm.OpenDataFolderCommand.ExecuteAsync(null);
 
@@ -503,7 +505,7 @@ public sealed class SettingsViewModelTests
     {
         Directory.CreateDirectory(AppPaths.AppDataDir);
         var (vm, _, dialogs, _) = Build(
-            launchExternalPath: _ => throw new InvalidOperationException("boom"));
+            launcher: new FakeExternalLauncher { OpenPathResult = _ => throw new InvalidOperationException("boom") });
 
         await vm.OpenDataFolderCommand.ExecuteAsync(null);
 
@@ -517,42 +519,42 @@ public sealed class SettingsViewModelTests
     [Fact]
     public async Task OpenProfilesFolder_is_a_no_op_when_ProfilesBaseFolder_is_empty()
     {
-        var called = false;
+        var launcher = new FakeExternalLauncher();
         var (vm, _, dialogs, _) = Build(
             profilesBaseFolder: "",
-            launchExternalPath: _ => called = true);
+            launcher: launcher);
 
         await vm.OpenProfilesFolderCommand.ExecuteAsync(null);
 
-        Assert.False(called);
+        Assert.Empty(launcher.OpenedPaths);
         Assert.Empty(dialogs.AlertCalls);
     }
 
     [Fact]
     public async Task OpenProfilesFolder_is_a_no_op_when_the_directory_does_not_exist()
     {
-        var called = false;
+        var launcher = new FakeExternalLauncher();
         var (vm, _, dialogs, _) = Build(
             profilesBaseFolder: Path.Combine(Path.GetTempPath(), "curator-does-not-exist-" + Guid.NewGuid()),
-            launchExternalPath: _ => called = true);
+            launcher: launcher);
 
         await vm.OpenProfilesFolderCommand.ExecuteAsync(null);
 
-        Assert.False(called);
+        Assert.Empty(launcher.OpenedPaths);
         Assert.Empty(dialogs.AlertCalls);
     }
 
     [Fact]
     public async Task OpenProfilesFolder_launches_the_seam_with_the_current_path()
     {
-        string? received = null;
+        var launcher = new FakeExternalLauncher();
         var (vm, _, dialogs, _) = Build(
             profilesBaseFolder: Path.GetTempPath(),
-            launchExternalPath: p => { received = p; return true; });
+            launcher: launcher);
 
         await vm.OpenProfilesFolderCommand.ExecuteAsync(null);
 
-        Assert.Equal(Path.GetTempPath(), received);
+        Assert.Equal(Path.GetTempPath(), Assert.Single(launcher.OpenedPaths));
         Assert.Empty(dialogs.AlertCalls);
     }
 
@@ -561,7 +563,7 @@ public sealed class SettingsViewModelTests
     {
         var (vm, _, dialogs, _) = Build(
             profilesBaseFolder: Path.GetTempPath(),
-            launchExternalPath: _ => false);
+            launcher: new FakeExternalLauncher { OpenPathResult = _ => false });
 
         await vm.OpenProfilesFolderCommand.ExecuteAsync(null);
 
@@ -575,7 +577,7 @@ public sealed class SettingsViewModelTests
     {
         var (vm, _, dialogs, _) = Build(
             profilesBaseFolder: Path.GetTempPath(),
-            launchExternalPath: _ => throw new InvalidOperationException("boom"));
+            launcher: new FakeExternalLauncher { OpenPathResult = _ => throw new InvalidOperationException("boom") });
 
         await vm.OpenProfilesFolderCommand.ExecuteAsync(null);
 
@@ -661,16 +663,16 @@ public sealed class SettingsViewModelTests
     public async Task Gaming_mode_open_folder_commands_never_call_the_launcher_seam()
     {
         Directory.CreateDirectory(AppPaths.AppDataDir);
-        var called = 0;
+        var launcher = new FakeExternalLauncher();
         var (vm, _, dialogs, _) = Build(
             profilesBaseFolder: Path.GetTempPath(),
-            launchExternalPath: _ => { called++; return true; },
+            launcher: launcher,
             gamingMode: new GamingModeState(true));
 
         await vm.OpenDataFolderCommand.ExecuteAsync(null);
         await vm.OpenProfilesFolderCommand.ExecuteAsync(null);
 
-        Assert.Equal(0, called);
+        Assert.Empty(launcher.OpenedPaths);
         Assert.Empty(dialogs.AlertCalls);
     }
 }

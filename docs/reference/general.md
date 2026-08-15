@@ -95,6 +95,39 @@ public sealed class ConfigLoader : IConfigLoader
   `AppPaths.AppDataDir` (`%LOCALAPPDATA%\ModifAmorphic\Modificus Curator` on
   Windows, `~/.local/share/Modificus Curator` on Linux).
 
+### `IExternalLauncher` / `ShellExternalLauncher`
+
+The one OS shell-open seam: opens a URL in the default browser or a folder in
+the file manager. Shared by every caller that hands a target to the OS (the
+mod list's files-page + games-page + open-external-folder actions, the DMF
+prompt's browser path, the Settings open-folder buttons, the Integrations
+API-key help link, and the OAuth loopback browser).
+
+```csharp
+public interface IExternalLauncher
+{
+    bool OpenUri(Uri uri);     // default browser (http/https)
+    bool OpenPath(string path); // file manager
+}
+
+public sealed class ShellExternalLauncher : IExternalLauncher
+{
+    public ShellExternalLauncher(ILogger<ShellExternalLauncher> logger);
+}
+```
+
+- Returns `false` when the OS could not start the shell launch (no default
+  handler, a headless session, a missing target); callers surface their own
+  fallback (typically a localized alert carrying the target for manual copy).
+- The failure set mapped to `false` is exactly the narrow shell-launch trio
+  (`Win32Exception`, `PlatformNotSupportedException`,
+  `FileNotFoundException`), caught + logged inside. Every other exception
+  propagates, so a real wiring bug stays visible instead of being swallowed as
+  a launch failure.
+- `ShellExternalLauncher` shells out via `Process.Start` with
+  `UseShellExecute = true` (the OS routes a URL to the browser, a folder to
+  the file manager). Stateless; registered as a singleton.
+
 ### `IAppStateStore` / `AppStateStore`
 
 Persists **runtime application state**: values that capture "where the app left
@@ -236,6 +269,8 @@ needs them). It registers:
   instance it used for its one-off startup snapshot (one shared live-read
   singleton) before calling `AddGeneral`; the typed default is the fallback for
   hosts that do not pre-register (tests, smoke harnesses).
+- `TryAddSingleton<IExternalLauncher, ShellExternalLauncher>()`: the OS
+  shell-open seam (URLs to the default browser, folders to the file manager).
 - `TryAddSingleton<IAppStateStore, AppStateStore>()`: the runtime app-state
   store. `TryAdd` (not `Add`) so a test or host may pre-register an override
   (e.g. an in-memory or temp-path store) before `AddGeneral` runs.

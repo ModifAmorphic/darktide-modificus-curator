@@ -232,6 +232,9 @@ public static class CuratorComposition
                 // Gaming Mode gates the Add split button's picker paths + the
                 // linked-row open-folder badge.
                 sp.GetRequiredService<IGamingModeState>(),
+                // The OS shell-open launcher: the Add NexusMods browser open +
+                // the linked-row open-folder action.
+                sp.GetRequiredService<IExternalLauncher>(),
                 startCountdownTimer,
                 stopCountdownTimer);
         });
@@ -271,6 +274,7 @@ public static class CuratorComposition
             // platforms without one); the shared state carries the status.
             sp.GetService<INxmHandlerRegistrar>(),
             sp.GetRequiredService<INxmRegistrationState>(),
+            sp.GetRequiredService<IExternalLauncher>(),
             sp.GetRequiredService<ILogger<IntegrationsViewModel>>()));
         services.AddSingleton(sp => new PreferencesViewModel(
             sp.GetRequiredService<IPreferencesService>(),
@@ -287,7 +291,8 @@ public static class CuratorComposition
             // open-folder buttons; manual path entry stays available.
             sp.GetRequiredService<IGamingModeState>(),
             sp.GetRequiredService<Action<Action>>(),
-            sp.GetRequiredService<ILogger<SettingsViewModel>>()));
+            sp.GetRequiredService<ILogger<SettingsViewModel>>(),
+            sp.GetRequiredService<IExternalLauncher>()));
 
         // The DMF (Darktide Mod Framework) install-prompt coordinator.
         // Subscribes to the synchronous IProfileService.ProfileCreated event at
@@ -315,7 +320,8 @@ public static class CuratorComposition
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<ILogger<DmfPromptService>>(),
             sp.GetRequiredService<INxmRegistrationState>(),
-            sp.GetRequiredService<IGamingModeState>()));
+            sp.GetRequiredService<IGamingModeState>(),
+            sp.GetRequiredService<IExternalLauncher>()));
 
         // ShellViewModel owns navigation + the deferred DMF trigger (consumed on
         // a real Mods entry). The concrete DmfPromptService is injected (not a

@@ -784,7 +784,7 @@ switch to in-app install).
   surfaces a user-facing alert. The finally block clears `row.IsUpdating` and
   releases the coordinator.
 - **Regular / unknown:** `OpenFilesPage` opens the mod's Nexus files page in
-  the user's browser via an injectable external-launcher seam. A launch failure
+  the user's browser via the shared `IExternalLauncher`. A launch failure
   surfaces a user-facing fallback alert (with the URL for manual copy) rather
   than being swallowed.
 
@@ -868,7 +868,7 @@ re-hydrates from the store when the result lands.
   untracked, which the `HyperlinkButton` treats as a no-op click). A linked row
   replaces this badge with a two-state indicator in the same cell: available
   shows an "External" pill whose click opens the OS file manager at the
-  external folder (`OpenFolder`, via a testable path-launcher seam with a
+  external folder (`OpenFolder`, via the shared `IExternalLauncher` with a
   fallback alert on failure); broken (the external folder is missing) shows a
   non-clickable "Folder unavailable" text in the caution brush. The broken
   state is pushed from `IModRepository.IsExternalAvailable` at Reload

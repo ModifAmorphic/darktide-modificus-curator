@@ -40,7 +40,8 @@ public sealed class SettingsViewModelAppUpdateTests
             dialogs,
             new GamingModeState(false),
             invokeOnUi: static action => action(),
-            NullLogger<SettingsViewModel>.Instance);
+            NullLogger<SettingsViewModel>.Instance,
+            new FakeExternalLauncher());
     }
 
     // ---- initial status reads LastCheckResult -----------------------------

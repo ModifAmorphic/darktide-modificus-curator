@@ -20,8 +20,9 @@ public static class ServiceCollectionExtensions
 {
     /// <summary>
     /// Registers General services: the <paramref name="loggerFactory"/>,
-    /// <c>AddLogging()</c>, <see cref="IConfigLoader"/>, and
-    /// <see cref="IAppStateStore"/> (runtime app-state: the active-profile id,
+    /// <c>AddLogging()</c>, <see cref="IConfigLoader"/>,
+    /// <see cref="IExternalLauncher"/> (the OS shell-open seam), and
+    /// <see cref="AppStateStore"/> (runtime app-state: the active-profile id,
     /// persisted separately from <see cref="CuratorConfig"/>).
     /// </summary>
     /// <remarks>
@@ -38,6 +39,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(loggerFactory);
         services.AddLogging();
         services.TryAddSingleton<IConfigLoader, ConfigLoader>();
+        services.TryAddSingleton<IExternalLauncher, ShellExternalLauncher>();
         // TryAdd so a test/host may pre-register an override (e.g. an in-memory
         // or temp-path state store) before AddGeneral runs.
         services.TryAddSingleton<IAppStateStore, AppStateStore>();

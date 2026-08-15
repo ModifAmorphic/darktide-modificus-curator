@@ -1,6 +1,5 @@
-using System.ComponentModel;
-using System.Diagnostics;
 using Modificus.Curator.Config;
+using Modificus.Curator.General;
 using Modificus.Curator.Integrations;
 using Modificus.Curator.Mods;
 using Modificus.Curator.Profiles;
@@ -91,7 +90,7 @@ public sealed class DmfPromptService
     private readonly INxmRegistrationState _nxmRegistration;
     private readonly IGamingModeState _gamingMode;
     private readonly ILogger<DmfPromptService> _logger;
-    private readonly Func<Uri, bool> _launchExternal;
+    private readonly IExternalLauncher _externalLauncher;
 
     // The pending new-profile trigger, set by the event handler (which fires
     // synchronously from CreateProfile) and consumed by ProcessPendingAsync
@@ -112,7 +111,7 @@ public sealed class DmfPromptService
         ILogger<DmfPromptService> logger,
         INxmRegistrationState nxmRegistration,
         IGamingModeState gamingMode,
-        Func<Uri, bool>? launchExternal = null)
+        IExternalLauncher externalLauncher)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _session = session ?? throw new ArgumentNullException(nameof(session));
@@ -124,7 +123,7 @@ public sealed class DmfPromptService
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
         _gamingMode = gamingMode ?? throw new ArgumentNullException(nameof(gamingMode));
-        _launchExternal = launchExternal ?? DefaultLaunchExternal;
+        _externalLauncher = externalLauncher ?? throw new ArgumentNullException(nameof(externalLauncher));
 
         _profiles.ProfileCreated += OnProfileCreated;
     }
@@ -334,7 +333,7 @@ public sealed class DmfPromptService
     private async Task OpenDmfFilesPageInBrowser()
     {
         var uri = new Uri(DmfFilesUrl);
-        if (_launchExternal(uri))
+        if (_externalLauncher.OpenUri(uri))
         {
             _logger.LogInformation(
                 "Opened DMF files page in browser; the nxm handler will pick up the download if Curator owns it.");
@@ -347,28 +346,6 @@ public sealed class DmfPromptService
         await _dialogs.ShowAlertAsync(
             _localization["Dmf_DownloadFailedTitle"],
             _localization.Format("Dmf_OpenBrowserFailedMessage", DmfFilesUrl));
-    }
-
-    /// <summary>
-    /// Opens <paramref name="uri"/> in the user's default browser via the OS
-    /// shell-open (<c>UseShellExecute = true</c>), the same pattern the OAuth
-    /// browser launcher + the Integrations help link use. Returns <c>false</c>
-    /// on a shell-open failure (no default browser, headless test env, missing
-    /// browser binary, unusual runtime) so the caller can surface a fallback
-    /// alert with the URL; programming errors still throw. The exception filter
-    /// is intentionally narrow so a real wiring bug is not silently swallowed.
-    /// </summary>
-    private static bool DefaultLaunchExternal(Uri uri)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo(uri.ToString()) { UseShellExecute = true });
-            return true;
-        }
-        catch (Exception ex) when (ex is Win32Exception or PlatformNotSupportedException or FileNotFoundException)
-        {
-            return false;
-        }
     }
 
     /// <summary>
