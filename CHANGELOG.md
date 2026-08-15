@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.1](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.30.0...v0.30.1) (2026-08-15)
+
+
+### Bug Fixes
+
+* hold launch overlay until relay exits; default detailed mod rows ([#207](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/207)) ([efa19b1](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/efa19b113d23a4a191a0a696cff5ed17f60e5d88))
+
 ## [0.30.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.29.2...v0.30.0) (2026-08-15)
 
 
