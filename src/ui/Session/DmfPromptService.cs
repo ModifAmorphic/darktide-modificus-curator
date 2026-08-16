@@ -5,6 +5,7 @@ using Modificus.Curator.Mods;
 using Modificus.Curator.Profiles;
 using Modificus.Curator.UI.Dialogs;
 using Modificus.Curator.UI.Localization;
+using Modificus.Curator.UI.ViewModels;
 using Microsoft.Extensions.Logging;
 
 namespace Modificus.Curator.UI.Session;
@@ -17,17 +18,22 @@ namespace Modificus.Curator.UI.Session;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>The trigger fires from the backend; the prompt fires from the shell on
-/// Mods entry.</b> <see cref="IProfileService.ProfileCreated"/> fires
+/// <b>The trigger fires from the backend; the prompt fires from the shell's
+/// modal queue.</b> <see cref="IProfileService.ProfileCreated"/> fires
 /// synchronously from inside the create call. This coordinator subscribes at
-/// construction (resolved eagerly when the shell is built, before any profile
-/// can be created), records the signal as pending, and the shell awaits
-/// <see cref="ProcessPendingAsync"/> when the user next navigates into the Mods
-/// destination, so the DMF prompt runs as the topmost modal with Mods already
-/// selected underneath. A pending trigger survives visits to other destinations
-/// and is consumed only on a real navigation into Mods.</para>
+/// construction (resolved eagerly at composition, before any profile can be
+/// created) and enqueues its prompt onto the <see cref="IShellModalQueue"/> for
+/// the Mods destination; the shell drains the queue after switching to Mods +
+/// running its enter effects, so the DMF prompt runs as the topmost modal with
+/// Mods already selected underneath. The queued entry survives visits to other
+/// destinations and is consumed only on a real navigation into Mods; a second
+/// create before the entry drains replaces it (the newest created id is the
+/// relevant one). After the prompt finishes (accepted, declined, or skipped),
+/// the coordinator reloads the mod list itself so an accepted existing/Premium
+/// DMF add is visible immediately; a declined or no-op prompt reloads the same
+/// authoritative state.</para>
 /// <para>
-/// <b>The two DMF cases.</b> On a trigger, the coordinator looks up DMF by
+/// <b>The two DMF cases.</b> On the trigger, the coordinator looks up DMF by
 /// source (<c>new NexusSource { ModId = <see cref="DmfModId"/> }</c>) and checks
 /// the active profile's mod list. (1) DMF in the repo but not in the profile:
 /// a Yes/No confirm, On Yes adds it instantly (no download). (2) DMF not in the
@@ -49,9 +55,10 @@ namespace Modificus.Curator.UI.Session;
 /// <para>
 /// <b>Lives in the UI assembly.</b> Mirrors <see cref="UpdateCheckRunner"/>:
 /// the coordinator observes UI-layer singletons (<see cref="IProfileSession"/>,
-/// <see cref="IDialogService"/>) and orchestrates Integrations + Profiles +
-/// Mods services. Registered as a singleton; the shell resolves it + awaits
-/// <see cref="ProcessPendingAsync"/> after navigating into Mods.</para>
+/// <see cref="IDialogService"/>, <see cref="IShellModalQueue"/>) and orchestrates
+/// Integrations + Profiles + Mods services. Registered as a singleton; nothing
+/// depends on it (the shell no longer knows it exists), so composition resolves
+/// it once at startup to establish the subscription.</para>
 /// </remarks>
 public sealed class DmfPromptService
 {
@@ -60,6 +67,12 @@ public sealed class DmfPromptService
     /// Darktide mods; the prompt offers to install it when missing.
     /// </summary>
     public const int DmfModId = 8;
+
+    /// <summary>
+    /// The queue-owner key for this service's enqueued modal (one pending
+    /// entry; a newer create replaces it).
+    /// </summary>
+    private static readonly object QueueOwner = typeof(DmfPromptService);
 
     /// <summary>
     /// The Nexus files page for DMF. Opened in the user's browser when DMF is
@@ -84,14 +97,8 @@ public sealed class DmfPromptService
     private readonly IGamingModeState _gamingMode;
     private readonly ILogger<DmfPromptService> _logger;
     private readonly IExternalLauncher _externalLauncher;
-
-    // The pending new-profile trigger, set by the event handler (which fires
-    // synchronously from CreateProfile) and consumed by ProcessPendingAsync
-    // (awaited by the shell on Mods entry). Single-entry: the newest create
-    // wins. Read + written on the UI thread only (ProfileCreated fires from
-    // ProfileService on the UI thread; the shell's NavigateAsync runs on the UI
-    // thread).
-    private Guid? _pendingNewProfileId;
+    private readonly IShellModalQueue _modalQueue;
+    private readonly IModListRefresh _modListRefresh;
 
     public DmfPromptService(
         IProfileService profiles,
@@ -104,7 +111,9 @@ public sealed class DmfPromptService
         ILogger<DmfPromptService> logger,
         INxmRegistrationState nxmRegistration,
         IGamingModeState gamingMode,
-        IExternalLauncher externalLauncher)
+        IExternalLauncher externalLauncher,
+        IShellModalQueue modalQueue,
+        IModListRefresh modListRefresh)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _session = session ?? throw new ArgumentNullException(nameof(session));
@@ -117,59 +126,39 @@ public sealed class DmfPromptService
         _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
         _gamingMode = gamingMode ?? throw new ArgumentNullException(nameof(gamingMode));
         _externalLauncher = externalLauncher ?? throw new ArgumentNullException(nameof(externalLauncher));
+        _modalQueue = modalQueue ?? throw new ArgumentNullException(nameof(modalQueue));
+        _modListRefresh = modListRefresh ?? throw new ArgumentNullException(nameof(modListRefresh));
 
         _profiles.ProfileCreated += OnProfileCreated;
     }
 
     /// <summary>
-    /// Records a new-profile-created signal. The shell will await
-    /// <see cref="ProcessPendingAsync"/> on the next navigation into Mods; this
-    /// method only records the pending trigger.
+    /// Records a new-profile-created signal: enqueues the prompt onto the
+    /// shell's modal queue for the next real Mods entry. A profile created
+    /// while Darktide runs does NOT become active (the session gates it), so
+    /// the prompt body skips in that case (the user is still on their previous
+    /// profile); a profile created + then deleted before the entry drains is
+    /// handled the same way (the active-id check no longer matches).
     /// </summary>
-    /// <remarks>
-    /// A second create before the first is processed overwrites it (the newest
-    /// created id is the relevant one). A profile created + then deleted before
-    /// the shell processes the trigger is handled by
-    /// <see cref="PromptForNewProfileAsync"/>: it checks the active id, which
-    /// no longer points at the deleted profile, so no prompt fires.
-    /// </remarks>
     private void OnProfileCreated(object? sender, ProfileSummary e)
     {
-        _pendingNewProfileId = e.Id;
-        _logger.LogDebug("Recorded pending DMF new-profile trigger for {Id}.", e.Id);
+        var createdProfileId = e.Id;
+        _modalQueue.Enqueue(QueueOwner, ShellDestination.Mods, () =>
+            RunPromptAndReloadAsync(createdProfileId));
+        _logger.LogDebug("Enqueued the DMF new-profile prompt for {Id}.", e.Id);
     }
 
     /// <summary>
-    /// Processes any pending new-profile trigger. Awaited by the shell after a
-    /// navigation into Mods so the DMF prompt runs as the topmost modal with
-    /// the Mods destination already selected underneath. Safe to call when
-    /// nothing is pending (a no-op).
+    /// The drained modal body: run the prompt (fail-isolated), then reload the
+    /// mod list so an accepted existing/Premium DMF add is visible immediately
+    /// (a declined, skipped, or browser-open prompt reloads the same
+    /// authoritative state). The reload is the enqueuer's business, matching
+    /// the post-consumed reload the shell used to run.
     /// </summary>
-    /// <returns><c>true</c> when a pending trigger was consumed (a prompt may or
-    /// may not have fired depending on the active-id + DMF checks); <c>false</c>
-    /// when there was no pending trigger, so the caller knows no mod list reload
-    /// is warranted.</returns>
-    /// <remarks>
-    /// The trigger is consumed (cleared) before it is processed so a thrown
-    /// exception in the prompt does not leave it stuck pending for the next
-    /// call. A failure inside the prompt is caught + logged so a wiring issue
-    /// never blocks the shell's post-navigation return. The boolean carries
-    /// only "a trigger was consumed"; whether the prompt fired (DMF missing vs.
-    /// already in the profile, declined, etc.) stays internal.</remarks>
-    public async Task<bool> ProcessPendingAsync()
+    private async Task RunPromptAndReloadAsync(Guid createdProfileId)
     {
-        // Snapshot + clear before processing so an exception in the prompt
-        // doesn't leave the trigger stuck for the next call.
-        var newProfileId = _pendingNewProfileId;
-        _pendingNewProfileId = null;
-
-        if (newProfileId is Guid id)
-        {
-            await RunPromptSafelyAsync(() => PromptForNewProfileAsync(id));
-            return true;
-        }
-
-        return false;
+        await RunPromptSafelyAsync(() => PromptForNewProfileAsync(createdProfileId));
+        _modListRefresh.Reload();
     }
 
     /// <summary>

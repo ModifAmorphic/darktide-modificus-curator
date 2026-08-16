@@ -65,17 +65,19 @@ internal static class TestDoubles
     /// <param name="gamingMode">Optional Gaming Mode state override. When
     /// omitted (the default), a non-gaming session so the browser paths run
     /// as they do on a desktop.</param>
-    public static DmfPromptService BuildDmfPromptService(
-        FakeProfileService? profiles = null,
-        FakeProfileSession? session = null,
-        FakeModRepository? repo = null,
-        FakeModAcquisitionService? acquisition = null,
-        FakeNexusAuthService? auth = null,
-        FakeDialogService? dialogs = null,
-        LocalizationService? localization = null,
-        FakeNxmRegistrationState? nxmRegistration = null,
-        IGamingModeState? gamingMode = null,
-        FakeExternalLauncher? launcher = null)
+    public static (DmfPromptService Service, ShellModalQueue Queue, IModListRefresh Refresh)
+        BuildDmfPromptService(
+            FakeProfileService? profiles = null,
+            FakeProfileSession? session = null,
+            FakeModRepository? repo = null,
+            FakeModAcquisitionService? acquisition = null,
+            FakeNexusAuthService? auth = null,
+            FakeDialogService? dialogs = null,
+            LocalizationService? localization = null,
+            FakeNxmRegistrationState? nxmRegistration = null,
+            IGamingModeState? gamingMode = null,
+            FakeExternalLauncher? launcher = null,
+            IModListRefresh? modListRefresh = null)
     {
         profiles ??= Profiles();
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
@@ -89,8 +91,10 @@ internal static class TestDoubles
         // SAFETY: an omitted launcher defaults to the harmless in-memory
         // recorder (there is no production fallback in the service).
         launcher ??= new FakeExternalLauncher();
+        modListRefresh ??= new RefreshRecorder();
         profiles.RepoLookup = repo;
-        return new DmfPromptService(
+        var queue = new ShellModalQueue();
+        return (new DmfPromptService(
             profiles,
             session,
             repo,
@@ -101,7 +105,9 @@ internal static class TestDoubles
             NullLogger<DmfPromptService>.Instance,
             nxmRegistration,
             gamingMode,
-            launcher);
+            launcher,
+            queue,
+            modListRefresh), queue, modListRefresh);
     }
 
     /// <summary>
@@ -301,7 +307,8 @@ internal static class TestDoubles
         PreferencesViewModel PreferencesPage,
         SettingsViewModel SettingsPage,
         FakeSteamService Steam,
-        DmfPromptService Dmf);
+        DmfPromptService Dmf,
+        ShellModalQueue ModalQueue);
 
     /// <summary>
     /// Builds a <see cref="ShellViewModel"/> wired to concrete singleton page
@@ -362,12 +369,19 @@ internal static class TestDoubles
             configLoader: config,
             appState: new FakeAppStateStore(),
             nxmRegistration: nxmRegistration);
-        var dmf = BuildDmfPromptService(
+        // The DMF coordinator + the shell share one modal queue (mirroring
+        // composition): the coordinator enqueues on ProfileCreated + reloads
+        // the mod list itself after the prompt; the shell drains the queue on
+        // destination entry. The modsPage the shell hosts is the refresh
+        // target, so an accepted DMF add surfaces in the same list the test
+        // reads.
+        var (dmf, modalQueue, _) = BuildDmfPromptService(
             profiles, session, repo,
             dialogs: dialogs,
             localization: localization,
             auth: auth,
-            nxmRegistration: nxmRegistration);
+            nxmRegistration: nxmRegistration,
+            modListRefresh: modsPage);
         var profilesPage = new ProfilesViewModel(
             profiles, session, dialogs, localization,
             NullLogger<ProfilesViewModel>.Instance);
@@ -392,7 +406,7 @@ internal static class TestDoubles
             session, launch, dialogs, localization,
             profilesPage, modsPage, integrationsPage, preferencesPage, settingsPage,
             appUpdate,
-            dmf,
+            modalQueue,
             invokeOnUi: static action => action(),
             NullLogger<ShellViewModel>.Instance,
             config, nxmRegistration,
@@ -402,7 +416,7 @@ internal static class TestDoubles
         return new ShellParts(
             shell, profiles, session, dialogs, launch, appUpdate, config,
             auth, nxmRegistrar, nxmRegistration, profilesPage, modsPage, integrationsPage,
-            preferencesPage, settingsPage, steam, dmf);
+            preferencesPage, settingsPage, steam, dmf, modalQueue);
     }
 }
 
