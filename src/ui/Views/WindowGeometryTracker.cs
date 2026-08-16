@@ -50,7 +50,6 @@ internal sealed class WindowGeometryTracker
     private bool _maximizeOnFirstOpen;
     private bool _hasOpened;
     private bool _isClosing;
-    private bool _hasPersisted;
     private Size? _trustedCandidate;
     private Size? _layoutCandidate;
     private bool _layoutSawOpen;

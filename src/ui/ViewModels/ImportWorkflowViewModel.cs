@@ -57,13 +57,12 @@ namespace Modificus.Curator.UI.ViewModels;
 /// generic inline message (technical details are logged, not exposed). No path
 /// strands processing or crashes through the command's calling context.</para>
 /// </remarks>
-public partial class ImportWorkflowViewModel : ObservableObject
+public partial class ImportWorkflowViewModel : LocalizedViewModel
 {
     private readonly IProfileService _profiles;
     private readonly IProfileSession _session;
     private readonly IModRepository _repo;
     private readonly IModImportService _importService;
-    private readonly LocalizationService _localization;
     private readonly ILogger<ImportWorkflowViewModel> _logger;
 
     private WorkflowState _state = WorkflowState.Inactive;
@@ -87,16 +86,15 @@ public partial class ImportWorkflowViewModel : ObservableObject
         IModImportService importService,
         LocalizationService localization,
         ILogger<ImportWorkflowViewModel> logger)
+        : base(localization)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _repo = repo ?? throw new ArgumentNullException(nameof(repo));
         _importService = importService ?? throw new ArgumentNullException(nameof(importService));
-        _localization = localization ?? throw new ArgumentNullException(nameof(localization));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         _session.PropertyChanged += OnSessionPropertyChanged;
-        _localization.PropertyChanged += OnCultureChanged;
     }
 
     /// <summary>
@@ -691,22 +689,16 @@ public partial class ImportWorkflowViewModel : ObservableObject
     /// URL label/placeholder, validation messages, failure message) without
     /// mutating the editing fields or the queue position.
     /// </summary>
-    private void OnCultureChanged(object? sender, PropertyChangedEventArgs e)
+    protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
-        if (e.PropertyName != nameof(LocalizationService.Culture)
-            && e.PropertyName != "Item[]")
-        {
-            return;
-        }
-
-        OnPropertyChanged(nameof(HeaderText));
-        OnPropertyChanged(nameof(ProcessingText));
-        OnPropertyChanged(nameof(UrlLabel));
-        OnPropertyChanged(nameof(UrlPlaceholder));
-        OnPropertyChanged(nameof(UrlValidationMessage));
-        OnPropertyChanged(nameof(VersionValidationMessage));
-        OnPropertyChanged(nameof(FailureMessage));
-    }
+        nameof(HeaderText),
+        nameof(ProcessingText),
+        nameof(UrlLabel),
+        nameof(UrlPlaceholder),
+        nameof(UrlValidationMessage),
+        nameof(VersionValidationMessage),
+        nameof(FailureMessage),
+    };
 
     // ---- helpers -----------------------------------------------------------
 

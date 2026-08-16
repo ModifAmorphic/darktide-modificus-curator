@@ -100,7 +100,7 @@ public enum ModAddMode
 /// the active list on it (the same reload point the flow had when it lived
 /// here).</para>
 /// </remarks>
-public partial class ModListViewModel : ObservableObject, IModListRefresh
+public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
 {
     /// <summary>
     /// The Nexus Mods games page for Darktide (the "Add Nexus Mods" flyout item's
@@ -113,7 +113,6 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     private readonly IProfileSession _session;
     private readonly IModRepository _repo;
     private readonly IDialogService _dialogs;
-    private readonly LocalizationService _localization;
     private readonly IUpdateStateStore _updateState;
     private readonly UpdateCheckRunner _updateCheckRunner;
     private readonly ILogger<ModListViewModel> _logger;
@@ -154,12 +153,12 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
         IExternalLauncher externalLauncher,
         INxmRegistrationState nxmRegistration,
         ILogger<ModListViewModel> logger)
+        : base(localization)
     {
         _profiles = profiles;
         _session = session;
         _repo = repo;
         _dialogs = dialogs;
-        _localization = localization;
         _updateState = updateState;
         _updateCheckRunner = updateCheckRunner;
         RowContext = rowContext ?? throw new ArgumentNullException(nameof(rowContext));
@@ -171,7 +170,6 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
         _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
 
         _session.PropertyChanged += OnSessionPropertyChanged;
-        _localization.PropertyChanged += OnCultureChanged;
         // The runner surfaces both update-family completions on the UI thread
         // (the re-raised check-completed + the automatic batch's
         // updates-applied); this VM does no marshaling of its own.
@@ -602,25 +600,31 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     }
 
     /// <summary>
-    /// The UI culture flipped (Preferences dialog). Re-fire the localized derived
-    /// strings + refresh each row's badge + policy text.
+    /// The mod list's localized property names, re-fired by the shared
+    /// culture-refresh base on a culture change (header, empty-state, and
+    /// refresh-gate tooltip strings; the gate re-render in
+    /// <see cref="OnCultureChanged"/> re-fires the non-localized gate
+    /// renderings alongside them).
     /// </summary>
-    private void OnCultureChanged(object? sender, PropertyChangedEventArgs e)
+    protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
-        if (e.PropertyName != nameof(LocalizationService.Culture)
-            && e.PropertyName != "Item[]")
-        {
-            return;
-        }
+        nameof(AddModsHintText),
+        nameof(NexusHintText),
+        nameof(AddModeLabel),
+        nameof(RateLimitedNoticeText),
+        nameof(RateLimitedTooltip),
+        nameof(ManualRefreshTooltip),
+        nameof(AddButtonTooltip),
+    };
 
-        OnPropertyChanged(nameof(AddModsHintText));
-        OnPropertyChanged(nameof(NexusHintText));
-        OnPropertyChanged(nameof(AddModeLabel));
-        OnPropertyChanged(nameof(RateLimitedNoticeText));
-        OnPropertyChanged(nameof(AddButtonTooltip));
-        // Re-resolve the localized refresh-gate renderings so the rate-limit +
-        // throttle tooltips pick up the new culture immediately (the gate's own
-        // state is unchanged; the raw values are re-read).
+    /// <summary>
+    /// The non-list culture work: re-resolve the localized refresh-gate
+    /// renderings so the rate-limit + throttle tooltips pick up the new
+    /// culture immediately (the gate's own state is unchanged; the raw values
+    /// are re-read), + refresh each row's localized text.
+    /// </summary>
+    protected override void OnCultureChanged()
+    {
         OnRefreshGateStateChanged();
         foreach (var row in Mods)
         {

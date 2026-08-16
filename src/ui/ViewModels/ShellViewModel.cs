@@ -74,12 +74,11 @@ namespace Modificus.Curator.UI.ViewModels;
 /// title re-resolve from <see cref="LocalizationService"/> on a culture
 /// change.</para>
 /// </remarks>
-public partial class ShellViewModel : ObservableObject, IShellNavigation
+public partial class ShellViewModel : LocalizedViewModel, IShellNavigation
 {
     private readonly IProfileSession _session;
     private readonly IRelayLaunchService _launchService;
     private readonly IDialogService _dialogs;
-    private readonly LocalizationService _localization;
     private readonly ModListViewModel _modList;
     private readonly ProfilesViewModel _profiles;
     private readonly IntegrationsViewModel _integrations;
@@ -120,11 +119,11 @@ public partial class ShellViewModel : ObservableObject, IShellNavigation
         INxmRegistrationState nxmRegistration,
         Func<Task>? yieldForLaunchRender = null,
         Func<Task>? launchHandoffTimeout = null)
+        : base(localization)
     {
         _session = session;
         _launchService = launchService;
         _dialogs = dialogs;
-        _localization = localization;
         _profiles = profiles;
         _modList = modList;
         _integrations = integrations;
@@ -156,10 +155,6 @@ public partial class ShellViewModel : ObservableObject, IShellNavigation
         _nxmRegistration.RefreshFromOs();
 
         _session.PropertyChanged += OnSessionPropertyChanged;
-        // Re-resolve the localized strings (status strip + page title) when the
-        // UI culture flips so the shell refreshes in-step with the rest of the
-        // UI on a language switch.
-        _localization.PropertyChanged += OnCultureChanged;
 
         // Subscribe to the app self-update state changes so the status-strip
         // notice appears the moment a check resolves an update (the startup
@@ -514,25 +509,19 @@ public partial class ShellViewModel : ObservableObject, IShellNavigation
     }
 
     /// <summary>
-    /// The UI culture flipped. Re-fire the property-changed events for the
-    /// localized derived strings (status strip + page title).
+    /// The shell's localized property names, re-fired by the shared
+    /// culture-refresh base on a culture change (status strip + page title).
     /// </summary>
-    private void OnCultureChanged(object? sender, PropertyChangedEventArgs e)
+    protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
-        if (e.PropertyName != nameof(LocalizationService.Culture)
-            && e.PropertyName != "Item[]")
-        {
-            return;
-        }
-
-        OnPropertyChanged(nameof(CurrentDestinationTitle));
-        OnPropertyChanged(nameof(GameRunningText));
-        OnPropertyChanged(nameof(NxmHandlerStatusText));
-        OnPropertyChanged(nameof(NxmHandlerStatusTooltip));
-        OnPropertyChanged(nameof(AppUpdateNoticeText));
-        OnPropertyChanged(nameof(AppUpdateNoticeTooltip));
-        OnPropertyChanged(nameof(AppUpdateDismissTooltip));
-    }
+        nameof(CurrentDestinationTitle),
+        nameof(GameRunningText),
+        nameof(NxmHandlerStatusText),
+        nameof(NxmHandlerStatusTooltip),
+        nameof(AppUpdateNoticeText),
+        nameof(AppUpdateNoticeTooltip),
+        nameof(AppUpdateDismissTooltip),
+    };
 
     /// <summary>
     /// Re-reads the OS <c>nxm://</c> handler registration into

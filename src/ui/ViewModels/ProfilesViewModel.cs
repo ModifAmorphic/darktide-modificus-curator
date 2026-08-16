@@ -117,12 +117,11 @@ public sealed record ProfileChoice(Guid Id, string Name, string Description, str
 /// <para><b>No <c>ConfigureAwait(false)</c></b> anywhere: the UI layer stays on
 /// the captured UI context (repo convention).</para>
 /// </remarks>
-public partial class ProfilesViewModel : ObservableObject
+public partial class ProfilesViewModel : LocalizedViewModel
 {
     private readonly IProfileService _profiles;
     private readonly IProfileSession _session;
     private readonly IDialogService _dialogs;
-    private readonly LocalizationService _localization;
     private readonly ILogger<ProfilesViewModel> _logger;
 
     // Persisted baseline captured at Load so IsDirty compares staged values
@@ -149,11 +148,11 @@ public partial class ProfilesViewModel : ObservableObject
         IDialogService dialogs,
         LocalizationService localization,
         ILogger<ProfilesViewModel> logger)
+        : base(localization)
     {
         _profiles = profiles;
         _session = session;
         _dialogs = dialogs;
-        _localization = localization;
         _logger = logger;
 
         // Snapshot the session's running state BEFORE subscribing + before any
@@ -167,7 +166,6 @@ public partial class ProfilesViewModel : ObservableObject
         Editor.Changed += OnEditorChanged;
 
         _session.PropertyChanged += OnSessionPropertyChanged;
-        _localization.PropertyChanged += OnCultureChanged;
 
         // First authoritative load mirrors what every later reload does.
         ReloadFromActive();
@@ -990,17 +988,15 @@ public partial class ProfilesViewModel : ObservableObject
     /// state, or raise the editor's user-edit Changed event. The XAML's indexer
     /// bindings refresh the static labels automatically.
     /// </summary>
-    private void OnCultureChanged(object? sender, PropertyChangedEventArgs e)
+    protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
-        if (e.PropertyName != nameof(LocalizationService.Culture) && e.PropertyName != "Item[]")
-        {
-            return;
-        }
+        nameof(NameError),
+        nameof(DescriptionError),
+        nameof(AddTooltip),
+        nameof(DeleteTooltip),
+    };
 
-        Editor.RefreshLocalizedValidation();
-        OnPropertyChanged(nameof(NameError));
-        OnPropertyChanged(nameof(DescriptionError));
-        OnPropertyChanged(nameof(AddTooltip));
-        OnPropertyChanged(nameof(DeleteTooltip));
-    }
+    /// <summary>The non-list culture work: refresh the launch-settings
+    /// editor's localized validation strings.</summary>
+    protected override void OnCultureChanged() => Editor.RefreshLocalizedValidation();
 }
