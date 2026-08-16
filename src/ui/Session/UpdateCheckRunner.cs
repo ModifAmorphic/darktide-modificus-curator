@@ -89,9 +89,12 @@ namespace Modificus.Curator.UI.Session;
 /// list VM's <c>CheckForUpdatesNow</c> command, but only so the command can
 /// toggle <c>IsCheckingNow</c> off in its finally block; the check itself still
 /// runs on a thread-pool task + never blocks the UI thread. Either way, the
-/// mod-list view model reads <see cref="IUpdateCheckService.LastResult"/> +
-/// subscribes to <see cref="IUpdateCheckService.CheckCompleted"/> to render
-/// badges without awaiting.</para>
+/// mod-list view model renders its update state without awaiting: it
+/// subscribes to this runner's re-raised <see cref="CheckCompleted"/> (the
+/// UI-thread completion signal) + re-hydrates its rows from the profile-scoped
+/// <see cref="IUpdateStateStore"/> (the persisted known-update state the check
+/// service records), never holding <see cref="IUpdateCheckService"/> or its
+/// <see cref="IUpdateCheckService.LastResult"/> directly.</para>
 /// <para>
 /// <b>Belt-and-suspenders exception handling.</b>
 /// <see cref="IUpdateCheckService.CheckAsync"/> /

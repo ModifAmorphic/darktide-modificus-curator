@@ -6,10 +6,11 @@ namespace Modificus.Curator.UI.Tests;
 /// <summary>
 /// The safety net that makes the shared culture-refresh base a fix rather
 /// than a move: reads every view-model source file under src/ui/ViewModels,
-/// finds every property getter that resolves through
-/// <c>_localization[...]</c>, and fails when such a getter is NOT covered by
-/// its VM's registered refresh list (the <see cref="LocalizedViewModel"/>
-/// registration or, for the parent-refreshed
+/// finds every string-returning property getter that resolves through the
+/// <c>_localization</c> field (the indexer or any member use, e.g.
+/// <c>_localization.Format(...)</c>), and fails when such a getter is NOT
+/// covered by its VM's registered refresh list (the
+/// <see cref="LocalizedViewModel"/> registration or, for the parent-refreshed
 /// <see cref="Modificus.Curator.UI.ViewModels.ModItemViewModel"/>, the
 /// Refresh method's re-fire list). The forget-to-register failure becomes a
 /// red test instead of silently stale UI text. Follows the
@@ -53,7 +54,8 @@ public sealed class LocalizedViewModelRegistrationTests
                 {
                     failures.Add(
                         $"{vm.ClassName} ({vm.File}): property '{getter}' resolves through " +
-                        "_localization[...] but is not in the class's registered refresh list " +
+                        "_localization (the indexer or a member call, e.g. Format) but is not " +
+                        "in the class's registered refresh list " +
                         "(LocalizedProperties for a LocalizedViewModel, or the Refresh() " +
                         "re-fire list for ModItemViewModel). Add it or the string goes stale " +
                         "on a culture switch.");
@@ -81,13 +83,46 @@ public sealed class LocalizedViewModelRegistrationTests
             string.Join("\n", unknown));
     }
 
+    [Fact]
+    public void A_format_only_localized_getter_is_detected()
+    {
+        // A getter that never touches the _localization indexer (it resolves
+        // only through the Format member) must still count as localized: the
+        // registration scan's detection has to cover every _localization
+        // member use, or such a getter could ship unregistered and go stale
+        // on a culture switch with the scan green. Pins the widened predicate
+        // against both getter shapes (expression- + block-bodied) and guards
+        // against over-widening (a plain string getter stays undetected).
+        const string source = """
+            public sealed class SampleViewModel
+            {
+                private readonly LocalizationService _localization;
+
+                public string HeaderText =>
+                    _localization.Format("Sample_Header");
+
+                public string PlainText => "not localized";
+
+                public string BlockText
+                {
+                    get { return _localization.Format("Sample_Block"); }
+                }
+            }
+            """;
+
+        var detected = FindLocalizedGetterNames(source);
+
+        Assert.Contains("HeaderText", detected);
+        Assert.Contains("BlockText", detected);
+        Assert.DoesNotContain("PlainText", detected);
+    }
+
     private sealed record ScannedVm(string File, string ClassName, string ClassSource, List<string> Getters);
 
     /// <summary>
-    /// Splits each VM file into its class declarations, then finds every
-    /// property getter inside each class whose body indexes _localization:
-    /// expression-bodied getters (<c>string X =&gt; ... _localization[...]</c>)
-    /// and block-bodied getters (brace-counted from the get accessor).
+    /// Splits each VM file into its class declarations, then collects every
+    /// localized getter name inside each class (see
+    /// <see cref="FindLocalizedGetterNames"/>).
     /// </summary>
     private static IEnumerable<ScannedVm> ScanVmClassesWithLocalizedGetters()
     {
@@ -113,28 +148,7 @@ public sealed class LocalizedViewModelRegistrationTests
                 var className = declarations[c].Groups[1].Value;
                 var fileLabel = file.Name;
 
-                var getters = new List<string>();
-                foreach (Match m in Regex.Matches(
-                             classSource,
-                             @"(?:public|internal|protected)[^()={};]*\bstring\??\s+(\w+)\s*=>([^;]{0,2000});"))
-                {
-                    if (m.Groups[2].Value.Contains("_localization["))
-                    {
-                        getters.Add(m.Groups[1].Value);
-                    }
-                }
-
-                foreach (Match m in Regex.Matches(
-                             classSource,
-                             @"(?:public|internal|protected)\s+string\??\s+(\w+)\s*\{"))
-                {
-                    var getter = GetterBody(classSource, m.Index + m.Length);
-                    if (getter is not null && getter.Contains("_localization["))
-                    {
-                        getters.Add(m.Groups[1].Value);
-                    }
-                }
-
+                var getters = FindLocalizedGetterNames(classSource);
                 if (getters.Count > 0)
                 {
                     yield return new ScannedVm(fileLabel, className, classSource, getters);
@@ -142,6 +156,48 @@ public sealed class LocalizedViewModelRegistrationTests
             }
         }
     }
+
+    /// <summary>
+    /// Finds every string-returning property getter in a class source that
+    /// resolves through the <c>_localization</c> field: expression-bodied
+    /// getters (<c>string X =&gt; ... _localization[...] ...</c>) and
+    /// block-bodied getters (brace-counted from the get accessor).
+    /// </summary>
+    private static List<string> FindLocalizedGetterNames(string classSource)
+    {
+        var getters = new List<string>();
+        foreach (Match m in Regex.Matches(
+                     classSource,
+                     @"(?:public|internal|protected)[^()={};]*\bstring\??\s+(\w+)\s*=>([^;]{0,2000});"))
+        {
+            if (ResolvesThroughLocalization(m.Groups[2].Value))
+            {
+                getters.Add(m.Groups[1].Value);
+            }
+        }
+
+        foreach (Match m in Regex.Matches(
+                     classSource,
+                     @"(?:public|internal|protected)\s+string\??\s+(\w+)\s*\{"))
+        {
+            var getter = GetterBody(classSource, m.Index + m.Length);
+            if (getter is not null && ResolvesThroughLocalization(getter))
+            {
+                getters.Add(m.Groups[1].Value);
+            }
+        }
+
+        return getters;
+    }
+
+    /// <summary>
+    /// Whether a getter body resolves localized text: the <c>_localization</c>
+    /// indexer or ANY member use on the field (e.g.
+    /// <c>_localization.Format(...)</c>). Both shapes go stale on a culture
+    /// switch when unregistered, so both count.
+    /// </summary>
+    private static bool ResolvesThroughLocalization(string getterBody) =>
+        getterBody.Contains("_localization[") || getterBody.Contains("_localization.");
 
     /// <summary>
     /// The names a VM class refreshes on a culture change: everything in its

@@ -32,8 +32,8 @@ namespace Modificus.Curator.UI.ViewModels;
 /// batch (folders linked earlier in the batch stay linked). No modal card; the
 /// folder is linked, not copied.</para>
 /// <para><b>Reload is the parent's:</b> the child raises
-/// <see cref="ModsLinked"/> exactly where the former parent-side flow reloaded,
-/// and the parent reloads the active list on it (the child never touches the
+/// <see cref="ModsLinked"/> when a link flow finishes, and the parent
+/// reloads the active list on it (the child never touches the
 /// row collection). The pending-changes flag is set here, on the session, only
 /// when a path actually landed a linked mod.</para>
 /// <para>No <c>ConfigureAwait(false)</c> anywhere: dialog calls + the session
@@ -74,10 +74,10 @@ public partial class LinkedModsViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Raised when a link flow finished processing its paths (exactly where the
-    /// former parent-side flow reloaded the list). The parent reloads the
-    /// active profile's rows on it; the raised order is one event per
-    /// <see cref="LinkModsCommand"/> execution that got past its entry guards.
+    /// Raised when a link flow finished processing its paths. The parent
+    /// reloads the active profile's rows on it; the raised order is one event
+    /// per <see cref="LinkModsCommand"/> execution that got past its entry
+    /// guards.
     /// </summary>
     public event EventHandler? ModsLinked;
 

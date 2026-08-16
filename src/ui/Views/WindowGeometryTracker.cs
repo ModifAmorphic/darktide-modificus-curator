@@ -78,13 +78,6 @@ internal sealed class WindowGeometryTracker
     public bool LastMeaningfulMaximized => _lastMeaningfulMaximized;
 
     /// <summary>
-    /// Whether the persisted state routes a one-shot maximize on first open
-    /// (seeded from the persisted maximized flag; the window consumes it in
-    /// its opened handler).
-    /// </summary>
-    public bool MaximizeOnFirstOpen => _maximizeOnFirstOpen;
-
-    /// <summary>
     /// Consumes the one-shot first-open maximize: returns whether the window
     /// should maximize now (the first call after a maximized seed) and clears
     /// the flag so later opens never re-maximize.

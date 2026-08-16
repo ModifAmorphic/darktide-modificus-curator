@@ -336,10 +336,10 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// shared row context (already on the UI thread). Re-fires this VM's
     /// forwarding properties (the names match the context's exactly) and fans
     /// the notification out to the live rows, whose derived enabled states +
-    /// tooltips re-read the context. One subscription + one fan-out replaces
-    /// the former three per-flag value pushes; rows dropped by a reload are
-    /// never subscribed individually, so none can leak against the
-    /// application-lifetime context.
+    /// tooltips re-read the context. Rows receive the notification only
+    /// through this single fan-out (never an individual subscription), so
+    /// rows dropped by a reload cannot leak against the application-lifetime
+    /// context.
     /// </summary>
     private void OnRowContextChanged(object? sender, PropertyChangedEventArgs e)
     {

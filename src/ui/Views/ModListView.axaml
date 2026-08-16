@@ -10,12 +10,12 @@
     The shared per-row building blocks, ONE definition each, hosted by both the
     Compact + Detailed row roots through ContentControl.ContentTemplate (the
     spec's shared-DataTemplate shape). Event handlers inside these templates
-    resolve against THIS file's code-behind exactly like the former inline
-    markup (the templates live in the same XAML document + namescope), and the
-    page-level Styles + the detailedModRow ContainerQuery still apply to the
-    realized instances: Avalonia styles select by searching the logical tree
-    upwards from each control, so the nested template content matches the same
-    selectors it matched when the markup was duplicated inline.
+    resolve against THIS file's code-behind (the templates live in the same
+    XAML document + namescope), and the page-level Styles + the
+    detailedModRow ContainerQuery still apply to the realized instances:
+    Avalonia styles select by searching the logical tree upwards from each
+    control, so the nested template content matches the same page-level
+    selectors.
 
     Layout parity: the ContentControl host adds no chrome (its theme is a bare
     ContentPresenter), so the wrapped panel receives the same measure
@@ -23,8 +23,8 @@
     per-density differences (the Compact strip's tighter inter-control margins
     + the Detailed-only Enabled label) are preserved per root: margins come
     from the Grid.compactRow-scoped styles below, and the label comes from the
-    row's density-aware EnabledLabel (null in Compact, matching the former
-    contentless checkbox).
+    row's density-aware EnabledLabel (null in Compact, so the compact row's
+    checkbox carries no label).
   -->
   <UserControl.Resources>
 
@@ -496,10 +496,10 @@
     <!--
       The Compact row's strip spacing: the same shared strip with the
       single-line row's tighter inter-control margins (12 / 12 / 8 / 8 / 4 /
-      4 / 4, exactly the margins the former per-column layout carried, with
-      ItemSpacing 0 so the margins alone define the gaps). Scoped under the
-      Compact root's Grid.compactRow class so the Detailed card is untouched,
-      and declared after the WrapPanel.actionStrip base so the override wins.
+      4 / 4, with ItemSpacing 0 so the margins alone define the gaps). Scoped
+      under the Compact root's Grid.compactRow class so the Detailed card is
+      untouched, and declared after the WrapPanel.actionStrip base so the
+      override wins.
     -->
     <Style Selector="Grid.compactRow WrapPanel.actionStrip">
       <Setter Property="ItemSpacing" Value="0" />
@@ -846,10 +846,9 @@
                 surface. The action strip (enabled, policy editor, update
                 button, move/remove cluster) is the shared template in one
                 Auto column: measured against the full row width, it never
-                wraps at reachable widths, matching the former per-column
-                layout (the strip's compact margins come from the
-                Grid.compactRow styles). The insertion markers span every
-                column.
+                wraps at reachable widths (the strip's compact margins come
+                from the Grid.compactRow styles). The insertion markers span
+                every column.
               -->
               <Grid Classes="compactRow"
                     ColumnDefinitions="Auto,*,Auto,Auto"
@@ -869,8 +868,8 @@
 
                   <!--
                     Source badge area (column 2): the shared badge cluster.
-                    The cell margin (the gap after the name) lives here on the
-                    host, matching the former StackPanel margin.
+                    The cell margin (the gap after the name) lives here on
+                    the host.
                   -->
                   <ContentControl Grid.Column="2"
                                   Margin="8,0,0,0"
@@ -883,8 +882,7 @@
                     editor, stable update-action cell, and the move / lock /
                     remove cluster, one shared definition. The enabled
                     checkbox shows no label in Compact (EnabledLabel is null
-                    for a compact row), exactly the former contentless
-                    checkbox.
+                    for a compact row, so the checkbox carries no text).
                   -->
                   <ContentControl Grid.Column="3"
                                   Content="{Binding}"

@@ -385,7 +385,6 @@ internal sealed class WindowGeometryTracker
 
     public Size LastNormalSize { get; }
     public bool LastMeaningfulMaximized { get; }
-    public bool MaximizeOnFirstOpen { get; }
     public event EventHandler<Size>? CorrectionRequested;
 
     public bool SeedPersisted(AppWindowState? saved, Size? workAreaDip, double minWidth, double minHeight);
