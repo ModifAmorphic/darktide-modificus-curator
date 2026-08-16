@@ -305,12 +305,24 @@ public partial class ModItemViewModel : ObservableObject
     /// <summary>
     /// Whether this row is displayed in Detailed mode. Pushed down by the
     /// detailed-rows coordinator. Drives the thumbnail-loading eligibility check
-    /// (<see cref="CanLoadThumbnail"/>). The row itself performs no density
+    /// (<see cref="CanLoadThumbnail"/>) and the shared action strip's Enabled
+    /// label (<see cref="EnabledLabel"/>). The row itself performs no density
     /// work; the coordinator owns all loading/clearing.
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanLoadThumbnail))]
+    [NotifyPropertyChangedFor(nameof(EnabledLabel))]
     private bool _isDetailed;
+
+    /// <summary>
+    /// The action strip's Enabled checkbox label: the localized "Enabled"
+    /// string in Detailed mode (where the label is part of the checkbox's
+    /// click hit target + automation name), or <c>null</c> in Compact (the
+    /// contentless checkbox the single-line row has always shown). Density is
+    /// row state, so one shared checkbox definition serves both roots; the
+    /// label re-resolves on a culture change (via <see cref="Refresh"/>).
+    /// </summary>
+    public string? EnabledLabel => IsDetailed ? _localization["ModRow_Enabled"] : null;
 
     /// <summary>
     /// The ComboBox selection for the policy editor (0 = Latest, 1 = Pinned),
@@ -726,6 +738,8 @@ public partial class ModItemViewModel : ObservableObject
         OnPropertyChanged(nameof(OrderLockAutomationName));
         // The Gaming Mode badge tooltip is localized by state; re-fire.
         OnPropertyChanged(nameof(LinkedBadgeTooltip));
+        // The action strip's Enabled label is localized + density-dependent.
+        OnPropertyChanged(nameof(EnabledLabel));
     }
 }
 
