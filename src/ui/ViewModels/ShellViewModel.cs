@@ -74,7 +74,7 @@ namespace Modificus.Curator.UI.ViewModels;
 /// title re-resolve from <see cref="LocalizationService"/> on a culture
 /// change.</para>
 /// </remarks>
-public partial class ShellViewModel : ObservableObject
+public partial class ShellViewModel : ObservableObject, IShellNavigation
 {
     private readonly IProfileSession _session;
     private readonly IRelayLaunchService _launchService;
@@ -338,13 +338,6 @@ public partial class ShellViewModel : ObservableObject
             }
         }
     }
-
-    /// <summary>
-    /// Navigates to Nexus. The awaitable entry point the first-run
-    /// onboarding reuses for its "Set up Nexus" choice, so onboarding-completion
-    /// persistence and Integration activation share one navigation path.
-    /// </summary>
-    internal Task NavigateToIntegrationsAsync() => NavigateAsync(ShellDestination.NexusIntegrations);
 
     // ---- hosted page view models ------------------------------------------
 

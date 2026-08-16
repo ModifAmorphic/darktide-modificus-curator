@@ -1,24 +1,22 @@
 using Modificus.Curator.General;
 using Modificus.Curator.Mods;
-using Modificus.Curator.Profiles;
 using Microsoft.Extensions.Logging;
 
 namespace Modificus.Curator.Integrations;
 
 /// <summary>
 /// Default <see cref="IUpdateStateStore"/>. Backs the domain rules over the raw
-/// <see cref="IKnownUpdateState.KnownUpdates"/> persistence, hydrating against the
-/// live profile + repository so stale entries self-heal. Registered as a
-/// singleton.
+/// <see cref="IKnownUpdateState.KnownUpdates"/> persistence, hydrating against
+/// the caller's candidates + the repository so stale entries self-heal.
+/// Registered as a singleton.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <b>No caching.</b> Every read goes back through <see cref="IKnownUpdateState"/>
 /// (the store is itself a cached singleton that rewrites the whole model on each
-/// write) + through <see cref="IProfileService"/> / <see cref="IModRepository"/>
-/// for the live filter. The state file is tiny and these surfaces are cheap, so
-/// the honest model is to re-read on every call rather than hold a cache that
-/// could drift from a concurrent write.</para>
+/// write) + through the repository for the live filter. The state file is tiny
+/// and these surfaces are cheap, so the honest model is to re-read on every call
+/// rather than hold a cache that could drift from a concurrent write.</para>
 /// <para>
 /// <b>Concurrency.</b> The check completes on a threadpool task; the UI reads on
 /// the UI thread. The backing store serializes its own writes under a
@@ -28,18 +26,15 @@ namespace Modificus.Curator.Integrations;
 internal sealed class UpdateStateStore : IUpdateStateStore
 {
     private readonly IKnownUpdateState _appState;
-    private readonly IProfileService _profiles;
     private readonly IModRepository _repository;
     private readonly ILogger<UpdateStateStore> _logger;
 
     public UpdateStateStore(
         IKnownUpdateState appState,
-        IProfileService profiles,
         IModRepository repository,
         ILogger<UpdateStateStore> logger)
     {
         _appState = appState ?? throw new ArgumentNullException(nameof(appState));
-        _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _repository = repository ?? throw new ArgumentNullException(nameof(repository));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -102,7 +97,8 @@ internal sealed class UpdateStateStore : IUpdateStateStore
     }
 
     /// <inheritdoc />
-    public IReadOnlyCollection<Guid> GetKnownUpdateContainerIds(Guid profileId)
+    public IReadOnlyCollection<Guid> GetKnownUpdateContainerIds(
+        Guid profileId, IReadOnlyList<ModListCandidate> candidates)
     {
         var current = GetProfileSnapshots(profileId);
         if (current.Count == 0)
@@ -110,7 +106,7 @@ internal sealed class UpdateStateStore : IUpdateStateStore
             return Array.Empty<Guid>();
         }
 
-        var valid = FilterValid(profileId, current);
+        var valid = FilterValid(candidates, current);
 
         // Self-heal: persist the filtered set so the next read skips the stale
         // ones without re-filtering. A no-change filter is a no-op write (the
@@ -124,68 +120,36 @@ internal sealed class UpdateStateStore : IUpdateStateStore
     }
 
     /// <summary>
-    /// Drops entries whose membership, policy, source, or installed version no
-    /// longer match the live profile + repository state. A kept entry must:
-    /// <list type="bullet">
-    /// <item>still be a member of the profile (not removed),</item>
-    /// <item>still be on <see cref="LatestPolicy"/> (not re-pinned),</item>
-    /// <item>still resolve to a <see cref="NexusSource"/> container with the
-    /// same <see cref="NexusSource.ModId"/> (not source-changed), and</item>
-    /// <item>still have the same installed <see cref="KnownUpdateSnapshot.CurrentVersion"/>
-    /// (not locally version-changed).</item>
-    /// </list>
+    /// Drops entries the shared eligibility evaluator rejects (see
+    /// <see cref="UpdateEligibility"/>): membership, policy, source, and
+    /// installed version are all re-checked against the caller's candidates +
+    /// the repository, so removed / re-pinned / source-changed /
+    /// version-changed entries self-heal out.
     /// </summary>
     private List<KnownUpdateSnapshot> FilterValid(
-        Guid profileId, List<KnownUpdateSnapshot> snapshots)
+        IReadOnlyList<ModListCandidate> candidates, List<KnownUpdateSnapshot> snapshots)
     {
-        // Index the profile entries by container id once for an O(1) lookup. A
+        // Index the candidates by container id once for an O(1) lookup. A
         // missing entry means the mod was removed from the profile.
-        Dictionary<Guid, ModListEntry> entries;
-        try
+        var candidatesById = new Dictionary<Guid, ModListCandidate>();
+        foreach (var candidate in candidates)
         {
-            entries = _profiles.GetModList(profileId)
-                .ToDictionary(e => e.ContainerId, e => e);
-        }
-        catch (KeyNotFoundException)
-        {
-            // Unknown profile (deleted between a check + a hydration). Every
-            // entry is stale; return empty so the caller renders nothing.
-            return new List<KnownUpdateSnapshot>();
+            candidatesById.TryAdd(candidate.ContainerId, candidate);
         }
 
         var valid = new List<KnownUpdateSnapshot>();
         foreach (var snapshot in snapshots)
         {
-            if (!entries.TryGetValue(snapshot.ContainerId, out var entry))
+            candidatesById.TryGetValue(snapshot.ContainerId, out var candidate);
+            if (UpdateEligibility.IsEligible(
+                    candidate,
+                    _repository.Get(snapshot.ContainerId),
+                    snapshot.ModId,
+                    snapshot.CurrentVersion,
+                    out _))
             {
-                continue; // removed from the profile
+                valid.Add(snapshot);
             }
-
-            if (entry.Policy is not LatestPolicy)
-            {
-                continue; // re-pinned
-            }
-
-            var container = _repository.Get(snapshot.ContainerId);
-            if (container is null)
-            {
-                continue; // container gone from the repository
-            }
-
-            if (container.Source is not NexusSource nexus || nexus.ModId != snapshot.ModId)
-            {
-                continue; // source changed / no longer the same Nexus mod
-            }
-
-            var installedVersion = container.ResolveVersion(new LatestPolicy())?.VersionString
-                ?? string.Empty;
-            if (!string.Equals(installedVersion, snapshot.CurrentVersion,
-                StringComparison.OrdinalIgnoreCase))
-            {
-                continue; // local version changed since the flag was recorded
-            }
-
-            valid.Add(snapshot);
         }
 
         return valid;

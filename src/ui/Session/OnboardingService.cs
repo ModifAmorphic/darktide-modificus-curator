@@ -1,5 +1,6 @@
 using Modificus.Curator.General;
 using Modificus.Curator.UI.Dialogs;
+using Modificus.Curator.UI.ViewModels;
 using Microsoft.Extensions.Logging;
 
 namespace Modificus.Curator.UI.Session;
@@ -27,12 +28,13 @@ namespace Modificus.Curator.UI.Session;
 /// per the UI-layer rule) and stays testable through the
 /// <see cref="IDialogService.ShowWelcomeAsync"/> + state-store seams.</para>
 /// <para>
-/// <b>The Nexus step is a focused navigation delegate.</b> The
-/// <c>navigateToIntegrations</c> delegate is supplied by the composition root
-/// and resolves to the shell's navigation entry point for Nexus.
-/// The coordinator never constructs the page or drives navigation itself; it
-/// just invokes the one delegate after persisting completion. This keeps the
-/// coordinator decoupled from the shell's navigation mechanics.</para>
+/// <b>The Nexus step is one navigation call.</b> The coordinator depends on
+/// <see cref="IShellNavigation"/> (implemented by the shell view model +
+/// registered by the composition root as a lazy forward) and invokes it with
+/// the Nexus destination after persisting completion, so the Welcome-driven
+/// visit shares the shell's guarded leave/enter lifecycle with every other
+/// navigation. The coordinator never constructs the page or drives navigation
+/// mechanics itself.</para>
 /// <para>
 /// <b>Registered as a singleton</b> so the in-process <see cref="_shown"/> guard
 /// reliably suppresses a second show even if persistence is best-effort and
@@ -43,7 +45,7 @@ public sealed class OnboardingService
 {
     private readonly IOnboardingState _appState;
     private readonly IDialogService _dialogs;
-    private readonly Func<Task> _navigateToIntegrations;
+    private readonly IShellNavigation _navigation;
     private readonly ILogger<OnboardingService> _logger;
 
     // In-process guard: once the Welcome has been shown this session, never show
@@ -55,12 +57,12 @@ public sealed class OnboardingService
     public OnboardingService(
         IOnboardingState appState,
         IDialogService dialogs,
-        Func<Task> navigateToIntegrations,
+        IShellNavigation navigation,
         ILogger<OnboardingService> logger)
     {
         _appState = appState ?? throw new ArgumentNullException(nameof(appState));
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
-        _navigateToIntegrations = navigateToIntegrations ?? throw new ArgumentNullException(nameof(navigateToIntegrations));
+        _navigation = navigation ?? throw new ArgumentNullException(nameof(navigation));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -95,7 +97,7 @@ public sealed class OnboardingService
         {
             try
             {
-                await _navigateToIntegrations();
+                await _navigation.NavigateAsync(ShellDestination.NexusIntegrations);
             }
             catch (Exception ex)
             {

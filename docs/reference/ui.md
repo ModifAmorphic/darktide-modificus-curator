@@ -167,9 +167,11 @@ owned by `IProfileSession`; launch availability derives directly from
   already Mods, then reload the mod list when a trigger was consumed). The
   destination is switched before any enter await so it stays active even if a
   refresh or the DMF prompt reports an error.
-- `NavigateToIntegrationsAsync()`: the internal awaitable entry point the
-  first-run onboarding reuses for its "Set up Nexus" choice, so onboarding-
-  completion persistence and Integrations activation share one navigation path.
+- `IShellNavigation` (implemented by the shell, registered as a lazy forward
+  to the shell singleton): the guarded navigation surface UI-layer services
+  consume; the first-run onboarding reuses it for its "Set up Nexus" choice, so
+  onboarding-completion persistence and Integrations activation share one
+  navigation path.
 - `Profiles` / `ModList` / `Integrations` / `Preferences` / `Settings`: the
   five hosted page view models (singletons, injected into the shell).
 - Launch + status-strip surface (`IsGameRunning`, `HasPendingStagedChanges`,
@@ -591,7 +593,7 @@ public sealed class OnboardingService
     public OnboardingService(
         IOnboardingState appState,
         IDialogService dialogs,
-        Func<Task> navigateToIntegrations,   // resolves to ShellViewModel.NavigateToIntegrationsAsync
+        IShellNavigation navigation,         // the shell's guarded navigation surface
         ILogger<OnboardingService> logger);
 
     public Task ShowWelcomeIfFirstRunAsync();
@@ -604,12 +606,13 @@ public sealed class OnboardingService
   further UI (so navigating away from Nexus, or the navigation
   failing, can never cause Welcome to repeat), and on a
   `WelcomeChoice.SetUpNexus` choice navigates the shell to Nexus
-  via the injected `navigateToIntegrations` delegate.
-- `navigateToIntegrations`: resolved lazily through
-  `ShellViewModel.NavigateToIntegrationsAsync` at composition, so the
-  destination's auth + registration-state refresh runs and the
-  leave-Integrations mod-list reload applies after the Welcome-driven visit
-  too. Kept as a delegate so the coordinator stays unit-testable.
+  via the injected `IShellNavigation`.
+- `IShellNavigation`: implemented by `ShellViewModel` and registered by the
+  composition root as a plain forward to the shell singleton (resolved lazily,
+  no construction-time cycle), so the destination's auth +
+  registration-state refresh runs and the leave-Integrations mod-list reload
+  applies after the Welcome-driven visit too. An interface (not a delegate) so
+  the seam is a named capability the shell owns.
 - `WelcomeChoice`: the typed result returned through
   `IDialogService.ShowWelcomeAsync`. `Continue` (the default; also ESC, the
   title-bar close button, and a window close) persists completion and leaves the
@@ -794,14 +797,20 @@ a real browser.
 
 The UI-layer glue between `IProfileSession` (the active-profile authority)
 and `IUpdateCheckService` (the Integrations update check). The check itself
-is backend-only; this runner owns when the UI fires it. After each check
-completes, the runner captures the exact result (not a potentially raced
-`LastResult`) and chains the `IAutomaticUpdateService` (the opt-in Premium
-automatic installer) on the captured UI context, so a manual CheckNow keeps
-its spinner active through the installations. The check flags mods via three
-tiers (the server's `viewerUpdateAvailable`, a mod-level version compare, and a
-latest-file-version confirmation that clears tier-2 false positives against the
-actual latest file); see
+is backend-only; this runner owns when the UI fires it. The runner also owns
+the candidate pull: each fire reads the profile's mod list through
+`IProfileService` inside its thread-pool task and maps the entries to
+`ModListCandidate` records (container id + policy, via one small internal UI
+extension) at the call site, so Integrations holds no Profiles dependency. A
+pull failure (a deleted or unreadable profile) is logged and the run skipped:
+no check call, no `LastResult` mutation. After each check completes, the
+runner captures the exact result (not a potentially raced `LastResult`) and
+chains the `IAutomaticUpdateService` (the opt-in Premium automatic installer)
+on the captured UI context, so a manual CheckNow keeps its spinner active
+through the installations. The check flags mods via three tiers (the server's
+`viewerUpdateAvailable`, a mod-level version compare, and a latest-file-version
+confirmation that clears tier-2 false positives against the actual latest
+file); see
 [the update-detection tiers](rate-limiting-strategy.md#update-detection-tiers).
 
 ```csharp
@@ -811,20 +820,31 @@ public sealed class UpdateCheckRunner
 
     public UpdateCheckRunner(
         IProfileSession session,
+        IProfileService profiles,           // the candidate pull
         IUpdateCheckService updateCheck,
         IConfigLoader configLoader,
         IUpdateCheckScheduleState appState,
         IAutomaticUpdateService autoUpdate,
         ILogger<UpdateCheckRunner> logger,
         Action<Action>? startTimer = null,
-        Func<DateTimeOffset>? getNow = null);
+        Func<DateTimeOffset>? getNow = null,
+        Action<Action>? invokeOnUi = null,          // the gate's StateChanged marshal
+        Action<Action>? startCountdownTimer = null, // the gate's 1-second countdown
+        Action? stopCountdownTimer = null);
 
+    public UpdateRefreshGate RefreshGate { get; }
     public DateTimeOffset? NextManualRefreshAllowedAt { get; }
 
     public void Start();
     public Task CheckNowAsync();
 }
 ```
+
+- `RefreshGate`: the runner-owned refresh-gate policy (see
+  [UpdateRefreshGate](#updaterefreshgate)). Every check result the runner
+  captures is fed into it (`ApplyResult`), and a throttled manual attempt
+  re-evaluates it so the countdown engages; the mod-list VM renders its state
+  through the marshaled `StateChanged` event.
 
 - `TickInterval`: the periodic timer's fixed tick granularity (1 minute).
   The user-configured interval
@@ -891,16 +911,46 @@ on every successful fire, so closing and reopening the app does not reset the
 free-refresh budget. See
 [the rate-limiting strategy](rate-limiting-strategy.md) for the thresholds.
 
-The header rate-limit pill is coupled to the refresh button, not the raw result
-flag: when a check result is rate-limited, the button stays disabled until the
-server-reported reset in `UpdateCheckResult.RateLimitResetsAt` elapses (or a
-1-minute client-side fallback when Nexus sent no reset, e.g. an HTTP 429 with no
-`x-rl-*` headers), and the pill reads "Refresh disabled due to rate-limiting"
-exactly while the button is rate-limit-blocked. Both clear together the moment
-the reset passes (the list VM re-evaluates `IsRateLimitActive` on each shared
-1-second countdown tick). The rate-limit reason takes tooltip precedence when
-both the rate limit and the manual fire-count throttle are active; the two
-causes share one countdown timer, so either keeps the button disabled.
+### `UpdateRefreshGate`
+
+The refresh-gate policy for the manual "check now" affordance, owned + exposed
+by the runner. Absorbs everything the list VM used to compute itself: the
+rate-limit tracking (fed by every check result the runner captures), the
+effective-reset computation (the server-reported reset governs; a 1-minute
+client-side fallback when Nexus sent no reset, e.g. an HTTP 429 with no
+`x-rl-*` headers), the manual-throttle read
+(`NextManualRefreshAllowedAt`), the shared 1-second countdown timer lifecycle,
+and the functional decisions.
+
+```csharp
+public sealed class UpdateRefreshGate
+{
+    public void ApplyResult(UpdateCheckResult? result);  // the runner's feed
+    public void Reevaluate();                            // results, blocked attempts, ticks
+
+    public bool IsRateLimited { get; }                   // the last result was rate-limited
+    public DateTimeOffset? RateLimitResetsAt { get; }    // the raw server reset
+    public bool IsRateLimitActive { get; }               // blocked until the effective reset elapses
+    public bool IsManualThrottled { get; }               // the sliding-window cooldown holds
+    public DateTimeOffset? ManualThrottleClearsAt { get; }
+    public bool IsRefreshEnabled { get; }                // !IsRateLimitActive && !IsManualThrottled
+
+    public event Action? StateChanged;                   // marshaled to the UI thread; readers pull
+}
+```
+
+- The list VM keeps ONLY the localized rendering: the tooltip priority
+  (rate-limit > throttle > normal), the `m:ss` countdown format, and the
+  `IsCheckingNow` affordance. It re-fires its bound properties when
+  `StateChanged` fires and composes `IsRefreshEnabled` with its own
+  `IsCheckingNow`.
+- The header rate-limit pill is coupled to the refresh button, not the raw
+  result flag: the pill reads "Refresh disabled due to rate-limiting" exactly
+  while `IsRateLimitActive` holds, and both clear together the moment the
+  effective reset passes (each 1-second countdown tick re-evaluates). The
+  rate-limit reason takes tooltip precedence when both the rate limit and the
+  manual fire-count throttle are active; the two causes share one countdown
+  timer, so either keeps the button disabled.
 
 The runner never blocks on a check beyond the await the manual trigger opts
 into, never surfaces its result (the mod list reads
@@ -1061,13 +1111,71 @@ failures; the runner wraps the call in its own try/catch as belt-and-suspenders
 `ConfigureAwait(false)` is used only inside its `Task.Run` block, the narrow
 documented exception to the UI-layer rule for explicit background-task code.
 
-## The update coordinator + automatic-update service
+## The mod-update install path + automatic-update service
 
-### `UpdateCoordinator`
+### `IModUpdateInstaller` (Integrations)
 
-Coordinates mod-update installs so only one runs at a time globally, shared
-between the manual per-row update action (`ModListViewModel`'s Update command)
-and the automatic Premium updater (`IAutomaticUpdateService`). Keeps a manual
+The single Premium install path, shared by the manual per-row update action
+(`ModListViewModel`'s Update command) and the automatic Premium batch. Lives in
+Integrations with the acquisition + state-store services it orchestrates; the
+UI consumes it through the interface. The installer owns:
+
+- the shared `UpdateCoordinator` (below), the global one-install-at-a-time gate
+  so a manual click and an automatic batch can never install concurrently;
+- the in-gate eligibility revalidation via `UpdateEligibility` against the
+  caller's candidates (a stale flag yields a `NotEligible` outcome + reason,
+  nothing installed or acknowledged);
+- the acquire (`AcquireLatestNexusAsync`, the latest MAIN release) + the
+  acknowledge-on-success (`AcknowledgeInstall`, exactly once, only on success);
+- the per-attempt progress events + the coordinator-backed busy flag.
+
+```csharp
+public interface IModUpdateInstaller
+{
+    bool IsBusy { get; }
+    event EventHandler? BusyChanged;
+    event EventHandler<ModUpdateProgressEventArgs>? ModUpdateProgress;
+
+    Task<ModInstallOutcome> TryInstallLatestAsync(   // MANUAL: refuses politely when gated
+        Guid profileId, Guid containerId, int modId, string expectedVersion,
+        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default);
+    Task<ModInstallOutcome> InstallLatestAsync(      // AUTOMATIC: awaits its turn
+        Guid profileId, Guid containerId, int modId, string expectedVersion,
+        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default);
+}
+
+public sealed record ModInstallOutcome(
+    ModInstallStatus Status,    // Installed / Busy / NotEligible / Failed
+    string Reason = "",
+    Exception? Exception = null);   // only on Failed
+
+public sealed record ModUpdateProgressEventArgs(Guid ContainerId, bool IsActive);
+```
+
+- `TryInstallLatestAsync`: the manual semantics. When the gate is held it
+  returns `Busy` without touching anything (a clean no-op for the caller).
+- `InstallLatestAsync`: the automatic semantics. Awaits the gate so a
+  sequential batch stays ordered, waiting its turn behind a manual install.
+- `ModInstallProgress`: raised with `IsActive == true` immediately after the
+  gate is acquired (before the eligibility check + the acquisition) and
+  `IsActive == false` from the attempt's finally block (success, failure, or
+  cancellation). Deterministic start/stop ordering per serialized attempt.
+  `ModListViewModel` subscribes, marshals to the UI thread, finds the row by
+  `ContainerId`, and sets its `IsUpdating` so the row-level spinner (left of
+  the Nexus badge) tracks the currently installing mod for BOTH paths. An
+  event for a row no longer present (after a profile switch / reload) is
+  ignored, so a mid-batch switch never leaves a stale spinner.
+- `BusyChanged` / `IsBusy`: coordinator-backed. `ModListViewModel` mirrors it
+  to `AnyRowUpdating` (pushed to rows) so per-row enabled states reflect "one
+  install at a time" without each row polling.
+- Cancellation (`OperationCanceledException`) propagates rather than becoming
+  an outcome, so each caller keeps its own cancellation posture (the VM swallows
+  it; the runner swallows it after the batch).
+
+### `UpdateCoordinator` (Integrations)
+
+Coordinates mod-update installs so only one runs at a time globally, held by
+the installer and shared across both Premium install paths. Keeps a manual
 click and an automatic batch from installing the same mod concurrently without
 relying on per-VM flags.
 
@@ -1077,67 +1185,54 @@ public sealed class UpdateCoordinator
     public bool IsBusy { get; }
     public event EventHandler? BusyChanged;
 
-    public bool TryAcquire(out IDisposable? scope);   // non-blocking (manual path)
-    public Task<IDisposable> AcquireAsync(CancellationToken ct = default); // awaiting (auto path)
+    public bool TryAcquire(out IDisposable? scope);   // non-blocking (the installer's manual path)
+    public Task<IDisposable> AcquireAsync(CancellationToken ct = default); // awaiting (the installer's batch path)
 }
 ```
 
 - `IsBusy`: flips on acquire + release and raises `BusyChanged` (on the
-  acquiring/releasing thread). `ModListViewModel` subscribes, marshals to the
-  UI thread, and pushes the flag down to each row so the per-row enabled state
-  reflects "one install at a time" without each row polling.
-- `TryAcquire`: non-blocking. The manual path uses it; a second click while an
-  install runs is a clean no-op.
-- `AcquireAsync`: awaiting. The automatic batch uses it per mod; the runner
-  serializes the batch, so this is uncontended in practice, but the coordinator
-  is the single mutual-exclusion point across both paths.
+  acquiring/releasing thread). The installer surfaces it; `ModListViewModel`
+  subscribes through the installer.
+- `TryAcquire`: non-blocking. The installer's manual semantics use it; a second
+  click while an install runs is a clean no-op.
+- `AcquireAsync`: awaiting. The installer's automatic semantics use it; the
+  batch serializes anyway, but the coordinator is the single mutual-exclusion
+  point across both paths.
 
 ### `IAutomaticUpdateService`
 
-The opt-in Premium automatic mod-update installer. Chained directly from
+The opt-in Premium automatic mod-update batch. Chained directly from
 `UpdateCheckRunner` after a check completes (the runner captures the exact
 result, not a potentially raced `LastResult`), it sequentially installs flagged
 updates for the active profile's Nexus Latest mods when the user has enabled it
 AND a fresh Premium verification passes. Independent of
 `ModListViewModel` (to avoid the existing ModListViewModel -> UpdateCheckRunner
-dependency becoming circular) and shares the `UpdateCoordinator` with the manual
-update action.
+dependency becoming circular). The installs route through the shared
+`IModUpdateInstaller`; the service owns only the gates, the sequential batch,
+and the aggregated failure feedback.
 
 ```csharp
 public interface IAutomaticUpdateService
 {
     event EventHandler? UpdatesApplied;
-    event EventHandler<ModUpdateProgressEventArgs>? ModUpdateProgress;
     Task RunAfterCheckAsync(UpdateCheckResult result, Guid profileId, CancellationToken ct = default);
 }
-
-public sealed record ModUpdateProgressEventArgs(Guid ContainerId, bool IsActive);
 ```
 
 - `RunAfterCheckAsync`: gates on the result's outcome being authoritative
   `Success` with updates, `NexusConfig.AutomaticUpdatesEnabled` being on, the
   active profile still matching, and a fresh `GetCurrentStateAsync` returning
   `IsPremium == true` (the Premium request fires ONLY when the gates pass, so
-  an empty result or a disabled setting costs no extra API call). Then installs
-  sequentially, one at a time under the coordinator. Per-mod revalidation gates
-  each entry (membership / policy / source / version still match); a profile
-  switch stops the whole batch; per-mod failures are isolated. A successful
-  install acknowledges/clears its known-update entry immediately. A batch with
-  failures surfaces one aggregated localized alert; a fully successful batch is
-  silent beyond the per-mod progress indication. `UpdatesApplied` is raised when
-  at least one install succeeded so `ModListViewModel` can reload the list (new
-  versions + cleared flags) without the service depending on it.
+  an empty result or a disabled setting costs no extra API call). Then runs the
+  sequential batch: each iteration re-checks the active profile (a switch stops
+  scheduling further entries) + re-pulls the candidates, then calls
+  `installer.InstallLatestAsync` (the awaiting semantics). Per-mod failures are
+  isolated into one aggregated localized alert; a fully successful batch is
+  silent beyond the installer's per-row progress. `UpdatesApplied` is raised
+  when at least one install succeeded so `ModListViewModel` can reload the list
+  (new versions + cleared flags) without the service depending on it.
 - `UpdatesApplied`: raised (on the caller's thread) when at least one install in
   the last batch succeeded. `ModListViewModel` subscribes and reloads.
-- `ModUpdateProgress`: raised per mod (on the caller's thread) with
-  `IsActive == true` immediately before the acquisition attempt and
-  `IsActive == false` from the per-mod finally block (success, failure, or
-  cancellation). Deterministic start/stop ordering per sequential item.
-  `ModListViewModel` subscribes, marshals to the UI thread, finds the row by
-  `ContainerId`, and sets its `IsUpdating` so the row-level spinner (left of the
-  Nexus badge) tracks the currently installing mod. An event for a row no longer
-  present (after a profile switch / reload) is ignored, so a mid-batch switch
-  never leaves a stale spinner.
 
 This is independent of `NexusConfig.AutoUpdateCheckEnabled`: periodic checking
 being off never disables automatic installation (startup + switch + manual
@@ -1541,8 +1636,8 @@ services.AddSingleton<INxmRegistrationState>(sp => new NxmRegistrationState(  //
     sp.GetService<INxmHandlerRegistrar>(),
     sp.GetRequiredService<Action<Action>>(),
     sp.GetRequiredService<ILogger<NxmRegistrationState>>()));
-services.AddSingleton<UpdateCoordinator>();                 // one-install-at-a-time gate
-services.AddSingleton<IAutomaticUpdateService, AutomaticUpdateService>(); // Premium auto-installer
+services.AddSingleton<IModListRefresh>(sp => sp.GetRequiredService<ModListViewModel>()); // nxm-handler reload seam
+services.AddSingleton<IAutomaticUpdateService, AutomaticUpdateService>(); // Premium auto-installer (installs via IModUpdateInstaller, registered by AddIntegrations)
 services.AddSingleton<IModThumbnailService>(sp => new ModThumbnailService( // UI-owned thumbnail cache (before the coordinator that injects it)
     sp.GetRequiredService<IHttpClientFactory>().CreateClient,
     cacheDirOverride: null,
@@ -1573,10 +1668,11 @@ services.AddSingleton<IAppUpdateService, NoopAppUpdateService>();
 #endif
 services.AddSingleton(sp => new AppUpdateCheckRunner(/* IAppUpdateService, IConfigLoader, logger */));
 services.AddSingleton(sp => new DmfPromptService(/* … */, sp.GetRequiredService<INxmRegistrationState>()));
+services.AddSingleton<IShellNavigation>(sp => sp.GetRequiredService<ShellViewModel>()); // plain forward
 services.AddSingleton(sp => new OnboardingService(
     sp.GetRequiredService<IOnboardingState>(),
     sp.GetRequiredService<IDialogService>(),
-    () => sp.GetRequiredService<ShellViewModel>().NavigateToIntegrationsAsync(),
+    sp.GetRequiredService<IShellNavigation>(),
     sp.GetRequiredService<ILogger<OnboardingService>>()));
 ```
 
@@ -1639,7 +1735,11 @@ Key wiring notes:
   that resolves its dependencies lazily at first use (the handler is first
   resolved by the IPC router, by which point all dependencies are
   registered). MS DI resolves the last registration for an interface, so
-  this supersedes the no-op default registered inside `AddNxm()`. See
+  this supersedes the no-op default registered inside `AddNxm()`. The handler
+  acknowledges a successful acquisition through `IUpdateStateStore` (the
+  Integrations seam) and reloads the list through `IModListRefresh`, a
+  one-member interface the composition root forwards to the `ModListViewModel`
+  singleton (a plain interface forward, resolved lazily). See
   [nxm reference](nxm.md) + [mod acquisition](../architecture/mod-acquisition.md).
 - `UpdateCheckRunner.Start()` and `AppUpdateCheckRunner.Start()` are called
   after the provider is built (best-effort; a wiring failure is logged and
@@ -1666,7 +1766,9 @@ instance violation) propagates out; `App` catches it and calls
   `NexusSource`, `UntrackedSource`, `LinkedSource`),
   `integrations` (`INexusAuthService`, `IModAcquisitionService`,
   `INexusModMetadataService`, `IUpdateCheckService`, `UpdateCheckResult`,
-  `ModUpdateInfo`), `steam` (`ISteamService`), `relay-client`
+  `ModUpdateInfo`, `ModListCandidate`, `IUpdateStateStore`,
+  `IModUpdateInstaller`, `ModInstallOutcome`, `ModInstallStatus`,
+  `ModUpdateProgressEventArgs`, `UpdateCoordinator`), `steam` (`ISteamService`), `relay-client`
   (`IRelayLaunchService`, `LaunchResult`, `LaunchStatus`), `nxm`
   (`INxmModDownloadHandler`, `NxmSingleInstanceException`, `NxmIpcServer`,
   `INxmHandlerRegistrar`), `launcher` (the stub).
@@ -1761,12 +1863,16 @@ No backend library references the UI (the dependency direction is one-way).
   available/broken, disabled policy edit, empty update-action cell,
   `IsExternalBroken` on Reload), `CheckCompleted` per-row state,
   `UpdateCommand` success / failure / one-at-a-time / premium gating,
-  `CheckForUpdatesNow`, `IsRateLimited` + the coupled `IsRateLimitActive`
-  refresh-button/pill gating (server reset + fallback cooldown, precedence over
-  the manual throttle), the `NamesChanged` in-place row
+  `CheckForUpdatesNow`, the gate-fed `IsRateLimited` + the coupled
+  `IsRateLimitActive` refresh-button/pill rendering (server reset + fallback
+  cooldown, precedence over the manual throttle), the `NamesChanged` in-place row
   name refresh (refreshed when the flag is set, untouched when it is not), and
   the empty-state Nexus hint (construction + both `Reload` paths perform zero
   registration probes; `IsNxmRegistered` follows the shared state).
+- **`UpdateRefreshGateTests`**: the gate directly -- server-reset governance,
+  the 1-minute fallback cooldown, immediate clearing on a non-rate-limited
+  result, the null-result no-op, the shared countdown-timer lifecycle, the
+  marshaled `StateChanged` event, and the manual-throttle coupling.
 - **`ModListOrderLockTests`**: the profile-scoped load-order lock + drag-reorder
   surface through the VM, against the lock-aware `FakeProfileService` projection:
   `OrderLocked` + move/grip availability on reload, `ToggleOrderLock` persists

@@ -41,19 +41,16 @@
       reader the typed-client builder reads the Nexus section from.
       Mods is the unified mod repository: the acquisition service imports
       downloaded archives via IModImportService + keys Nexus containers by
-      NexusSource. The dependency direction is clean (Mods knows nothing of
-      Integrations).
-      Profiles is the profile + per-profile mod-list model: the update-check
-      service (IUpdateCheckService) orchestrates across Mods (per-container
-      source + version resolution), Profiles (the active profile's mod list),
-      and Nexus (the one-call recently-updated list). The dependency direction
-      is clean: Profiles depends only on Config + Mods, not on Integrations, so
-      this reference introduces no cycle.
+      NexusSource, and the update family resolves installed versions through
+      ModContainer. The dependency direction is clean (Mods knows nothing of
+      Integrations). The update-check + state-store services take the mod-list
+      candidates as call parameters (the UI layer maps its profile entries at
+      the call site), so Integrations holds no Profiles reference and no cycle
+      can arise in either direction.
     -->
     <ProjectReference Include="..\config\Modificus.Curator.Config.csproj" />
     <ProjectReference Include="..\general\Modificus.Curator.General.csproj" />
     <ProjectReference Include="..\mods\Modificus.Curator.Mods.csproj" />
-    <ProjectReference Include="..\profiles\Modificus.Curator.Profiles.csproj" />
   </ItemGroup>
 
 </Project>

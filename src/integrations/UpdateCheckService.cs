@@ -2,15 +2,14 @@ using System.Collections.Concurrent;
 using Modificus.Curator.Config;
 using Modificus.Curator.General;
 using Modificus.Curator.Mods;
-using Modificus.Curator.Profiles;
 using Microsoft.Extensions.Logging;
 
 namespace Modificus.Curator.Integrations;
 
 /// <summary>
 /// Default <see cref="IUpdateCheckService"/>. Queries the Nexus v2 GraphQL
-/// <c>modsByUid</c> batch endpoint for the update status of the active
-/// profile's <see cref="LatestPolicy"/> + <see cref="NexusSource"/> mods via
+/// <c>modsByUid</c> batch endpoint for the update status of the caller's
+/// <see cref="LatestPolicy"/> + <see cref="NexusSource"/> candidates via
 /// <see cref="INexusClient"/>. Registered as a singleton.
 /// </summary>
 /// <remarks>
@@ -64,7 +63,6 @@ namespace Modificus.Curator.Integrations;
 internal sealed class UpdateCheckService : IUpdateCheckService
 {
     private readonly INexusClient _nexus;
-    private readonly IProfileService _profiles;
     private readonly IModRepository _repository;
     private readonly IConfigLoader _configLoader;
     private readonly IUpdateStateStore _stateStore;
@@ -138,8 +136,6 @@ internal sealed class UpdateCheckService : IUpdateCheckService
 
     /// <param name="nexus">The Nexus v1/v2 client (the GraphQL batch query +
     /// the per-mod file listing for tier 3).</param>
-    /// <param name="profiles">The profile service (for the active profile's mod
-    /// list).</param>
     /// <param name="repository">The mod repository (to resolve installed
     /// versions + containers).</param>
     /// <param name="configLoader">Read live for the Nexus auth gate (AuthMethod.None
@@ -154,7 +150,6 @@ internal sealed class UpdateCheckService : IUpdateCheckService
     /// tests inject a controllable clock to drive the TTL deterministically.</param>
     public UpdateCheckService(
         INexusClient nexus,
-        IProfileService profiles,
         IModRepository repository,
         IConfigLoader configLoader,
         IUpdateStateStore stateStore,
@@ -162,7 +157,6 @@ internal sealed class UpdateCheckService : IUpdateCheckService
         Func<DateTimeOffset>? getNow = null)
     {
         _nexus = nexus ?? throw new ArgumentNullException(nameof(nexus));
-        _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _repository = repository ?? throw new ArgumentNullException(nameof(repository));
         _configLoader = configLoader ?? throw new ArgumentNullException(nameof(configLoader));
         _stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
@@ -177,19 +171,21 @@ internal sealed class UpdateCheckService : IUpdateCheckService
     public event EventHandler<UpdateCheckResult?>? CheckCompleted;
 
     /// <inheritdoc />
-    public Task<UpdateCheckResult> CheckAsync(Guid profileId, CancellationToken ct = default)
-        => RunCheckAsync(profileId, thorough: false, ct);
+    public Task<UpdateCheckResult> CheckAsync(
+        Guid profileId, IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default)
+        => RunCheckAsync(profileId, candidates, thorough: false, ct);
 
     /// <inheritdoc />
-    public Task<UpdateCheckResult> CheckThoroughAsync(Guid profileId, CancellationToken ct = default)
-        => RunCheckAsync(profileId, thorough: true, ct);
+    public Task<UpdateCheckResult> CheckThoroughAsync(
+        Guid profileId, IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default)
+        => RunCheckAsync(profileId, candidates, thorough: true, ct);
 
     /// <summary>
-    /// The shared check logic for both <see cref="CheckAsync"/> + 
+    /// The shared check logic for both <see cref="CheckAsync"/> +
     /// <see cref="CheckThoroughAsync"/>. Runs the auth gate, the Nexus-mods
-    /// enumeration (Latest + Pinned), the single v2 GraphQL batch query (one
-    /// call for all Nexus mods), the rate-limit gate, the three-tier update
-    /// mapping scoped to the Latest subset (tier 1
+    /// enumeration over the candidates (Latest + Pinned), the single v2 GraphQL
+    /// batch query (one call for all Nexus mods), the rate-limit gate, the
+    /// three-tier update mapping scoped to the Latest subset (tier 1
     /// <see cref="ModUpdateStatus.ViewerUpdateAvailable"/>, tier 2 mod-level
     /// version compare, tier 3 latest-file-version confirm), and a name-sync
     /// pass over ALL Nexus mods that renames each container to match its current
@@ -199,7 +195,7 @@ internal sealed class UpdateCheckService : IUpdateCheckService
     /// both Latest + Pinned. Both check shapes inherit both via this method.
     /// </summary>
     private async Task<UpdateCheckResult> RunCheckAsync(
-        Guid profileId, bool thorough, CancellationToken ct)
+        Guid profileId, IReadOnlyList<ModListCandidate> candidates, bool thorough, CancellationToken ct)
     {
         // 1. Auth gate. No auth configured means the user has not signed in; the
         //    Nexus client would refuse the call, so short-circuit to an empty
@@ -212,19 +208,16 @@ internal sealed class UpdateCheckService : IUpdateCheckService
             return Publish(profileId, EmptyResult(thorough, CheckOutcome.NoAuth));
         }
 
-        // 2. Profile mods + the Nexus subset. Let KeyNotFoundException propagate
-        //    if the profile id is unknown; the caller owns passing a valid id.
-        var entries = _profiles.GetModList(profileId);
-
-        // Enumerate EVERY Nexus-sourced mod in the profile (Latest OR Pinned).
-        // The batch query is sent for this full set so both the update-flag
-        // logic AND the name-sync pass read their data from one call. Pinned
-        // mods ride along for name sync only (the flag logic below stays scoped
-        // to Latest). Skip UntrackedSource (no remote to query).
-        var nexusMods = new List<(ModListEntry Entry, ModContainer Container, NexusSource Nexus)>();
-        foreach (var entry in entries)
+        // 2. The Nexus subset of the candidates. Enumerate EVERY Nexus-sourced
+        //    candidate (Latest OR Pinned): the batch query is sent for this full
+        //    set so both the update-flag logic AND the name-sync pass read their
+        //    data from one call. Pinned mods ride along for name sync only (the
+        //    flag logic below stays scoped to Latest). Skip UntrackedSource (no
+        //    remote to query) + candidates whose container is missing.
+        var nexusMods = new List<(ModListCandidate Candidate, ModContainer Container, NexusSource Nexus)>();
+        foreach (var candidate in candidates)
         {
-            var container = _repository.Get(entry.ContainerId);
+            var container = _repository.Get(candidate.ContainerId);
             if (container is null)
             {
                 continue;
@@ -235,14 +228,14 @@ internal sealed class UpdateCheckService : IUpdateCheckService
                 continue;
             }
 
-            nexusMods.Add((entry, container, nexus));
+            nexusMods.Add((candidate, container, nexus));
         }
 
         // The flaggable subset: Latest-only (Pinned mods are frozen version-wise
         // and must NOT be flagged). Tier logic iterates this subset; name sync
         // iterates the full nexusMods set.
         var checkable = nexusMods
-            .Where(m => m.Entry.Policy is LatestPolicy)
+            .Where(m => m.Candidate.Policy is LatestPolicy)
             .ToList();
 
         if (nexusMods.Count == 0)
@@ -250,10 +243,11 @@ internal sealed class UpdateCheckService : IUpdateCheckService
             // No Nexus mods at all (not even Pinned): nothing to flag + nothing
             // to name-sync. A profile with only Pinned Nexus mods still runs the
             // batch (for the name sync), so the gate is on nexusMods, not
-            // checkable.
+            // checkable. An empty candidate list lands here too (the local truth
+            // that no applicable Nexus update can exist).
             _logger.LogDebug(
-                "Update check skipped: no Nexus mods in profile {Profile}.",
-                profileId);
+                "Update check skipped: no Nexus mods among the {Count} candidate(s) for profile {Profile}.",
+                candidates.Count, profileId);
             return Publish(profileId, EmptyResult(thorough, CheckOutcome.NoNexusMods));
         }
 
@@ -328,7 +322,7 @@ internal sealed class UpdateCheckService : IUpdateCheckService
         }
 
         var flagged = new List<(ModUpdateInfo Info, ModUpdateStatus Node, bool Tier1Driven)>();
-        foreach (var (entry, container, nexus) in checkable)
+        foreach (var (candidate, container, nexus) in checkable)
         {
             var uid = (long)NexusGameIdentity.DarktideGameId * 4294967296L + nexus.ModId;
             if (!byUid.TryGetValue(uid, out var status))
@@ -365,7 +359,7 @@ internal sealed class UpdateCheckService : IUpdateCheckService
 
             flagged.Add((
                 new ModUpdateInfo(
-                    entry.ContainerId,
+                    candidate.ContainerId,
                     nexus.ModId,
                     container.Name,
                     installedVersion,

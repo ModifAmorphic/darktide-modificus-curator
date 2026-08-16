@@ -76,19 +76,22 @@ public static class CuratorComposition
         // IPC router, by which point all dependencies including IProfileSession,
         // IDialogService, and MainWindow are registered). It coordinates the
         // acquisition service (Integrations) with the active-profile session,
-        // profile service, and the UI-thread alert dialog. Registered with a
-        // factory so the UI-thread marshaling seam
-        // (Dispatcher.UIThread.InvokeAsync) is wired explicitly.
+        // the profile service, and the UI-thread alert dialog, acknowledges the
+        // install through the update-state store, and reloads the list through
+        // the narrow IModListRefresh seam. Registered with a factory so the
+        // UI-thread marshaling seam (Dispatcher.UIThread.InvokeAsync) is wired
+        // explicitly.
         services.AddSingleton<INxmModDownloadHandler>(sp => new NxmModDownloadHandler(
             invokeOnUi: action => Dispatcher.UIThread.InvokeAsync(action),
             sp.GetRequiredService<IModAcquisitionService>(),
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IConfigLoader>(),
+            sp.GetRequiredService<IUpdateStateStore>(),
+            sp.GetRequiredService<IModListRefresh>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),
-            sp.GetRequiredService<ILogger<NxmModDownloadHandler>>(),
-            refreshModList: containerId => sp.GetRequiredService<ModListViewModel>().AcknowledgeUpdateAndReload(containerId)));
+            sp.GetRequiredService<ILogger<NxmModDownloadHandler>>()));
 
         // UI surface. MainWindow is a singleton: the desktop lifetime installs
         // the resolved instance as desktop.MainWindow, and DialogService resolves
@@ -127,6 +130,10 @@ public static class CuratorComposition
         // (the event fires on a threadpool thread; the handler iterates the
         // UI-bound Mods collection). Production wires Dispatcher.UIThread.Post.
         services.AddSingleton<Action<Action>>(_ => action => Dispatcher.UIThread.Post(action));
+        // The narrow "reload the mod list" seam consumed by the nxm download
+        // handler: a plain interface forward to the list VM singleton (resolved
+        // lazily, so the registration introduces no construction-time cycle).
+        services.AddSingleton<IModListRefresh>(sp => sp.GetRequiredService<ModListViewModel>());
         // The shared last-known OS nxm:// registration state. Its deliberate
         // probe points: one seed refresh at shell construction, one refresh on
         // each Nexus-enter, one after each register/release action. Every other
@@ -137,15 +144,14 @@ public static class CuratorComposition
             sp.GetService<INxmHandlerRegistrar>(),
             sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<NxmRegistrationState>>()));
-        // The global install coordinator: shared between the manual per-row update
-        // action and the automatic Premium updater so only one install runs at a
-        // time. Singleton: holds the single-slot semaphore for the app lifetime.
-        services.AddSingleton<UpdateCoordinator>();
         // The opt-in Premium automatic mod-update installer. Chained from the
-        // update-check runner after each check; independent of ModListViewModel
-        // (to avoid the ModListViewModel -> UpdateCheckRunner dependency becoming
-        // circular) but raises UpdatesApplied so the list VM reloads after a
-        // batch.
+        // update-check runner after each check; each install routes through the
+        // shared IModUpdateInstaller (registered by AddIntegrations together
+        // with the UpdateCoordinator it holds, the global one-install-at-a-time
+        // gate shared with the manual per-row action). Independent of
+        // ModListViewModel (to avoid the ModListViewModel ->
+        // UpdateCheckRunner dependency becoming circular) but raises
+        // UpdatesApplied so the list VM reloads after a batch.
         services.AddSingleton<IAutomaticUpdateService, AutomaticUpdateService>();
 
         // The mod-thumbnail disk/in-memory cache + download orchestrator. A UI-
@@ -188,57 +194,36 @@ public static class CuratorComposition
             sp.GetRequiredService<IModImportService>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<ILogger<ImportWorkflowViewModel>>()));
-        // The manual-refresh countdown timer seams (the throttle's live m:ss
-        // tooltip). Production manages a single 1-second DispatcherTimer, created
-        // lazily on first start, with Tick wired once; Start/Stop control whether
-        // it runs (mirrors StartUpdateCheckPolling's established timer pattern).
-        // The start delegate is idempotent: a second start while the timer is
-        // running is a no-op (DispatcherTimer.Start is safe to re-call, and the
-        // Tick handler is wired exactly once). Composition happens on the UI
-        // thread during app startup, so the DispatcherTimer affinity is correct.
-        services.AddSingleton(sp =>
-        {
-            DispatcherTimer? countdownTimer = null;
-            Action<Action> startCountdownTimer = tick =>
-            {
-                if (countdownTimer is null)
-                {
-                    countdownTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-                    countdownTimer.Tick += (_, _) => tick();
-                }
-                countdownTimer.Start();
-            };
-            Action stopCountdownTimer = () => countdownTimer?.Stop();
-            return new ModListViewModel(
-                sp.GetRequiredService<IProfileService>(),
-                sp.GetRequiredService<IProfileSession>(),
-                sp.GetRequiredService<IModRepository>(),
-                sp.GetRequiredService<IModImportService>(),
-                sp.GetRequiredService<IDialogService>(),
-                sp.GetRequiredService<LocalizationService>(),
-                sp.GetRequiredService<IUpdateCheckService>(),
-                sp.GetRequiredService<IModAcquisitionService>(),
-                sp.GetRequiredService<INexusAuthService>(),
-                sp.GetRequiredService<IUpdateStateStore>(),
-                sp.GetRequiredService<UpdateCheckRunner>(),
-                sp.GetRequiredService<UpdateCoordinator>(),
-                sp.GetRequiredService<IAutomaticUpdateService>(),
-                sp.GetRequiredService<ImportWorkflowViewModel>(),
-                sp.GetRequiredService<DetailedModRowsViewModel>(),
-                sp.GetRequiredService<Action<Action>>(),
-                sp.GetRequiredService<ILogger<ModListViewModel>>(),
-                // The shared last-known nxm registration state feeds the
-                // empty-state Nexus hint; the mod list never probes the OS.
-                sp.GetRequiredService<INxmRegistrationState>(),
-                // Gaming Mode gates the Add split button's picker paths + the
-                // linked-row open-folder badge.
-                sp.GetRequiredService<IGamingModeState>(),
-                // The OS shell-open launcher: the Add NexusMods browser open +
-                // the linked-row open-folder action.
-                sp.GetRequiredService<IExternalLauncher>(),
-                startCountdownTimer,
-                stopCountdownTimer);
-        });
+        services.AddSingleton(sp => new ModListViewModel(
+            sp.GetRequiredService<IProfileService>(),
+            sp.GetRequiredService<IProfileSession>(),
+            sp.GetRequiredService<IModRepository>(),
+            sp.GetRequiredService<IModImportService>(),
+            sp.GetRequiredService<IDialogService>(),
+            sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<IUpdateCheckService>(),
+            // The single install path for the manual Premium update action:
+            // coordinator-gated, revalidating, acknowledging, progress-
+            // reporting (shared with the automatic batch).
+            sp.GetRequiredService<IModUpdateInstaller>(),
+            sp.GetRequiredService<INexusAuthService>(),
+            sp.GetRequiredService<IUpdateStateStore>(),
+            // The runner owns the refresh gate; the VM renders its state.
+            sp.GetRequiredService<UpdateCheckRunner>(),
+            sp.GetRequiredService<IAutomaticUpdateService>(),
+            sp.GetRequiredService<ImportWorkflowViewModel>(),
+            sp.GetRequiredService<DetailedModRowsViewModel>(),
+            sp.GetRequiredService<Action<Action>>(),
+            sp.GetRequiredService<ILogger<ModListViewModel>>(),
+            // The shared last-known nxm registration state feeds the
+            // empty-state Nexus hint; the mod list never probes the OS.
+            sp.GetRequiredService<INxmRegistrationState>(),
+            // Gaming Mode gates the Add split button's picker paths + the
+            // linked-row open-folder badge.
+            sp.GetRequiredService<IGamingModeState>(),
+            // The OS shell-open launcher: the Add NexusMods browser open +
+            // the linked-row open-folder action.
+            sp.GetRequiredService<IExternalLauncher>()));
 
         // The hosted destination view models: singletons (one instance per page,
         // kept alive + subscribed for the application lifetime). Each page VM is
@@ -358,11 +343,15 @@ public static class CuratorComposition
         // The UI-layer glue that fires an update check
         // (IUpdateCheckService, registered above via AddIntegrations) on the
         // automatic triggers: startup (when a profile is restored),
-        // active-profile switch, and a periodic timer. All three share one
-        // shared interval gate (read live from config) so a rapid
+        // active-profile switch, and a periodic timer. Owns the candidate
+        // pull: each fire reads the profile's mod list through
+        // IProfileService + maps the entries to ModListCandidates at the call
+        // site (so Integrations holds no Profiles reference); a pull failure
+        // (a deleted profile) is logged + skipped. All three triggers share
+        // one shared interval gate (read live from config) so a rapid
         // open/close loop or rapid profile switching cannot burn API calls;
         // the gate's last-check timestamp is persisted via the app-state
-        // it survives a close/reopen. The toggle gates only the periodic
+        // so it survives a close/reopen. The toggle gates only the periodic
         // timer. Subscribes to IProfileSession.PropertyChanged for switches
         // + fires the opening check for the restored active id. Started after
         // the provider is built (see StartUpdateCheck); best-effort, never
@@ -370,14 +359,43 @@ public static class CuratorComposition
         // app lifetime. The periodic timer is wired to a DispatcherTimer (the
         // established ProfileSession pattern); the runner takes the timer-start
         // delegate as a seam so it stays unit-testable.
-        services.AddSingleton(sp => new UpdateCheckRunner(
-            sp.GetRequiredService<IProfileSession>(),
-            sp.GetRequiredService<IUpdateCheckService>(),
-            sp.GetRequiredService<IConfigLoader>(),
-            sp.GetRequiredService<IUpdateCheckScheduleState>(),
-            sp.GetRequiredService<IAutomaticUpdateService>(),
-            sp.GetRequiredService<ILogger<UpdateCheckRunner>>(),
-            StartUpdateCheckPolling));
+        // The manual-refresh countdown timer seams (the throttle's live m:ss
+        // tooltip + the rate-limit pill's clearing), owned by the runner's
+        // UpdateRefreshGate. Production manages a single 1-second
+        // DispatcherTimer, created lazily on first start, with Tick wired once;
+        // Start/Stop control whether it runs (mirrors
+        // StartUpdateCheckPolling's established timer pattern). The start
+        // delegate is idempotent: a second start while the timer is running is
+        // a no-op (DispatcherTimer.Start is safe to re-call, and the Tick
+        // handler is wired exactly once). Composition happens on the UI thread
+        // during app startup, so the DispatcherTimer affinity is correct. The
+        // gate's StateChanged marshals through the shared Action<Action> seam.
+        services.AddSingleton(sp =>
+        {
+            DispatcherTimer? countdownTimer = null;
+            Action<Action> startCountdownTimer = tick =>
+            {
+                if (countdownTimer is null)
+                {
+                    countdownTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                    countdownTimer.Tick += (_, _) => tick();
+                }
+                countdownTimer.Start();
+            };
+            Action stopCountdownTimer = () => countdownTimer?.Stop();
+            return new UpdateCheckRunner(
+                sp.GetRequiredService<IProfileSession>(),
+                sp.GetRequiredService<IProfileService>(),
+                sp.GetRequiredService<IUpdateCheckService>(),
+                sp.GetRequiredService<IConfigLoader>(),
+                sp.GetRequiredService<IUpdateCheckScheduleState>(),
+                sp.GetRequiredService<IAutomaticUpdateService>(),
+                sp.GetRequiredService<ILogger<UpdateCheckRunner>>(),
+                StartUpdateCheckPolling,
+                invokeOnUi: sp.GetRequiredService<Action<Action>>(),
+                startCountdownTimer: startCountdownTimer,
+                stopCountdownTimer: stopCountdownTimer);
+        });
 
         // The Curator self-update service (Velopack). Conditional on
         // CURATOR_VELOPACK: a Velopack-packaged build (Windows install or Linux
@@ -418,15 +436,17 @@ public static class CuratorComposition
         // The first-run Welcome onboarding coordinator. Shows the Welcome modal
         // once, the first time the app starts with onboarding not yet complete,
         // persists completion, and on a "Set up Nexus" choice navigates the shell
-        // to Nexus (resolved lazily through ShellViewModel's
-        // navigation entry point, so the leave-Integrations nxm/mod-list refresh
+        // to Nexus through IShellNavigation (a plain forward to the shell
+        // singleton below, resolved lazily so the registration introduces no
+        // construction-time cycle; the leave-Integrations nxm/mod-list refresh
         // applies after the Welcome-driven visit too). Singleton: owns the
         // in-process "already shown" guard. Started from App after the main
         // window opens; best-effort, never blocks startup.
+        services.AddSingleton<IShellNavigation>(sp => sp.GetRequiredService<ShellViewModel>());
         services.AddSingleton(sp => new OnboardingService(
             sp.GetRequiredService<IOnboardingState>(),
             sp.GetRequiredService<IDialogService>(),
-            () => sp.GetRequiredService<ShellViewModel>().NavigateToIntegrationsAsync(),
+            sp.GetRequiredService<IShellNavigation>(),
             sp.GetRequiredService<ILogger<OnboardingService>>()));
 
         var provider = services.BuildServiceProvider();

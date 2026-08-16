@@ -100,7 +100,7 @@ public enum ModAddMode
 /// <see cref="ModVersionPolicy.Latest"/> (inert for linked). No modal; the folder
 /// is linked, not copied.</para>
 /// </remarks>
-public partial class ModListViewModel : ObservableObject
+public partial class ModListViewModel : ObservableObject, IModListRefresh
 {
     /// <summary>
     /// The Nexus Mods games page for Darktide (the "Add Nexus Mods" flyout item's
@@ -109,15 +109,6 @@ public partial class ModListViewModel : ObservableObject
     /// </summary>
     private const string NexusModsGamesUrl = "https://www.nexusmods.com/games/" + NexusGameIdentity.DarktideDomain;
 
-    /// <summary>
-    /// The client-side cooldown applied when a rate-limited check did not carry
-    /// a server-reported reset (e.g. an HTTP 429 with no <c>x-rl-*</c> headers).
-    /// Measured from the result's <see cref="UpdateCheckResult.CheckedAt"/> so
-    /// the refresh button re-enables on a reasonable schedule even when Nexus
-    /// stays silent about when the window refills.
-    /// </summary>
-    private static readonly TimeSpan RateLimitFallbackCooldown = TimeSpan.FromMinutes(1);
-
     private readonly IProfileService _profiles;
     private readonly IProfileSession _session;
     private readonly IModRepository _repo;
@@ -125,36 +116,34 @@ public partial class ModListViewModel : ObservableObject
     private readonly IDialogService _dialogs;
     private readonly LocalizationService _localization;
     private readonly IUpdateCheckService _updateCheck;
-    private readonly IModAcquisitionService _acquisition;
+    private readonly IModUpdateInstaller _installer;
     private readonly INexusAuthService _auth;
     private readonly IUpdateStateStore _updateState;
     private readonly UpdateCheckRunner _updateCheckRunner;
-    private readonly UpdateCoordinator _updateCoordinator;
     private readonly IAutomaticUpdateService _automaticUpdates;
     private readonly ILogger<ModListViewModel> _logger;
     private readonly Action<Action> _invokeOnUi;
-    private readonly Action<Action>? _startCountdownTimer;
-    private readonly Action? _stopCountdownTimer;
-    /// <summary>
-    /// The clock backing the rate-limit-active decision (a functional gate on
-    /// the refresh button, unlike the cosmetic-only manual-throttle countdown,
-    /// which reads <see cref="DateTimeOffset.UtcNow"/> directly). Defaults to
-    /// <see cref="DateTimeOffset.UtcNow"/>; tests inject a controllable clock so
-    /// the active flag + its elapsing are deterministic. Mirrors the
-    /// <c>UpdateCheckRunner</c> + <c>UpdateCheckService</c> clock seams.
-    /// </summary>
-    private readonly Func<DateTimeOffset> _getNow;
     private readonly IExternalLauncher _externalLauncher;
     private readonly INxmRegistrationState _nxmRegistration;
     private readonly IGamingModeState _gamingMode;
 
     /// <summary>
+    /// The profile entries the last <see cref="Reload"/> loaded (the raw
+    /// <see cref="IProfileService.GetModList"/> snapshot for the active
+    /// profile, empty with no active profile). Kept so the update family's
+    /// candidate-taking reads (<see cref="ApplyKnownUpdateState"/>) pass the
+    /// entries the rows were built from, not a second, racy re-pull.
+    /// </summary>
+    private IReadOnlyList<ModListEntry> _loadedEntries = Array.Empty<ModListEntry>();
+
+    /// <summary>
     /// Creates the list VM, subscribes to the session (reload on active-profile
     /// change), the update-check service (badge refresh on
-    /// <see cref="IUpdateCheckService.CheckCompleted"/>), the update coordinator
-    /// (push the global busy flag down to rows), the automatic-update service
-    /// (reload after a batch installs mods), and localization (culture refresh),
-    /// loads the current profile's mods, and reads the Nexus premium state once
+    /// <see cref="IUpdateCheckService.CheckCompleted"/>), the mod-update
+    /// installer (per-row spinner via progress + the global busy flag pushed
+    /// down to rows), the automatic-update service (reload after a batch
+    /// installs mods), and localization (culture refresh), loads the current
+    /// profile's mods, and reads the Nexus premium state once
     /// (fire-and-forget; flips <see cref="IsPremiumUser"/> when it lands).
     /// </summary>
     public ModListViewModel(
@@ -165,11 +154,10 @@ public partial class ModListViewModel : ObservableObject
         IDialogService dialogs,
         LocalizationService localization,
         IUpdateCheckService updateCheck,
-        IModAcquisitionService acquisition,
+        IModUpdateInstaller installer,
         INexusAuthService auth,
         IUpdateStateStore updateState,
         UpdateCheckRunner updateCheckRunner,
-        UpdateCoordinator updateCoordinator,
         IAutomaticUpdateService automaticUpdates,
         ImportWorkflowViewModel importWorkflow,
         DetailedModRowsViewModel detailedRows,
@@ -177,10 +165,7 @@ public partial class ModListViewModel : ObservableObject
         ILogger<ModListViewModel> logger,
         INxmRegistrationState nxmRegistration,
         IGamingModeState gamingMode,
-        IExternalLauncher externalLauncher,
-        Action<Action>? startCountdownTimer = null,
-        Action? stopCountdownTimer = null,
-        Func<DateTimeOffset>? getNow = null)
+        IExternalLauncher externalLauncher)
     {
         _profiles = profiles;
         _session = session;
@@ -189,19 +174,15 @@ public partial class ModListViewModel : ObservableObject
         _dialogs = dialogs;
         _localization = localization;
         _updateCheck = updateCheck;
-        _acquisition = acquisition;
+        _installer = installer ?? throw new ArgumentNullException(nameof(installer));
         _auth = auth;
         _updateState = updateState;
         _updateCheckRunner = updateCheckRunner;
-        _updateCoordinator = updateCoordinator ?? throw new ArgumentNullException(nameof(updateCoordinator));
         _automaticUpdates = automaticUpdates ?? throw new ArgumentNullException(nameof(automaticUpdates));
         ImportWorkflow = importWorkflow ?? throw new ArgumentNullException(nameof(importWorkflow));
         DetailedRows = detailedRows ?? throw new ArgumentNullException(nameof(detailedRows));
         _logger = logger;
         _invokeOnUi = invokeOnUi ?? throw new ArgumentNullException(nameof(invokeOnUi));
-        _startCountdownTimer = startCountdownTimer;
-        _stopCountdownTimer = stopCountdownTimer;
-        _getNow = getNow ?? (() => DateTimeOffset.UtcNow);
         _externalLauncher = externalLauncher ?? throw new ArgumentNullException(nameof(externalLauncher));
         _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
         _gamingMode = gamingMode ?? throw new ArgumentNullException(nameof(gamingMode));
@@ -209,21 +190,18 @@ public partial class ModListViewModel : ObservableObject
         _session.PropertyChanged += OnSessionPropertyChanged;
         _localization.PropertyChanged += OnCultureChanged;
         _updateCheck.CheckCompleted += OnUpdateCheckCompleted;
-        _updateCoordinator.BusyChanged += OnCoordinatorBusyChanged;
+        _installer.BusyChanged += OnInstallerBusyChanged;
+        _installer.ModUpdateProgress += OnModUpdateProgress;
         _automaticUpdates.UpdatesApplied += OnAutomaticUpdatesApplied;
-        _automaticUpdates.ModUpdateProgress += OnAutomaticUpdateProgress;
+        // The refresh gate is runner-owned + fed by every check result; this
+        // VM renders its state (the gate marshals the event to the UI thread).
+        _updateCheckRunner.RefreshGate.StateChanged += OnRefreshGateStateChanged;
         ImportWorkflow.ItemImported += OnItemImported;
         // The Add split button's enabled state combines the workflow's activity
         // with the Gaming Mode gate, so the workflow's own IsActive flips must
         // re-fire it. Both VMs are application-lifetime singletons; the
         // subscription is never undone (mirrors the neighboring subscriptions).
         ImportWorkflow.PropertyChanged += OnImportWorkflowPropertyChanged;
-
-        // The refresh button's tooltip defaults to the normal "check now"
-        // string. ReevaluateRefreshGate owns the tooltip once a rate limit or
-        // the manual sliding-window throttle engages (each second via the
-        // countdown tick). Nothing is active at construction.
-        ManualRefreshTooltip = _localization["ModList_CheckNowTooltip"];
 
         // Read the Nexus premium state once at construction. Fire-and-forget:
         // GetCurrentStateAsync hits the network, so blocking the (UI-thread)
@@ -259,20 +237,21 @@ public partial class ModListViewModel : ObservableObject
         });
 
     /// <summary>
-    /// The automatic-update service reports per-mod progress: a container's
-    /// install started (active=true) or finished (active=false). Marshal to the
-    /// UI thread, find the row by ContainerId, and set its
-    /// <see cref="ModItemViewModel.IsUpdating"/> so the row-level spinner (left
-    /// of the Nexus badge) tracks the currently installing mod. An event for a
-    /// row no longer present (after a profile switch / reload) is ignored, so a
-    /// switch mid-batch never leaves a stale spinner on a now-absent row.
+    /// The mod-update installer reports per-install progress (a container's
+    /// install attempt started or finished, for BOTH the manual Premium path
+    /// and the automatic batch). Marshal to the UI thread, find the row by
+    /// ContainerId, and set its <see cref="ModItemViewModel.IsUpdating"/> so
+    /// the row-level spinner (left of the Nexus badge) tracks the currently
+    /// installing mod. An event for a row no longer present (after a profile
+    /// switch / reload) is ignored, so a switch mid-batch never leaves a stale
+    /// spinner on a now-absent row.
     /// </summary>
-    private void OnAutomaticUpdateProgress(object? sender, ModUpdateProgressEventArgs e) =>
+    private void OnModUpdateProgress(object? sender, ModUpdateProgressEventArgs e) =>
         _invokeOnUi(() => ApplyModUpdateProgress(e.ContainerId, e.IsActive));
 
     /// <summary>
-    /// Applies a per-mod automatic-update progress signal to the matching row.
-    /// Finds the row by ContainerId; sets its <see cref="ModItemViewModel.IsUpdating"/>
+    /// Applies a per-mod install progress signal to the matching row. Finds the
+    /// row by ContainerId; sets its <see cref="ModItemViewModel.IsUpdating"/>
     /// to <paramref name="isActive"/>. Ignores a container id with no matching
     /// row (the row may have been removed by a profile switch / reload between
     /// the event + this UI-thread callback).
@@ -399,58 +378,40 @@ public partial class ModListViewModel : ObservableObject
     private bool _isPremiumUser;
 
     /// <summary>
-    /// Whether the last update check was rate-limited. Drives the header
-    /// rate-limit notice (the "check incomplete" indicator). Set from
-    /// <see cref="IUpdateCheckService.LastResult"/> on reload + on
-    /// <see cref="IUpdateCheckService.CheckCompleted"/>. Stays <c>true</c>
+    /// Whether the last update check was rate-limited, read from the
+    /// runner-owned refresh gate (fed by every check result). Drives the header
+    /// rate-limit notice (the "check incomplete" indicator). Stays <c>true</c>
     /// until a later non-rate-limited result lands; the coupled
     /// <see cref="IsRateLimitActive"/> flag (and the pill's visibility) is what
     /// flips back when the reset elapses.
     /// </summary>
-    [ObservableProperty]
-    private bool _isRateLimited;
+    public bool IsRateLimited => _updateCheckRunner.RefreshGate.IsRateLimited;
 
     /// <summary>
     /// The server-reported reset of the exhausted window from the last
-    /// rate-limited result (UTC), or <c>null</code> when the server gave none.
-    /// Paired with <see cref="_rateLimitCheckedAt"/> (the result timestamp) so
-    /// the active flag can fall back to <see cref="RateLimitFallbackCooldown"/>
-    /// when this is null. Cleared alongside <see cref="_isRateLimited"/> when a
-    /// later non-rate-limited result lands.
+    /// rate-limited result (UTC), or <c>null</c> when the server gave none.
+    /// Read from the refresh gate; re-fired with the other gate-rendered
+    /// properties when the gate's state changes.
     /// </summary>
-    [ObservableProperty]
-    private DateTimeOffset? _rateLimitResetsAt;
+    public DateTimeOffset? RateLimitResetsAt => _updateCheckRunner.RefreshGate.RateLimitResetsAt;
 
     /// <summary>
-    /// The <see cref="UpdateCheckResult.CheckedAt"/> of the last rate-limited
-    /// result, backing the <see cref="RateLimitFallbackCooldown"/> computation
-    /// when <see cref="_rateLimitResetsAt"/> is null. Not observable: it feeds
-    /// only the derived active flag, which is re-fired on each re-evaluation.
+    /// Whether the refresh button is currently blocked by an active rate limit
+    /// (the gate's decision: the last result was rate-limited AND its effective
+    /// reset has not elapsed). Drives <see cref="IsRefreshEnabled"/> (the button
+    /// disables) + the pill's visibility, so the two stay coherent: the pill
+    /// shows exactly while the button is rate-limit-blocked, and both clear
+    /// together when the reset elapses.
     /// </summary>
-    private DateTimeOffset? _rateLimitCheckedAt;
+    public bool IsRateLimitActive => _updateCheckRunner.RefreshGate.IsRateLimitActive;
 
     /// <summary>
-    /// Whether the refresh button is currently blocked by an active rate limit:
-    /// <c>true</c> when the last result was rate-limited AND the effective reset
-    /// (the server-reported <see cref="_rateLimitResetsAt"/>, or
-    /// <see cref="_rateLimitCheckedAt"/> + <see cref="RateLimitFallbackCooldown"/>
-    /// when the server was silent) has not yet elapsed. Drives
-    /// <see cref="IsRefreshEnabled"/> (the button disables) + the pill's
-    /// visibility, so the two stay coherent: the pill shows exactly while the
-    /// button is rate-limit-blocked, and both clear together when the reset
-    /// elapses. Re-evaluated on each result + each countdown tick by
-    /// <see cref="ReevaluateRefreshGate"/>.
-    /// </summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsRefreshEnabled))]
-    private bool _isRateLimitActive;
-
-    /// <summary>
-    /// Whether the update coordinator reports an install in flight (manual or
-    /// automatic). Set from <see cref="OnCoordinatorBusyChanged"/>; pushed down
+    /// Whether the mod-update installer reports an install in flight (manual or
+    /// automatic; the coordinator-backed busy flag). Set from
+    /// <see cref="OnInstallerBusyChanged"/>; pushed down
     /// to each row so the per-row enabled state reflects the global "one install
     /// at a time" coordination. The manual Update command no longer sets this
-    /// directly; acquiring the coordinator is the single source of truth.
+    /// directly; the installer behind its shared gate is the single source of truth.
     /// </summary>
     [ObservableProperty]
     private bool _anyRowUpdating;
@@ -460,7 +421,8 @@ public partial class ModListViewModel : ObservableObject
     /// True while <see cref="CheckForUpdatesNowCommand"/> awaits the runner's
     /// thorough check (multiple API calls, a few seconds); drives the header
     /// refresh button's enabled + spinner state. Cleared in the command's
-    /// finally block on success or failure (no stuck state).
+    /// finally block on success or failure (no stuck state). The one gate input
+    /// this VM still owns (an affordance state, not refresh-gate policy).
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsRefreshEnabled))]
@@ -468,39 +430,41 @@ public partial class ModListViewModel : ObservableObject
 
     /// <summary>
     /// Whether the manual sliding-window throttle is currently blocking the
-    /// refresh button (the runner's free 10/hour budget is spent + the 2-minute
-    /// cooldown has not elapsed). Set by <see cref="ReevaluateRefreshGate"/>
-    /// after each manual attempt + re-evaluated on each countdown tick. Drives
-    /// <see cref="IsRefreshEnabled"/> (the button disables) + the countdown
-    /// tooltip (<see cref="ManualRefreshTooltip"/>).
+    /// refresh button (the gate's decision over the runner's
+    /// next-allowed read). Drives <see cref="IsRefreshEnabled"/> (the button
+    /// disables) + the countdown tooltip (<see cref="ManualRefreshTooltip"/>).
     /// </summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsRefreshEnabled))]
-    private bool _isManualRefreshThrottled;
+    public bool IsManualRefreshThrottled => _updateCheckRunner.RefreshGate.IsManualThrottled;
 
     /// <summary>
     /// The refresh button's tooltip. Reflects the active cause by priority: a
     /// server rate limit (the rate-limit tooltip) takes precedence, then the
     /// manual sliding-window countdown, then the normal "Check for updates now"
-    /// string. Updated each second by the countdown tick while either cause is
-    /// active, and re-resolved on a culture change. Bound to the button's
-    /// <c>ToolTip.Tip</c>.
+    /// string. Re-resolved when the refresh gate's state changes (including
+    /// each countdown tick while either cause is active) + on a culture change.
+    /// Bound to the button's <c>ToolTip.Tip</c>.
     /// </summary>
-    [ObservableProperty]
-    private string _manualRefreshTooltip;
+    public string ManualRefreshTooltip
+    {
+        get
+        {
+            var gate = _updateCheckRunner.RefreshGate;
+            return gate.IsRateLimitActive
+                ? RateLimitedTooltip
+                : gate.IsManualThrottled && gate.ManualThrottleClearsAt is { } allowed
+                    ? BuildThrottleTooltip(allowed)
+                    : _localization["ModList_CheckNowTooltip"];
+        }
+    }
 
     /// <summary>
     /// Whether the manual "check now" refresh button is enabled: NOT while a
-    /// thorough check is in flight (<see cref="IsCheckingNow"/>), NOT while the
-    /// manual sliding-window throttle is blocking
-    /// (<see cref="IsManualRefreshThrottled"/>), and NOT while an active rate
-    /// limit has not yet reset (<see cref="IsRateLimitActive"/>). A single
-    /// computed property so the view binds the button's IsEnabled to one source;
-    /// its dependencies each carry
-    /// <c>[NotifyPropertyChangedFor(nameof(IsRefreshEnabled))]</c> so the
-    /// binding re-evaluates when any flips.
+    /// thorough check is in flight (<see cref="IsCheckingNow"/>; this VM's own
+    /// affordance state) and NOT while the runner-owned refresh gate blocks
+    /// (an active rate limit or the manual sliding-window throttle; see
+    /// <see cref="UpdateRefreshGate.IsRefreshEnabled"/>).
     /// </summary>
-    public bool IsRefreshEnabled => !IsCheckingNow && !IsManualRefreshThrottled && !IsRateLimitActive;
+    public bool IsRefreshEnabled => !IsCheckingNow && _updateCheckRunner.RefreshGate.IsRefreshEnabled;
 
     /// <summary>
     /// The localized split-button label for the current <see cref="AddMode"/>
@@ -568,27 +532,14 @@ public partial class ModListViewModel : ObservableObject
     /// names the local time the window refills; otherwise falls back to a
     /// time-free "try again later" message (the server stayed silent, e.g. an
     /// HTTP 429 with no <c>x-rl-*</c> headers, so no specific time is promised).
-    /// Re-fires on a culture change + each re-evaluation.
+    /// Re-fires on a culture change + each gate state change.
     /// </summary>
     public string RateLimitedTooltip =>
-        RateLimitResetsAt is { } reset
+        _updateCheckRunner.RefreshGate.RateLimitResetsAt is { } reset
             ? _localization.Format(
                 "ModList_RateLimitedTooltipWithTime",
                 reset.ToLocalTime().ToString("t", _localization.Culture))
             : _localization["ModList_RateLimitedTooltip"];
-
-    /// <summary>
-    /// The moment the active rate limit clears: the server-reported
-    /// <see cref="RateLimitResetsAt"/>, or (when the server was silent) the
-    /// rate-limited result's <see cref="_rateLimitCheckedAt"/> plus
-    /// <see cref="RateLimitFallbackCooldown"/>. <c>null</c> when no rate-limited
-    /// result has landed (or it has been cleared). A pure function of the
-    /// observable fields, so the active flag stays a pure function of the clock.
-    /// </summary>
-    private DateTimeOffset? EffectiveRateLimitReset =>
-        RateLimitResetsAt ?? (_rateLimitCheckedAt is { } checkedAt
-            ? checkedAt + RateLimitFallbackCooldown
-            : null);
 
     /// <summary>
     /// The inline import workflow finished a successful per-item import on the
@@ -637,11 +588,10 @@ public partial class ModListViewModel : ObservableObject
         OnPropertyChanged(nameof(AddModeLabel));
         OnPropertyChanged(nameof(RateLimitedNoticeText));
         OnPropertyChanged(nameof(AddButtonTooltip));
-        // Re-resolve the refresh-gate state so the rate-limit + throttle
-        // tooltips pick up the new culture immediately (the countdown tick will
-        // also re-resolve on its next fire, but this keeps the UI honest without
-        // waiting). OnCultureChanged re-fires the tooltipped affordances.
-        ReevaluateRefreshGate();
+        // Re-resolve the localized refresh-gate renderings so the rate-limit +
+        // throttle tooltips pick up the new culture immediately (the gate's own
+        // state is unchanged; the raw values are re-read).
+        OnRefreshGateStateChanged();
         foreach (var row in Mods)
         {
             row.Refresh();
@@ -662,14 +612,30 @@ public partial class ModListViewModel : ObservableObject
     }
 
     /// <summary>
+    /// The runner-owned refresh gate's state changed (a result landed, a blocked
+    /// manual attempt, or a countdown tick; already marshaled to the UI thread
+    /// by the gate). Re-fire the gate-rendered properties so the bound button,
+    /// pill, and tooltip re-read the gate. Also re-fired on a culture change so
+    /// the localized renderings resolve under the new culture.
+    /// </summary>
+    private void OnRefreshGateStateChanged()
+    {
+        OnPropertyChanged(nameof(IsRateLimited));
+        OnPropertyChanged(nameof(RateLimitResetsAt));
+        OnPropertyChanged(nameof(IsRateLimitActive));
+        OnPropertyChanged(nameof(IsManualRefreshThrottled));
+        OnPropertyChanged(nameof(IsRefreshEnabled));
+        OnPropertyChanged(nameof(ManualRefreshTooltip));
+        OnPropertyChanged(nameof(RateLimitedTooltip));
+    }
+
+    /// <summary>
     /// The update check finished (background task fires the event on its
     /// completing thread). The check service already recorded the authoritative
     /// outcome through the persisted known-update store, so re-hydrate the rows
     /// from that store (profile-scoped) rather than reading the single in-memory
     /// <see cref="IUpdateCheckService.LastResult"/> (which cannot distinguish
-    /// profiles). The transient rate-limit notice still reads
-    /// <see cref="IUpdateCheckService.LastResult"/> (the notice is session-only;
-    /// it does not need to persist and must not erase known flags). Idempotent.
+    /// profiles). Idempotent.
     /// </summary>
     private void OnUpdateCheckCompleted(object? sender, UpdateCheckResult? result)
     {
@@ -692,12 +658,9 @@ public partial class ModListViewModel : ObservableObject
     /// </summary>
     private void ApplyCheckLanded(UpdateCheckResult? result)
     {
-        IsRateLimited = result?.RateLimited == true;
-        RateLimitResetsAt = result?.RateLimitResetsAt;
-        _rateLimitCheckedAt = result?.CheckedAt;
-        // Re-evaluate the coupled refresh gate so the button + pill reflect the
-        // just-landed rate-limit state (or its clearing) at once.
-        ReevaluateRefreshGate();
+        // The rate-limit tracking + the coupled refresh-button/pill state are
+        // owned by the runner's UpdateRefreshGate (fed from the captured result
+        // before this event fires); this handler renders rows only.
 
         if (Mods.Count == 0)
         {
@@ -726,14 +689,15 @@ public partial class ModListViewModel : ObservableObject
 
     /// <summary>
     /// Reads the profile-scoped known-update container ids from the persisted
-    /// store (which self-heals stale entries against the live profile + repo) and
-    /// applies them to the rows by container id. This is the single source of
-    /// truth for the per-row <see cref="ModItemViewModel.UpdateAvailable"/> flag,
-    /// so a restart inside the interval gate shows prior flags before any API
-    /// call, and a result from one profile never bleeds into another. Called from
-    /// <see cref="ApplyCheckLanded"/> + <see cref="Reload"/> +
-    /// <see cref="AcknowledgeUpdateAndReload"/>. A no-op when no profile is
-    /// active.
+    /// store (which self-heals stale entries against the loaded candidates +
+    /// the repo) and applies them to the rows by container id. This is the
+    /// single source of truth for the per-row
+    /// <see cref="ModItemViewModel.UpdateAvailable"/> flag, so a restart inside
+    /// the interval gate shows prior flags before any API call, and a result
+    /// from one profile never bleeds into another. The candidates are the
+    /// entries the last <see cref="Reload"/> loaded (the rows were built from
+    /// them). Called from <see cref="ApplyCheckLanded"/> +
+    /// <see cref="Reload"/>. A no-op when no profile is active.
     /// </summary>
     private void ApplyKnownUpdateState()
     {
@@ -746,7 +710,8 @@ public partial class ModListViewModel : ObservableObject
             return;
         }
 
-        var flaggedIds = _updateState.GetKnownUpdateContainerIds(profileId);
+        var flaggedIds = _updateState.GetKnownUpdateContainerIds(
+            profileId, _loadedEntries.ToCandidates());
         foreach (var row in Mods)
         {
             row.UpdateAvailable = flaggedIds.Contains(row.ContainerId);
@@ -754,16 +719,15 @@ public partial class ModListViewModel : ObservableObject
     }
 
     /// <summary>
-    /// The global install-coordinator's busy flag changed (a manual row update or
-    /// the automatic updater acquired or released it). Mirror it to
+    /// The installer's busy flag changed (a manual row update or the automatic
+    /// batch acquired or released the shared coordinator). Mirror it to
     /// <see cref="AnyRowUpdating"/> + push the new value down to every row so the
     /// per-row enabled state recomputes (Premium clicks stay disabled while
-    /// another install runs; regular/unknown clicks stay enabled). Fires on a
-    /// threadpool thread when the automatic updater acquires/releases, so marshal
-    /// to the UI thread.
+    /// another install runs; regular/unknown clicks stay enabled). Fires on the
+    /// acquiring/releasing thread, so marshal to the UI thread.
     /// </summary>
-    private void OnCoordinatorBusyChanged(object? sender, EventArgs e) =>
-        _invokeOnUi(() => AnyRowUpdating = _updateCoordinator.IsBusy);
+    private void OnInstallerBusyChanged(object? sender, EventArgs e) =>
+        _invokeOnUi(() => AnyRowUpdating = _installer.IsBusy);
 
     /// <summary>
     /// Pushes the current <see cref="IsPremiumUser"/>, <see cref="AnyRowUpdating"/>,
@@ -849,6 +813,7 @@ public partial class ModListViewModel : ObservableObject
             HasActiveProfile = false;
             HasMods = false;
             ModCount = 0;
+            _loadedEntries = Array.Empty<ModListEntry>();
             // Hand an empty snapshot so old work is cancelled.
             _ = DetailedRows.SetRowsAsync(Array.Empty<ModItemViewModel>());
             return;
@@ -857,6 +822,7 @@ public partial class ModListViewModel : ObservableObject
         HasActiveProfile = true;
 
         var entries = _profiles.GetModList(id);
+        _loadedEntries = entries;
         foreach (var entry in entries.OrderBy(e => e.Order, Comparer<int>.Default))
         {
             var container = _repo.Get(entry.ContainerId);
@@ -915,37 +881,6 @@ public partial class ModListViewModel : ObservableObject
         // hydration + metadata backfill on Detailed. Fire-and-forget: the
         // coordinator catches/logs all failures internally.
         _ = DetailedRows.SetRowsAsync(Mods.ToArray());
-    }
-
-    /// <summary>
-    /// Acknowledges a successful version change for <paramref name="containerId"/>
-    /// in the active profile (removing its persisted known-update entry
-    /// immediately, without an extra API check), then reloads so the new version
-    /// shows and the flag clears. Called after a successful nxm
-    /// install/reinstall: the prior known-update state (recorded before the
-    /// version change) would otherwise re-apply the flag via
-    /// <see cref="ApplyKnownUpdateState"/>. The next authoritative check
-    /// reconciles naturally (the mod is re-evaluated against the new version).
-    /// </summary>
-    public void AcknowledgeUpdateAndReload(Guid containerId)
-    {
-        if (_session.ActiveProfileId is Guid profileId)
-        {
-            try
-            {
-                _updateState.AcknowledgeInstall(profileId, containerId);
-            }
-            catch (Exception ex)
-            {
-                // Defensive: AcknowledgeInstall should not throw, but a
-                // persistence failure must not block the reload.
-                _logger.LogWarning(ex,
-                    "Acknowledging update for container {Container} failed; the next check reconciles.",
-                    containerId);
-            }
-        }
-
-        Reload();
     }
 
     /// <summary>
@@ -1236,10 +1171,12 @@ public partial class ModListViewModel : ObservableObject
     /// <see cref="IUpdateCheckService.CheckCompleted"/> subscription re-applies
     /// the result to the rows when it lands. The command is a no-op (via the
     /// runner) when no profile is active; a second click while one is in flight
-    /// is a no-op (the <see cref="IsCheckingNow"/> guard). After the await,
-    /// <see cref="ReevaluateRefreshGate"/> re-evaluates the runner's
-    /// sliding-window throttle so the button disables + the countdown tooltip
-    /// engages when the manual path is rate-limited.
+    /// is a no-op (the <see cref="IsCheckingNow"/> guard). The runner-owned
+    /// refresh gate (<see cref="UpdateRefreshGate"/>) re-evaluates itself after
+    /// every completed attempt, whatever the outcome, so the button's disabled
+    /// state + the countdown tooltip arrive via the gate's
+    /// <see cref="UpdateRefreshGate.StateChanged"/>; this VM does no post-await
+    /// gate work.
     /// </summary>
     [RelayCommand]
     private async Task CheckForUpdatesNow()
@@ -1258,91 +1195,18 @@ public partial class ModListViewModel : ObservableObject
             // No ConfigureAwait(false): the finally (clearing IsCheckingNow)
             // should run on the UI thread so the bound control re-enables
             // synchronously. The runner's Task.Run dispatches the actual check
-            // to a thread-pool task; we only await its completion here.
+            // to a thread-pool task; we only await its completion here. The
+            // runner's refresh gate re-evaluates itself after every attempt (a
+            // fire that spent the free budget engages the countdown whatever
+            // the run's outcome; a blocked attempt re-evaluates on its early
+            // return), so this VM needs no post-await gate work.
             await _updateCheckRunner.CheckNowAsync();
-            // Re-evaluate the refresh gate after every attempt (a fire that
-            // spent the free budget engages the countdown; a blocked attempt
-            // also lands here as CompletedTask with the throttle active). Stays
-            // on the UI thread (no ConfigureAwait above).
-            ReevaluateRefreshGate();
         }
         finally
         {
             IsCheckingNow = false;
         }
     }
-
-    // ---- refresh gate (rate-limit + manual-throttle countdown, shared timer) --
-
-    /// <summary>
-    /// Re-evaluates the refresh affordance against both disabling causes, the
-    /// server rate limit (active until the effective reset elapses) and the
-    /// manual sliding-window throttle (the runner's free-budget cooldown), and
-    /// applies the result to <see cref="IsRateLimitActive"/>,
-    /// <see cref="IsManualRefreshThrottled"/>, <see cref="ManualRefreshTooltip"/>,
-    /// and the countdown timer. Called after every <c>CheckForUpdatesNow</c>
-    /// attempt, when a check result lands (<see cref="ApplyCheckLanded"/>), on
-    /// each 1-second tick (<see cref="OnCountdownTick"/>), and on a culture
-    /// change.
-    /// </summary>
-    /// <remarks>
-    /// The two causes share a single countdown timer: it runs while EITHER has
-    /// an unelapsed deadline (so the rate-limit pill clears the instant its
-    /// reset passes, even mid-throttle) and stops when neither does. The tooltip
-    /// takes the rate-limit reason when active (the more informative,
-    /// server-driven cause) and otherwise falls back to the throttle countdown
-    /// or the normal "check now" string. Production's start delegate is
-    /// idempotent (no-op if already running), so invoking it on every re-eval is
-    /// safe.
-    /// </remarks>
-    private void ReevaluateRefreshGate()
-    {
-        // (1) Rate-limit active: the last result was rate-limited AND the
-        //     effective reset (server-reported, or CheckedAt + the fallback
-        //     cooldown when the server was silent) has not elapsed.
-        var effectiveReset = EffectiveRateLimitReset;
-        bool rateLimitActive = IsRateLimited
-            && effectiveReset is { } reset
-            && _getNow() < reset;
-        IsRateLimitActive = rateLimitActive;
-
-        // (2) Manual sliding-window throttle: the runner reports the next
-        //     allowed manual fire, or null once the cooldown has elapsed.
-        var next = _updateCheckRunner.NextManualRefreshAllowedAt;
-        bool throttled = next is not null;
-        IsManualRefreshThrottled = throttled;
-
-        // (3) Shared timer: run while either cause has an unelapsed deadline,
-        //     stop when neither does.
-        if (rateLimitActive || throttled)
-        {
-            _startCountdownTimer?.Invoke(OnCountdownTick);
-        }
-        else
-        {
-            _stopCountdownTimer?.Invoke();
-        }
-
-        // (4) Tooltip by priority: rate-limit > throttle > normal.
-        ManualRefreshTooltip = rateLimitActive
-            ? RateLimitedTooltip
-            : throttled && next is { } allowed
-                ? BuildThrottleTooltip(allowed)
-                : _localization["ModList_CheckNowTooltip"];
-
-        // (5) Re-fire the rate-limit tooltip (its time/later branch depends on
-        //     RateLimitResetsAt, which may have just changed).
-        OnPropertyChanged(nameof(RateLimitedTooltip));
-    }
-
-    /// <summary>
-    /// The 1-second countdown tick callback (production wires a
-    /// <c>DispatcherTimer</c>; tests invoke the captured callback directly). A
-    /// thin wrapper over <see cref="ReevaluateRefreshGate"/> so each tick clears
-    /// a now-elapsed rate limit / throttle, updates the tooltip, and stops the
-    /// timer once neither cause remains.
-    /// </summary>
-    private void OnCountdownTick() => ReevaluateRefreshGate();
 
     /// <summary>
     /// Formats the throttle tooltip from the absolute unlock instant: resolves
@@ -1378,40 +1242,37 @@ public partial class ModListViewModel : ObservableObject
 
     /// <summary>
     /// The stable per-row update action. Branches on the verified Premium state:
-    /// <b>Premium</b> re-downloads the mod's latest MAIN release via
-    /// <see cref="IModAcquisitionService.AcquireLatestNexusAsync"/> (the
-    /// auth-only / premium path) under the global install coordinator, then
-    /// acknowledges the install (clearing the persisted known-update entry
-    /// immediately, with no extra API check) + reloads (works identically
-    /// inside Gaming Mode); <b>regular / unknown</b> opens the mod's Nexus
-    /// files page in the user's browser via the injectable external-launcher
-    /// seam, surfacing a fallback alert on launch failure, except inside a
-    /// Steam Deck Gaming Mode session where the browser flow cannot complete
-    /// and Desktop Mode guidance is shown instead.
+    /// <b>Premium</b> installs the mod's latest MAIN release in-app via
+    /// <see cref="IModUpdateInstaller.TryInstallLatestAsync"/> (the shared
+    /// install path: coordinator-gated one-install-at-a-time, in-gate
+    /// eligibility revalidation, acknowledge-on-success, per-row progress; works
+    /// identically inside Gaming Mode); <b>regular / unknown</b> opens the mod's
+    /// Nexus files page in the user's browser via the injectable
+    /// external-launcher seam, surfacing a fallback alert on launch failure,
+    /// except inside a Steam Deck Gaming Mode session where the browser flow
+    /// cannot complete and Desktop Mode guidance is shown instead.
     /// </summary>
     /// <remarks>
     /// <para><b>Defense.</b> No-op when: there is no active profile; the row is
     /// not Nexus+Latest (<see cref="ModItemViewModel.IsNexusLatest"/>); no update
     /// is flagged (<see cref="ModItemViewModel.UpdateAvailable"/>); or the row
     /// has no <see cref="ModItemViewModel.NexusModId"/>. The Premium install path
-    /// additionally no-ops when the global coordinator is already busy (one
-    /// install at a time, shared with the automatic updater).</para>
-    /// <para><b>One install at a time, globally.</b> The Premium path acquires
-    /// the shared <see cref="UpdateCoordinator"/>; the automatic updater acquires
-    /// the same coordinator per mod, so a manual click and an automatic batch can
-    /// never install the same mod concurrently. The coordinator's busy flag drives
+    /// additionally no-ops when the installer reports another install in flight
+    /// (one install at a time, shared with the automatic batch).</para>
+    /// <para><b>One install at a time, globally.</b> The installer's shared
+    /// coordinator is the single mutual-exclusion point across the manual click
+    /// + the automatic batch. Its busy flag drives
     /// <see cref="AnyRowUpdating"/> (pushed to rows), which disables other
-    /// Premium rows' actions while an install runs.</para>
+    /// Premium rows' actions while an install runs; its progress events drive
+    /// this row's spinner (<see cref="ModItemViewModel.IsUpdating"/>).</para>
     /// <para><b>Transactional extraction.</b> The mod repository's
     /// <c>AddVersion</c> extracts into a sibling temp + atomically swaps on
     /// success, so a mid-update failure leaves the existing version intact (the
     /// user keeps the version they had). On Premium-install failure the command
-    /// surfaces a user-facing alert; on success (or failure) the finally block
-    /// clears <see cref="ModItemViewModel.IsUpdating"/> + releases the
-    /// coordinator so the row's other controls re-enable.</para>
+    /// surfaces a user-facing alert with the exception's message.</para>
     /// <para><b>No ConfigureAwait(false)</b> on the Premium path: the continuation
     /// must stay on the UI thread so Reload + ShowAlertAsync run on the UI thread
-    /// (the UI-layer convention). The acquisition's own I/O runs on the threadpool
+    /// (the UI-layer convention). The installer's own I/O runs on the threadpool
     /// internally; awaiting it does not block the UI thread.</para>
     /// </remarks>
     [RelayCommand]
@@ -1450,38 +1311,35 @@ public partial class ModListViewModel : ObservableObject
     }
 
     /// <summary>
-    /// The Premium install branch of the update action: acquires the global
-    /// coordinator (no-op if busy), runs the acquisition, acknowledges the
-    /// install, and reloads. Surfaces a user-facing alert on failure.
+    /// The Premium install branch of the update action: hands the install to
+    /// the shared installer (a Busy outcome when another install is in flight is
+    /// a silent no-op) and renders the outcome. On <see cref="ModInstallStatus.Installed"/>
+    /// the installer has already acquired the latest release + acknowledged the
+    /// flag, so this marks the session pending + reloads (the new version + the
+    /// cleared flag show). On <see cref="ModInstallStatus.Failed"/> the localized
+    /// alert carries the exception's message. Busy + NotEligible are silent (a
+    /// second click while busy is a no-op; an ineligible target means the flag
+    /// was stale + the next hydration clears it). Cancellation propagates out of
+    /// the installer + is swallowed here (not a failure).
     /// </summary>
     private async Task UpdatePremiumAsync(Guid profileId, ModItemViewModel row, int modId)
     {
-        // One install at a time, globally: a second click while another install
-        // is in flight is a no-op. The coordinator is shared with the automatic
-        // updater, so the two paths can never install the same mod concurrently.
-        if (!_updateCoordinator.TryAcquire(out var scope))
-        {
-            return;
-        }
-
-        row.IsUpdating = true;
+        ModInstallOutcome outcome;
         try
         {
             // No ConfigureAwait(false): the continuation must stay on the UI
-            // thread so AcknowledgeUpdateAndReload (mutates the UI-bound Mods
-            // collection) + the failure-path ShowAlertAsync below run on the UI
-            // thread (the UI-layer convention).
-            await _acquisition.AcquireLatestNexusAsync(NexusGameIdentity.DarktideDomain, modId);
-
-            // Acknowledge the install: remove this container's known-update entry
-            // immediately (no extra API check), then reload so the new version
-            // shows + the flag clears. The persisted state was the source of the
-            // flag, so clearing it is enough; ApplyKnownUpdateState (inside
-            // Reload) reads the cleared state.
-            AcknowledgeUpdateAndReload(row.ContainerId);
-            _session.HasPendingChanges = true;
-
-            _logger.LogInformation("Updated mod {Container} to the latest Nexus release.", row.ContainerId);
+            // thread so Reload + the failure-path ShowAlertAsync below run on
+            // the UI thread (the UI-layer convention). The expected version is
+            // the row's resolved version (what the row was built from); the
+            // installer revalidates it against the container's current state
+            // inside the gate. The candidates are the entries the last Reload
+            // loaded.
+            outcome = await _installer.TryInstallLatestAsync(
+                profileId,
+                row.ContainerId,
+                modId,
+                row.ActualVersion,
+                _loadedEntries.ToCandidates());
         }
         catch (OperationCanceledException)
         {
@@ -1489,18 +1347,31 @@ public partial class ModListViewModel : ObservableObject
             // no alert. Re-throwing would surface as an unobserved exception on
             // the fire-and-forget AsyncRelayCommand, so swallow instead.
             _logger.LogInformation("Update of mod {Container} was cancelled.", row.ContainerId);
+            return;
         }
-        catch (Exception ex)
+
+        switch (outcome.Status)
         {
-            _logger.LogError(ex, "Update of mod {Container} failed.", row.ContainerId);
-            await _dialogs.ShowAlertAsync(
-                _localization["Update_FailedTitle"],
-                _localization.Format("Update_FailedMessage", row.Name) + " " + ex.Message);
-        }
-        finally
-        {
-            row.IsUpdating = false;
-            scope?.Dispose();
+            case ModInstallStatus.Installed:
+                _session.HasPendingChanges = true;
+                Reload();
+                _logger.LogInformation("Updated mod {Container} to the latest Nexus release.", row.ContainerId);
+                break;
+
+            case ModInstallStatus.Failed:
+                _logger.LogError(
+                    outcome.Exception, "Update of mod {Container} failed.", row.ContainerId);
+                await _dialogs.ShowAlertAsync(
+                    _localization["Update_FailedTitle"],
+                    _localization.Format("Update_FailedMessage", row.Name) + " "
+                        + (outcome.Exception?.Message ?? outcome.Reason));
+                break;
+
+            default:
+                // Busy (another install is in flight: a clean no-op) +
+                // NotEligible (a stale flag; the installer logged the reason +
+                // the next hydration self-heals it out). Silent.
+                break;
         }
     }
 

@@ -386,10 +386,12 @@ covers EVERY Nexus-sourced mod, Latest AND Pinned; the Nexus name wins, identity
 + `NexusSource` are flagged), and `UntrackedSource` mods are not queried.
 
 ```csharp
+public sealed record ModListCandidate(Guid ContainerId, ModVersionPolicy Policy);
+
 public interface IUpdateCheckService
 {
-    Task<UpdateCheckResult> CheckAsync(Guid profileId, CancellationToken ct = default);             // periodic (v2 GraphQL batch query)
-    Task<UpdateCheckResult> CheckThoroughAsync(Guid profileId, CancellationToken ct = default);      // same query, Thorough = true
+    Task<UpdateCheckResult> CheckAsync(Guid profileId, IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default);             // periodic (v2 GraphQL batch query)
+    Task<UpdateCheckResult> CheckThoroughAsync(Guid profileId, IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default);      // same query, Thorough = true
     UpdateCheckResult? LastResult { get; }
     event EventHandler<UpdateCheckResult?>? CheckCompleted;
 }
@@ -413,19 +415,25 @@ public sealed record ModUpdateInfo(
 public enum CheckOutcome { Failed, Success, NoAuth, NoNexusMods, RateLimited }
 ```
 
-- `CheckAsync(profileId)`: the periodic check (see flow below). Queries the v2
-  GraphQL `modsByUid` batch endpoint (1 API call for all Nexus mods) and
-  flags each Latest + Nexus mod via three tiers (tier 1
-  `viewerUpdateAvailable`, tier 2 a mod-level version compare, tier 3 a
-  latest-file-version confirmation that clears tier-2-only false positives).
-  After the tier logic, syncs every Nexus mod's display name to its current
-  Nexus name from the same batch response (Pinned mods included). The result
-  has `Thorough = false`. Best-effort, never throws for non-cancellation
-  failures: a transient API failure, missing auth, or exhausted rate limit all
-  surface as an empty result. Cancellation (`OperationCanceledException`)
-  propagates, and a `KeyNotFoundException` from `IProfileService.GetModList`
-  (an unknown profile id) propagates; the caller owns passing a valid id.
-- `CheckThoroughAsync(profileId)`: runs the same v2 batch query as
+- `CheckAsync(profileId, candidates)`: the periodic check (see flow below).
+  The candidates are the profile's mod-list entries (container id + current
+  policy), mapped at the call site by the UI layer (which references both
+  libraries); Integrations holds no Profiles dependency. `profileId` is used
+  only as the update-state key (the persisted known-update snapshot + the
+  recorded result are per-profile). Queries the v2 GraphQL `modsByUid` batch
+  endpoint (1 API call for all Nexus mods) and flags each Latest + Nexus
+  candidate via three tiers (tier 1 `viewerUpdateAvailable`, tier 2 a mod-level
+  version compare, tier 3 a latest-file-version confirmation that clears
+  tier-2-only false positives). After the tier logic, syncs every Nexus mod's
+  display name to its current Nexus name from the same batch response (Pinned
+  mods included). An empty candidate list short-circuits to the `NoNexusMods`
+  outcome (never a failure): local truth proves no applicable Nexus update can
+  exist. Best-effort, never throws for non-cancellation failures: a transient
+  API failure, missing auth, or exhausted rate limit all surface as an empty
+  result. Cancellation (`OperationCanceledException`) propagates. The caller
+  owns profile validity: an unreadable profile surfaces at the caller's
+  candidate pull (the runner logs + skips), never here.
+- `CheckThoroughAsync(profileId, candidates)`: runs the same v2 batch query as
   `CheckAsync`; the two differ only in the result's `Thorough` flag (`true`
   here). Kept for interface compatibility; both paths run the same query, so
   the flag no longer signals a coverage difference.
@@ -472,15 +480,16 @@ the `Thorough` flag on the result).
 1. **Auth gate.** Read `IConfigLoader.Load().Integrations.Nexus.AuthMethod`. If
    `None` -> return an empty result (no API call; the user hasn't configured
    Nexus).
-2. **Profile mods.** `IProfileService.GetModList(profileId)` -> the entries.
- 3. **Enumerate the Nexus subset.** For each entry, resolve the container via
-    `IModRepository.Get`. Keep every `NexusSource` entry (Latest AND Pinned).
+2. **Enumerate the Nexus subset of the candidates.** For each candidate,
+   resolve the container via `IModRepository.Get`. Keep every `NexusSource`
+   candidate (Latest AND Pinned).
     Skip `UntrackedSource` and `LinkedSource` (linked mods have no Nexus
     identity and no versions, so they never enter the check). Derive a
     `checkable` subset filtered to
     `LatestPolicy` (the flag logic is scoped to it; Pinned mods are frozen
-    version-wise and never flagged). If no Nexus mods at all -> empty result (API
-    not called). A profile with only Pinned Nexus mods still runs the batch (for
+    version-wise and never flagged). If no Nexus candidates at all -> empty
+    result (API not called; an empty candidate list lands here too). A profile
+    with only Pinned Nexus mods still runs the batch (for
     the name sync).
 4. **Query Nexus v2 GraphQL (1 call for ALL Nexus mods).**
    `INexusClient.CheckUpdatesGraphQlAsync(NexusGameIdentity.DarktideGameId, modIds, ct)`
@@ -547,7 +556,8 @@ public interface IUpdateStateStore
 {
     void RecordResult(Guid profileId, UpdateCheckResult result);
     void AcknowledgeInstall(Guid profileId, Guid containerId);
-    IReadOnlyCollection<Guid> GetKnownUpdateContainerIds(Guid profileId);
+    IReadOnlyCollection<Guid> GetKnownUpdateContainerIds(
+        Guid profileId, IReadOnlyList<ModListCandidate> candidates);
 }
 ```
 
@@ -562,35 +572,115 @@ public interface IUpdateStateStore
   flag without an extra API check.
 - `GetKnownUpdateContainerIds`: reads the persisted snapshots for a profile,
   filters out stale ones (removed / pinned / source-changed / version-changed
-  since the flag was recorded), writes the filtered set back (self-heal), and
-  returns the container ids that remain flagged. The UI calls this on reload +
-  on profile switch + after an acknowledgement + after a check completes.
+  relative to the caller's candidates + the repository), writes the filtered set
+  back (self-heal), and returns the container ids that remain flagged. The
+  caller passes the profile entries it already holds (mapped to candidates the
+  same way as the check); the store pulls no profile state itself. The UI calls
+  this on reload + on profile switch + after an acknowledgement + after a check
+  completes.
 
 The persisted shape is `KnownUpdateSnapshot` (in General; a plain serializable
 DTO) backed by `IKnownUpdateState.KnownUpdates` (a profile-keyed map in
 `app-state.json`). Restored/persisted data is never re-published as a fresh
 authoritative result; the UI reads it directly to render flags.
 
+### Eligibility rules (`UpdateEligibility`)
+
+The four known-update eligibility rules live in one pure static evaluator,
+`UpdateEligibility.IsEligible(candidate, container, expectedModId,
+expectedVersion, out reason)`, shared by every consumer that must decide
+whether a recorded flag still applies: the state store's hydration self-heal
+(`GetKnownUpdateContainerIds`) and the mod-update installer's in-gate
+revalidation. A flag stays eligible only while:
+
+1. the container is still a member of the caller's candidate list,
+2. the entry is still on `LatestPolicy`,
+3. the container still resolves to a `NexusSource` with the recorded mod id, and
+4. the installed version (resolved via `ModContainer.ResolveVersion` with a
+   `LatestPolicy`) still matches the recorded version case-insensitively.
+
+A rejection carries a short machine-readable reason ("removed from profile",
+"re-pinned", "container gone", "source changed", "version changed") for
+logging. The evaluator is pure: no services, no I/O, no clock; everything
+arrives as arguments.
+
+## Mod-update installer
+
+`IModUpdateInstaller` is the single Premium install path, shared by the manual
+per-row update action (the UI's Update command) and the automatic Premium batch
+(the UI's `IAutomaticUpdateService`). Routing both through one service is what
+enforces the global one-install-at-a-time guarantee and gives both paths one
+acknowledge + progress contract.
+
+```csharp
+public interface IModUpdateInstaller
+{
+    bool IsBusy { get; }
+    event EventHandler? BusyChanged;
+    event EventHandler<ModUpdateProgressEventArgs>? ModUpdateProgress;
+
+    Task<ModInstallOutcome> TryInstallLatestAsync(   // MANUAL: refuses politely when gated
+        Guid profileId, Guid containerId, int modId, string expectedVersion,
+        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default);
+    Task<ModInstallOutcome> InstallLatestAsync(      // AUTOMATIC: awaits its turn
+        Guid profileId, Guid containerId, int modId, string expectedVersion,
+        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default);
+}
+
+public sealed record ModInstallOutcome(
+    ModInstallStatus Status,    // Installed / Busy / NotEligible / Failed
+    string Reason = "",
+    Exception? Exception = null);   // only on Failed
+```
+
+- `UpdateCoordinator` (this library) is the gate: a single-slot semaphore held
+  for the install's duration. `TryInstallLatestAsync` uses its non-blocking
+  acquire (a held gate -> `Busy`, nothing touched); `InstallLatestAsync` awaits
+  it (a sequential batch waits its turn behind a manual install).
+- Eligibility is revalidated INSIDE the gate via `UpdateEligibility` against
+  the caller's candidates: a stale flag (removed / re-pinned / source-changed /
+  version-changed since the flag was recorded) -> `NotEligible` + the reason,
+  nothing installed. The manual caller passes the row's resolved version as
+  `expectedVersion`; the automatic caller passes the check result's recorded
+  `CurrentVersion`.
+- On success the installer acquires the latest MAIN release
+  (`IModAcquisitionService.AcquireLatestNexusAsync` over the Darktide domain)
+  and calls `IUpdateStateStore.AcknowledgeInstall` exactly once, so the flag
+  clears without an extra API check. Busy / NotEligible / Failed / cancelled
+  attempts never acknowledge.
+- `ModUpdateProgress` brackets every attempt (active=true after the gate is
+  acquired, active=false in the finally) so a subscriber's spinner can never
+  get stuck; `BusyChanged` / `IsBusy` mirror the coordinator.
+- A non-cancellation failure -> `Failed` carrying the exception (the manual
+  alert keeps its exact message body); `OperationCanceledException` propagates
+  so each caller keeps its own cancellation posture.
+
 ### UI wiring (`UpdateCheckRunner`)
 
 The triggers that fire the checks live in `UpdateCheckRunner` in `ui/Session/`,
-NOT in the Integrations library (the service itself has no knowledge of profile
-switches; it just takes a `profileId` + checks). The runner is a UI-layer
-singleton that subscribes to `IProfileSession.PropertyChanged` filtered to
-`ActiveProfileId` only (it ignores `IsRunning`, which the polling timer drives
-every few seconds) and fires `CheckAsync` fire-and-forget via `Task.Run` on
-three triggers: startup (the restored active id), an active-profile switch, and
-the periodic timer (every `AutoUpdateCheckIntervalMinutes` when
-`AutoUpdateCheckEnabled` is on; the only gated trigger). A fourth trigger, the
-manual "check now" affordance on the mod list, fires `CheckThoroughAsync` via an
-awaitable `CheckNowAsync()` (the mod-list VM awaits it to drive an
-`IsCheckingNow` spinner; the await now also covers the chained
-`IAutomaticUpdateService` batch, so the manual spinner stays active through the
-installations). Registered + started from `CuratorComposition` after the
-provider is built (best-effort: a wiring failure is logged + swallowed,
-never blocks startup). The mod-list UI subscribes to `CheckCompleted` and reads
-the profile-scoped `IUpdateStateStore` (not `LastResult`) to render per-row
-update flags.
+NOT in the Integrations library (the service has no knowledge of profile
+switches or of the profile store; it takes the candidate set + the state-key
+profile id + checks). The runner is a UI-layer singleton that owns the
+candidate pull: each fire reads the profile's mod list through
+`IProfileService` inside its thread-pool task + maps the entries to
+`ModListCandidate`s at the call site, so Integrations holds no Profiles
+dependency. A pull failure (a deleted or unreadable profile) is logged + the
+run skipped: no check call, no `LastResult` mutation. The runner subscribes to
+`IProfileSession.PropertyChanged` filtered to `ActiveProfileId` only (it ignores
+`IsRunning`, which the polling timer drives every few seconds) and fires
+`CheckAsync` fire-and-forget via `Task.Run` on three triggers: startup (the
+restored active id), an active-profile switch, and the periodic timer (every
+`AutoUpdateCheckIntervalMinutes` when `AutoUpdateCheckEnabled` is on; the only
+gated trigger). A fourth trigger, the manual "check now" affordance on the mod
+list, fires `CheckThoroughAsync` via an awaitable `CheckNowAsync()` (the
+mod-list VM awaits it to drive an `IsCheckingNow` spinner; the await now also
+covers the chained `IAutomaticUpdateService` batch, so the manual spinner stays
+active through the installations). Registered + started from
+`CuratorComposition` after the provider is built (best-effort: a wiring failure
+is logged + swallowed, never blocks startup). The mod-list UI subscribes to
+`CheckCompleted` and reads the profile-scoped `IUpdateStateStore` (not
+`LastResult`) to render per-row update flags, passing the entries its last
+reload loaded as the hydration candidates.
 
 ## Metadata backfill service
 
@@ -732,17 +822,22 @@ Registers:
   extract + place orchestrator over `INexusClient` + `IModImportService` + a
   plain `HttpClient` from the factory for the CDN download).
 - `IUpdateCheckService` -> `UpdateCheckService` (singleton; the Nexus-only
-  update check. Depends on `INexusClient` + `IProfileService` + `IModRepository`
-  + `IConfigLoader` + `IUpdateStateStore`; the Integrations -> Profiles project
-  reference exists for this service).
+  update check. Depends on `INexusClient` + `IModRepository` + `IConfigLoader` +
+  `IUpdateStateStore`; the check set arrives as caller-mapped
+  `ModListCandidate`s, so Integrations holds no Profiles reference).
 - `INexusModMetadataService` -> `NexusModMetadataService` (singleton; the
   missing-only display-metadata backfill over the stable v1 endpoint. Depends on
   `INexusClient` + `IModRepository` + `IConfigLoader` +
   `INexusMetadataBackfillState`;
   holds the semaphore that serializes overlapping passes).
 - `IUpdateStateStore` -> `UpdateStateStore` (singleton; the profile-scoped
-  known-update persistence rules over `IKnownUpdateState.KnownUpdates` + the live
-  profile/repository for hydration self-heal).
+  known-update persistence rules over `IKnownUpdateState.KnownUpdates` + the
+  caller's candidates + the repository for hydration self-heal).
+- `UpdateCoordinator` (singleton; the global one-install-at-a-time gate, a
+  single-slot semaphore held for the app lifetime).
+- `IModUpdateInstaller` -> `ModUpdateInstaller` (singleton; the single Premium
+  install path over `IModAcquisitionService` + `IUpdateStateStore` +
+  `IModRepository` + `UpdateCoordinator`).
 
 The OAuth factory's token store + the service's token store are the SAME
 `NexusOAuthTokenStore` instance (matches production wiring). The store depends
@@ -759,10 +854,12 @@ view. No construction-time cycle.
   `general` (`IConfigLoader`, `INexusMetadataBackfillState` for the metadata-backfill
   gate),
   `mods` (`IModImportService`, `NexusSource`, `IModRepository` /
-  `ModContainer` / `ModVersion` for the acquisition + update-check services,
-  `ModDisplayMetadata` for the acquisition capture + the metadata backfill),
-  `profiles` (`IProfileService` for the update-check
-  service).
+  `ModContainer` / `ModVersion` / `ModVersionPolicy` for the acquisition +
+  update-check + update-install services, `ModDisplayMetadata` for the
+  acquisition capture + the metadata backfill). Integrations references no
+  Profiles library: the update family takes the profile's mod-list entries as
+  `ModListCandidate` call parameters, mapped by the UI layer (which references
+  both libraries).
 - **NuGet:** `Microsoft.Extensions.Http` (`AddHttpClient<TClient,TImpl>` +
   `IHttpClientFactory`), `Microsoft.Extensions.DependencyInjection.Abstractions`,
   `Microsoft.Extensions.Logging.Abstractions`, `Duende.IdentityModel.OidcClient`
@@ -804,9 +901,9 @@ view. No construction-time cycle.
   import-failure temp cleanup, progress reporting, cancellation, and the
   latest-MAIN-file resolution + null-nxm-token forward + no-MAIN-file throw for
   `AcquireLatestNexusAsync`.
-- **`UpdateCheckService`** against a fake `INexusClient` + a fake
-  `IProfileService` + a fake `IModRepository` + the `FakeConfigLoader`: correct
-   flagging (`viewerUpdateAvailable == true` flags, `false` + `null` do not),
+- **`UpdateCheckService`** against a fake `INexusClient` + caller-built
+  `ModListCandidate` batches + a fake `IModRepository` + the `FakeConfigLoader`:
+   correct flagging (`viewerUpdateAvailable == true` flags, `false` + `null` do not),
    `PinnedPolicy` (flag-wise) / `UntrackedSource` / `LinkedSource` skipping,
   no-auth short-circuit (no API call), no-Nexus-mods short-circuit,
   rate-limit guard (the `> 0` guard prevents a false positive on `NexusRateLimits.Unknown`,
@@ -827,6 +924,17 @@ view. No construction-time cycle.
   game id + mod ids, string + numeric UID deserialization, GraphQL-error
   surfacing (200 OK body
   with errors), + rate-limit exception.
+- **`UpdateEligibility`** -- the four rules evaluated directly: the eligible
+  baseline, each rejection reason (removed / re-pinned / container gone /
+  source changed by id + by source type / version changed), and the
+  case-insensitive version match.
+- **`ModUpdateInstaller`** against fakes: the success path (acquire over the
+  Darktide domain + acknowledge exactly once + the progress bracket), the gate
+  (Try refuses politely + touches nothing when held; InstallLatest awaits its
+  turn; IsBusy/BusyChanged mirror the coordinator), the in-gate revalidation
+  (removed / version-changed / re-pinned -> NotEligible with the reason,
+  nothing installed), the failure outcome (the exception preserved, no
+  acknowledge), and cancellation (propagates, no acknowledge, spinner closed).
 - **`NexusModMetadataService`** against a fake `INexusClient` + a fake
   `IModRepository` + the `FakeConfigLoader` + a fake/real backfill state:
   the auth gate (None returns empty, no API call), the persisted 24-hour gate

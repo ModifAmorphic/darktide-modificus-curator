@@ -1,11 +1,11 @@
-namespace Modificus.Curator.UI.Session;
+namespace Modificus.Curator.Integrations;
 
 /// <summary>
 /// Coordinates mod-update installs so only one runs at a time globally, shared
-/// between the manual per-row update action (<see cref="ViewModels.ModListViewModel"/>'s
-/// Update command) and the automatic Premium updater (<see cref="IAutomaticUpdateService"/>).
-/// Keeps the manual click and an automatic batch from installing the same mod
-/// concurrently without relying on per-VM flags.
+/// between the manual per-row update action and the automatic Premium updater
+/// (both through <see cref="IModUpdateInstaller"/>). Keeps a manual click and
+/// an automatic batch from installing the same mod concurrently without
+/// relying on per-VM flags.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -13,14 +13,12 @@ namespace Modificus.Curator.UI.Session;
 /// manual path uses <see cref="TryAcquire"/> (non-blocking: a second click while
 /// an install runs is a clean no-op); the automatic path uses
 /// <see cref="AcquireAsync"/> (awaits its turn so a sequential batch processes
-/// one mod at a time, but the runner serializes the batch already so in practice
+/// one mod at a time, but the caller serializes the batch already so in practice
 /// the await is uncontended).</para>
 /// <para>
 /// <b>Busy notification.</b> <see cref="IsBusy"/> flips on acquire + release and
 /// raises <see cref="BusyChanged"/> (on the acquiring/releasing thread).
-/// <see cref="ViewModels.ModListViewModel"/> subscribes, marshals to the UI
-/// thread, and pushes the flag down to each row so the per-row enabled state
-/// reflects "one install at a time" without each row polling.</para>
+/// Subscribers marshal to the UI thread if they touch UI state.</para>
 /// <para>
 /// <b>Reentrancy.</b> The same thread acquiring twice would deadlock the
 /// semaphore; both call sites acquire-then-release in a tight try/finally scope
@@ -67,10 +65,8 @@ public sealed class UpdateCoordinator
 
     /// <summary>
     /// Awaiting acquire for the automatic batch. Resolves when the gate is free
-    /// (the runner serializes a batch, so in practice this is uncontended). The
+    /// (the caller serializes a batch, so in practice this is uncontended). The
     /// returned scope's <see cref="IDisposable.Dispose"/> releases the gate.
-    /// Stays on the captured (UI) context: this is UI-layer code outside any
-    /// <c>Task.Run</c> block, so no <c>ConfigureAwait(false)</c>.
     /// </summary>
     public async Task<IDisposable> AcquireAsync(CancellationToken ct = default)
     {

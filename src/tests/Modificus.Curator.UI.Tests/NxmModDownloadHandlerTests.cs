@@ -180,11 +180,13 @@ public sealed class NxmModDownloadHandlerTests
     }
 
     [Fact]
-    public async Task HandleAsync_happy_path_invokes_refresh_with_the_acquired_container_id()
+    public async Task HandleAsync_happy_path_acknowledges_and_reloads_the_mod_list()
     {
-        // The refresh callback is forwarded the container id (not just called)
-        // so the mod list can clear the stale UpdateAvailable flag for that
-        // specific container after an nxm install/reinstall.
+        // The nxm path owns the same acknowledge + reload contract as the
+        // in-app installer: the persisted known-update entry for the acquired
+        // container is cleared directly through the update-state store (no
+        // extra API check), then the list reloads through the narrow
+        // IModListRefresh seam so the new version + cleared flag show.
         var containerId = Guid.NewGuid();
         var versionId = "version-folder-1234";
         var acquisition = new FakeAcquisitionService
@@ -193,21 +195,26 @@ public sealed class NxmModDownloadHandlerTests
             Session = { ActiveProfileId = ProfileId },
             NextResult = (containerId, versionId),
         };
-        Guid? refreshedContainerId = null;
+        var updateState = new FakeUpdateStateStore();
+        var reloads = 0;
         var handler = new NxmModDownloadHandler(
             action => action(),
             acquisition,
             acquisition.Session,
             acquisition.Profiles,
             acquisition.Loader,
+            updateState,
+            new RefreshRecorder(() => reloads++),
             acquisition.Dialogs,
             Localization,
-            NullLogger<NxmModDownloadHandler>.Instance,
-            refreshModList: id => refreshedContainerId = id);
+            NullLogger<NxmModDownloadHandler>.Instance);
 
         await handler.HandleAsync(SampleUrl);
 
-        Assert.Equal(containerId, refreshedContainerId);
+        var acknowledge = Assert.Single(updateState.AcknowledgeCalls);
+        Assert.Equal(ProfileId, acknowledge.ProfileId);
+        Assert.Equal(containerId, acknowledge.ContainerId);
+        Assert.Equal(1, reloads);
     }
 
     // ---- error path --------------------------------------------------------
@@ -295,6 +302,8 @@ public sealed class NxmModDownloadHandlerTests
             acquisition.Session,
             acquisition.Profiles,
             acquisition.Loader,
+            new FakeUpdateStateStore(),
+            new RefreshRecorder(),
             acquisition.Dialogs,
             Localization,
             NullLogger<NxmModDownloadHandler>.Instance);
@@ -331,6 +340,8 @@ public sealed class NxmModDownloadHandlerTests
             bundle.Session,
             bundle.Profiles,
             bundle.Loader,
+            new FakeUpdateStateStore(),
+            new RefreshRecorder(),
             bundle.Dialogs,
             Localization,
             NullLogger<NxmModDownloadHandler>.Instance);
@@ -349,6 +360,25 @@ public sealed class NxmModDownloadHandlerTests
                 },
             },
         };
+}
+
+/// <summary>
+/// A counting <see cref="IModListRefresh"/> double: records Reload calls via
+/// the optional callback so a test can assert the handler reloaded the list.
+/// </summary>
+internal sealed class RefreshRecorder : IModListRefresh
+{
+    private readonly Action? _onReload;
+
+    public RefreshRecorder(Action? onReload = null) => _onReload = onReload;
+
+    public int Reloads { get; private set; }
+
+    public void Reload()
+    {
+        Reloads++;
+        _onReload?.Invoke();
+    }
 }
 
 /// <summary>

@@ -34,7 +34,7 @@ public sealed class ModListGamingModeTests
         FakeNexusAuthService? auth = null,
         FakeDialogService? dialogs = null,
         FakeNxmRegistrationState? nxmRegistration = null,
-        FakeModAcquisitionService? acquisition = null,
+        FakeModUpdateInstaller? installer = null,
         FakeExternalLauncher? launcher = null)
     {
         var a = Profile("Alpha");
@@ -58,7 +58,7 @@ public sealed class ModListGamingModeTests
             auth: auth,
             dialogs: dialogs,
             nxmRegistration: nxmRegistration,
-            acquisition: acquisition,
+            installer: installer,
             launcher: launcher,
             gamingMode: gamingMode);
         return (vm, session);
@@ -280,7 +280,7 @@ public sealed class ModListGamingModeTests
         // coordinator with no guidance alert and no browser.
         var launches = new List<Uri>();
         var dialogs = new FakeDialogService();
-        var acquisition = new FakeModAcquisitionService();
+        var installer = new FakeModUpdateInstaller();
         var auth = new FakeNexusAuthService
         {
             State = new NexusAuthState(NexusAuthMethod.OAuth, "premium", IsPremium: true),
@@ -289,7 +289,7 @@ public sealed class ModListGamingModeTests
             withNexusRow: true,
             auth: auth,
             dialogs: dialogs,
-            acquisition: acquisition,
+            installer: installer,
             launcher: FakeExternalLauncher.RecordingUris(launches));
         var row = vm.Mods.Single(m => m.Name == "SoundPack");
         Assert.True(vm.IsPremiumUser);
@@ -297,9 +297,9 @@ public sealed class ModListGamingModeTests
 
         await vm.UpdateCommand.ExecuteAsync(row);
 
-        var call = Assert.Single(acquisition.LatestNexusCalls);
-        Assert.Equal("warhammer40kdarktide", call.GameDomain);
+        var call = Assert.Single(installer.Calls);
         Assert.Equal(1234, call.ModId);
+        Assert.Equal(row.ContainerId, call.ContainerId);
         Assert.Empty(launches);
         Assert.Empty(dialogs.AlertCalls);
     }

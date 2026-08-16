@@ -3,6 +3,7 @@ using System.Linq;
 using Modificus.Curator.Config;
 using Modificus.Curator.General;
 using Modificus.Curator.Integrations;
+using Modificus.Curator.Profiles;
 using Microsoft.Extensions.Logging;
 
 namespace Modificus.Curator.UI.Session;
@@ -10,13 +11,18 @@ namespace Modificus.Curator.UI.Session;
 /// <summary>
 /// The UI-layer glue between <see cref="IProfileSession"/> (the active-profile
 /// authority) and <see cref="IUpdateCheckService"/> (the Integrations update
-/// check). Fires a background update check on three triggers: (1) startup, when
+/// check). Owns the candidate pull: on every fire it reads the profile's
+/// mod list through <see cref="IProfileService"/> + maps the entries to
+/// <see cref="ModListCandidate"/> at the call site, so Integrations holds no
+/// Profiles dependency and the runner is the one place a profile-validity
+/// problem surfaces (a pull failure is logged + skipped, not a failed check).
+/// Fires a background update check on three triggers: (1) startup, when
 /// the session restores the persisted active id; (2) an active-profile switch;
 /// and (3) a periodic timer (every <c>AutoUpdateCheckIntervalMinutes</c> when
 /// <c>AutoUpdateCheckEnabled</c> is on). All three fire the Month-only
 /// <see cref="IUpdateCheckService.CheckAsync"/> (cheap, one API call) +
-/// discard the task. A fourth trigger, the manual "check now" affordance on the
-/// mod list, routes through <see cref="CheckNowAsync"/> + fires the thorough
+/// discard the task. A fourth trigger, the manual "check now" affordance on
+/// the mod list, routes through <see cref="CheckNowAsync"/> + fires the thorough
 /// <see cref="IUpdateCheckService.CheckThoroughAsync"/> (the per-mod pass that
 /// also catches mods outside the Month window); its <see cref="Task"/> is
 /// awaitable so the list VM can drive an <c>IsCheckingNow</c> affordance while
@@ -124,6 +130,7 @@ public sealed class UpdateCheckRunner
     public static readonly TimeSpan TickInterval = TimeSpan.FromMinutes(1);
 
     private readonly IProfileSession _session;
+    private readonly IProfileService _profiles;
     private readonly IUpdateCheckService _updateCheck;
     private readonly IConfigLoader _configLoader;
     private readonly IUpdateCheckScheduleState _appState;
@@ -169,8 +176,9 @@ public sealed class UpdateCheckRunner
     // the front on every access (NextManualRefreshAllowedAt / CanRefreshManually)
     // as they age past ManualRefreshWindow. UI-thread only: CheckNowAsync and
     // the property getter run on the UI thread (the button click routes through
-    // the list VM's CheckForUpdatesNow, and the VM's countdown reads the
-    // property), so no synchronization. PERSISTS across restarts via
+    // the list VM's CheckForUpdatesNow, and the refresh gate reads the property
+    // on each re-evaluation, including each countdown tick), so no
+    // synchronization. PERSISTS across restarts via
     // IUpdateCheckScheduleState.ManualRefreshTimestamps: seeded from the store at Start()
     // (the first access prunes entries aged past the 1-hour window), and written
     // back on every successful manual fire. SEPARATE from the shared
@@ -180,6 +188,10 @@ public sealed class UpdateCheckRunner
     private readonly Queue<DateTimeOffset> _manualRefreshTimes = new();
 
     /// <param name="session">The active-profile authority (fires on load + switch).</param>
+    /// <param name="profiles">The profile service the candidate pull reads the
+    /// profile's mod list through (mapped to
+    /// <see cref="ModListCandidate"/> at the call site; a pull failure is
+    /// logged + skipped, never surfaced as a failed check).</param>
     /// <param name="updateCheck">The Integrations update check entry point.</param>
     /// <param name="configLoader">Read live for the periodic toggle + the interval gate.</param>
     /// <param name="appState">Persists
@@ -198,15 +210,20 @@ public sealed class UpdateCheckRunner
     /// <see cref="DateTimeOffset.UtcNow"/>; tests inject a controllable clock.</param>
     public UpdateCheckRunner(
         IProfileSession session,
+        IProfileService profiles,
         IUpdateCheckService updateCheck,
         IConfigLoader configLoader,
         IUpdateCheckScheduleState appState,
         IAutomaticUpdateService autoUpdate,
         ILogger<UpdateCheckRunner> logger,
         Action<Action>? startTimer = null,
-        Func<DateTimeOffset>? getNow = null)
+        Func<DateTimeOffset>? getNow = null,
+        Action<Action>? invokeOnUi = null,
+        Action<Action>? startCountdownTimer = null,
+        Action? stopCountdownTimer = null)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
+        _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _updateCheck = updateCheck ?? throw new ArgumentNullException(nameof(updateCheck));
         _configLoader = configLoader ?? throw new ArgumentNullException(nameof(configLoader));
         _appState = appState ?? throw new ArgumentNullException(nameof(appState));
@@ -214,7 +231,19 @@ public sealed class UpdateCheckRunner
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _startTimer = startTimer;
         _getNow = getNow ?? (() => DateTimeOffset.UtcNow);
+        RefreshGate = new UpdateRefreshGate(
+            this, invokeOnUi, startCountdownTimer, stopCountdownTimer, _getNow);
     }
+
+    /// <summary>
+    /// The refresh-gate policy for the manual "check now" affordance: the
+    /// rate-limit tracking (fed by every check result this runner captures),
+    /// the manual-throttle read, the effective-reset computation, the shared
+    /// 1-second countdown timer, and the IsRateLimitActive / IsManualThrottled
+    /// / IsRefreshEnabled decisions. The list VM renders this state; it does
+    /// not compute it.
+    /// </summary>
+    public UpdateRefreshGate RefreshGate { get; }
 
     /// <summary>
     /// Subscribes to the session's active-profile changes, starts the periodic
@@ -293,9 +322,13 @@ public sealed class UpdateCheckRunner
     /// path throttles to one per <see cref="ManualRefreshThrottleInterval"/>
     /// (2 minutes). A throttled attempt is a silent no-op: it returns
     /// <see cref="Task.CompletedTask"/> WITHOUT firing, WITHOUT recording a
-    /// timestamp, and WITHOUT stamping <c>_lastCheckAt</c> / persisting. The VM
-    /// reads <see cref="NextManualRefreshAllowedAt"/> after the await to drive the
-    /// countdown tooltip + the button's disabled state.</para>
+    /// timestamp, and WITHOUT stamping <c>_lastCheckAt</c> / persisting. The
+    /// runner-owned <see cref="RefreshGate"/> decides the resulting button
+    /// state: it re-evaluates on every completed manual attempt, whatever the
+    /// outcome (an allowed fire consumed budget even when the run ends without
+    /// a result), and on a blocked attempt's early return. The list VM renders
+    /// the localized countdown tooltip + disabled state from the gate via
+    /// <see cref="UpdateRefreshGate.StateChanged"/>; it computes nothing.</para>
     /// </remarks>
     /// <returns>A <see cref="Task"/> that completes when the thorough check
     /// finishes (success or failure), or <see cref="Task.CompletedTask"/> when
@@ -315,9 +348,10 @@ public sealed class UpdateCheckRunner
         if (!CanRefreshManually(now))
         {
             // Throttled: a blocked attempt consumes nothing (no API call, no
-            // timestamp stamp, no persistence change). The VM reads
-            // NextManualRefreshAllowedAt to drive the countdown tooltip + the
-            // disabled button.
+            // timestamp stamp, no persistence change). Re-evaluate the refresh
+            // gate so the countdown timer engages + listeners re-read the
+            // throttled state.
+            RefreshGate.Reevaluate();
             return Task.CompletedTask;
         }
 
@@ -337,10 +371,13 @@ public sealed class UpdateCheckRunner
     /// The absolute instant the next manual refresh becomes allowed, or
     /// <c>null</c> when the manual path is not throttled (under the free limit,
     /// or the 2-minute cooldown has elapsed). Computed via the injected
-    /// <c>_getNow</c> clock so it is deterministic in tests. The single source of
-    /// truth for both the refresh button's enable state and the countdown
-    /// tooltip: the list VM reads this on every manual attempt (after the await)
-    /// and on each 1-second countdown tick.
+    /// <c>_getNow</c> clock so it is deterministic in tests. The single source
+    /// of the manual-throttle half of the refresh gate's decisions: the
+    /// runner-owned <see cref="RefreshGate"/> reads this on every re-evaluation
+    /// (after every applied check result, after every completed or blocked
+    /// manual attempt, and on each 1-second countdown tick) + folds it into
+    /// <see cref="UpdateRefreshGate.IsManualThrottled"/>; the list VM renders
+    /// the gate's state, it does not read this directly.
     /// </summary>
     /// <remarks>
     /// Prunes the window first (so aged timestamps drop out + the count reflects
@@ -496,6 +533,15 @@ public sealed class UpdateCheckRunner
     /// </summary>
     /// <remarks>
     /// <para>
+    /// <b>The candidate pull runs here.</b> The profile's mod list is read
+    /// through <see cref="IProfileService"/> inside the thread-pool task (a
+    /// disk read must not land on the UI thread) + mapped to candidates. The
+    /// runner owns profile validity now: a pull failure (e.g. the profile was
+    /// deleted between the trigger + the read) is logged + the whole run is
+    /// skipped, matching the old fire-and-forget swallow, so
+    /// <see cref="IUpdateCheckService.LastResult"/> is never mutated by a
+    /// profile-validity problem.</para>
+    /// <para>
     /// <b>Capture the exact result.</b> The check's return value is captured
     /// directly (not re-read from <see cref="IUpdateCheckService.LastResult"/>,
     /// which a concurrent check could have replaced between the call + the
@@ -536,18 +582,36 @@ public sealed class UpdateCheckRunner
         UpdateCheckResult? result = null;
         try
         {
-            // The check runs on a thread-pool task. The INNER awaits use
-            // ConfigureAwait(false) (explicit background-task code, the narrow
-            // documented exception). The OUTER await does NOT, so the
+            // The check (including the candidate pull: a disk read that belongs
+            // on the thread-pool task) runs in the background. The INNER awaits
+            // use ConfigureAwait(false) (explicit background-task code, the
+            // narrow documented exception). The OUTER await does NOT, so the
             // continuation resumes on the captured UI context (the UI-layer
             // convention) before invoking the automatic-update service below.
             result = await Task.Run(async () =>
             {
+                IReadOnlyList<ModListCandidate> candidates;
+                try
+                {
+                    candidates = _profiles.GetModList(profileId).ToCandidates();
+                }
+                catch (Exception ex)
+                {
+                    // The profile could not be read (deleted between the
+                    // trigger + this read, or a disk problem). Skip the whole
+                    // run: no check call, no LastResult mutation. Matches the
+                    // old fire-and-forget swallow for a deleted profile.
+                    _logger.LogInformation(ex,
+                        "Update check for profile {Profile} skipped: the candidate pull failed.",
+                        profileId);
+                    return (UpdateCheckResult?)null;
+                }
+
                 if (thorough)
                 {
-                    return await _updateCheck.CheckThoroughAsync(profileId).ConfigureAwait(false);
+                    return await _updateCheck.CheckThoroughAsync(profileId, candidates).ConfigureAwait(false);
                 }
-                return await _updateCheck.CheckAsync(profileId).ConfigureAwait(false);
+                return await _updateCheck.CheckAsync(profileId, candidates).ConfigureAwait(false);
             });
         }
         catch (OperationCanceledException)
@@ -555,24 +619,26 @@ public sealed class UpdateCheckRunner
             // Defensive only: no cancellation token is wired today (the
             // runner uses the default token), so this does not fire in
             // production. Swallowed silently regardless.
-            return;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex,
                 "Update check for profile {Profile} threw unexpectedly.", profileId);
-            return;
         }
 
         // The thread-pool task returned the result. The outer await resumes on
         // the captured UI context (no ConfigureAwait(false) on it, per the
-        // UI-layer convention). Invoke the automatic-update service here, on the
-        // UI context, so its dialog + event callbacks land on the UI thread +
-        // the manual CheckNow (which awaits this task) keeps its spinner active
-        // through the installations. The service gates itself; a no-op call is
-        // cheap, so no need to pre-filter here.
+        // UI-layer convention). Feed the refresh gate first (every check
+        // result flows through it: the rate-limit tracking + the coupled
+        // button/pill state update even while installs run), then invoke the
+        // automatic-update service here, on the UI context, so its dialog +
+        // event callbacks land on the UI thread + the manual CheckNow (which
+        // awaits this task) keeps its spinner active through the installations.
+        // The service gates itself; a no-op call is cheap, so no need to
+        // pre-filter here.
         if (result is not null)
         {
+            RefreshGate.ApplyResult(result);
             try
             {
                 await _autoUpdate.RunAfterCheckAsync(result, profileId);
@@ -589,6 +655,16 @@ public sealed class UpdateCheckRunner
                 _logger.LogError(ex,
                     "Automatic update batch for profile {Profile} threw unexpectedly.", profileId);
             }
+        }
+        else
+        {
+            // The run ended without a result: the candidate pull failed, or
+            // the belt-and-suspenders catch above swallowed an unexpected
+            // throw. A manual fire consumed sliding-window budget BEFORE the
+            // run started, so the gate still owes a re-evaluation; a null
+            // result changes no rate-limit tracking, so a plain re-evaluate
+            // (not ApplyResult) is the full feed.
+            RefreshGate.Reevaluate();
         }
     }
 }

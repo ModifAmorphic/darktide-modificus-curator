@@ -71,9 +71,10 @@ internal sealed class NxmModDownloadHandler : INxmModDownloadHandler
     private readonly IProfileSession _session;
     private readonly IProfileService _profileService;
     private readonly IConfigLoader _configLoader;
+    private readonly IUpdateStateStore _updateState;
+    private readonly IModListRefresh _modListRefresh;
     private readonly IDialogService _dialogs;
     private readonly LocalizationService _localization;
-    private readonly Action<Guid>? _refreshModList;
     private readonly ILogger<NxmModDownloadHandler> _logger;
 
     public NxmModDownloadHandler(
@@ -82,20 +83,22 @@ internal sealed class NxmModDownloadHandler : INxmModDownloadHandler
         IProfileSession session,
         IProfileService profileService,
         IConfigLoader configLoader,
+        IUpdateStateStore updateState,
+        IModListRefresh modListRefresh,
         IDialogService dialogs,
         LocalizationService localization,
-        ILogger<NxmModDownloadHandler> logger,
-        Action<Guid>? refreshModList = null)
+        ILogger<NxmModDownloadHandler> logger)
     {
         _invokeOnUi = invokeOnUi ?? throw new ArgumentNullException(nameof(invokeOnUi));
         _acquisition = acquisition ?? throw new ArgumentNullException(nameof(acquisition));
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _profileService = profileService ?? throw new ArgumentNullException(nameof(profileService));
         _configLoader = configLoader ?? throw new ArgumentNullException(nameof(configLoader));
+        _updateState = updateState ?? throw new ArgumentNullException(nameof(updateState));
+        _modListRefresh = modListRefresh ?? throw new ArgumentNullException(nameof(modListRefresh));
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
         _localization = localization ?? throw new ArgumentNullException(nameof(localization));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _refreshModList = refreshModList;
     }
 
     /// <inheritdoc />
@@ -155,17 +158,27 @@ internal sealed class NxmModDownloadHandler : INxmModDownloadHandler
 
             _profileService.AddMod(profileId.Value, containerId, ModVersionPolicy.Latest);
 
+            // Acknowledge the install: clear the persisted known-update entry
+            // for this container directly through the update-state store (no
+            // extra API check), so the stale known-update state (recorded
+            // before the version change) does not re-apply the flag on the
+            // reload below. The next authoritative check reconciles naturally.
+            try
+            {
+                _updateState.AcknowledgeInstall(profileId.Value, containerId);
+            }
+            catch (Exception ex)
+            {
+                // Defensive: AcknowledgeInstall should not throw, but a
+                // persistence failure must not block the reload.
+                _logger.LogWarning(ex,
+                    "Acknowledging update for container {Container} failed; the next check reconciles.",
+                    containerId);
+            }
+
             // Refresh the mod list on the UI thread so the newly-added (or
             // reinstalled) mod appears immediately without a profile switch.
-            // The container id is forwarded so the refresh can also acknowledge
-            // the install: clear the persisted known-update entry for this
-            // container immediately (no extra API check), so the stale
-            // known-update state (recorded before the version change) does not
-            // re-apply the flag on the reload.
-            if (_refreshModList is not null)
-            {
-                await _invokeOnUi(() => { _refreshModList(containerId); return Task.CompletedTask; });
-            }
+            await _invokeOnUi(() => { _modListRefresh.Reload(); return Task.CompletedTask; });
 
             _logger.LogInformation(
                 "Acquired Nexus mod {Mod} file {File} into profile {Profile} (container {Container}, version {Version}).",

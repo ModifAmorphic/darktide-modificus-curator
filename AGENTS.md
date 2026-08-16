@@ -481,7 +481,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           window shows);
                           `IModAcquisitionService` (download + extract + place
                           orchestrator in Integrations) + the real `NxmModDownloadHandler` (in UI,
-                          coordinating IDialogService + IProfileSession + Dispatcher.UIThread) that
+                          coordinating IDialogService + IProfileSession + Dispatcher.UIThread,
+                          acknowledging a successful acquisition via IUpdateStateStore + reloading
+                          the list via the one-member `IModListRefresh` (ui/Session/) implemented by
+                          ModListViewModel + forwarded by the composition root) that
                           replaces the no-op default via DI last-registration-wins, registered after
                           AddNxm() in CuratorComposition;
                           the shared `INxmRegistrationState` (ui/Session/, an
@@ -518,20 +521,30 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           unverified update action, non-Premium DMF prompt,
                           the Mods empty-state Nexus hint swaps to Desktop
                           Mode guidance);
-                          `UpdateCheckRunner` (ui/Session/) the
-                          UI-layer glue that fires `IUpdateCheckService.CheckAsync`
-                          fire-and-forget on the three automatic triggers
-                          (startup-with-restored-id + active-profile switch via
-                          IProfileSession.PropertyChanged filtered to
-                          ActiveProfileId + a periodic timer), all interval-gated
-                          via a shared last-check persisted to
-                          `IUpdateCheckScheduleState.LastUpdateCheckUtc` (so a close/reopen
-                          loop does not fire a call per launch); the
-                          `AutoUpdateCheckEnabled` toggle gates ONLY the periodic
-                          timer, and the manual `CheckNowAsync` carries its own
-                          sliding-window throttle (10 free/hour then 1/2min,
-                          independent of the interval gate); registered + started
-                          best-effort from CuratorComposition);
+                           `UpdateCheckRunner` (ui/Session/) the
+                           UI-layer glue that fires `IUpdateCheckService.CheckAsync`
+                           fire-and-forget on the three automatic triggers
+                           (startup-with-restored-id + active-profile switch via
+                           IProfileSession.PropertyChanged filtered to
+                           ActiveProfileId + a periodic timer), all interval-gated
+                           via a shared last-check persisted to
+                           `IUpdateCheckScheduleState.LastUpdateCheckUtc` (so a close/reopen
+                           loop does not fire a call per launch); owns the
+                           candidate pull: each fire reads the profile's mod
+                           list through IProfileService inside its thread-pool
+                           task + maps the entries to `ModListCandidate`s at
+                           the call site (one small internal UI extension), so
+                           Integrations holds no Profiles reference + a pull
+                           failure (a deleted/unreadable profile) is logged +
+                           skipped without mutating LastResult; the runner owns
+                           + exposes the `UpdateRefreshGate` (fed by every
+                           captured check result; the mod-list VM renders its
+                           state); the
+                           `AutoUpdateCheckEnabled` toggle gates ONLY the periodic
+                           timer, and the manual `CheckNowAsync` carries its own
+                           sliding-window throttle (10 free/hour then 1/2min,
+                           independent of the interval gate); registered + started
+                           best-effort from CuratorComposition);
                           the mod-list update UI per-row update
                           signal + per-mod update action. `ModListViewModel` subscribes
                           to `IUpdateCheckService.CheckCompleted` and reads the
@@ -539,27 +552,42 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `IKnownUpdateState.KnownUpdates` / app-state.json, so a
                           restart inside the interval gate shows prior flags
                           before any API call) for per-row `UpdateAvailable`
-                          (matched by ContainerId) + the list-level `IsRateLimited`
-                          notice + the coupled `IsRateLimitActive` gate (the
-                          latter still from the in-memory LastResult, session-only;
-                          a rate-limited check disables the refresh button until
+                          (matched by ContainerId; the VM passes the entries
+                          its last Reload loaded as the hydration candidates),
+                          while the refresh-gate policy lives in the
+                          runner-owned `UpdateRefreshGate` (ui/Session/): the
+                          rate-limit tracking fed by every captured check
+                          result, the effective-reset computation (server
+                          reset governs, 1-minute fallback when silent), the
+                          manual-throttle read, the shared 1-second countdown
+                          timer lifecycle, + the IsRateLimitActive /
+                          IsManualThrottled / IsRefreshEnabled decisions; the
+                          VM keeps only the localized rendering (tooltip
+                          priority rate-limit > throttle > normal,
+                          BuildThrottleTooltip, FormatRemaining, IsCheckingNow)
+                          driven by the gate's marshaled StateChanged. A
+                          rate-limited check disables the refresh button until
                           the server-reported reset in `UpdateCheckResult.RateLimitResetsAt`
-                          elapses, with a 1-minute client-side fallback when Nexus
-                          sent no reset, and the pill reads "Refresh disabled due
-                          to rate-limiting" exactly while the button is rate-limit-blocked,
-                          distinct from the client-side manual fire-count throttle
-                          which remains), reads
+                          elapses (1-minute client-side fallback when Nexus
+                          sent no reset), and the pill reads "Refresh disabled
+                          due to rate-limiting" exactly while the button is
+                          rate-limit-blocked, distinct from the client-side
+                          manual fire-count throttle which remains. The VM
+                          reads
                           `INexusAuthService.GetCurrentStateAsync` once at construction
                           for the per-row premium behavior (`IsPremiumUser` pushed
                           down to rows; no mid-session refresh),
                           and exposes an async `UpdateCommand(row)` that branches on
-                          premium: Premium acquires the global `UpdateCoordinator`
-                          (one install at a time, shared with the automatic updater)
-                          then calls
-                          `IModAcquisitionService.AcquireLatestNexusAsync` +
-                          `AcknowledgeUpdateAndReload` (clears the persisted
-                          known-update entry, no extra API check); regular/unknown
-                          opens the mod's Nexus files page via the shared
+                          premium: Premium hands the install to
+                          `IModUpdateInstaller.TryInstallLatestAsync` (the
+                          single install path in Integrations:
+                          coordinator-gated one-install-at-a-time, in-gate
+                          eligibility revalidation, acquire + acknowledge-on-
+                          success, per-row progress; Busy + NotEligible are
+                          silent no-ops, Failed surfaces the localized alert
+                          with the exception's message, Installed reloads +
+                          flags HasPendingChanges); regular/unknown opens the
+                          mod's Nexus files page via the shared
                           IExternalLauncher (fallback alert on failure).
                           `CheckForUpdatesNowCommand` awaits the runner's
                           thorough check (driving an `IsCheckingNow` spinner on
@@ -618,18 +646,26 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            regular/unverified flagged row's update action +
                            tooltip carry Desktop Mode guidance instead of the
                            files-page launch; Premium rows keep the in-app
-                           install path). The `UpdateCoordinator` (ui/Session/) is the
-                           single one-install-at-a-time gate shared with the
-                           `IAutomaticUpdateService` (ui/Session/), the opt-in
-                           Premium automatic installer chained after each check from
-                           `UpdateCheckRunner` (captures the exact result, gates on
-                           authoritative Success + updates + AutomaticUpdatesEnabled
-                           + active profile + a fresh Premium verify, installs
-                           sequentially under the coordinator, isolates per-mod
-                           failures into one summary alert, acknowledges on success,
-                           stops on profile switch, raises UpdatesApplied so the list
-                           VM reloads, raises ModUpdateProgress per mod so the
-                           row-level spinner tracks the currently installing row).
+                           install path). The `IModUpdateInstaller`
+                           (Integrations, holding the `UpdateCoordinator`: the
+                           single one-install-at-a-time gate) is the one
+                           Premium install path for both the manual row action
+                           + the automatic batch (in-gate eligibility
+                           revalidation via UpdateEligibility, acquire,
+                           acknowledge-on-success exactly once, per-attempt
+                           ModUpdateProgress events driving the row spinner
+                           for both paths). The `IAutomaticUpdateService`
+                           (ui/Session/) is the opt-in Premium automatic batch
+                           chained after each check from `UpdateCheckRunner`
+                           (captures the exact result, gates on authoritative
+                           Success + updates + AutomaticUpdatesEnabled + active
+                           profile + a fresh Premium verify, then runs the
+                           sequential batch through
+                           `installer.InstallLatestAsync` with per-iteration
+                           candidate re-pull + active-profile re-check,
+                           isolates per-mod failures into one summary alert,
+                           stops on profile switch, raises UpdatesApplied so
+                           the list VM reloads).
                            The check is split by trigger:
                            `IUpdateCheckService.CheckAsync` (the v2 GraphQL
                            `modsByUid` batch query, 1 API call for all mods)
@@ -740,9 +776,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `WelcomeWindow` (ui/Views/) once on first startup
                           (persisted via `IOnboardingState.OnboardingCompleted`),
                           and on a "Set up Nexus" choice persists completion
-                          first, then navigates the shell to Nexus
-                          (wired from `App` after the main window opens,
-                          exception-safe).
+                          first, then navigates the shell to Nexus through
+                          `IShellNavigation` (ui/Session/, implemented by
+                          ShellViewModel + forwarded by the composition root as
+                          a plain interface forward; wired from `App` after the
+                          main window opens, exception-safe).
                           `IDialogService.ShowProgressAsync<T>`
                           runs the supplied work under a non-closeable spinner +
                           closes it on completion; `DialogTitleBar.ShowClose`
@@ -961,10 +999,17 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         NoNexusMods clears, no-auth/rate-limit/failed preserve,
                         hydration self-heals removed/pinned/source-changed/
                         version-changed entries, AcknowledgeInstall clears a
-                        single entry on a successful version change);
+                        single entry on a successful version change;
                         LastResult + CheckCompleted event for the mod-list;
-                        Integrations references Profiles, acyclic, for
-                        IProfileService.GetModList)
+                        the update family takes the profile's mod list as
+                        caller-mapped `ModListCandidate` records
+                        (ContainerId + Policy), so Integrations holds no
+                        Profiles reference; + the pure static
+                        `UpdateEligibility` evaluator, the one source of the
+                        four known-update eligibility rules (member /
+                        LatestPolicy / NexusSource same ModId / ordinal-ignore-
+                        case version match), shared by the store's hydration
+                        self-heal + the install-time revalidation)
   steam/                Modificus.Curator.Steam -- Steam + Darktide + Proton discovery
                         (multi-library + compatdata; Linux Proton resolves from Steam's
                         CompatToolMapping in config.vdf, app-specific entry first then
@@ -1101,13 +1146,22 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           incl. the display-metadata capture from the shared mapper)
                                           + the UpdateCheckService (Nexus-only
                                           update check against a fake INexusClient +
-                                          fake IProfileService + fake IModRepository)
+                                          caller-built ModListCandidate batches +
+                                          fake IModRepository)
                                           + the UpdateStateStore (the profile-scoped
                                           known-update persistence rules: success
                                           replaces/clears, failed/no-auth/rate-limited
                                           preserve, no-Nexus-mods clears, acknowledge,
                                           + the hydration self-heal for removed/pinned/
                                           source-changed/version-changed entries)
+                                          + the UpdateEligibility evaluator (the four
+                                          rules + every rejection reason + the
+                                          case-insensitive version match)
+                                          + the ModUpdateInstaller (gate semantics
+                                          Try-Busy vs awaiting, in-gate revalidation,
+                                          acknowledge-on-success-only, the progress
+                                          bracket, the Failed outcome shape,
+                                          cancellation propagation)
                                           + the NexusModMetadataService (stable-v1
                                           display-metadata backfill: the 24-hour gate,
                                           the 25-attempt cap, active-profile-priority
@@ -1191,18 +1245,27 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             case-insensitive duplicate, reserved name -- + a Logging
                                             toggle (EnableLuaLogs emits Relay's bare --log-lua flag) +
                                             a SkipSplash toggle (SkipSplash emits Relay's bare
-                                            --skip-splash flag)) + the
+                                             --skip-splash flag)) + the
                                             NxmModDownloadHandler auth/profile gates + error
                                             wiring + the mod-list update flow: profile-scoped
-                                            known-update persistence/hydration, the stable
+                                            known-update persistence/hydration, the
+                                            UpdateCheckRunner candidate pull + the
+                                            unreadable-profile skip, the
+                                            UpdateRefreshGate (server reset
+                                            governs, fallback cooldown, timer
+                                            lifecycle, marshaled StateChanged,
+                                            throttle coupling), the stable
                                             per-row update action (no-update disabled, flagged
                                             accent, Premium install, regular/unknown files-page
                                             open, launcher failure alert, unsupported rows),
                                             UpdateCommand premium/regular branches + one-at-a-time
-                                            via the UpdateCoordinator + acknowledgement + the
-                                            automatic-update setting + the AutomaticUpdateService
-                                            gating/sequencing/isolation/concurrency/profile-switch
-                                            + SourceUrl resolution; + the linked-folder flow
+                                            + the Busy/NotEligible silent no-ops + the Failed alert
+                                            via the installer outcome + the automatic-update setting
+                                            + the AutomaticUpdateService
+                                            gating/sequencing/isolation/profile-switch/mid-batch-
+                                            profile-deletion/cancellation + the installer-driven
+                                            progress + busy push-down + SourceUrl resolution; + the
+                                            linked-folder flow
                                             (LinkModsCommand peek/collision-refusal/re-link +
                                             LatestPolicy add, the linked badge two-state available/
                                             broken, OpenFolderCommand launch + failure alert, the
@@ -1497,7 +1560,9 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   offer: it shows the `WelcomeWindow` (ui/Views/) once on first startup
   (persisted via `IOnboardingState.OnboardingCompleted`), and on a "Set up Nexus"
   choice persists completion first, then navigates the shell to Nexus
-  Integrations (wired from `App` after the main window opens, exception-safe). See
+  Integrations through `IShellNavigation` (ui/Session/, implemented by
+  ShellViewModel + forwarded by the composition root; wired from `App` after
+  the main window opens, exception-safe). See
   `docs/architecture/MODIFICUS-CURATOR.md`.
 
 ## Key docs

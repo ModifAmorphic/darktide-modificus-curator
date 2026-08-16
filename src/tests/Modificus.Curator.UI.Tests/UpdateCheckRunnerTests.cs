@@ -2,6 +2,8 @@ using System.ComponentModel;
 using Modificus.Curator.Config;
 using Modificus.Curator.General;
 using Modificus.Curator.Integrations;
+using Modificus.Curator.Mods;
+using Modificus.Curator.Profiles;
 using Modificus.Curator.UI.Session;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -720,6 +722,66 @@ public sealed class UpdateCheckRunnerTests
         await WaitAsync(() => service2.ThoroughCallCount == 1);
     }
 
+    [Fact]
+    public async Task CheckNow_with_a_throwing_candidate_pull_still_engages_the_refresh_gate()
+    {
+        // A manual fire consumes sliding-window budget BEFORE the check runs.
+        // When the candidate pull throws, the run ends in the null-result path
+        // (no check call, no automatic-update chaining), but the gate must
+        // still re-evaluate after the attempt: the button disables + the
+        // countdown timer engages exactly as a successful fire would. Feeding
+        // the gate only on non-null results left a budget-consuming failure
+        // with the button enabled + the countdown timer stopped until the next
+        // unrelated event.
+        var id = Guid.NewGuid();
+        var session = new FakeProfileSession { ActiveProfileId = id };
+        var profiles = new FakeProfileService
+        {
+            GetModListThrows = new KeyNotFoundException($"No profile {id}"),
+        };
+        var service = new FakeUpdateCheckService();
+        var appState = new FakeAppStateStore();
+        var now = DateTimeOffset.UtcNow;
+        Action? countdownTick = null;
+        var runner = new UpdateCheckRunner(
+            session, profiles, service, new FakeConfigLoader(), appState,
+            new FakeAutomaticUpdateService(), NullLogger<UpdateCheckRunner>.Instance,
+            getNow: () => now,
+            startCountdownTimer: t => countdownTick ??= t);
+
+        // Spend the free budget: 10 allowed fires, each ending in the
+        // null-result path (the pull throws inside every run).
+        var tenth = now;
+        for (var i = 0; i < 10; i++)
+        {
+            now = now.AddSeconds(1);
+            tenth = now;
+            await runner.CheckNowAsync();
+        }
+        var gate = runner.RefreshGate;
+
+        Assert.Equal(0, service.ThoroughCallCount); // every pull failed
+        Assert.Equal(10, appState.ManualRefreshTimestamps!.Count); // budget spent
+
+        // The gate engaged from the failed attempts alone: throttled, the
+        // button blocked by the gate, the countdown timer started.
+        Assert.True(gate.IsManualThrottled);
+        Assert.False(gate.IsRefreshEnabled);
+        Assert.NotNull(countdownTick);
+
+        // The countdown advances: a tick inside the cooldown keeps the
+        // throttle live; past the 10th timestamp + 2 minutes it clears.
+        now = tenth.AddSeconds(30);
+        countdownTick!.Invoke();
+        Assert.True(gate.IsManualThrottled);
+        Assert.False(gate.IsRefreshEnabled);
+
+        now = tenth.AddMinutes(2).AddSeconds(1);
+        countdownTick.Invoke();
+        Assert.False(gate.IsManualThrottled);
+        Assert.True(gate.IsRefreshEnabled);
+    }
+
     /// <summary>
     /// Fires <paramref name="count"/> manual refreshes, advancing the captured
     /// clock 1 second before each so the timestamps are distinct but all within
@@ -847,6 +909,90 @@ public sealed class UpdateCheckRunnerTests
         Assert.Equal(id, Assert.Single(service.Calls));
     }
 
+    // ---- the candidate pull (the runner owns profile validity) -------------
+
+    [Fact]
+    public async Task Check_maps_the_profile_entries_to_candidates_at_the_call_site()
+    {
+        // The runner reads the profile's mod list through IProfileService +
+        // maps each entry to a ModListCandidate (container id + current
+        // policy, policy identity preserved) so Integrations receives the
+        // check set without holding a Profiles reference.
+        var a = new ProfileSummary(Guid.NewGuid(), "Alpha", "");
+        var profiles = new FakeProfileService();
+        var latestContainer = Guid.NewGuid();
+        var pinnedContainer = Guid.NewGuid();
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = latestContainer, Order = 0, Policy = ModVersionPolicy.Latest },
+            new ModListEntry { ContainerId = pinnedContainer, Order = 1, Policy = new PinnedPolicy("v") });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var service = new FakeUpdateCheckService();
+        var autoUpdate = new FakeAutomaticUpdateService();
+        var runner = new UpdateCheckRunner(
+            session, profiles, service, new FakeConfigLoader(), new FakeAppStateStore(),
+            autoUpdate, NullLogger<UpdateCheckRunner>.Instance);
+
+        await runner.CheckNowAsync();
+
+        Assert.Equal(1, service.ThoroughCallCount);
+        var candidates = Assert.Single(service.CandidateCalls);
+        Assert.Equal(
+            profiles.GetModList(a.Id).Select(e => (e.ContainerId, e.Policy)),
+            candidates.Select(c => (c.ContainerId, c.Policy)));
+    }
+
+    [Fact]
+    public async Task Unreadable_profile_pull_skips_the_check_without_touching_LastResult()
+    {
+        // A deleted/unreadable profile surfaces at the runner's candidate pull
+        // now (Integrations no longer pulls the list itself). The pull failure
+        // is logged + the run skipped: no check call, no LastResult mutation,
+        // no automatic-update chaining - matching the old fire-and-forget
+        // swallow for a deleted profile.
+        var id = Guid.NewGuid();
+        var session = new FakeProfileSession { ActiveProfileId = id };
+        var profiles = new FakeProfileService
+        {
+            GetModListThrows = new KeyNotFoundException($"No profile {id}"),
+        };
+        var service = new FakeUpdateCheckService
+        {
+            // A staged result proves the skip path never mutated it.
+            LastResult = null,
+        };
+        var autoUpdate = new FakeAutomaticUpdateService();
+        var runner = new UpdateCheckRunner(
+            session, profiles, service, new FakeConfigLoader(), new FakeAppStateStore(),
+            autoUpdate, NullLogger<UpdateCheckRunner>.Instance);
+
+        await runner.CheckNowAsync();
+
+        Assert.Equal(0, service.CallCount);
+        Assert.Equal(0, service.ThoroughCallCount);
+        Assert.Null(service.LastResult);
+        Assert.Empty(autoUpdate.Calls);
+    }
+
+    [Fact]
+    public async Task Empty_profile_pull_still_calls_the_check_with_an_empty_candidate_set()
+    {
+        // A VALID profile whose mod list is empty is not a failure: the check
+        // runs with an empty candidate batch (the service maps that to its
+        // NoNexusMods short-circuit), so persisted state reconciles normally.
+        var id = Guid.NewGuid();
+        var session = new FakeProfileSession { ActiveProfileId = id };
+        var service = new FakeUpdateCheckService();
+        var runner = new UpdateCheckRunner(
+            session, new FakeProfileService(), service, new FakeConfigLoader(),
+            new FakeAppStateStore(), new FakeAutomaticUpdateService(),
+            NullLogger<UpdateCheckRunner>.Instance);
+
+        await runner.CheckNowAsync();
+
+        Assert.Equal(1, service.ThoroughCallCount);
+        Assert.Empty(Assert.Single(service.CandidateCalls));
+    }
+
     // ---- helpers -----------------------------------------------------------
 
     /// <summary>
@@ -867,6 +1013,7 @@ public sealed class UpdateCheckRunnerTests
         autoUpdate ??= new FakeAutomaticUpdateService();
         return new UpdateCheckRunner(
             session,
+            new FakeProfileService(),
             service,
             configLoader,
             appState,
@@ -895,6 +1042,7 @@ public sealed class UpdateCheckRunnerTests
         Action? tick = null;
         var runner = new UpdateCheckRunner(
             session,
+            new FakeProfileService(),
             service,
             configLoader,
             appState,

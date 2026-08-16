@@ -772,17 +772,23 @@ switch to in-app install).
 
 `Update(row)` branches on the verified Premium state:
 
-- **Premium:** `UpdatePremiumAsync` acquires the global `UpdateCoordinator`
-  (one install at a time, shared with the automatic updater; a second click
-  while an install runs is a clean no-op), then calls
+- **Premium:** `UpdatePremiumAsync` hands the install to the shared
+  `IModUpdateInstaller.TryInstallLatestAsync` (Integrations; the single install
+  path for both the manual action and the automatic batch). The installer
+  acquires the global `UpdateCoordinator` (one install at a time; a second
+  click while an install runs returns a Busy outcome, a clean no-op),
+  revalidates eligibility inside the gate, calls
   `IModAcquisitionService.AcquireLatestNexusAsync(gameDomain, modId)` (the
-  premium / auth-only path). The repository's `AddVersion` extracts into a
-  sibling temp and atomically swaps on success, so a mid-update failure leaves
-  the existing version intact. On success it acknowledges the install
+  premium / auth-only path), acknowledges the install on success
   (`IUpdateStateStore.AcknowledgeInstall`, clearing the persisted known-update
-  entry immediately, with no extra API check) and reloads. On failure it
-  surfaces a user-facing alert. The finally block clears `row.IsUpdating` and
-  releases the coordinator.
+  entry immediately, with no extra API check), and raises per-row progress
+  (active=true/false bracketing the attempt) that drives `row.IsUpdating`. The
+  repository's `AddVersion` extracts into a sibling temp and atomically swaps
+  on success, so a mid-update failure leaves the existing version intact. The
+  VM renders the outcome: Installed reloads + flags the session pending,
+  Failed surfaces the localized alert carrying the exception's message, Busy +
+  NotEligible are silent no-ops, and cancellation is swallowed (not a
+  failure).
 - **Regular / unknown:** `OpenFilesPage` opens the mod's Nexus files page in
   the user's browser via the shared `IExternalLauncher`. A launch failure
   surfaces a user-facing fallback alert (with the URL for manual copy) rather
@@ -792,6 +798,18 @@ Defense: no-op when there is no active profile, the row is not Nexus plus
 Latest (`IsNexusLatest`), no update is flagged (`UpdateAvailable`), or the row
 has no `NexusModId`.
 
+### The mod-update installer
+
+`IModUpdateInstaller` (Integrations) is the single Premium install path: it
+owns the shared `UpdateCoordinator` (the global one-install-at-a-time gate),
+the in-gate eligibility revalidation via `UpdateEligibility` (a stale flag
+yields a NotEligible outcome + reason, nothing installed), the acquire (the
+latest MAIN release over `IModAcquisitionService`), the acknowledge-on-success
+(exactly once), and the per-attempt progress events
+(`ModUpdateProgressEventArgs`) that drive the row spinner for BOTH the manual
+and the automatic paths. Cancellation propagates rather than becoming an
+outcome, so each caller keeps its own cancellation posture.
+
 ### The automatic-update service
 
 `IAutomaticUpdateService` is chained directly from `UpdateCheckRunner` after
@@ -800,14 +818,13 @@ raced `LastResult`). It runs only when the result's outcome is authoritative
 `Success` with updates, `NexusConfig.AutomaticUpdatesEnabled` is on, the active
 profile still matches, and a fresh `GetCurrentStateAsync` returns
 `IsPremium == true` (the Premium request fires ONLY when the gates pass). It
-installs sequentially under the `UpdateCoordinator`; per-mod revalidation gates
-each entry, a profile switch stops the batch, per-mod failures are isolated and
-aggregated into one alert, successful installs acknowledge immediately, and a
-fully successful batch is silent beyond the per-mod progress indication. The
-service raises `ModUpdateProgress` per mod (active=true before the acquisition,
-active=false from the per-mod finally) so `ModListViewModel` can show the
-spinner on the currently installing row; it reloads after the batch via the
-service's `UpdatesApplied` event.
+owns only the gates + the sequential batch + the feedback: each iteration
+re-checks the active profile + re-pulls the candidates, then calls
+`installer.InstallLatestAsync` (the awaiting semantics: the batch waits its
+turn behind a manual install under the shared gate). A profile switch stops
+the batch, per-mod failures are isolated and aggregated into one alert, and a
+fully successful batch is silent beyond the installer's per-row progress. The
+VM reloads after the batch via the service's `UpdatesApplied` event.
 
 ### The manual "check now" affordance
 

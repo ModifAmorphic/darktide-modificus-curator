@@ -119,12 +119,12 @@ public sealed class IntegrationsServiceCollectionExtensionsTests
     [Fact]
     public void AddIntegrations_registers_IUpdateCheckService_as_singleton()
     {
-        // The update-check service orchestrates across Nexus + Mods + Profiles.
-        // Verified by descriptor (rather than resolving) so the test does not
-        // need IProfileService + IModRepository stubs (registered by AddProfiles
-        // + AddMods in the composition root, not by AddIntegrations). The
-        // service's own tests construct it directly and cover its behavior
-        // end-to-end.
+        // The update-check service orchestrates across Nexus + Mods (the check
+        // set arrives as caller-mapped ModListCandidates, so no Profiles
+        // dependency exists). Verified by descriptor (rather than resolving) so
+        // the test does not need an IModRepository stub (registered by AddMods
+        // in the composition root, not by AddIntegrations). The service's own
+        // tests construct it directly and cover its behavior end-to-end.
         var services = new ServiceCollection();
         services.AddIntegrations();
 

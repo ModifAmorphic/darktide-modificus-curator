@@ -18,12 +18,14 @@ public static class ServiceCollectionExtensions
     /// mod acquisition service (download + extract + place orchestration over
     /// <see cref="INexusClient"/> + <see cref="IModImportService"/>, singleton),
     /// the update-check service (one-call v2 GraphQL <c>modsByUid</c> batch
-    /// query for the active profile's LatestPolicy + NexusSource mods, singleton;
+    /// query for the caller's LatestPolicy + NexusSource candidates, singleton;
     /// the mod-list view binds badges to <see cref="IUpdateCheckService.LastResult"/>
-    /// + subscribes to <see cref="IUpdateCheckService.CheckCompleted"/>), and the
-    /// Nexus display-metadata backfill service (missing-only, sequential v1
-    /// <c>GetModInfoAsync</c> pass capped at 25 attempts per persisted 24-hour
-    /// window, singleton).
+    /// + subscribes to <see cref="IUpdateCheckService.CheckCompleted"/>), the
+    /// mod-update install family (the shared <see cref="UpdateCoordinator"/> +
+    /// <see cref="IModUpdateInstaller"/>, the single install path for the
+    /// manual + automatic Premium flows), and the Nexus display-metadata
+    /// backfill service (missing-only, sequential v1 <c>GetModInfoAsync</c>
+    /// pass capped at 25 attempts per persisted 24-hour window, singleton).
     /// </summary>
     /// <remarks>
     /// <para>
@@ -38,6 +40,7 @@ public static class ServiceCollectionExtensions
         AddNexus(services);
         AddAcquisition(services);
         AddUpdateCheck(services);
+        AddUpdateInstall(services);
         AddMetadataBackfill(services);
 
         return services;
@@ -100,21 +103,37 @@ public static class ServiceCollectionExtensions
 
     /// <summary>
     /// Registers the Nexus update-check service. Queries the v2 GraphQL
-    /// <c>modsByUid</c> batch endpoint for the active profile's LatestPolicy +
-    /// NexusSource mods via <see cref="INexusClient"/> +
-    /// <see cref="IModRepository"/> + <see cref="Profiles.IProfileService"/>.
-    /// Singleton: holds the last result (<see cref="IUpdateCheckService.LastResult"/>)
-    /// so the mod-list view can bind badges to it without re-running the check, and
-    /// publishes updates through <see cref="IUpdateCheckService.CheckCompleted"/>.
-    /// Also registers <see cref="IUpdateStateStore"/> (the profile-scoped known-update
+    /// <c>modsByUid</c> batch endpoint for the caller-supplied
+    /// <see cref="ModListCandidate"/> set (the LatestPolicy + NexusSource
+    /// subset is flaggable) via <see cref="INexusClient"/> +
+    /// <see cref="IModRepository"/>. Singleton: holds the last result
+    /// (<see cref="IUpdateCheckService.LastResult"/>) so the mod-list view can
+    /// bind badges to it without re-running the check, and publishes updates
+    /// through <see cref="IUpdateCheckService.CheckCompleted"/>. Also registers
+    /// <see cref="IUpdateStateStore"/> (the profile-scoped known-update
     /// persistence rules over <see cref="IKnownUpdateState.KnownUpdates"/>) as a
-    /// singleton; the check service records each result through it, and the UI reads
-    /// + acknowledges through it.
+    /// singleton; the check service records each result through it, and the UI
+    /// reads + acknowledges through it.
     /// </summary>
     private static void AddUpdateCheck(IServiceCollection services)
     {
         services.AddSingleton<IUpdateStateStore, UpdateStateStore>();
         services.AddSingleton<IUpdateCheckService, UpdateCheckService>();
+    }
+
+    /// <summary>
+    /// Registers the mod-update install family: the shared
+    /// <see cref="UpdateCoordinator"/> (the global one-install-at-a-time gate,
+    /// a singleton holding the single-slot semaphore for the app lifetime) and
+    /// <see cref="IModUpdateInstaller"/> (the single install path over
+    /// <see cref="IModAcquisitionService"/> + <see cref="IUpdateStateStore"/> +
+    /// <see cref="IModRepository"/> that both the manual per-row action and the
+    /// automatic Premium batch route through).
+    /// </summary>
+    private static void AddUpdateInstall(IServiceCollection services)
+    {
+        services.AddSingleton<UpdateCoordinator>();
+        services.AddSingleton<IModUpdateInstaller, ModUpdateInstaller>();
     }
 
     /// <summary>

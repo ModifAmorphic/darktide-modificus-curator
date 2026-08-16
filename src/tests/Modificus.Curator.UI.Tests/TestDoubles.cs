@@ -110,12 +110,11 @@ internal static class TestDoubles
         FakeDialogService? dialogs = null,
         LocalizationService? localization = null,
         FakeUpdateCheckService? updateCheck = null,
-        FakeModAcquisitionService? acquisition = null,
+        FakeModUpdateInstaller? installer = null,
         FakeNexusAuthService? auth = null,
         FakeConfigLoader? configLoader = null,
         FakeAppStateStore? appState = null,
         FakeUpdateStateStore? updateState = null,
-        UpdateCoordinator? coordinator = null,
         FakeAutomaticUpdateService? automaticUpdates = null,
         ImportWorkflowViewModel? importWorkflow = null,
         Action<Action>? invokeOnUi = null,
@@ -124,7 +123,8 @@ internal static class TestDoubles
         Action? stopCountdownTimer = null,
         FakeExternalLauncher? launcher = null,
         FakeNxmRegistrationState? nxmRegistration = null,
-        IGamingModeState? gamingMode = null)
+        IGamingModeState? gamingMode = null,
+        UpdateCheckRunner? runner = null)
     {
         profiles ??= Profiles();
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
@@ -133,12 +133,11 @@ internal static class TestDoubles
         dialogs ??= new FakeDialogService();
         localization ??= new LocalizationService();
         updateCheck ??= new FakeUpdateCheckService();
-        acquisition ??= new FakeModAcquisitionService();
+        updateState ??= new FakeUpdateStateStore(repo);
+        installer ??= new FakeModUpdateInstaller { StateStore = updateState };
         auth ??= new FakeNexusAuthService();
         configLoader ??= new FakeConfigLoader();
         appState ??= new FakeAppStateStore();
-        updateState ??= new FakeUpdateStateStore(profiles, repo);
-        coordinator ??= new UpdateCoordinator();
         automaticUpdates ??= new FakeAutomaticUpdateService();
         profiles.RepoLookup = repo;
         // The inline import-workflow child VM: constructed over the SAME
@@ -192,19 +191,27 @@ internal static class TestDoubles
                 updateCheck.RecordProfileId = session.ActiveProfileId;
             }
         };
-        // The runner wires the manual CheckNow path; constructed with the
-        // test's fakes + no periodic timer (the manual trigger does not depend
-        // on the timer being started). An optional getNow lets the throttle
-        // tests drive the sliding window deterministically.
-        var runner = new UpdateCheckRunner(
+        // The runner wires the manual CheckNow path + owns the refresh gate;
+        // constructed with the test's fakes + no periodic timer (the manual
+        // trigger does not depend on the timer being started). An optional
+        // getNow lets the throttle tests drive the sliding window + the gate's
+        // rate-limit clock deterministically; the countdown-timer seams are
+        // forwarded to the runner's gate. The profiles fake backs the
+        // runner's candidate pull. A test that needs to drive the gate
+        // directly (the rate-limit tests) passes its own pre-constructed
+        // runner.
+        runner ??= new UpdateCheckRunner(
             session,
+            profiles,
             updateCheck,
             configLoader,
             appState,
             automaticUpdates,
             NullLogger<UpdateCheckRunner>.Instance,
             startTimer: null,
-            getNow: getNow);
+            getNow: getNow,
+            startCountdownTimer: startCountdownTimer,
+            stopCountdownTimer: stopCountdownTimer);
         return new ModListViewModel(
             profiles,
             session,
@@ -213,11 +220,10 @@ internal static class TestDoubles
             dialogs,
             localization,
             updateCheck,
-            acquisition,
+            installer,
             auth,
             updateState,
             runner,
-            coordinator,
             automaticUpdates,
             importWorkflow,
             detailedRows,
@@ -225,10 +231,7 @@ internal static class TestDoubles
             NullLogger<ModListViewModel>.Instance,
             nxmRegistration,
             gamingMode,
-            launcher,
-            startCountdownTimer,
-            stopCountdownTimer,
-            getNow);
+            launcher);
     }
 
     /// <summary>
@@ -676,7 +679,23 @@ internal sealed class FakeProfileService : IProfileService
 
     // ---- mod-list surface --------------------------------------------------
 
-    public IReadOnlyList<ModListEntry> GetModList(Guid id) => EnsureList(id).ToArray();
+    /// <summary>
+    /// When set, <see cref="GetModList"/> throws this exception, simulating an
+    /// unreadable or deleted profile (the production service surfaces
+    /// KeyNotFoundException for an unknown id). Default <c>null</c> = no throw.
+    /// Used by the update-check runner tests to verify the candidate-pull
+    /// failure posture (log + skip, no check call, no LastResult mutation).
+    /// </summary>
+    public Exception? GetModListThrows { get; set; }
+
+    public IReadOnlyList<ModListEntry> GetModList(Guid id)
+    {
+        if (GetModListThrows is not null)
+        {
+            throw GetModListThrows;
+        }
+        return EnsureList(id).ToArray();
+    }
 
     public void SetModOrder(Guid id, IReadOnlyList<Guid> containerIdsInOrder)
     {
@@ -962,18 +981,16 @@ internal sealed class FakeAppStateStore :
 /// replacement + acknowledge + hydrate semantics over a per-profile set of
 /// flagged container ids so the mod-list VM tests can drive the persisted
 /// known-update state. The real store's self-healing filter is covered by the
-/// Integrations-layer tests; this fake does the simplest equivalent (return
-/// whatever was recorded for the profile).
+/// Integrations-layer tests; this fake does the simplest equivalent (drop
+/// entries absent from the caller's candidates or whose container is gone).
 /// </summary>
 internal sealed class FakeUpdateStateStore : IUpdateStateStore
 {
     private readonly Dictionary<Guid, HashSet<Guid>> _flagged = new();
-    private readonly FakeProfileService? _profiles;
     private readonly FakeModRepository? _repository;
 
-    public FakeUpdateStateStore(FakeProfileService? profiles = null, FakeModRepository? repository = null)
+    public FakeUpdateStateStore(FakeModRepository? repository = null)
     {
-        _profiles = profiles;
         _repository = repository;
     }
 
@@ -1007,21 +1024,19 @@ internal sealed class FakeUpdateStateStore : IUpdateStateStore
         }
     }
 
-    public IReadOnlyCollection<Guid> GetKnownUpdateContainerIds(Guid profileId)
+    public IReadOnlyCollection<Guid> GetKnownUpdateContainerIds(
+        Guid profileId, IReadOnlyList<ModListCandidate> candidates)
     {
         if (!_flagged.TryGetValue(profileId, out var set))
         {
             return Array.Empty<Guid>();
         }
 
-        // Light self-heal: drop entries no longer in the profile or whose
-        // container is gone, mirroring the real store's filter closely enough
-        // for the VM tests that exercise it.
-        if (_profiles is not null)
-        {
-            var members = _profiles.GetModList(profileId).Select(e => e.ContainerId).ToHashSet();
-            set.RemoveWhere(id => !members.Contains(id));
-        }
+        // Light self-heal: drop entries no longer among the caller's
+        // candidates or whose container is gone, mirroring the real store's
+        // filter closely enough for the VM tests that exercise it.
+        var members = candidates.Select(c => c.ContainerId).ToHashSet();
+        set.RemoveWhere(id => !members.Contains(id));
         if (_repository is not null)
         {
             set.RemoveWhere(id => _repository.Get(id) is null);
@@ -1038,16 +1053,14 @@ internal sealed class FakeUpdateStateStore : IUpdateStateStore
 /// No-op <see cref="IAutomaticUpdateService"/> for the UI tests. Records
 /// <see cref="RunAfterCheckAsync"/> calls so the runner tests can assert the
 /// service was chained after a check; raises <see cref="UpdatesApplied"/> only
-/// when a test calls <see cref="RaiseUpdatesApplied"/>; raises
-/// <see cref="ModUpdateProgress"/> only when a test calls
-/// <see cref="RaiseModUpdateProgress"/>. Never installs anything.
+/// when a test calls <see cref="RaiseUpdatesApplied"/>. Never installs anything
+/// (per-row progress comes from the <see cref="FakeModUpdateInstaller"/>).
 /// </summary>
 internal sealed class FakeAutomaticUpdateService : IAutomaticUpdateService
 {
     public IReadOnlyList<(UpdateCheckResult Result, Guid ProfileId)> Calls { get; } = new List<(UpdateCheckResult, Guid)>();
 
     public event EventHandler? UpdatesApplied;
-    public event EventHandler<ModUpdateProgressEventArgs>? ModUpdateProgress;
 
     public Task RunAfterCheckAsync(UpdateCheckResult result, Guid profileId, CancellationToken ct = default)
     {
@@ -1056,14 +1069,113 @@ internal sealed class FakeAutomaticUpdateService : IAutomaticUpdateService
     }
 
     public void RaiseUpdatesApplied() => UpdatesApplied?.Invoke(this, EventArgs.Empty);
+}
+
+/// <summary>
+/// Configurable <see cref="IModUpdateInstaller"/> for the UI tests. Records
+/// every install call (both the Try + awaiting shapes) with its arguments;
+/// answers with the configured outcome (Installed by default, acknowledging
+/// through the wired state store like the real installer), a settable busy
+/// refusal for the Try shape, or a thrown exception (cancellation posture).
+/// Raises progress active/inactive around each simulated attempt + exposes
+/// <see cref="RaiseBusyChanged"/> for the busy push-down tests.
+/// </summary>
+internal sealed class FakeModUpdateInstaller : IModUpdateInstaller
+{
+    /// <summary>The install calls made through either method, in order
+    /// (profileId, containerId, modId, expectedVersion, method).</summary>
+    public IReadOnlyList<(Guid ProfileId, Guid ContainerId, int ModId, string ExpectedVersion, string Method)> Calls { get; }
+        = new List<(Guid, Guid, int, string, string)>();
+
+    /// <summary>The outcome returned by the next non-busy install call.
+    /// Default <see cref="ModInstallStatus.Installed"/>. Per-call overrides:
+    /// <see cref="OutcomeQueue"/>.</summary>
+    public ModInstallOutcome NextOutcome { get; set; } = new(ModInstallStatus.Installed);
+
+    /// <summary>Outcomes returned one per install call, in order (dequeued
+    /// before falling back to <see cref="NextOutcome"/>), so a test can script
+    /// a batch where specific entries fail + others succeed.</summary>
+    public Queue<ModInstallOutcome> OutcomeQueue { get; } = new();
+
+    /// <summary>When true, the next <see cref="TryInstallLatestAsync"/> call
+    /// answers <see cref="ModInstallStatus.Busy"/> without recording progress
+    /// or acknowledging (the manual no-op).</summary>
+    public bool NextTryIsBusy { get; set; }
+
+    /// <summary>When set, thrown from the next install attempt (after progress
+    /// active=true), so a test can drive the caller-side cancellation or
+    /// exception posture.</summary>
+    public Exception? ThrowNext { get; set; }
+
+    /// <summary>
+    /// Optional state store acknowledged on an Installed outcome, mirroring the
+    /// real installer's acknowledge-on-success so the VM-level flag-clearing
+    /// assertions observe the persisted state the way production does.
+    /// </summary>
+    public IUpdateStateStore? StateStore { get; set; }
+
+    /// <summary>The value reported by <see cref="IsBusy"/>; settable so a test
+    /// can simulate an install in flight without holding a real gate.</summary>
+    public bool IsBusy { get; set; }
+
+    public event EventHandler? BusyChanged;
+    public event EventHandler<ModUpdateProgressEventArgs>? ModUpdateProgress;
+
+    /// <summary>Raises <see cref="BusyChanged"/> (an installer's busy flag
+    /// flipped somewhere else).</summary>
+    public void RaiseBusyChanged() => BusyChanged?.Invoke(this, EventArgs.Empty);
 
     /// <summary>
     /// Raises <see cref="ModUpdateProgress"/> for <paramref name="containerId"/>
     /// with the given <paramref name="isActive"/> state, simulating the
-    /// production service's per-mod progress signal.
+    /// installer's per-attempt progress signal.
     /// </summary>
     public void RaiseModUpdateProgress(Guid containerId, bool isActive) =>
         ModUpdateProgress?.Invoke(this, new ModUpdateProgressEventArgs(containerId, isActive));
+
+    public async Task<ModInstallOutcome> TryInstallLatestAsync(
+        Guid profileId, Guid containerId, int modId, string expectedVersion,
+        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default)
+    {
+        ((List<(Guid, Guid, int, string, string)>)Calls).Add(
+            (profileId, containerId, modId, expectedVersion, nameof(TryInstallLatestAsync)));
+        if (NextTryIsBusy)
+        {
+            return new ModInstallOutcome(ModInstallStatus.Busy);
+        }
+        return await RunAsync(profileId, containerId);
+    }
+
+    public async Task<ModInstallOutcome> InstallLatestAsync(
+        Guid profileId, Guid containerId, int modId, string expectedVersion,
+        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default)
+    {
+        ((List<(Guid, Guid, int, string, string)>)Calls).Add(
+            (profileId, containerId, modId, expectedVersion, nameof(InstallLatestAsync)));
+        return await RunAsync(profileId, containerId);
+    }
+
+    private async Task<ModInstallOutcome> RunAsync(Guid profileId, Guid containerId)
+    {
+        RaiseModUpdateProgress(containerId, isActive: true);
+        try
+        {
+            if (ThrowNext is not null)
+            {
+                await Task.FromException(ThrowNext);
+            }
+            var outcome = OutcomeQueue.Count > 0 ? OutcomeQueue.Dequeue() : NextOutcome;
+            if (outcome.Status == ModInstallStatus.Installed)
+            {
+                StateStore?.AcknowledgeInstall(profileId, containerId);
+            }
+            return outcome;
+        }
+        finally
+        {
+            RaiseModUpdateProgress(containerId, isActive: false);
+        }
+    }
 }
 
 /// <summary>
@@ -1855,6 +1967,7 @@ internal sealed class FakeUpdateCheckService : IUpdateCheckService
 {
     private readonly ConcurrentQueue<Guid> _calls = new();
     private readonly ConcurrentQueue<Guid> _thoroughCalls = new();
+    private readonly ConcurrentQueue<IReadOnlyList<ModListCandidate>> _candidateBatches = new();
 
     /// <summary>
     /// Optional state store wired so <see cref="RaiseCheckCompleted"/> +
@@ -1892,6 +2005,14 @@ internal sealed class FakeUpdateCheckService : IUpdateCheckService
     public IReadOnlyList<Guid> ThoroughCalls => _thoroughCalls.ToArray();
 
     /// <summary>
+    /// The candidate lists passed to <see cref="CheckAsync"/> /
+    /// <see cref="CheckThoroughAsync"/> (both shapes record into the same
+    /// queue), in call order, so tests can assert the runner's entry-to-
+    /// candidate mapping.
+    /// </summary>
+    public IReadOnlyList<IReadOnlyList<ModListCandidate>> CandidateCalls => _candidateBatches.ToArray();
+
+    /// <summary>
     /// When set, thrown synchronously from every <see cref="CheckAsync"/> +
     /// <see cref="CheckThoroughAsync"/> call, after the call is recorded. Lets
     /// the exception-safety test assert the call was made AND that the runner
@@ -1910,9 +2031,11 @@ internal sealed class FakeUpdateCheckService : IUpdateCheckService
 
     public event EventHandler<UpdateCheckResult?>? CheckCompleted;
 
-    public Task<UpdateCheckResult> CheckAsync(Guid profileId, CancellationToken ct = default)
+    public Task<UpdateCheckResult> CheckAsync(
+        Guid profileId, IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default)
     {
         _calls.Enqueue(profileId);
+        _candidateBatches.Enqueue(candidates);
 
         if (ThrowOnCheck is not null)
         {
@@ -1931,9 +2054,11 @@ internal sealed class FakeUpdateCheckService : IUpdateCheckService
         return Task.FromResult(LastResult);
     }
 
-    public Task<UpdateCheckResult> CheckThoroughAsync(Guid profileId, CancellationToken ct = default)
+    public Task<UpdateCheckResult> CheckThoroughAsync(
+        Guid profileId, IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default)
     {
         _thoroughCalls.Enqueue(profileId);
+        _candidateBatches.Enqueue(candidates);
 
         if (ThrowOnCheck is not null)
         {

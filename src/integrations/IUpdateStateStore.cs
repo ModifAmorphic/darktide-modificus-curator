@@ -39,11 +39,11 @@ namespace Modificus.Curator.Integrations;
 /// <para>
 /// <b>Hydration self-heals.</b> <see cref="GetKnownUpdateContainerIds"/> reads the
 /// persisted snapshots for a profile + filters out entries whose membership,
-/// policy, source, or installed version no longer match. Removed (no longer in
-/// the profile), pinned (policy changed to Pinned), source-changed (no longer a
-/// Nexus mod with the same id), or version-changed (a local version change since
-/// the flag was recorded) entries are dropped and the filtered set is written
-/// back so the next read is fast.</para>
+/// policy, source, or installed version no longer match the caller's candidates.
+/// Removed (no longer in the candidate list), pinned (policy changed to Pinned),
+/// source-changed (no longer a Nexus mod with the same id), or version-changed
+/// (a local version change since the flag was recorded) entries are dropped and
+/// the filtered set is written back so the next read is fast.</para>
 /// <para>
 /// <b>Acknowledgement.</b> <see cref="AcknowledgeInstall"/> removes a single
 /// profile/container entry immediately after a successful local version change,
@@ -75,13 +75,17 @@ public interface IUpdateStateStore
     /// <summary>
     /// Reads the persisted known-update entries for <paramref name="profileId"/>,
     /// filters out stale ones (removed / pinned / source-changed / version-changed
-    /// since the flag was recorded), writes the filtered set back, and returns the
-    /// container ids that remain flagged. Rendering is always keyed by the current
-    /// profile's authoritative-or-persisted state.
+    /// relative to <paramref name="candidates"/>), writes the filtered set back,
+    /// and returns the container ids that remain flagged. Rendering is always
+    /// keyed by the current profile's authoritative-or-persisted state.
     /// </summary>
     /// <param name="profileId">The profile whose known updates to hydrate.</param>
-    /// <returns>The flagged container ids for the profile, after self-healing. An
-    /// unknown profile or one with no recorded entries yields an empty
-    /// collection.</returns>
-    IReadOnlyCollection<Guid> GetKnownUpdateContainerIds(Guid profileId);
+    /// <param name="candidates">The profile's current mod-list entries (the
+    /// caller's authoritative read; the filter compares each snapshot against
+    /// this list + the repository).</param>
+    /// <returns>The flagged container ids for the profile, after self-healing.
+    /// A profile with no recorded entries yields an empty collection.</returns>
+    IReadOnlyCollection<Guid> GetKnownUpdateContainerIds(
+        Guid profileId,
+        IReadOnlyList<ModListCandidate> candidates);
 }
