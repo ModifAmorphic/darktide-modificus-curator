@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.3](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.30.2...v0.30.3) (2026-08-16)
+
+
+### Bug Fixes
+
+* **ui:** consolidate the UI layer: one row definition, decomposed mod-list VM, testable shell furniture ([#214](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/214)) ([71998fd](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/71998fd239595fea9e94680d2a53b9ce0bf45458))
+
 ## [0.30.2](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.30.1...v0.30.2) (2026-08-16)
 
 
