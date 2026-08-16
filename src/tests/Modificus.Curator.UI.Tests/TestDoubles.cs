@@ -176,6 +176,23 @@ internal static class TestDoubles
         // Gaming Mode default: not gaming (the ordinary desktop session the
         // existing tests assume); gaming-gating tests pass a gaming state.
         gamingMode ??= new GamingModeState(false);
+
+        // The link-external-folder child: constructed over the SAME
+        // profile/session/repo/import/dialog fakes (after the launcher +
+        // gaming-mode defaults above are settled) so a link-flow test sees its
+        // linked container land in the profile the mod-list VM reads (mirrors
+        // production DI: one shared child singleton injected into the mod-list
+        // VM, which reloads when the child's flow finishes).
+        var linkedMods = new LinkedModsViewModel(
+            profiles,
+            session,
+            repo,
+            importService,
+            dialogs,
+            localization,
+            launcher,
+            gamingMode,
+            NullLogger<LinkedModsViewModel>.Instance);
         // Wire the state store + a record-profile-id tracker into the fake
         // update-check service so RaiseCheckCompleted / CheckAsync record the
         // result through the store (mirroring the real service's publish-time
@@ -216,7 +233,6 @@ internal static class TestDoubles
             profiles,
             session,
             repo,
-            importService,
             dialogs,
             localization,
             updateCheck,
@@ -227,6 +243,7 @@ internal static class TestDoubles
             automaticUpdates,
             importWorkflow,
             detailedRows,
+            linkedMods,
             invokeOnUi,
             NullLogger<ModListViewModel>.Instance,
             nxmRegistration,

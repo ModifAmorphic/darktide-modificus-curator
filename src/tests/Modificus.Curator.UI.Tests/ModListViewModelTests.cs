@@ -1841,7 +1841,7 @@ public sealed class ModListViewModelTests
     {
         var (vm, profiles, repo, import, _, _, a) = BuildForLinked();
 
-        await vm.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
+        await vm.LinkedMods.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
 
         // LinkFolder ran once with the picked path; the linked container was
         // created on the repo.
@@ -1863,7 +1863,7 @@ public sealed class ModListViewModelTests
         // link flow peeks it before LinkFolder (same gate as the copy import).
         var (vm, _, _, import, _, _, _) = BuildForLinked();
 
-        await vm.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
+        await vm.LinkedMods.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
 
         Assert.Single(import.GetBaseNameCalls);
         Assert.Equal("/external/DMF", import.GetBaseNameCalls[0]);
@@ -1880,7 +1880,7 @@ public sealed class ModListViewModelTests
         import.GetBaseNameFunc = path => throw new InvalidOperationException(
             "Invalid mod folder '/external/Bad': no 'Bad.mod' descriptor found.");
 
-        await vm.LinkModsCommand.ExecuteAsync(new[] { "/external/Bad" });
+        await vm.LinkedMods.LinkModsCommand.ExecuteAsync(new[] { "/external/Bad" });
 
         // No LinkFolder, no AddMod, no row.
         Assert.Empty(import.LinkFolderCalls);
@@ -1905,7 +1905,7 @@ public sealed class ModListViewModelTests
             new InvalidOperationException("Cannot link '/external/DMF': it overlaps the mods repository root."),
         });
 
-        await vm.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
+        await vm.LinkedMods.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
 
         // LinkFolder was recorded (then threw); AddMod never ran.
         Assert.Single(import.LinkFolderCalls);
@@ -1930,7 +1930,7 @@ public sealed class ModListViewModelTests
         profiles.GetBaseNameCollisionResult =
             new ModListEntry { ContainerId = conflicting.Id, Enabled = true, Order = 0 };
 
-        await vm.LinkModsCommand.ExecuteAsync(new[] { "/external/dmf" });
+        await vm.LinkedMods.LinkModsCommand.ExecuteAsync(new[] { "/external/dmf" });
 
         // The peek + the collision check both ran; FindExistingContainer fed the
         // exclusion (null here, a brand-new linked container).
@@ -1959,13 +1959,13 @@ public sealed class ModListViewModelTests
         var dialogs = new FakeDialogService();
         var (vm, profiles, repo, import, _, _, _) = BuildForLinked(dialogs: dialogs);
         // First link creates the container + adds it.
-        await vm.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
+        await vm.LinkedMods.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
         var firstContainer = repo.List().Single(c => c.Source is LinkedSource);
         var firstPassCollisionCalls = profiles.GetBaseNameCollisionCalls.Count;
 
         // Re-link the same path (a trailing-slash variant resolves to the same
         // normalized container id).
-        await vm.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF/" });
+        await vm.LinkedMods.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF/" });
 
         // The re-link's collision check carried the existing container id as the
         // exclusion (the second collision call this run).
@@ -1988,7 +1988,7 @@ public sealed class ModListViewModelTests
     {
         var (vm, profiles, _, import, _, _, _) = BuildForLinked();
 
-        await vm.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF", "/external/SoundPack" });
+        await vm.LinkedMods.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF", "/external/SoundPack" });
 
         // One peek + one LinkFolder + one AddMod per path, in order.
         Assert.Equal(2, import.GetBaseNameCalls.Count);
@@ -2008,7 +2008,7 @@ public sealed class ModListViewModelTests
             ? throw new InvalidOperationException("Invalid mod folder '/external/Bad'.")
             : Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
 
-        await vm.LinkModsCommand.ExecuteAsync(
+        await vm.LinkedMods.LinkModsCommand.ExecuteAsync(
             new[] { "/external/One", "/external/Bad", "/external/Three" });
 
         // First linked; second threw; third never reached.
@@ -2028,7 +2028,7 @@ public sealed class ModListViewModelTests
         var vm = TestDoubles.BuildModList(profiles,
             new FakeProfileSession { ActiveProfileId = null }, repo, import);
 
-        await vm.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
+        await vm.LinkedMods.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
 
         Assert.Empty(import.LinkFolderCalls);
         Assert.Empty(profiles.AddModCalls);
@@ -2039,7 +2039,7 @@ public sealed class ModListViewModelTests
     {
         var (vm, profiles, _, import, _, _, _) = BuildForLinked();
 
-        await vm.LinkModsCommand.ExecuteAsync(Array.Empty<string>());
+        await vm.LinkedMods.LinkModsCommand.ExecuteAsync(Array.Empty<string>());
 
         Assert.Empty(import.LinkFolderCalls);
         Assert.Empty(profiles.AddModCalls);
@@ -2055,10 +2055,10 @@ public sealed class ModListViewModelTests
         const string externalPath = "/external/DMF";
         var launcher = new FakeExternalLauncher();
         var (vm, _, repo, _, _, _, _) = BuildForLinked(launcher: launcher);
-        await vm.LinkModsCommand.ExecuteAsync(new[] { externalPath });
+        await vm.LinkedMods.LinkModsCommand.ExecuteAsync(new[] { externalPath });
         var row = Row(vm, "DMF");
 
-        await vm.OpenFolderCommand.ExecuteAsync(row);
+        await vm.LinkedMods.OpenFolderCommand.ExecuteAsync(row);
 
         Assert.Equal(repo.List().Single(c => c.Source is LinkedSource).Id, row.ContainerId);
         var opened = Assert.Single(launcher.OpenedPaths);
@@ -2075,10 +2075,10 @@ public sealed class ModListViewModelTests
         var (vm, _, _, _, _, _, _) = BuildForLinked(
             dialogs: dialogs,
             launcher: new FakeExternalLauncher { OpenPathResult = _ => false });
-        await vm.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
+        await vm.LinkedMods.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
         var row = Row(vm, "DMF");
 
-        await vm.OpenFolderCommand.ExecuteAsync(row);
+        await vm.LinkedMods.OpenFolderCommand.ExecuteAsync(row);
 
         var alert = Assert.Single(dialogs.AlertCalls);
         Assert.Contains("DMF", alert.Message);
@@ -2099,7 +2099,7 @@ public sealed class ModListViewModelTests
             launcher: launcher);
         var row = Row(vm, "DMF");
 
-        await vm.OpenFolderCommand.ExecuteAsync(row);
+        await vm.LinkedMods.OpenFolderCommand.ExecuteAsync(row);
 
         Assert.Empty(launcher.OpenedPaths);
     }
@@ -2112,7 +2112,7 @@ public sealed class ModListViewModelTests
         var (vm, profiles, repo, _, _, _, profileId) = BuildForLinked(
             dialogs: dialogs,
             launcher: launcher);
-        await vm.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
+        await vm.LinkedMods.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
         var container = repo.List().Single(c => c.Source is LinkedSource);
         // Mark the external folder unavailable + reload so the row reflects it.
         repo.ExternalUnavailableIds.Add(container.Id);
@@ -2122,7 +2122,7 @@ public sealed class ModListViewModelTests
         var row = Row(vm, "DMF");
 
         Assert.True(row.IsLinkedBroken);
-        await vm.OpenFolderCommand.ExecuteAsync(row);
+        await vm.LinkedMods.OpenFolderCommand.ExecuteAsync(row);
 
         Assert.Empty(launcher.OpenedPaths);
         Assert.Empty(dialogs.AlertCalls);
@@ -2368,7 +2368,7 @@ public sealed class ModListViewModelTests
         var (vm, session) = BuildWithSession(profiles, repo, import);
         Assert.False(session.HasPendingChanges);
 
-        await vm.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
+        await vm.LinkedMods.LinkModsCommand.ExecuteAsync(new[] { "/external/DMF" });
 
         Assert.True(session.HasPendingChanges);
     }

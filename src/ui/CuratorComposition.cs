@@ -194,11 +194,31 @@ public static class CuratorComposition
             sp.GetRequiredService<IModImportService>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<ILogger<ImportWorkflowViewModel>>()));
-        services.AddSingleton(sp => new ModListViewModel(
+
+        // The link-external-folder child VM: an application-lifetime singleton
+        // registered BEFORE ModListViewModel (which takes it as a child +
+        // reloads the active list when its link flow finishes). Owns the
+        // picker-driven peek / collision-check / LinkFolder / AddMod loop, its
+        // failure alerts, and the linked row's open-external-folder badge
+        // command; the view's picker + badge forward paths route to its
+        // commands (the same forwarder shape the Add split button uses for the
+        // import workflow).
+        services.AddSingleton(sp => new LinkedModsViewModel(
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IModRepository>(),
             sp.GetRequiredService<IModImportService>(),
+            sp.GetRequiredService<IDialogService>(),
+            sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<IExternalLauncher>(),
+            // Gaming Mode gates the linked-row open-folder badge (the picker
+            // side is gated by the Add split button).
+            sp.GetRequiredService<IGamingModeState>(),
+            sp.GetRequiredService<ILogger<LinkedModsViewModel>>()));
+        services.AddSingleton(sp => new ModListViewModel(
+            sp.GetRequiredService<IProfileService>(),
+            sp.GetRequiredService<IProfileSession>(),
+            sp.GetRequiredService<IModRepository>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<IUpdateCheckService>(),
@@ -213,6 +233,7 @@ public static class CuratorComposition
             sp.GetRequiredService<IAutomaticUpdateService>(),
             sp.GetRequiredService<ImportWorkflowViewModel>(),
             sp.GetRequiredService<DetailedModRowsViewModel>(),
+            sp.GetRequiredService<LinkedModsViewModel>(),
             sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<ModListViewModel>>(),
             // The shared last-known nxm registration state feeds the
@@ -222,7 +243,7 @@ public static class CuratorComposition
             // linked-row open-folder badge.
             sp.GetRequiredService<IGamingModeState>(),
             // The OS shell-open launcher: the Add NexusMods browser open +
-            // the linked-row open-folder action.
+            // the regular-tier update action's files-page open.
             sp.GetRequiredService<IExternalLauncher>()));
 
         // The hosted destination view models: singletons (one instance per page,

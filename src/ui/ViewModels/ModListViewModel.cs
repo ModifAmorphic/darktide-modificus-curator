@@ -40,11 +40,11 @@ public enum ModAddMode
 /// shell. Loads the profile's mods (joined with source + version from the mod
 /// repository for the badge), and applies every edit through
 /// <see cref="IProfileService"/>: enable/disable, reorder (up/down), per-mod
-/// policy (Latest / Pinned), remove (confirmed),
-/// the add flow (file picker + drag-and-drop) forwarded to the injected
-/// <see cref="ImportWorkflowViewModel"/> (the inline import card), and the
-/// link-external-folder flow (folder picker only, no copy, no card) via
-/// <see cref="IModImportService.LinkFolder"/>.
+/// policy (Latest / Pinned), remove (confirmed), the add flow (file picker +
+/// drag-and-drop) forwarded to the injected <see cref="ImportWorkflowViewModel"/>
+/// (the inline import card), and the link-external-folder flow (folder picker
+/// only, no copy, no card) forwarded to the injected
+/// <see cref="LinkedModsViewModel"/>.
 /// </summary>
 /// <remarks>
 /// <para><b>Active profile is the session's:</b> the list never decides the active
@@ -93,12 +93,12 @@ public enum ModAddMode
 /// profile. While the workflow is active (editing, processing, or failure),
 /// the Add split button disables and drag-and-drop is rejected.</para>
 /// <para><b>Link flow:</b> the Add split button's "Link external folder" flyout
-/// item reduces to <see cref="LinkModsCommand"/>, which peeks the base name
-/// (validates the mod-folder shape), checks the base-name collision (excluding a
-/// re-link of the same path), then records the metadata-only container via
-/// <see cref="IModImportService.LinkFolder"/> + adds the profile reference with
-/// <see cref="ModVersionPolicy.Latest"/> (inert for linked). No modal; the folder
-/// is linked, not copied.</para>
+/// item opens the folder picker (view-side) and forwards the selected paths to
+/// <see cref="LinkedMods"/>'s <c>LinkModsCommand</c>, which owns the peek /
+/// collision-check / LinkFolder / AddMod loop and its failure alerts. The child
+/// raises its <c>ModsLinked</c> event where the flow finishes; this VM reloads
+/// the active list on it (the same reload point the flow had when it lived
+/// here).</para>
 /// </remarks>
 public partial class ModListViewModel : ObservableObject, IModListRefresh
 {
@@ -112,7 +112,6 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     private readonly IProfileService _profiles;
     private readonly IProfileSession _session;
     private readonly IModRepository _repo;
-    private readonly IModImportService _importService;
     private readonly IDialogService _dialogs;
     private readonly LocalizationService _localization;
     private readonly IUpdateCheckService _updateCheck;
@@ -142,7 +141,8 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     /// <see cref="IUpdateCheckService.CheckCompleted"/>), the mod-update
     /// installer (per-row spinner via progress + the global busy flag pushed
     /// down to rows), the automatic-update service (reload after a batch
-    /// installs mods), and localization (culture refresh), loads the current
+    /// installs mods), the linked-mods child (reload when its link flow
+    /// finishes), and localization (culture refresh), loads the current
     /// profile's mods, and reads the Nexus premium state once
     /// (fire-and-forget; flips <see cref="IsPremiumUser"/> when it lands).
     /// </summary>
@@ -150,7 +150,6 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
         IProfileService profiles,
         IProfileSession session,
         IModRepository repo,
-        IModImportService importService,
         IDialogService dialogs,
         LocalizationService localization,
         IUpdateCheckService updateCheck,
@@ -161,6 +160,7 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
         IAutomaticUpdateService automaticUpdates,
         ImportWorkflowViewModel importWorkflow,
         DetailedModRowsViewModel detailedRows,
+        LinkedModsViewModel linkedMods,
         Action<Action> invokeOnUi,
         ILogger<ModListViewModel> logger,
         INxmRegistrationState nxmRegistration,
@@ -170,7 +170,6 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
         _profiles = profiles;
         _session = session;
         _repo = repo;
-        _importService = importService;
         _dialogs = dialogs;
         _localization = localization;
         _updateCheck = updateCheck;
@@ -181,6 +180,7 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
         _automaticUpdates = automaticUpdates ?? throw new ArgumentNullException(nameof(automaticUpdates));
         ImportWorkflow = importWorkflow ?? throw new ArgumentNullException(nameof(importWorkflow));
         DetailedRows = detailedRows ?? throw new ArgumentNullException(nameof(detailedRows));
+        LinkedMods = linkedMods ?? throw new ArgumentNullException(nameof(linkedMods));
         _logger = logger;
         _invokeOnUi = invokeOnUi ?? throw new ArgumentNullException(nameof(invokeOnUi));
         _externalLauncher = externalLauncher ?? throw new ArgumentNullException(nameof(externalLauncher));
@@ -202,6 +202,10 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
         // re-fire it. Both VMs are application-lifetime singletons; the
         // subscription is never undone (mirrors the neighboring subscriptions).
         ImportWorkflow.PropertyChanged += OnImportWorkflowPropertyChanged;
+        // The link flow lives on the child; the reload that surfaces freshly
+        // linked rows is this VM's (same reload point the flow had inline).
+        // Application-lifetime singletons both; never undone.
+        LinkedMods.ModsLinked += OnModsLinked;
 
         // Read the Nexus premium state once at construction. Fire-and-forget:
         // GetCurrentStateAsync hits the network, so blocking the (UI-thread)
@@ -294,6 +298,26 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     /// on every reload.
     /// </summary>
     public DetailedModRowsViewModel DetailedRows { get; }
+
+    /// <summary>
+    /// The link-external-folder child VM (application-lifetime singleton,
+    /// injected before this VM in composition). Owns the peek / collision-check
+    /// / LinkFolder / AddMod loop and the linked row's open-folder badge
+    /// command; exposed read-only so the view's picker forward paths + the
+    /// shared badge template's <c>OpenFolder_Click</c> route to
+    /// <c>LinkedMods.LinkModsCommand</c> / <c>LinkedMods.OpenFolderCommand</c>
+    /// (the same forwarder shape the Add split button uses for
+    /// <see cref="ImportWorkflow"/>). This VM reloads the active list when the
+    /// child's <c>ModsLinked</c> event fires.
+    /// </summary>
+    public LinkedModsViewModel LinkedMods { get; }
+
+    /// <summary>
+    /// The link-external-folder child finished processing its picker paths
+    /// (linked or not). Reload so freshly linked rows appear; a no-link run
+    /// reloads the same authoritative state, exactly as the inline flow did.
+    /// </summary>
+    private void OnModsLinked(object? sender, EventArgs e) => Reload();
 
     /// <summary>
     /// Whether the app runs inside a Steam Deck Gaming Mode session (fixed for
@@ -1399,7 +1423,11 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
                 // fallback alert rather than swallowing it so the user can act
                 // (the URL is included for manual copy).
                 _logger.LogWarning("Opening the Nexus files page for {Container} failed.", row.ContainerId);
-                _ = ShowLaunchFailedAlertAsync(row.Name, url);
+                _ = LaunchAlerts.ShowAsync(
+                    _dialogs, _localization,
+                    "ModList_OpenFilesFailedTitle",
+                    "ModList_OpenFilesFailedMessage",
+                    row.Name, url);
             }
         }
         catch (Exception ex)
@@ -1407,20 +1435,12 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
             // The launcher's exception filter is narrow; a real wiring bug
             // surfaces here as a fallback alert rather than being swallowed.
             _logger.LogError(ex, "Launching the Nexus files page for {Container} threw.", row.ContainerId);
-            _ = ShowLaunchFailedAlertAsync(row.Name, url);
+            _ = LaunchAlerts.ShowAsync(
+                _dialogs, _localization,
+                "ModList_OpenFilesFailedTitle",
+                "ModList_OpenFilesFailedMessage",
+                row.Name, url);
         }
-    }
-
-    /// <summary>
-    /// Shows the localized launcher-failure alert (fire-and-forget on the UI
-    /// thread; the click handler is sync). Includes the files-page URL so the
-    /// user can open it manually.
-    /// </summary>
-    private async Task ShowLaunchFailedAlertAsync(string modName, string url)
-    {
-        await _dialogs.ShowAlertAsync(
-            _localization["ModList_OpenFilesFailedTitle"],
-            _localization.Format("ModList_OpenFilesFailedMessage", modName, url));
     }
 
     /// <summary>
@@ -1461,7 +1481,11 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
                 // fallback alert rather than swallowing it so the user can act
                 // (the URL is included for manual copy).
                 _logger.LogWarning("Opening the Nexus Mods games page failed.");
-                _ = ShowNexusModsLaunchFailedAlertAsync(url);
+                _ = LaunchAlerts.ShowAsync(
+                    _dialogs, _localization,
+                    "ModList_OpenNexusModsFailedTitle",
+                    "ModList_OpenNexusModsFailedMessage",
+                    url);
             }
         }
         catch (Exception ex)
@@ -1469,206 +1493,11 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
             // The launcher's exception filter is narrow; a real wiring bug
             // surfaces here as a fallback alert rather than being swallowed.
             _logger.LogError(ex, "Launching the Nexus Mods games page threw.");
-            _ = ShowNexusModsLaunchFailedAlertAsync(url);
+            _ = LaunchAlerts.ShowAsync(
+                _dialogs, _localization,
+                "ModList_OpenNexusModsFailedTitle",
+                "ModList_OpenNexusModsFailedMessage",
+                url);
         }
-    }
-
-    /// <summary>
-    /// Shows the localized launcher-failure alert for the Nexus Mods games page
-    /// (fire-and-forget on the UI thread; the click handler is sync). Includes
-    /// the URL so the user can open it manually.
-    /// </summary>
-    private async Task ShowNexusModsLaunchFailedAlertAsync(string url)
-    {
-        await _dialogs.ShowAlertAsync(
-            _localization["ModList_OpenNexusModsFailedTitle"],
-            _localization.Format("ModList_OpenNexusModsFailedMessage", url));
-    }
-
-    // ---- link-external-folder helper -------------------------------------
-
-    /// <summary>
-    /// Surfaces a link-external-folder failure alert for a source path + the
-    /// underlying exception, using the localized <c>Import_Failed</c> strings.
-    /// Logs the exception with its stack + shows the message text to the user.
-    /// (The copied local-import flow now surfaces its failures inline via
-    /// <see cref="ImportWorkflowViewModel.FailureMessage"/>; this helper is used
-    /// only by the linked-folder flow, which remains modal-alert-based.)
-    /// </summary>
-    private async Task AlertImportFailed(string path, Exception ex)
-    {
-        _logger.LogError(ex, "Import of {Path} failed", path);
-        await _dialogs.ShowAlertAsync(
-            _localization["Import_FailedTitle"],
-            _localization.Format("Import_FailedMessage", path) + " " + ex.Message);
-    }
-
-    // ---- link external folder (picker only, no modal, no copy) --------------
-
-    /// <summary>
-    /// Processes a list of external folder paths from the link flow (the "Link
-    /// external folder" picker), sequentially. Per path the flow mirrors the
-    /// copied-import flow minus the inline workflow (the folder is linked, not
-    /// copied): <b>(1)</b> peek the base folder name via
-    /// <see cref="IModImportService.GetBaseName"/> (validates the mod-folder
-    /// shape, throws on an invalid source); <b>(2)</b> hard-block a base-name
-    /// collision against the active profile (refuse, create nothing, alert),
-    /// excluding the container a re-link would dedup to (a re-link resolves to
-    /// the same container, and <see cref="IProfileService.AddMod"/> is idempotent
-    /// on it); <b>(3)</b> <see cref="IModImportService.LinkFolder"/> (record the
-    /// metadata-only container, no copy) + <see cref="IProfileService.AddMod"/>
-    /// with <see cref="ModVersionPolicy.Latest"/> (inert for linked; the external
-    /// folder is the single implicit version). A failed peek, a containment /
-    /// shape failure from <see cref="IModImportService.LinkFolder"/>, OR a
-    /// collision cancels the whole remaining batch (folders linked earlier in the
-    /// batch stay linked).
-    /// </summary>
-    /// <remarks>
-    /// No <c>ConfigureAwait(false)</c> anywhere: dialog + observable mutations
-    /// stay on the captured UI context (UI-layer convention).
-    /// </remarks>
-    [RelayCommand]
-    private async Task LinkMods(IReadOnlyList<string>? paths)
-    {
-        if (paths is null || paths.Count == 0)
-        {
-            return;
-        }
-
-        if (_session.ActiveProfileId is not Guid id)
-        {
-            _logger.LogWarning("Link flow ignored: no active profile");
-            return;
-        }
-
-        // Tracks whether any path actually landed a linked mod in the profile.
-        // A failed-peek or all-colliding batch links nothing, so it must not set
-        // the pending-changes flag (no structural change occurred).
-        var changed = false;
-        foreach (var path in paths)
-        {
-            // (1) Peek the base folder name. The picked folder IS the base; this
-            // validates the mod-folder shape (a matching <base>.mod descriptor)
-            // BEFORE any container is created. An invalid source throws here;
-            // catch it per path, surface an alert naming the failing source, and
-            // abort the remaining batch (the cancel-aborts-batch posture).
-            string baseName;
-            try
-            {
-                baseName = _importService.GetBaseName(path);
-            }
-            catch (Exception ex) when (
-                ex is InvalidOperationException or ArgumentException
-                    or IOException or UnauthorizedAccessException
-                    or System.IO.InvalidDataException)
-            {
-                await AlertImportFailed(path, ex);
-                break;
-            }
-
-            // (2) Base-name collision hard-block (same rule as the inline
-            // import workflow's collision check). The
-            // container a re-link would dedup to is excluded: a re-link resolves
-            // to the same linked container (Linked identity is the normalized
-            // external path), and AddMod is idempotent on it, so it must NOT be
-            // treated as a collision.
-            var linkedSource = new LinkedSource { ExternalPath = path };
-            var existing = _importService.FindExistingContainer(linkedSource, string.Empty);
-            var collision = _profiles.GetBaseNameCollision(id, baseName, existing?.Id);
-            if (collision is not null)
-            {
-                var conflictingName = _repo.Get(collision.ContainerId)?.Name ?? baseName;
-                _logger.LogWarning(
-                    "Link blocked at {Path}: base folder '{Base}' collides with existing mod '{Conflicting}' (container {Container}) on profile {Id}",
-                    path, baseName, conflictingName, collision.ContainerId, id);
-                await _dialogs.ShowAlertAsync(
-                    _localization["Import_CollisionTitle"],
-                    _localization.Format("Import_CollisionMessage", path, baseName, conflictingName));
-                break;
-            }
-
-            // (3) Record the linked container (metadata only, no copy) then add
-            // the profile reference with LatestPolicy (inert for linked).
-            Guid containerId;
-            try
-            {
-                containerId = _importService.LinkFolder(path);
-            }
-            catch (Exception ex) when (
-                ex is InvalidOperationException or ArgumentException)
-            {
-                await AlertImportFailed(path, ex);
-                break;
-            }
-
-            _profiles.AddMod(id, containerId, ModVersionPolicy.Latest);
-            changed = true;
-            _logger.LogInformation(
-                "Linked {Mod} from {Path} (policy=Latest) onto container {Container}",
-                baseName, path, containerId);
-        }
-
-        if (changed)
-        {
-            _session.HasPendingChanges = true;
-        }
-        Reload();
-    }
-
-    // ---- open external folder (linked row badge click) ----------------------
-
-    /// <summary>
-    /// Opens the OS file manager at a linked row's external folder via the
-    /// injected <see cref="IExternalLauncher"/>, surfacing a fallback alert on
-    /// launch failure. No-op for a non-linked row, a broken row (the folder is
-    /// missing), a row whose source carries no path, or while inside a Steam
-    /// Deck Gaming Mode session (file-manager opens depend on a desktop shell;
-    /// the disabled badge is the first gate, this is the programmatic one). The
-    /// row carries state only; this command owns the launch + alert, mirroring
-    /// the regular/unknown files-page open path.
-    /// </summary>
-    [RelayCommand]
-    private async Task OpenFolder(ModItemViewModel? row)
-    {
-        if (row is null || row.Source is not LinkedSource || row.IsExternalBroken)
-        {
-            return;
-        }
-
-        if (IsGamingMode)
-        {
-            return;
-        }
-
-        var path = row.ExternalFolderPath;
-        if (string.IsNullOrEmpty(path))
-        {
-            return;
-        }
-
-        try
-        {
-            if (!_externalLauncher.OpenPath(path))
-            {
-                _logger.LogWarning("Opening the external folder for {Container} failed.", row.ContainerId);
-                await ShowOpenFolderFailedAlertAsync(row.Name, path);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Launching the external folder for {Container} threw.", row.ContainerId);
-            await ShowOpenFolderFailedAlertAsync(row.Name, path);
-        }
-    }
-
-    /// <summary>
-    /// Shows the localized open-folder-failure alert (the launcher returned
-    /// false or threw). Includes the path so the user can open it manually.
-    /// </summary>
-    private async Task ShowOpenFolderFailedAlertAsync(string modName, string path)
-    {
-        await _dialogs.ShowAlertAsync(
-            _localization["ModList_OpenFolderFailedTitle"],
-            _localization.Format("ModList_OpenFolderFailedMessage", modName, path));
     }
 }

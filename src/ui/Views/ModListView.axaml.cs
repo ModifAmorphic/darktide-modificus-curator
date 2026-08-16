@@ -240,8 +240,9 @@ public partial class ModListView : UserControl
     /// <summary>
     /// The "Link external folder" flyout item: sets the mode to LinkExternal (so
     /// subsequent primary clicks reopen the link picker) and opens a folder
-    /// picker, forwarding the selected folder paths to the VM's link command
-    /// (records each folder as a metadata-only linked container, no copy).
+    /// picker, forwarding the selected folder paths to the linked-mods child
+    /// VM's link command (records each folder as a metadata-only linked
+    /// container, no copy).
     /// </summary>
     private async void LinkFolder_Click(object? sender, RoutedEventArgs e)
     {
@@ -251,7 +252,7 @@ public partial class ModListView : UserControl
 
     /// <summary>
     /// Opens a multi-select folder picker and forwards the selected folder paths
-    /// to the VM's link command. The picker call mirrors
+    /// to the linked-mods child VM's link command. The picker call mirrors
     /// <see cref="OpenFolderPickerAsync"/> exactly (the same
     /// <c>StorageProvider.OpenFolderPickerAsync</c> path); only the target
     /// command differs. Gated on <see cref="ImportWorkflowViewModel.IsActive"/>
@@ -298,7 +299,7 @@ public partial class ModListView : UserControl
         var paths = result.Select(f => f.Path.LocalPath).ToArray();
         if (paths.Length > 0)
         {
-            await vm.LinkModsCommand.ExecuteAsync(paths);
+            await vm.LinkedMods.LinkModsCommand.ExecuteAsync(paths);
         }
     }
 
@@ -613,18 +614,18 @@ public partial class ModListView : UserControl
     }
 
     /// <summary>
-    /// Routes a linked row's badge click to the parent's
+    /// Routes a linked row's badge click to the linked-mods child's
     /// <c>OpenFolderCommand</c>, which opens the OS file manager at the row's
     /// external folder. No-op for non-linked or broken rows (the command guards
     /// on both). The row is passed as the command parameter; the view is pure
-    /// mechanics.
+    /// mechanics (the shared badge template routes here from both row roots).
     /// </summary>
     private void OpenFolder_Click(object? sender, RoutedEventArgs e)
     {
         if (sender is HyperlinkButton hb && hb.DataContext is ModItemViewModel row)
         {
             // AsyncRelayCommand.Execute forwards to ExecuteAsync.
-            ViewModel?.OpenFolderCommand.Execute(row);
+            ViewModel?.LinkedMods.OpenFolderCommand.Execute(row);
         }
     }
 
