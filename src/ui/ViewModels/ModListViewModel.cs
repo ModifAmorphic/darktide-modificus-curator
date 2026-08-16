@@ -114,17 +114,11 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     private readonly IModRepository _repo;
     private readonly IDialogService _dialogs;
     private readonly LocalizationService _localization;
-    private readonly IUpdateCheckService _updateCheck;
-    private readonly IModUpdateInstaller _installer;
-    private readonly INexusAuthService _auth;
     private readonly IUpdateStateStore _updateState;
     private readonly UpdateCheckRunner _updateCheckRunner;
-    private readonly IAutomaticUpdateService _automaticUpdates;
     private readonly ILogger<ModListViewModel> _logger;
-    private readonly Action<Action> _invokeOnUi;
     private readonly IExternalLauncher _externalLauncher;
     private readonly INxmRegistrationState _nxmRegistration;
-    private readonly IGamingModeState _gamingMode;
 
     /// <summary>
     /// The profile entries the last <see cref="Reload"/> loaded (the raw
@@ -136,15 +130,14 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     private IReadOnlyList<ModListEntry> _loadedEntries = Array.Empty<ModListEntry>();
 
     /// <summary>
-    /// Creates the list VM, subscribes to the session (reload on active-profile
-    /// change), the update-check service (badge refresh on
-    /// <see cref="IUpdateCheckService.CheckCompleted"/>), the mod-update
-    /// installer (per-row spinner via progress + the global busy flag pushed
-    /// down to rows), the automatic-update service (reload after a batch
-    /// installs mods), the linked-mods child (reload when its link flow
-    /// finishes), and localization (culture refresh), loads the current
-    /// profile's mods, and reads the Nexus premium state once
-    /// (fire-and-forget; flips <see cref="IsPremiumUser"/> when it lands).
+    /// Creates the list VM, subscribes to the session (reload on
+    /// active-profile change), the update-check runner (row hydration on every
+    /// completed check + reload after an automatic batch installs mods), the
+    /// row context (the per-row install progress + the global premium / busy /
+    /// gaming flips, all already on the UI thread), the linked-mods child
+    /// (reload when its link flow finishes), and localization (culture
+    /// refresh), then loads the current profile's mods. The premium read lives
+    /// in the row context (fire-and-forget at its construction).
     /// </summary>
     public ModListViewModel(
         IProfileService profiles,
@@ -152,50 +145,46 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
         IModRepository repo,
         IDialogService dialogs,
         LocalizationService localization,
-        IUpdateCheckService updateCheck,
-        IModUpdateInstaller installer,
-        INexusAuthService auth,
         IUpdateStateStore updateState,
         UpdateCheckRunner updateCheckRunner,
-        IAutomaticUpdateService automaticUpdates,
+        ModRowContext rowContext,
         ImportWorkflowViewModel importWorkflow,
         DetailedModRowsViewModel detailedRows,
         LinkedModsViewModel linkedMods,
-        Action<Action> invokeOnUi,
-        ILogger<ModListViewModel> logger,
+        IExternalLauncher externalLauncher,
         INxmRegistrationState nxmRegistration,
-        IGamingModeState gamingMode,
-        IExternalLauncher externalLauncher)
+        ILogger<ModListViewModel> logger)
     {
         _profiles = profiles;
         _session = session;
         _repo = repo;
         _dialogs = dialogs;
         _localization = localization;
-        _updateCheck = updateCheck;
-        _installer = installer ?? throw new ArgumentNullException(nameof(installer));
-        _auth = auth;
         _updateState = updateState;
         _updateCheckRunner = updateCheckRunner;
-        _automaticUpdates = automaticUpdates ?? throw new ArgumentNullException(nameof(automaticUpdates));
+        RowContext = rowContext ?? throw new ArgumentNullException(nameof(rowContext));
         ImportWorkflow = importWorkflow ?? throw new ArgumentNullException(nameof(importWorkflow));
         DetailedRows = detailedRows ?? throw new ArgumentNullException(nameof(detailedRows));
         LinkedMods = linkedMods ?? throw new ArgumentNullException(nameof(linkedMods));
-        _logger = logger;
-        _invokeOnUi = invokeOnUi ?? throw new ArgumentNullException(nameof(invokeOnUi));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _externalLauncher = externalLauncher ?? throw new ArgumentNullException(nameof(externalLauncher));
         _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
-        _gamingMode = gamingMode ?? throw new ArgumentNullException(nameof(gamingMode));
 
         _session.PropertyChanged += OnSessionPropertyChanged;
         _localization.PropertyChanged += OnCultureChanged;
-        _updateCheck.CheckCompleted += OnUpdateCheckCompleted;
-        _installer.BusyChanged += OnInstallerBusyChanged;
-        _installer.ModUpdateProgress += OnModUpdateProgress;
-        _automaticUpdates.UpdatesApplied += OnAutomaticUpdatesApplied;
+        // The runner surfaces both update-family completions on the UI thread
+        // (the re-raised check-completed + the automatic batch's
+        // updates-applied); this VM does no marshaling of its own.
+        _updateCheckRunner.CheckCompleted += OnUpdateCheckCompleted;
+        _updateCheckRunner.UpdatesApplied += OnAutomaticUpdatesApplied;
         // The refresh gate is runner-owned + fed by every check result; this
         // VM renders its state (the gate marshals the event to the UI thread).
         _updateCheckRunner.RefreshGate.StateChanged += OnRefreshGateStateChanged;
+        // The row context's per-container install progress drives the matching
+        // row's spinner; its global flips (premium / busy / gaming) re-fire
+        // this VM's forwarding names + fan out to the live rows.
+        RowContext.ModUpdateProgress += OnModUpdateProgress;
+        RowContext.PropertyChanged += OnRowContextChanged;
         ImportWorkflow.ItemImported += OnItemImported;
         // The Add split button's enabled state combines the workflow's activity
         // with the Gaming Mode gate, so the workflow's own IsActive flips must
@@ -206,16 +195,6 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
         // linked rows is this VM's (same reload point the flow had inline).
         // Application-lifetime singletons both; never undone.
         LinkedMods.ModsLinked += OnModsLinked;
-
-        // Read the Nexus premium state once at construction. Fire-and-forget:
-        // GetCurrentStateAsync hits the network, so blocking the (UI-thread)
-        // constructor on it would stall app startup. The result lands quickly
-        // (sub-second typically) and flips IsPremiumUser; until then the Update
-        // buttons stay disabled (also gated on an update being flagged, which
-        // takes longer). No mid-session refresh by design (re-checking on Integrations
-        // dialog close would burn an API call each time; a user signing in
-        // mid-session needing a restart for the install behavior to change is acceptable).
-        _ = LoadPremiumStateAsync();
 
         // The empty-state Nexus hint reads the shared last-known nxm
         // registration state; no OS probe happens here or in Reload.
@@ -228,30 +207,27 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     /// <summary>
     /// The automatic-update service finished a batch with at least one
     /// successful install. Mark the active profile as having staged changes (the
-    /// batch changed one or more mod versions) and reload on the UI thread so the
-    /// new versions + cleared flags show. The event fires on the UI thread (the
-    /// service is invoked from the runner after it returns to the UI context),
-    /// but marshal defensively so a test that fires it off-thread stays correct.
+    /// batch changed one or more mod versions) and reload so the new versions +
+    /// cleared flags show. The runner re-raises the event on the UI thread.
     /// </summary>
-    private void OnAutomaticUpdatesApplied(object? sender, EventArgs e) =>
-        _invokeOnUi(() =>
-        {
-            _session.HasPendingChanges = true;
-            Reload();
-        });
+    private void OnAutomaticUpdatesApplied(object? sender, EventArgs e)
+    {
+        _session.HasPendingChanges = true;
+        Reload();
+    }
 
     /// <summary>
-    /// The mod-update installer reports per-install progress (a container's
-    /// install attempt started or finished, for BOTH the manual Premium path
-    /// and the automatic batch). Marshal to the UI thread, find the row by
-    /// ContainerId, and set its <see cref="ModItemViewModel.IsUpdating"/> so
-    /// the row-level spinner (left of the Nexus badge) tracks the currently
-    /// installing mod. An event for a row no longer present (after a profile
-    /// switch / reload) is ignored, so a switch mid-batch never leaves a stale
-    /// spinner on a now-absent row.
+    /// The row context reports per-install progress (a container's install
+    /// attempt started or finished, for BOTH the manual Premium path and the
+    /// automatic batch; already on the UI thread). Find the row by ContainerId
+    /// and set its <see cref="ModItemViewModel.IsUpdating"/> so the row-level
+    /// spinner (left of the Nexus badge) tracks the currently installing mod.
+    /// An event for a row no longer present (after a profile switch / reload)
+    /// is ignored, so a switch mid-batch never leaves a stale spinner on a
+    /// now-absent row.
     /// </summary>
     private void OnModUpdateProgress(object? sender, ModUpdateProgressEventArgs e) =>
-        _invokeOnUi(() => ApplyModUpdateProgress(e.ContainerId, e.IsActive));
+        ApplyModUpdateProgress(e.ContainerId, e.IsActive);
 
     /// <summary>
     /// Applies a per-mod install progress signal to the matching row. Finds the
@@ -320,13 +296,66 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     private void OnModsLinked(object? sender, EventArgs e) => Reload();
 
     /// <summary>
+    /// The Detailed-rows child VM's sibling: the shared observable row context
+    /// (premium / install-busy / gaming), created in composition before this
+    /// VM and passed once to every row on <see cref="Reload"/>. Exposed
+    /// read-only for the forwarding properties below; the rows hold the same
+    /// instance.
+    /// </summary>
+    public ModRowContext RowContext { get; }
+
+    /// <summary>
     /// Whether the app runs inside a Steam Deck Gaming Mode session (fixed for
     /// the process lifetime). Gates the Add split button's picker-based paths
-    /// and each linked row's open-folder badge, and is pushed down to every row
-    /// (mirroring the premium push) so the per-row badge state recomputes
-    /// without a parent walk in the binding.
+    /// and each linked row's open-folder badge. Forwarded from
+    /// <see cref="RowContext"/>; re-fires through
+    /// <see cref="OnRowContextChanged"/> when the context flips (the gaming
+    /// half is constant for the process lifetime).
     /// </summary>
-    public bool IsGamingMode => _gamingMode.IsGamingMode;
+    public bool IsGamingMode => RowContext.IsGamingMode;
+
+    /// <summary>
+    /// Whether the Nexus account is premium: forwarded from
+    /// <see cref="RowContext"/> (the context's one-shot construction read; no
+    /// mid-session refresh). Drives the manual update action's branch
+    /// (Premium -> in-app install; regular/unknown -> open the files page);
+    /// the per-row halves read the same context through their own forwarding
+    /// properties.
+    /// </summary>
+    public bool IsPremiumUser => RowContext.IsPremiumUser;
+
+    /// <summary>
+    /// Whether the mod-update installer reports an install in flight (manual or
+    /// automatic; the coordinator-backed busy flag). Forwarded from
+    /// <see cref="RowContext"/>; rows read the same flag through their own
+    /// forwarding property, so the per-row enabled state reflects the global
+    /// "one install at a time" coordination without a parent walk.
+    /// </summary>
+    public bool AnyRowUpdating => RowContext.AnyRowUpdating;
+
+    /// <summary>
+    /// A row-affecting global (premium / install-busy / gaming) flipped on the
+    /// shared row context (already on the UI thread). Re-fires this VM's
+    /// forwarding properties (the names match the context's exactly) and fans
+    /// the notification out to the live rows, whose derived enabled states +
+    /// tooltips re-read the context. One subscription + one fan-out replaces
+    /// the former three per-flag value pushes; rows dropped by a reload are
+    /// never subscribed individually, so none can leak against the
+    /// application-lifetime context.
+    /// </summary>
+    private void OnRowContextChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        OnPropertyChanged(e.PropertyName);
+        if (e.PropertyName is null)
+        {
+            return;
+        }
+
+        foreach (var row in Mods)
+        {
+            row.OnRowContextChanged(e.PropertyName);
+        }
+    }
 
     /// <summary>
     /// Whether the Add split button is enabled: not while the inline import
@@ -390,18 +419,6 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     private ModAddMode _addMode = ModAddMode.NexusMods;
 
     /// <summary>
-    /// Whether the Nexus account is premium. Read once at construction (see the
-    /// constructor's premium-read note); no mid-session refresh. Drives the
-    /// per-row update action's click behavior (Premium -> in-app install;
-    /// regular/unknown -> open the Nexus files page) and is pushed down to each
-    /// row so the per-row enabled state + tooltip can recompute without a parent
-    /// walk in the binding. False until the read lands (or on a read failure; a
-    /// restart re-reads).
-    /// </summary>
-    [ObservableProperty]
-    private bool _isPremiumUser;
-
-    /// <summary>
     /// Whether the last update check was rate-limited, read from the
     /// runner-owned refresh gate (fed by every check result). Drives the header
     /// rate-limit notice (the "check incomplete" indicator). Stays <c>true</c>
@@ -428,17 +445,6 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     /// together when the reset elapses.
     /// </summary>
     public bool IsRateLimitActive => _updateCheckRunner.RefreshGate.IsRateLimitActive;
-
-    /// <summary>
-    /// Whether the mod-update installer reports an install in flight (manual or
-    /// automatic; the coordinator-backed busy flag). Set from
-    /// <see cref="OnInstallerBusyChanged"/>; pushed down
-    /// to each row so the per-row enabled state reflects the global "one install
-    /// at a time" coordination. The manual Update command no longer sets this
-    /// directly; the installer behind its shared gate is the single source of truth.
-    /// </summary>
-    [ObservableProperty]
-    private bool _anyRowUpdating;
 
     /// <summary>
     /// Whether the manual "check now" affordance is running a thorough check.
@@ -654,22 +660,15 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     }
 
     /// <summary>
-    /// The update check finished (background task fires the event on its
-    /// completing thread). The check service already recorded the authoritative
+    /// A fired update check finished. The runner re-raises the completion on
+    /// UI thread, and the check service already recorded the authoritative
     /// outcome through the persisted known-update store, so re-hydrate the rows
-    /// from that store (profile-scoped) rather than reading the single in-memory
-    /// <see cref="IUpdateCheckService.LastResult"/> (which cannot distinguish
-    /// profiles). Idempotent.
+    /// from that store (profile-scoped) rather than reading the single
+    /// in-memory <see cref="IUpdateCheckService.LastResult"/> (which cannot
+    /// distinguish profiles). Idempotent.
     /// </summary>
-    private void OnUpdateCheckCompleted(object? sender, UpdateCheckResult? result)
-    {
-        // The event fires on the check's completing thread (a threadpool thread
-        // via UpdateCheckRunner's Task.Run). Marshal to the UI thread so the
-        // hydration's iteration of the UI-bound Mods collection doesn't race
-        // with a UI-thread Reload (ObservableCollection's enumerator is not
-        // thread-safe vs concurrent mutation).
-        _invokeOnUi(() => ApplyCheckLanded(result));
-    }
+    private void OnUpdateCheckCompleted(object? sender, UpdateCheckResult? result) =>
+        ApplyCheckLanded(result);
 
     /// <summary>
     /// Applies a just-landed check: refreshes the rate-limit notice from the
@@ -743,72 +742,6 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     }
 
     /// <summary>
-    /// The installer's busy flag changed (a manual row update or the automatic
-    /// batch acquired or released the shared coordinator). Mirror it to
-    /// <see cref="AnyRowUpdating"/> + push the new value down to every row so the
-    /// per-row enabled state recomputes (Premium clicks stay disabled while
-    /// another install runs; regular/unknown clicks stay enabled). Fires on the
-    /// acquiring/releasing thread, so marshal to the UI thread.
-    /// </summary>
-    private void OnInstallerBusyChanged(object? sender, EventArgs e) =>
-        _invokeOnUi(() => AnyRowUpdating = _installer.IsBusy);
-
-    /// <summary>
-    /// Pushes the current <see cref="IsPremiumUser"/>, <see cref="AnyRowUpdating"/>,
-    /// and <see cref="IsGamingMode"/> down to every row so each row's enabled
-    /// state + tooltip recompute without a parent walk in the binding. Called on
-    /// reload + whenever either observable half flips. The gaming half is
-    /// constant for the process lifetime (riding the same push keeps one
-    /// row-state path instead of a second per-row assignment site).
-    /// </summary>
-    private void PushGlobalStateToRows()
-    {
-        foreach (var row in Mods)
-        {
-            row.IsPremiumUser = IsPremiumUser;
-            row.AnyRowUpdating = AnyRowUpdating;
-            row.IsGamingMode = IsGamingMode;
-        }
-    }
-
-    /// <summary>
-    /// Reads the Nexus premium state once (called fire-and-forget from the
-    /// constructor). On success flips <see cref="IsPremiumUser"/> and pushes it
-    /// down to the rows; on failure logs + leaves it false (a restart re-reads).
-    /// </summary>
-    private async Task LoadPremiumStateAsync()
-    {
-        try
-        {
-            var state = await _auth.GetCurrentStateAsync();
-            IsPremiumUser = state?.IsPremium == true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Nexus premium state read failed; per-row update actions stay regular-tier until restart.");
-        }
-        finally
-        {
-            // Whether the read landed or failed, push the current value down so
-            // each row's tooltip + enabled state reflect it.
-            PushGlobalStateToRows();
-        }
-    }
-
-    /// <summary>
-    /// Pushes the new premium flag down to every row when it changes (the
-    /// construction-time read + a future refresh).
-    /// </summary>
-    partial void OnIsPremiumUserChanged(bool value) => PushGlobalStateToRows();
-
-    /// <summary>
-    /// Pushes the new global-busy flag down to every row when it changes (the
-    /// coordinator acquired or released).
-    /// </summary>
-    partial void OnAnyRowUpdatingChanged(bool value) => PushGlobalStateToRows();
-
-    /// <summary>
     /// The shared nxm registration state published a new last-known value
     /// (already on the UI thread). Re-read it into the empty-state hint flag.
     /// </summary>
@@ -860,6 +793,7 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
             var version = ResolveDisplayVersion(entry, container);
             var row = new ModItemViewModel(
                 _localization,
+                RowContext,
                 entry.ContainerId,
                 container?.Name ?? string.Empty,
                 source,
@@ -892,12 +826,12 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
         // directly without a parent walk.
         ApplyMoveAvailability();
 
-        // The freshly built rows default UpdateAvailable=false + carry no
-        // premium / global-busy state. Push the current global state down, then
-        // re-apply the persisted known-update state (profile-scoped) so a profile
-        // switch (or a post-edit reload, or a restart) reflects the recorded
-        // flags without waiting for the next check.
-        PushGlobalStateToRows();
+        // The freshly built rows default UpdateAvailable=false; their premium /
+        // busy / gaming halves read the shared row context (passed at
+        // construction), so no global push happens here. Re-apply the persisted
+        // known-update state (profile-scoped) so a profile switch (or a
+        // post-edit reload, or a restart) reflects the recorded flags without
+        // waiting for the next check.
         ApplyKnownUpdateState();
 
         // Hand the final row snapshot to the density coordinator so it can push
@@ -1358,7 +1292,7 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
             // installer revalidates it against the container's current state
             // inside the gate. The candidates are the entries the last Reload
             // loaded.
-            outcome = await _installer.TryInstallLatestAsync(
+            outcome = await RowContext.InstallLatestAsync(
                 profileId,
                 row.ContainerId,
                 modId,

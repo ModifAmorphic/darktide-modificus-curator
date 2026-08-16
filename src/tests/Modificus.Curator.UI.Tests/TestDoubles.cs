@@ -29,6 +29,26 @@ internal static class TestDoubles
     public static FakeProfileService Profiles(params ProfileSummary[] seed) => new(seed);
 
     /// <summary>
+    /// Builds a <see cref="ModRowContext"/> over the supplied (or default)
+    /// fakes with a pass-through UI-thread seam: the premium read resolves
+    /// synchronously (the fake auth returns completed tasks), the installer's
+    /// busy + progress events flow through immediately, and the gaming flag is
+    /// readable off the context the moment it is built.
+    /// </summary>
+    public static ModRowContext RowContext(
+        FakeNexusAuthService? auth = null,
+        FakeModUpdateInstaller? installer = null,
+        IGamingModeState? gamingMode = null)
+    {
+        return new ModRowContext(
+            auth ?? new FakeNexusAuthService(),
+            installer ?? new FakeModUpdateInstaller(),
+            gamingMode ?? new GamingModeState(false),
+            static action => action(),
+            NullLogger<ModRowContext>.Instance);
+    }
+
+    /// <summary>
     /// Builds a <see cref="DmfPromptService"/> wired to the supplied (or default)
     /// fakes. Defaults share the test's profiles/session so the create trigger
     /// fires through the same fake the test asserts on. The dialog fake defaults
@@ -193,6 +213,16 @@ internal static class TestDoubles
             launcher,
             gamingMode,
             NullLogger<LinkedModsViewModel>.Instance);
+
+        // The shared row context: the SAME installer/auth/gaming fakes the
+        // test drives (premium reads resolve synchronously off the fake auth;
+        // the installer's busy + progress events flow through the context).
+        var rowContext = new ModRowContext(
+            auth,
+            installer,
+            gamingMode,
+            invokeOnUi ?? (static action => action()),
+            NullLogger<ModRowContext>.Instance);
         // Wire the state store + a record-profile-id tracker into the fake
         // update-check service so RaiseCheckCompleted / CheckAsync record the
         // result through the store (mirroring the real service's publish-time
@@ -235,20 +265,15 @@ internal static class TestDoubles
             repo,
             dialogs,
             localization,
-            updateCheck,
-            installer,
-            auth,
             updateState,
             runner,
-            automaticUpdates,
+            rowContext,
             importWorkflow,
             detailedRows,
             linkedMods,
-            invokeOnUi,
-            NullLogger<ModListViewModel>.Instance,
+            launcher,
             nxmRegistration,
-            gamingMode,
-            launcher);
+            NullLogger<ModListViewModel>.Instance);
     }
 
     /// <summary>
@@ -2179,6 +2204,11 @@ internal sealed class FakeNexusAuthService : INexusAuthService
     /// gated, or that entering Integrations ran its auth refresh.</summary>
     public int GetCurrentStateCallCount { get; private set; }
 
+    /// <summary>When true, <see cref="GetCurrentStateAsync"/> throws instead of
+    /// returning the state (the caller's failure path: a caller that reads the
+    /// premium state once must swallow + keep its default).</summary>
+    public bool ThrowOnGetCurrentState { get; set; }
+
     /// <summary>
     /// When true, <see cref="LoginWithOAuthAsync"/> returns a task that completes
     /// as canceled when the supplied <see cref="CancellationToken"/> fires, so a
@@ -2213,6 +2243,10 @@ internal sealed class FakeNexusAuthService : INexusAuthService
     public Task<NexusAuthState?> GetCurrentStateAsync(CancellationToken ct = default)
     {
         GetCurrentStateCallCount++;
+        if (ThrowOnGetCurrentState)
+        {
+            throw new InvalidOperationException("offline");
+        }
         return Task.FromResult(State);
     }
 

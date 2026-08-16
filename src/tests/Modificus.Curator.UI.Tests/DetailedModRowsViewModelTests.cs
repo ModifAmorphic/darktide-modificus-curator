@@ -537,6 +537,7 @@ public sealed class DetailedModRowsViewModelTests
         var loc = new LocalizationService();
         return new ModItemViewModel(
             loc,
+            TestDoubles.RowContext(),
             containerId ?? Guid.NewGuid(),
             "Test",
             source ?? new UntrackedSource(),

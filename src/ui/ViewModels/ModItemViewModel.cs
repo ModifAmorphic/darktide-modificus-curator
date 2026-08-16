@@ -216,28 +216,34 @@ public partial class ModItemViewModel : ObservableObject
     private bool _isUpdating;
 
     /// <summary>
-    /// Whether the Nexus account was verified Premium. Pushed down by the parent
-    /// (read once at construction). Drives the update action's click behavior
-    /// (Premium -> in-app install; regular/unknown -> open the Nexus files page)
-    /// and the tooltip. The button itself shows for Nexus + Latest rows
-    /// regardless of premium; only the click behavior + tooltip differ.
+    /// The shared row context (premium / install-busy / gaming) this row reads
+    /// its global halves from. Passed once at construction by the parent; the
+    /// parent's single context subscription fans change notifications into the
+    /// live rows (via <see cref="OnRowContextChanged"/>), so a row never
+    /// subscribes to the application-lifetime context itself.
     /// </summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(UpdateActionEnabled))]
-    [NotifyPropertyChangedFor(nameof(UpdateActionTooltip))]
-    private bool _isPremiumUser;
+    public ModRowContext RowContext { get; }
+
+    /// <summary>
+    /// Whether the Nexus account was verified Premium: forwarded from
+    /// <see cref="RowContext"/> (its one-shot construction read). Drives the
+    /// update action's click behavior (Premium -> in-app install;
+    /// regular/unknown -> open the Nexus files page) and the tooltip. The
+    /// button itself shows for Nexus + Latest rows regardless of premium; only
+    /// the click behavior + tooltip differ.
+    /// </summary>
+    public bool IsPremiumUser => RowContext.IsPremiumUser;
 
     /// <summary>
     /// Whether any row (or the automatic updater) is currently running an
-    /// install. Pushed down by the parent so the per-row enabled state can reflect
-    /// the global "one install at a time" coordination without a parent walk in
+    /// install: forwarded from <see cref="RowContext"/> (the installer's
+    /// coordinator-gated busy flag), so the per-row enabled state reflects the
+    /// global "one install at a time" coordination without a parent walk in
     /// the binding. Premium clicks are disabled while this is true (the
     /// coordinator would reject a second concurrent install); regular/unknown
     /// clicks (which open a files page, no install) stay enabled.
     /// </summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(UpdateActionEnabled))]
-    private bool _anyRowUpdating;
+    public bool AnyRowUpdating => RowContext.AnyRowUpdating;
 
     /// <summary>
     /// Whether a linked row's external folder is missing at the last reload.
@@ -255,18 +261,47 @@ public partial class ModItemViewModel : ObservableObject
     private bool _isExternalBroken;
 
     /// <summary>
-    /// Whether the app runs inside a Steam Deck Gaming Mode session. Pushed down
-    /// by the parent (constant for the process lifetime). Disables the linked
-    /// row's "External" badge (its click opens the OS file manager, which depends
-    /// on a desktop shell); the non-interactive "Folder unavailable" text is
-    /// unaffected either way. Also swaps the update-action tooltip's
-    /// open-files variant for the Desktop Mode guidance (regular/unknown users
-    /// only; Premium installs stay in-app).
+    /// Whether the app runs inside a Steam Deck Gaming Mode session: forwarded
+    /// from <see cref="RowContext"/> (constant for the process lifetime).
+    /// Disables the linked row's "External" badge (its click opens the OS file
+    /// manager, which depends on a desktop shell); the non-interactive "Folder
+    /// unavailable" text is unaffected either way. Also swaps the
+    /// update-action tooltip's open-files variant for the Desktop Mode guidance
+    /// (regular/unknown users only; Premium installs stay in-app).
     /// </summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(LinkedBadgeTooltip))]
-    [NotifyPropertyChangedFor(nameof(UpdateActionTooltip))]
-    private bool _isGamingMode;
+    public bool IsGamingMode => RowContext.IsGamingMode;
+
+    /// <summary>
+    /// A row-affecting global flipped on the shared row context (the parent's
+    /// single subscription fans it here; already on the UI thread). Re-fires
+    /// the row's forwarding property + the derived members that read it, so
+    /// bindings + tooltips re-resolve exactly as the former per-flag pushdown
+    /// made them.
+    /// </summary>
+    /// <param name="propertyName">The context property that flipped (one of
+    /// <see cref="ModRowContext"/>'s observable names).</param>
+    internal void OnRowContextChanged(string propertyName)
+    {
+        switch (propertyName)
+        {
+            case nameof(ModRowContext.IsPremiumUser):
+                OnPropertyChanged(nameof(IsPremiumUser));
+                OnPropertyChanged(nameof(UpdateActionEnabled));
+                OnPropertyChanged(nameof(UpdateActionTooltip));
+                break;
+
+            case nameof(ModRowContext.AnyRowUpdating):
+                OnPropertyChanged(nameof(AnyRowUpdating));
+                OnPropertyChanged(nameof(UpdateActionEnabled));
+                break;
+
+            case nameof(ModRowContext.IsGamingMode):
+                OnPropertyChanged(nameof(IsGamingMode));
+                OnPropertyChanged(nameof(LinkedBadgeTooltip));
+                OnPropertyChanged(nameof(UpdateActionTooltip));
+                break;
+        }
+    }
 
     /// <summary>
     /// The linked badge's tooltip: the localized Gaming Mode guidance while
@@ -643,6 +678,8 @@ public partial class ModItemViewModel : ObservableObject
     /// </summary>
     /// <param name="localization">The localization service, used for the derived
     /// badge + policy text (re-resolves on a culture change).</param>
+    /// <param name="rowContext">The shared row context (premium / install-busy /
+    /// gaming) the row's global halves read; passed once per row.</param>
     /// <param name="containerId">The mod container's id (immutable join key).</param>
     /// <param name="name">The container's display name.</param>
     /// <param name="source">The joined source provenance.</param>
@@ -663,6 +700,7 @@ public partial class ModItemViewModel : ObservableObject
     /// sites that have not yet been updated.</param>
     public ModItemViewModel(
         LocalizationService localization,
+        ModRowContext rowContext,
         Guid containerId,
         string name,
         ModSource source,
@@ -676,6 +714,7 @@ public partial class ModItemViewModel : ObservableObject
         ModDisplayMetadata? displayMetadata = null)
     {
         _localization = localization;
+        RowContext = rowContext ?? throw new ArgumentNullException(nameof(rowContext));
         ContainerId = containerId;
         _name = name;
         Source = source;

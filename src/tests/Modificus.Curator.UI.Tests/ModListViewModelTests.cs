@@ -291,7 +291,7 @@ public sealed class ModListViewModelTests
         var profiles = TestDoubles.Profiles();
         var vm = Build(profiles, new FakeProfileSession { ActiveProfileId = null });
 
-        vm.ToggleEnabledCommand.Execute(new ModItemViewModel(Localization, Guid.NewGuid(), "X",
+        vm.ToggleEnabledCommand.Execute(new ModItemViewModel(Localization, TestDoubles.RowContext(), Guid.NewGuid(), "X",
             new UntrackedSource(), "", true, 0, ModVersionPolicy.Latest, Array.Empty<ModVersion>(), true));
 
         Assert.Empty(profiles.SetModEnabledCalls);
@@ -406,7 +406,7 @@ public sealed class ModListViewModelTests
         var dialogs = new FakeDialogService { ConfirmResult = true };
         var vm = Build(profiles, new FakeProfileSession { ActiveProfileId = null }, dialogs: dialogs);
 
-        await vm.RemoveCommand.ExecuteAsync(new ModItemViewModel(Localization, Guid.NewGuid(), "X",
+        await vm.RemoveCommand.ExecuteAsync(new ModItemViewModel(Localization, TestDoubles.RowContext(), Guid.NewGuid(), "X",
             new UntrackedSource(), "", true, 0, ModVersionPolicy.Latest, Array.Empty<ModVersion>(), true));
 
         Assert.Empty(profiles.RemoveModCalls);
@@ -1009,7 +1009,7 @@ public sealed class ModListViewModelTests
             updateCheck: updateCheck, installer: installer);
 
         // A synthetic row (the empty profile has none) exercises the defense.
-        var synthetic = new ModItemViewModel(Localization, Guid.NewGuid(), "X",
+        var synthetic = new ModItemViewModel(Localization, TestDoubles.RowContext(), Guid.NewGuid(), "X",
             new NexusSource { ModId = 8 }, "", true, 0, ModVersionPolicy.Latest,
             Array.Empty<ModVersion>(), true);
         await vm2.UpdateCommand.ExecuteAsync(synthetic);

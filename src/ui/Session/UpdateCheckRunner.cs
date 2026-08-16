@@ -138,6 +138,7 @@ public sealed class UpdateCheckRunner
     private readonly ILogger<UpdateCheckRunner> _logger;
     private readonly Action<Action>? _startTimer;
     private readonly Func<DateTimeOffset> _getNow;
+    private readonly Action<Action> _invokeOnUi;
 
     // The last time any check fired (startup, switch, periodic, or manual).
     // Seeded from the persisted IUpdateCheckScheduleState.LastUpdateCheckUtc at Start();
@@ -231,9 +232,38 @@ public sealed class UpdateCheckRunner
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _startTimer = startTimer;
         _getNow = getNow ?? (() => DateTimeOffset.UtcNow);
+        _invokeOnUi = invokeOnUi ?? (static action => action());
         RefreshGate = new UpdateRefreshGate(
             this, invokeOnUi, startCountdownTimer, stopCountdownTimer, _getNow);
+
+        // Surface the two UI-relevant update-family completions (a check
+        // landing + an automatic batch applying installs) as runner events,
+        // marshaled to the UI thread. The runner is the only driver of both
+        // underlying services, so the mod list subscribes here instead of
+        // holding either service itself; the raw services' own events stay
+        // untouched for their own subscribers.
+        _updateCheck.CheckCompleted += (s, result) =>
+            _invokeOnUi(() => CheckCompleted?.Invoke(this, result));
+        _autoUpdate.UpdatesApplied += (s, e) =>
+            _invokeOnUi(() => UpdatesApplied?.Invoke(this, e));
     }
+
+    /// <summary>
+    /// A check this runner fired has completed (any outcome), raised on the UI
+    /// thread with the same result the service published. The UI-facing
+    /// re-raise of <see cref="IUpdateCheckService.CheckCompleted"/>: the runner
+    /// is the single driver of checks, so consumers (the mod-list row
+    /// hydration) subscribe here rather than to the service.
+    /// </summary>
+    public event EventHandler<UpdateCheckResult?>? CheckCompleted;
+
+    /// <summary>
+    /// The automatic-update service finished a batch with at least one
+    /// successful install, raised on the UI thread. The UI-facing re-raise of
+    /// <see cref="IAutomaticUpdateService.UpdatesApplied"/> (the runner chains
+    /// the batch after each check).
+    /// </summary>
+    public event EventHandler? UpdatesApplied;
 
     /// <summary>
     /// The refresh-gate policy for the manual "check now" affordance: the

@@ -215,36 +215,42 @@ public static class CuratorComposition
             // side is gated by the Add split button).
             sp.GetRequiredService<IGamingModeState>(),
             sp.GetRequiredService<ILogger<LinkedModsViewModel>>()));
+        // The shared row context (premium / install-busy / gaming): created
+        // once before the mod-list VM, it reads the Nexus premium state at
+        // construction (fire-and-forget), mirrors the installer's busy flag +
+        // re-raises its per-container progress on the UI thread, and fronts
+        // the single install path for the manual Premium update action. The
+        // mod-list VM passes the same instance to every row; the rows read
+        // their global halves off it instead of receiving per-flag pushes.
+        services.AddSingleton(sp => new ModRowContext(
+            sp.GetRequiredService<INexusAuthService>(),
+            sp.GetRequiredService<IModUpdateInstaller>(),
+            sp.GetRequiredService<IGamingModeState>(),
+            sp.GetRequiredService<Action<Action>>(),
+            sp.GetRequiredService<ILogger<ModRowContext>>()));
+
         services.AddSingleton(sp => new ModListViewModel(
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IModRepository>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),
-            sp.GetRequiredService<IUpdateCheckService>(),
-            // The single install path for the manual Premium update action:
-            // coordinator-gated, revalidating, acknowledging, progress-
-            // reporting (shared with the automatic batch).
-            sp.GetRequiredService<IModUpdateInstaller>(),
-            sp.GetRequiredService<INexusAuthService>(),
             sp.GetRequiredService<IUpdateStateStore>(),
-            // The runner owns the refresh gate; the VM renders its state.
+            // The runner owns the refresh gate + surfaces both update-family
+            // completions (check completed + the automatic batch applied) on
+            // the UI thread; the VM renders its state + hydrates rows from it.
             sp.GetRequiredService<UpdateCheckRunner>(),
-            sp.GetRequiredService<IAutomaticUpdateService>(),
+            sp.GetRequiredService<ModRowContext>(),
             sp.GetRequiredService<ImportWorkflowViewModel>(),
             sp.GetRequiredService<DetailedModRowsViewModel>(),
             sp.GetRequiredService<LinkedModsViewModel>(),
-            sp.GetRequiredService<Action<Action>>(),
-            sp.GetRequiredService<ILogger<ModListViewModel>>(),
+            // The OS shell-open launcher: the Add NexusMods browser open +
+            // the regular-tier update action's files-page open.
+            sp.GetRequiredService<IExternalLauncher>(),
             // The shared last-known nxm registration state feeds the
             // empty-state Nexus hint; the mod list never probes the OS.
             sp.GetRequiredService<INxmRegistrationState>(),
-            // Gaming Mode gates the Add split button's picker paths + the
-            // linked-row open-folder badge.
-            sp.GetRequiredService<IGamingModeState>(),
-            // The OS shell-open launcher: the Add NexusMods browser open +
-            // the regular-tier update action's files-page open.
-            sp.GetRequiredService<IExternalLauncher>()));
+            sp.GetRequiredService<ILogger<ModListViewModel>>()));
 
         // The hosted destination view models: singletons (one instance per page,
         // kept alive + subscribed for the application lifetime). Each page VM is
