@@ -78,9 +78,9 @@ public sealed class ModRowContextTests
 
         var row = Assert.Single(vm.Mods);
         var rowFired = new List<string>();
-        row.PropertyChanged += (_, e) => rowFired.Add(e.PropertyName);
+        row.PropertyChanged += (_, e) => rowFired.Add(e.PropertyName!);
         var vmFired = new List<string>();
-        vm.PropertyChanged += (_, e) => vmFired.Add(e.PropertyName);
+        vm.PropertyChanged += (_, e) => vmFired.Add(e.PropertyName!);
 
         context.IsPremiumUser = true;
 
@@ -108,7 +108,7 @@ public sealed class ModRowContextTests
         var vm = BuildWithContext(context);
         var row = Assert.Single(vm.Mods);
         var rowFired = new List<string>();
-        row.PropertyChanged += (_, e) => rowFired.Add(e.PropertyName);
+        row.PropertyChanged += (_, e) => rowFired.Add(e.PropertyName!);
 
         installer.IsBusy = true;
         installer.RaiseBusyChanged();

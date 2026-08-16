@@ -359,13 +359,19 @@ public static class CuratorComposition
             sp.GetRequiredService<ILogger<ShellViewModel>>(),
             sp.GetRequiredService<IConfigLoader>(),
             sp.GetRequiredService<INxmRegistrationState>()));
+        // The narrow factory for the one dialog VM with service dependencies
+        // (the discovery escape hatch), so DialogService shows dialogs without
+        // constructing view models or carrying their dependencies.
+        services.AddSingleton<IDiscoveryEscapeHatchFactory>(sp => new DiscoveryEscapeHatchFactory(
+            sp.GetRequiredService<IConfigLoader>(),
+            sp.GetRequiredService<ISteamService>(),
+            sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<IGamingModeState>()));
         services.AddSingleton<IDialogService>(sp =>
             new DialogService(
                 sp.GetRequiredService<MainWindow>(),
                 sp.GetRequiredService<LocalizationService>(),
-                sp.GetRequiredService<IConfigLoader>(),
-                sp.GetRequiredService<ISteamService>(),
-                sp.GetRequiredService<IGamingModeState>()));
+                sp.GetRequiredService<IDiscoveryEscapeHatchFactory>()));
 
         // The UI-layer glue that fires an update check
         // (IUpdateCheckService, registered above via AddIntegrations) on the
