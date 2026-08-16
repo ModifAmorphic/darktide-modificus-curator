@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.2](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.30.1...v0.30.2) (2026-08-16)
+
+
+### Bug Fixes
+
+* **update:** consolidate the fragmented mod-update domain into one install path ([#211](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/211)) ([63686e2](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/63686e2ab3a44f5eb4e554f3d767cfaee1fe0215))
+
 ## [0.30.1](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.30.0...v0.30.1) (2026-08-15)
 
 
