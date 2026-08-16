@@ -66,22 +66,21 @@ public sealed class GamingModeGatingXamlTests
     }
 
     [Fact]
-    public void ModList_linked_badge_disables_under_gaming_in_both_row_roots()
+    public void ModList_linked_badge_disables_under_gaming_in_the_shared_badge_cluster()
     {
         var xaml = LoadXaml("src/ui/Views/ModListView.axaml");
 
-        // The linked badge is the HyperlinkButton routing to OpenFolder_Click;
-        // one instance per row root (Compact Grid + Detailed card).
+        // The linked badge is the HyperlinkButton routing to OpenFolder_Click.
+        // The badge cluster is one shared DataTemplate definition hosted by
+        // both row roots, so exactly one badge exists to assert (the former
+        // copy-policing second assertion collapsed with the duplication).
         var badges = Elements(xaml.Root!, "HyperlinkButton")
             .Where(b => A(b, "Click") == "OpenFolder_Click")
             .ToList();
-        Assert.Equal(2, badges.Count);
-        foreach (var badge in badges)
-        {
-            Assert.Equal("{Binding !IsGamingMode}", A(badge, "IsEnabled"));
-            Assert.Equal("{Binding LinkedBadgeTooltip}", A(badge, "ToolTip.Tip"));
-            Assert.Equal("True", A(badge, "ToolTip.ShowOnDisabled"));
-        }
+        var badge = Assert.Single(badges);
+        Assert.Equal("{Binding !IsGamingMode}", A(badge, "IsEnabled"));
+        Assert.Equal("{Binding LinkedBadgeTooltip}", A(badge, "ToolTip.Tip"));
+        Assert.Equal("True", A(badge, "ToolTip.ShowOnDisabled"));
 
         // Binding validity: the row VM exposes both paths.
         Assert.NotNull(typeof(ModItemViewModel).GetProperty("IsGamingMode"));

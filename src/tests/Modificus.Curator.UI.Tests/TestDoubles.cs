@@ -29,6 +29,26 @@ internal static class TestDoubles
     public static FakeProfileService Profiles(params ProfileSummary[] seed) => new(seed);
 
     /// <summary>
+    /// Builds a <see cref="ModRowContext"/> over the supplied (or default)
+    /// fakes with a pass-through UI-thread seam: the premium read resolves
+    /// synchronously (the fake auth returns completed tasks), the installer's
+    /// busy + progress events flow through immediately, and the gaming flag is
+    /// readable off the context the moment it is built.
+    /// </summary>
+    public static ModRowContext RowContext(
+        FakeNexusAuthService? auth = null,
+        FakeModUpdateInstaller? installer = null,
+        IGamingModeState? gamingMode = null)
+    {
+        return new ModRowContext(
+            auth ?? new FakeNexusAuthService(),
+            installer ?? new FakeModUpdateInstaller(),
+            gamingMode ?? new GamingModeState(false),
+            static action => action(),
+            NullLogger<ModRowContext>.Instance);
+    }
+
+    /// <summary>
     /// Builds a <see cref="DmfPromptService"/> wired to the supplied (or default)
     /// fakes. Defaults share the test's profiles/session so the create trigger
     /// fires through the same fake the test asserts on. The dialog fake defaults
@@ -45,17 +65,19 @@ internal static class TestDoubles
     /// <param name="gamingMode">Optional Gaming Mode state override. When
     /// omitted (the default), a non-gaming session so the browser paths run
     /// as they do on a desktop.</param>
-    public static DmfPromptService BuildDmfPromptService(
-        FakeProfileService? profiles = null,
-        FakeProfileSession? session = null,
-        FakeModRepository? repo = null,
-        FakeModAcquisitionService? acquisition = null,
-        FakeNexusAuthService? auth = null,
-        FakeDialogService? dialogs = null,
-        LocalizationService? localization = null,
-        FakeNxmRegistrationState? nxmRegistration = null,
-        IGamingModeState? gamingMode = null,
-        FakeExternalLauncher? launcher = null)
+    public static (DmfPromptService Service, ShellModalQueue Queue, IModListRefresh Refresh)
+        BuildDmfPromptService(
+            FakeProfileService? profiles = null,
+            FakeProfileSession? session = null,
+            FakeModRepository? repo = null,
+            FakeModAcquisitionService? acquisition = null,
+            FakeNexusAuthService? auth = null,
+            FakeDialogService? dialogs = null,
+            LocalizationService? localization = null,
+            FakeNxmRegistrationState? nxmRegistration = null,
+            IGamingModeState? gamingMode = null,
+            FakeExternalLauncher? launcher = null,
+            IModListRefresh? modListRefresh = null)
     {
         profiles ??= Profiles();
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
@@ -69,8 +91,10 @@ internal static class TestDoubles
         // SAFETY: an omitted launcher defaults to the harmless in-memory
         // recorder (there is no production fallback in the service).
         launcher ??= new FakeExternalLauncher();
+        modListRefresh ??= new RefreshRecorder();
         profiles.RepoLookup = repo;
-        return new DmfPromptService(
+        var queue = new ShellModalQueue();
+        return (new DmfPromptService(
             profiles,
             session,
             repo,
@@ -81,7 +105,9 @@ internal static class TestDoubles
             NullLogger<DmfPromptService>.Instance,
             nxmRegistration,
             gamingMode,
-            launcher);
+            launcher,
+            queue,
+            modListRefresh), queue, modListRefresh);
     }
 
     /// <summary>
@@ -176,6 +202,33 @@ internal static class TestDoubles
         // Gaming Mode default: not gaming (the ordinary desktop session the
         // existing tests assume); gaming-gating tests pass a gaming state.
         gamingMode ??= new GamingModeState(false);
+
+        // The link-external-folder child: constructed over the SAME
+        // profile/session/repo/import/dialog fakes (after the launcher +
+        // gaming-mode defaults above are settled) so a link-flow test sees its
+        // linked container land in the profile the mod-list VM reads (mirrors
+        // production DI: one shared child singleton injected into the mod-list
+        // VM, which reloads when the child's flow finishes).
+        var linkedMods = new LinkedModsViewModel(
+            profiles,
+            session,
+            repo,
+            importService,
+            dialogs,
+            localization,
+            launcher,
+            gamingMode,
+            NullLogger<LinkedModsViewModel>.Instance);
+
+        // The shared row context: the SAME installer/auth/gaming fakes the
+        // test drives (premium reads resolve synchronously off the fake auth;
+        // the installer's busy + progress events flow through the context).
+        var rowContext = new ModRowContext(
+            auth,
+            installer,
+            gamingMode,
+            invokeOnUi ?? (static action => action()),
+            NullLogger<ModRowContext>.Instance);
         // Wire the state store + a record-profile-id tracker into the fake
         // update-check service so RaiseCheckCompleted / CheckAsync record the
         // result through the store (mirroring the real service's publish-time
@@ -216,22 +269,17 @@ internal static class TestDoubles
             profiles,
             session,
             repo,
-            importService,
             dialogs,
             localization,
-            updateCheck,
-            installer,
-            auth,
             updateState,
             runner,
-            automaticUpdates,
+            rowContext,
             importWorkflow,
             detailedRows,
-            invokeOnUi,
-            NullLogger<ModListViewModel>.Instance,
+            linkedMods,
+            launcher,
             nxmRegistration,
-            gamingMode,
-            launcher);
+            NullLogger<ModListViewModel>.Instance);
     }
 
     /// <summary>
@@ -259,7 +307,8 @@ internal static class TestDoubles
         PreferencesViewModel PreferencesPage,
         SettingsViewModel SettingsPage,
         FakeSteamService Steam,
-        DmfPromptService Dmf);
+        DmfPromptService Dmf,
+        ShellModalQueue ModalQueue);
 
     /// <summary>
     /// Builds a <see cref="ShellViewModel"/> wired to concrete singleton page
@@ -320,12 +369,19 @@ internal static class TestDoubles
             configLoader: config,
             appState: new FakeAppStateStore(),
             nxmRegistration: nxmRegistration);
-        var dmf = BuildDmfPromptService(
+        // The DMF coordinator + the shell share one modal queue (mirroring
+        // composition): the coordinator enqueues on ProfileCreated + reloads
+        // the mod list itself after the prompt; the shell drains the queue on
+        // destination entry. The modsPage the shell hosts is the refresh
+        // target, so an accepted DMF add surfaces in the same list the test
+        // reads.
+        var (dmf, modalQueue, _) = BuildDmfPromptService(
             profiles, session, repo,
             dialogs: dialogs,
             localization: localization,
             auth: auth,
-            nxmRegistration: nxmRegistration);
+            nxmRegistration: nxmRegistration,
+            modListRefresh: modsPage);
         var profilesPage = new ProfilesViewModel(
             profiles, session, dialogs, localization,
             NullLogger<ProfilesViewModel>.Instance);
@@ -350,7 +406,7 @@ internal static class TestDoubles
             session, launch, dialogs, localization,
             profilesPage, modsPage, integrationsPage, preferencesPage, settingsPage,
             appUpdate,
-            dmf,
+            modalQueue,
             invokeOnUi: static action => action(),
             NullLogger<ShellViewModel>.Instance,
             config, nxmRegistration,
@@ -360,7 +416,7 @@ internal static class TestDoubles
         return new ShellParts(
             shell, profiles, session, dialogs, launch, appUpdate, config,
             auth, nxmRegistrar, nxmRegistration, profilesPage, modsPage, integrationsPage,
-            preferencesPage, settingsPage, steam, dmf);
+            preferencesPage, settingsPage, steam, dmf, modalQueue);
     }
 }
 
@@ -443,7 +499,7 @@ internal sealed class FakeProfileService : IProfileService
     /// <remarks>Raised from <see cref="CreateProfile"/>. The DMF prompt
     /// coordinator subscribes; tests that drive the new-profile trigger
     /// simulate a create through <see cref="CreateProfile"/> (the event fires)
-    /// + a call to <c>DmfPromptService.ProcessPendingAsync</c>.</remarks>
+    /// + a drain of the shell modal queue the coordinator enqueues onto.</remarks>
     public event EventHandler<ProfileSummary>? ProfileCreated;
 
     /// <summary>
@@ -2162,6 +2218,11 @@ internal sealed class FakeNexusAuthService : INexusAuthService
     /// gated, or that entering Integrations ran its auth refresh.</summary>
     public int GetCurrentStateCallCount { get; private set; }
 
+    /// <summary>When true, <see cref="GetCurrentStateAsync"/> throws instead of
+    /// returning the state (the caller's failure path: a caller that reads the
+    /// premium state once must swallow + keep its default).</summary>
+    public bool ThrowOnGetCurrentState { get; set; }
+
     /// <summary>
     /// When true, <see cref="LoginWithOAuthAsync"/> returns a task that completes
     /// as canceled when the supplied <see cref="CancellationToken"/> fires, so a
@@ -2196,6 +2257,10 @@ internal sealed class FakeNexusAuthService : INexusAuthService
     public Task<NexusAuthState?> GetCurrentStateAsync(CancellationToken ct = default)
     {
         GetCurrentStateCallCount++;
+        if (ThrowOnGetCurrentState)
+        {
+            throw new InvalidOperationException("offline");
+        }
         return Task.FromResult(State);
     }
 

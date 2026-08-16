@@ -40,7 +40,7 @@ namespace Modificus.Curator.UI.ViewModels;
 /// reality (the persisted value stays inert; see
 /// <see cref="EffectiveRelayConsoleChecked"/>).</para>
 /// </remarks>
-public partial class PreferencesViewModel : ObservableObject
+public partial class PreferencesViewModel : LocalizedViewModel
 {
     /// <summary>
     /// The slider floor / ceiling in percent + step. Exposed as constants so
@@ -53,7 +53,6 @@ public partial class PreferencesViewModel : ObservableObject
     private static readonly ThemeMode DefaultTheme = ThemeMode.System;
 
     private readonly IPreferencesService _preferences;
-    private readonly LocalizationService _localization;
 
     /// <summary>Whether a property change should fire <see cref="ApplyAndPersist"/>.</summary>
     /// <remarks>
@@ -77,6 +76,7 @@ public partial class PreferencesViewModel : ObservableObject
         IConfigLoader configLoader,
         LocalizationService localization,
         bool isRelayConsoleToggleSupported)
+        : base(localization)
     {
         _preferences = preferences;
         _localization = localization;
@@ -113,9 +113,6 @@ public partial class PreferencesViewModel : ObservableObject
             _suppressApply = false;
         }
 
-        // Re-resolve the platform-aware tooltip when the UI culture flips so it
-        // refreshes alongside the rest of the dialog text.
-        _localization.PropertyChanged += OnCultureChanged;
     }
 
     /// <summary>
@@ -158,13 +155,14 @@ public partial class PreferencesViewModel : ObservableObject
     /// Re-fires <see cref="RelayConsoleTooltip"/> when the UI culture flips so the
     /// platform-aware tooltip refreshes with the rest of the dialog text.
     /// </summary>
-    private void OnCultureChanged(object? sender, PropertyChangedEventArgs e)
+    /// <summary>
+    /// The Preferences page's localized property names, re-fired by the shared
+    /// culture-refresh base on a culture change.
+    /// </summary>
+    protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
-        if (e.PropertyName is nameof(LocalizationService.Culture) or "Item[]")
-        {
-            OnPropertyChanged(nameof(RelayConsoleTooltip));
-        }
-    }
+        nameof(RelayConsoleTooltip),
+    };
 
     /// <summary>The theme picker options.</summary>
     public IReadOnlyList<ThemeOption> ThemeOptions { get; }
@@ -253,16 +251,13 @@ public partial class PreferencesViewModel : ObservableObject
 /// through the <see cref="LocalizationService"/> and refreshes on a culture
 /// change (so the picker text follows a language switch live).
 /// </summary>
-public sealed class ThemeOption : ObservableObject
+public sealed class ThemeOption : LocalizedViewModel
 {
-    private readonly LocalizationService _localization;
-
     public ThemeOption(ThemeMode mode, string labelKey, LocalizationService localization)
+        : base(localization)
     {
         Mode = mode;
         LabelKey = labelKey;
-        _localization = localization;
-        _localization.PropertyChanged += OnCultureChanged;
     }
 
     public ThemeMode Mode { get; }
@@ -271,13 +266,11 @@ public sealed class ThemeOption : ObservableObject
     /// <summary>The localized display label (refreshes on a culture change).</summary>
     public string Label => _localization[LabelKey];
 
-    private void OnCultureChanged(object? sender, PropertyChangedEventArgs e)
+    /// <inheritdoc />
+    protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
-        if (e.PropertyName is nameof(LocalizationService.Culture) or "Item[]")
-        {
-            OnPropertyChanged(nameof(Label));
-        }
-    }
+        nameof(Label),
+    };
 }
 
 /// <summary>
@@ -287,16 +280,13 @@ public sealed class ThemeOption : ObservableObject
 /// <see cref="Label"/> resolves the key through the <see cref="LocalizationService"/>
 /// and refreshes on a culture change.
 /// </summary>
-public sealed class LanguageOption : ObservableObject
+public sealed class LanguageOption : LocalizedViewModel
 {
-    private readonly LocalizationService _localization;
-
     public LanguageOption(string name, string labelKey, LocalizationService localization)
+        : base(localization)
     {
         Name = name;
         LabelKey = labelKey;
-        _localization = localization;
-        _localization.PropertyChanged += OnCultureChanged;
     }
 
     public string Name { get; }
@@ -305,11 +295,9 @@ public sealed class LanguageOption : ObservableObject
     /// <summary>The localized display label (refreshes on a culture change).</summary>
     public string Label => _localization[LabelKey];
 
-    private void OnCultureChanged(object? sender, PropertyChangedEventArgs e)
+    /// <inheritdoc />
+    protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
-        if (e.PropertyName is nameof(LocalizationService.Culture) or "Item[]")
-        {
-            OnPropertyChanged(nameof(Label));
-        }
-    }
+        nameof(Label),
+    };
 }

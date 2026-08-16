@@ -31,9 +31,8 @@ namespace Modificus.Curator.UI.ViewModels;
 /// language switch mid-dialog refreshes the field labels alongside the rest of
 /// the UI.</para>
 /// </remarks>
-public sealed partial class DiscoveryFieldRowViewModel : ObservableObject
+public sealed partial class DiscoveryFieldRowViewModel : LocalizedViewModel
 {
-    private readonly LocalizationService _localization;
     private readonly Action<DiscoveryFieldRowViewModel>? _onValueChanged;
     private string _value;
 
@@ -50,12 +49,11 @@ public sealed partial class DiscoveryFieldRowViewModel : ObservableObject
         string initialValue,
         LocalizationService localization,
         Action<DiscoveryFieldRowViewModel>? onValueChanged = null)
+        : base(localization)
     {
         Field = field;
         _value = initialValue ?? string.Empty;
-        _localization = localization;
         _onValueChanged = onValueChanged;
-        _localization.PropertyChanged += OnCultureChanged;
     }
 
     /// <summary>
@@ -138,14 +136,15 @@ public sealed partial class DiscoveryFieldRowViewModel : ObservableObject
     /// singleton that outlives any dialog). The owning VM should call this on
     /// window close for each row.
     /// </summary>
-    public void Detach() => _localization.PropertyChanged -= OnCultureChanged;
+    public void Detach() => DetachLocalization();
 
-    private void OnCultureChanged(object? sender, PropertyChangedEventArgs e)
+    /// <summary>
+    /// The row's localized property names, re-fired by the shared
+    /// culture-refresh base on a culture change.
+    /// </summary>
+    protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
-        if (e.PropertyName is nameof(LocalizationService.Culture) or "Item[]")
-        {
-            OnPropertyChanged(nameof(Label));
-            OnPropertyChanged(nameof(BrowseTooltip));
-        }
-    }
+        nameof(Label),
+        nameof(BrowseTooltip),
+    };
 }

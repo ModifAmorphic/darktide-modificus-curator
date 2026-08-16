@@ -40,11 +40,11 @@ public enum ModAddMode
 /// shell. Loads the profile's mods (joined with source + version from the mod
 /// repository for the badge), and applies every edit through
 /// <see cref="IProfileService"/>: enable/disable, reorder (up/down), per-mod
-/// policy (Latest / Pinned), remove (confirmed),
-/// the add flow (file picker + drag-and-drop) forwarded to the injected
-/// <see cref="ImportWorkflowViewModel"/> (the inline import card), and the
-/// link-external-folder flow (folder picker only, no copy, no card) via
-/// <see cref="IModImportService.LinkFolder"/>.
+/// policy (Latest / Pinned), remove (confirmed), the add flow (file picker +
+/// drag-and-drop) forwarded to the injected <see cref="ImportWorkflowViewModel"/>
+/// (the inline import card), and the link-external-folder flow (folder picker
+/// only, no copy, no card) forwarded to the injected
+/// <see cref="LinkedModsViewModel"/>.
 /// </summary>
 /// <remarks>
 /// <para><b>Active profile is the session's:</b> the list never decides the active
@@ -93,14 +93,14 @@ public enum ModAddMode
 /// profile. While the workflow is active (editing, processing, or failure),
 /// the Add split button disables and drag-and-drop is rejected.</para>
 /// <para><b>Link flow:</b> the Add split button's "Link external folder" flyout
-/// item reduces to <see cref="LinkModsCommand"/>, which peeks the base name
-/// (validates the mod-folder shape), checks the base-name collision (excluding a
-/// re-link of the same path), then records the metadata-only container via
-/// <see cref="IModImportService.LinkFolder"/> + adds the profile reference with
-/// <see cref="ModVersionPolicy.Latest"/> (inert for linked). No modal; the folder
-/// is linked, not copied.</para>
+/// item opens the folder picker (view-side) and forwards the selected paths to
+/// <see cref="LinkedMods"/>'s <c>LinkModsCommand</c>, which owns the peek /
+/// collision-check / LinkFolder / AddMod loop and its failure alerts. The child
+/// raises its <c>ModsLinked</c> event where the flow finishes; this VM reloads
+/// the active list on it (the same reload point the flow had when it lived
+/// here).</para>
 /// </remarks>
-public partial class ModListViewModel : ObservableObject, IModListRefresh
+public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
 {
     /// <summary>
     /// The Nexus Mods games page for Darktide (the "Add Nexus Mods" flyout item's
@@ -112,20 +112,12 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     private readonly IProfileService _profiles;
     private readonly IProfileSession _session;
     private readonly IModRepository _repo;
-    private readonly IModImportService _importService;
     private readonly IDialogService _dialogs;
-    private readonly LocalizationService _localization;
-    private readonly IUpdateCheckService _updateCheck;
-    private readonly IModUpdateInstaller _installer;
-    private readonly INexusAuthService _auth;
     private readonly IUpdateStateStore _updateState;
     private readonly UpdateCheckRunner _updateCheckRunner;
-    private readonly IAutomaticUpdateService _automaticUpdates;
     private readonly ILogger<ModListViewModel> _logger;
-    private readonly Action<Action> _invokeOnUi;
     private readonly IExternalLauncher _externalLauncher;
     private readonly INxmRegistrationState _nxmRegistration;
-    private readonly IGamingModeState _gamingMode;
 
     /// <summary>
     /// The profile entries the last <see cref="Reload"/> loaded (the raw
@@ -137,81 +129,70 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     private IReadOnlyList<ModListEntry> _loadedEntries = Array.Empty<ModListEntry>();
 
     /// <summary>
-    /// Creates the list VM, subscribes to the session (reload on active-profile
-    /// change), the update-check service (badge refresh on
-    /// <see cref="IUpdateCheckService.CheckCompleted"/>), the mod-update
-    /// installer (per-row spinner via progress + the global busy flag pushed
-    /// down to rows), the automatic-update service (reload after a batch
-    /// installs mods), and localization (culture refresh), loads the current
-    /// profile's mods, and reads the Nexus premium state once
-    /// (fire-and-forget; flips <see cref="IsPremiumUser"/> when it lands).
+    /// Creates the list VM, subscribes to the session (reload on
+    /// active-profile change), the update-check runner (row hydration on every
+    /// completed check + reload after an automatic batch installs mods), the
+    /// row context (the per-row install progress + the global premium / busy /
+    /// gaming flips, all already on the UI thread), the linked-mods child
+    /// (reload when its link flow finishes), and localization (culture
+    /// refresh), then loads the current profile's mods. The premium read lives
+    /// in the row context (fire-and-forget at its construction).
     /// </summary>
     public ModListViewModel(
         IProfileService profiles,
         IProfileSession session,
         IModRepository repo,
-        IModImportService importService,
         IDialogService dialogs,
         LocalizationService localization,
-        IUpdateCheckService updateCheck,
-        IModUpdateInstaller installer,
-        INexusAuthService auth,
         IUpdateStateStore updateState,
         UpdateCheckRunner updateCheckRunner,
-        IAutomaticUpdateService automaticUpdates,
+        ModRowContext rowContext,
         ImportWorkflowViewModel importWorkflow,
         DetailedModRowsViewModel detailedRows,
-        Action<Action> invokeOnUi,
-        ILogger<ModListViewModel> logger,
+        LinkedModsViewModel linkedMods,
+        IExternalLauncher externalLauncher,
         INxmRegistrationState nxmRegistration,
-        IGamingModeState gamingMode,
-        IExternalLauncher externalLauncher)
+        ILogger<ModListViewModel> logger)
+        : base(localization)
     {
         _profiles = profiles;
         _session = session;
         _repo = repo;
-        _importService = importService;
         _dialogs = dialogs;
-        _localization = localization;
-        _updateCheck = updateCheck;
-        _installer = installer ?? throw new ArgumentNullException(nameof(installer));
-        _auth = auth;
         _updateState = updateState;
         _updateCheckRunner = updateCheckRunner;
-        _automaticUpdates = automaticUpdates ?? throw new ArgumentNullException(nameof(automaticUpdates));
+        RowContext = rowContext ?? throw new ArgumentNullException(nameof(rowContext));
         ImportWorkflow = importWorkflow ?? throw new ArgumentNullException(nameof(importWorkflow));
         DetailedRows = detailedRows ?? throw new ArgumentNullException(nameof(detailedRows));
-        _logger = logger;
-        _invokeOnUi = invokeOnUi ?? throw new ArgumentNullException(nameof(invokeOnUi));
+        LinkedMods = linkedMods ?? throw new ArgumentNullException(nameof(linkedMods));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _externalLauncher = externalLauncher ?? throw new ArgumentNullException(nameof(externalLauncher));
         _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
-        _gamingMode = gamingMode ?? throw new ArgumentNullException(nameof(gamingMode));
 
         _session.PropertyChanged += OnSessionPropertyChanged;
-        _localization.PropertyChanged += OnCultureChanged;
-        _updateCheck.CheckCompleted += OnUpdateCheckCompleted;
-        _installer.BusyChanged += OnInstallerBusyChanged;
-        _installer.ModUpdateProgress += OnModUpdateProgress;
-        _automaticUpdates.UpdatesApplied += OnAutomaticUpdatesApplied;
+        // The runner surfaces both update-family completions on the UI thread
+        // (the re-raised check-completed + the automatic batch's
+        // updates-applied); this VM does no marshaling of its own.
+        _updateCheckRunner.CheckCompleted += OnUpdateCheckCompleted;
+        _updateCheckRunner.UpdatesApplied += OnAutomaticUpdatesApplied;
         // The refresh gate is runner-owned + fed by every check result; this
         // VM renders its state (the gate marshals the event to the UI thread).
         _updateCheckRunner.RefreshGate.StateChanged += OnRefreshGateStateChanged;
+        // The row context's per-container install progress drives the matching
+        // row's spinner; its global flips (premium / busy / gaming) re-fire
+        // this VM's forwarding names + fan out to the live rows.
+        RowContext.ModUpdateProgress += OnModUpdateProgress;
+        RowContext.PropertyChanged += OnRowContextChanged;
         ImportWorkflow.ItemImported += OnItemImported;
         // The Add split button's enabled state combines the workflow's activity
         // with the Gaming Mode gate, so the workflow's own IsActive flips must
         // re-fire it. Both VMs are application-lifetime singletons; the
         // subscription is never undone (mirrors the neighboring subscriptions).
         ImportWorkflow.PropertyChanged += OnImportWorkflowPropertyChanged;
-
-        // Read the Nexus premium state once at construction. Fire-and-forget:
-        // GetCurrentStateAsync hits the network, so blocking the (UI-thread)
-        // constructor on it would stall app startup. The result lands quickly
-        // (sub-second typically) and flips IsPremiumUser; until then the Update
-        // buttons stay disabled (also gated on an update being flagged, which
-        // takes longer). No mid-session refresh by design (re-checking on Integrations
-        // dialog close would burn an API call each time; a user signing in
-        // mid-session needing a restart for the install behavior to change is acceptable).
-        _ = LoadPremiumStateAsync();
+        // The link flow lives on the child; the reload that surfaces freshly
+        // linked rows is this VM's (same reload point the flow had inline).
+        // Application-lifetime singletons both; never undone.
+        LinkedMods.ModsLinked += OnModsLinked;
 
         // The empty-state Nexus hint reads the shared last-known nxm
         // registration state; no OS probe happens here or in Reload.
@@ -224,30 +205,27 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     /// <summary>
     /// The automatic-update service finished a batch with at least one
     /// successful install. Mark the active profile as having staged changes (the
-    /// batch changed one or more mod versions) and reload on the UI thread so the
-    /// new versions + cleared flags show. The event fires on the UI thread (the
-    /// service is invoked from the runner after it returns to the UI context),
-    /// but marshal defensively so a test that fires it off-thread stays correct.
+    /// batch changed one or more mod versions) and reload so the new versions +
+    /// cleared flags show. The runner re-raises the event on the UI thread.
     /// </summary>
-    private void OnAutomaticUpdatesApplied(object? sender, EventArgs e) =>
-        _invokeOnUi(() =>
-        {
-            _session.HasPendingChanges = true;
-            Reload();
-        });
+    private void OnAutomaticUpdatesApplied(object? sender, EventArgs e)
+    {
+        _session.HasPendingChanges = true;
+        Reload();
+    }
 
     /// <summary>
-    /// The mod-update installer reports per-install progress (a container's
-    /// install attempt started or finished, for BOTH the manual Premium path
-    /// and the automatic batch). Marshal to the UI thread, find the row by
-    /// ContainerId, and set its <see cref="ModItemViewModel.IsUpdating"/> so
-    /// the row-level spinner (left of the Nexus badge) tracks the currently
-    /// installing mod. An event for a row no longer present (after a profile
-    /// switch / reload) is ignored, so a switch mid-batch never leaves a stale
-    /// spinner on a now-absent row.
+    /// The row context reports per-install progress (a container's install
+    /// attempt started or finished, for BOTH the manual Premium path and the
+    /// automatic batch; already on the UI thread). Find the row by ContainerId
+    /// and set its <see cref="ModItemViewModel.IsUpdating"/> so the row-level
+    /// spinner (left of the Nexus badge) tracks the currently installing mod.
+    /// An event for a row no longer present (after a profile switch / reload)
+    /// is ignored, so a switch mid-batch never leaves a stale spinner on a
+    /// now-absent row.
     /// </summary>
     private void OnModUpdateProgress(object? sender, ModUpdateProgressEventArgs e) =>
-        _invokeOnUi(() => ApplyModUpdateProgress(e.ContainerId, e.IsActive));
+        ApplyModUpdateProgress(e.ContainerId, e.IsActive);
 
     /// <summary>
     /// Applies a per-mod install progress signal to the matching row. Finds the
@@ -296,13 +274,86 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     public DetailedModRowsViewModel DetailedRows { get; }
 
     /// <summary>
+    /// The link-external-folder child VM (application-lifetime singleton,
+    /// injected before this VM in composition). Owns the peek / collision-check
+    /// / LinkFolder / AddMod loop and the linked row's open-folder badge
+    /// command; exposed read-only so the view's picker forward paths + the
+    /// shared badge template's <c>OpenFolder_Click</c> route to
+    /// <c>LinkedMods.LinkModsCommand</c> / <c>LinkedMods.OpenFolderCommand</c>
+    /// (the same forwarder shape the Add split button uses for
+    /// <see cref="ImportWorkflow"/>). This VM reloads the active list when the
+    /// child's <c>ModsLinked</c> event fires.
+    /// </summary>
+    public LinkedModsViewModel LinkedMods { get; }
+
+    /// <summary>
+    /// The link-external-folder child finished processing its picker paths
+    /// (linked or not). Reload so freshly linked rows appear; a no-link run
+    /// reloads the same authoritative state, exactly as the inline flow did.
+    /// </summary>
+    private void OnModsLinked(object? sender, EventArgs e) => Reload();
+
+    /// <summary>
+    /// The Detailed-rows child VM's sibling: the shared observable row context
+    /// (premium / install-busy / gaming), created in composition before this
+    /// VM and passed once to every row on <see cref="Reload"/>. Exposed
+    /// read-only for the forwarding properties below; the rows hold the same
+    /// instance.
+    /// </summary>
+    public ModRowContext RowContext { get; }
+
+    /// <summary>
     /// Whether the app runs inside a Steam Deck Gaming Mode session (fixed for
     /// the process lifetime). Gates the Add split button's picker-based paths
-    /// and each linked row's open-folder badge, and is pushed down to every row
-    /// (mirroring the premium push) so the per-row badge state recomputes
-    /// without a parent walk in the binding.
+    /// and each linked row's open-folder badge. Forwarded from
+    /// <see cref="RowContext"/>; re-fires through
+    /// <see cref="OnRowContextChanged"/> when the context flips (the gaming
+    /// half is constant for the process lifetime).
     /// </summary>
-    public bool IsGamingMode => _gamingMode.IsGamingMode;
+    public bool IsGamingMode => RowContext.IsGamingMode;
+
+    /// <summary>
+    /// Whether the Nexus account is premium: forwarded from
+    /// <see cref="RowContext"/> (the context's one-shot construction read; no
+    /// mid-session refresh). Drives the manual update action's branch
+    /// (Premium -> in-app install; regular/unknown -> open the files page);
+    /// the per-row halves read the same context through their own forwarding
+    /// properties.
+    /// </summary>
+    public bool IsPremiumUser => RowContext.IsPremiumUser;
+
+    /// <summary>
+    /// Whether the mod-update installer reports an install in flight (manual or
+    /// automatic; the coordinator-backed busy flag). Forwarded from
+    /// <see cref="RowContext"/>; rows read the same flag through their own
+    /// forwarding property, so the per-row enabled state reflects the global
+    /// "one install at a time" coordination without a parent walk.
+    /// </summary>
+    public bool AnyRowUpdating => RowContext.AnyRowUpdating;
+
+    /// <summary>
+    /// A row-affecting global (premium / install-busy / gaming) flipped on the
+    /// shared row context (already on the UI thread). Re-fires this VM's
+    /// forwarding properties (the names match the context's exactly) and fans
+    /// the notification out to the live rows, whose derived enabled states +
+    /// tooltips re-read the context. Rows receive the notification only
+    /// through this single fan-out (never an individual subscription), so
+    /// rows dropped by a reload cannot leak against the application-lifetime
+    /// context.
+    /// </summary>
+    private void OnRowContextChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        OnPropertyChanged(e.PropertyName);
+        if (e.PropertyName is null)
+        {
+            return;
+        }
+
+        foreach (var row in Mods)
+        {
+            row.OnRowContextChanged(e.PropertyName);
+        }
+    }
 
     /// <summary>
     /// Whether the Add split button is enabled: not while the inline import
@@ -366,18 +417,6 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     private ModAddMode _addMode = ModAddMode.NexusMods;
 
     /// <summary>
-    /// Whether the Nexus account is premium. Read once at construction (see the
-    /// constructor's premium-read note); no mid-session refresh. Drives the
-    /// per-row update action's click behavior (Premium -> in-app install;
-    /// regular/unknown -> open the Nexus files page) and is pushed down to each
-    /// row so the per-row enabled state + tooltip can recompute without a parent
-    /// walk in the binding. False until the read lands (or on a read failure; a
-    /// restart re-reads).
-    /// </summary>
-    [ObservableProperty]
-    private bool _isPremiumUser;
-
-    /// <summary>
     /// Whether the last update check was rate-limited, read from the
     /// runner-owned refresh gate (fed by every check result). Drives the header
     /// rate-limit notice (the "check incomplete" indicator). Stays <c>true</c>
@@ -404,17 +443,6 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     /// together when the reset elapses.
     /// </summary>
     public bool IsRateLimitActive => _updateCheckRunner.RefreshGate.IsRateLimitActive;
-
-    /// <summary>
-    /// Whether the mod-update installer reports an install in flight (manual or
-    /// automatic; the coordinator-backed busy flag). Set from
-    /// <see cref="OnInstallerBusyChanged"/>; pushed down
-    /// to each row so the per-row enabled state reflects the global "one install
-    /// at a time" coordination. The manual Update command no longer sets this
-    /// directly; the installer behind its shared gate is the single source of truth.
-    /// </summary>
-    [ObservableProperty]
-    private bool _anyRowUpdating;
 
     /// <summary>
     /// Whether the manual "check now" affordance is running a thorough check.
@@ -572,25 +600,31 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     }
 
     /// <summary>
-    /// The UI culture flipped (Preferences dialog). Re-fire the localized derived
-    /// strings + refresh each row's badge + policy text.
+    /// The mod list's localized property names, re-fired by the shared
+    /// culture-refresh base on a culture change (header, empty-state, and
+    /// refresh-gate tooltip strings; the gate re-render in
+    /// <see cref="OnCultureChanged"/> re-fires the non-localized gate
+    /// renderings alongside them).
     /// </summary>
-    private void OnCultureChanged(object? sender, PropertyChangedEventArgs e)
+    protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
-        if (e.PropertyName != nameof(LocalizationService.Culture)
-            && e.PropertyName != "Item[]")
-        {
-            return;
-        }
+        nameof(AddModsHintText),
+        nameof(NexusHintText),
+        nameof(AddModeLabel),
+        nameof(RateLimitedNoticeText),
+        nameof(RateLimitedTooltip),
+        nameof(ManualRefreshTooltip),
+        nameof(AddButtonTooltip),
+    };
 
-        OnPropertyChanged(nameof(AddModsHintText));
-        OnPropertyChanged(nameof(NexusHintText));
-        OnPropertyChanged(nameof(AddModeLabel));
-        OnPropertyChanged(nameof(RateLimitedNoticeText));
-        OnPropertyChanged(nameof(AddButtonTooltip));
-        // Re-resolve the localized refresh-gate renderings so the rate-limit +
-        // throttle tooltips pick up the new culture immediately (the gate's own
-        // state is unchanged; the raw values are re-read).
+    /// <summary>
+    /// The non-list culture work: re-resolve the localized refresh-gate
+    /// renderings so the rate-limit + throttle tooltips pick up the new
+    /// culture immediately (the gate's own state is unchanged; the raw values
+    /// are re-read), + refresh each row's localized text.
+    /// </summary>
+    protected override void OnCultureChanged()
+    {
         OnRefreshGateStateChanged();
         foreach (var row in Mods)
         {
@@ -630,22 +664,15 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     }
 
     /// <summary>
-    /// The update check finished (background task fires the event on its
-    /// completing thread). The check service already recorded the authoritative
+    /// A fired update check finished. The runner re-raises the completion on
+    /// UI thread, and the check service already recorded the authoritative
     /// outcome through the persisted known-update store, so re-hydrate the rows
-    /// from that store (profile-scoped) rather than reading the single in-memory
-    /// <see cref="IUpdateCheckService.LastResult"/> (which cannot distinguish
-    /// profiles). Idempotent.
+    /// from that store (profile-scoped) rather than reading the single
+    /// in-memory <see cref="IUpdateCheckService.LastResult"/> (which cannot
+    /// distinguish profiles). Idempotent.
     /// </summary>
-    private void OnUpdateCheckCompleted(object? sender, UpdateCheckResult? result)
-    {
-        // The event fires on the check's completing thread (a threadpool thread
-        // via UpdateCheckRunner's Task.Run). Marshal to the UI thread so the
-        // hydration's iteration of the UI-bound Mods collection doesn't race
-        // with a UI-thread Reload (ObservableCollection's enumerator is not
-        // thread-safe vs concurrent mutation).
-        _invokeOnUi(() => ApplyCheckLanded(result));
-    }
+    private void OnUpdateCheckCompleted(object? sender, UpdateCheckResult? result) =>
+        ApplyCheckLanded(result);
 
     /// <summary>
     /// Applies a just-landed check: refreshes the rate-limit notice from the
@@ -719,72 +746,6 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
     }
 
     /// <summary>
-    /// The installer's busy flag changed (a manual row update or the automatic
-    /// batch acquired or released the shared coordinator). Mirror it to
-    /// <see cref="AnyRowUpdating"/> + push the new value down to every row so the
-    /// per-row enabled state recomputes (Premium clicks stay disabled while
-    /// another install runs; regular/unknown clicks stay enabled). Fires on the
-    /// acquiring/releasing thread, so marshal to the UI thread.
-    /// </summary>
-    private void OnInstallerBusyChanged(object? sender, EventArgs e) =>
-        _invokeOnUi(() => AnyRowUpdating = _installer.IsBusy);
-
-    /// <summary>
-    /// Pushes the current <see cref="IsPremiumUser"/>, <see cref="AnyRowUpdating"/>,
-    /// and <see cref="IsGamingMode"/> down to every row so each row's enabled
-    /// state + tooltip recompute without a parent walk in the binding. Called on
-    /// reload + whenever either observable half flips. The gaming half is
-    /// constant for the process lifetime (riding the same push keeps one
-    /// row-state path instead of a second per-row assignment site).
-    /// </summary>
-    private void PushGlobalStateToRows()
-    {
-        foreach (var row in Mods)
-        {
-            row.IsPremiumUser = IsPremiumUser;
-            row.AnyRowUpdating = AnyRowUpdating;
-            row.IsGamingMode = IsGamingMode;
-        }
-    }
-
-    /// <summary>
-    /// Reads the Nexus premium state once (called fire-and-forget from the
-    /// constructor). On success flips <see cref="IsPremiumUser"/> and pushes it
-    /// down to the rows; on failure logs + leaves it false (a restart re-reads).
-    /// </summary>
-    private async Task LoadPremiumStateAsync()
-    {
-        try
-        {
-            var state = await _auth.GetCurrentStateAsync();
-            IsPremiumUser = state?.IsPremium == true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Nexus premium state read failed; per-row update actions stay regular-tier until restart.");
-        }
-        finally
-        {
-            // Whether the read landed or failed, push the current value down so
-            // each row's tooltip + enabled state reflect it.
-            PushGlobalStateToRows();
-        }
-    }
-
-    /// <summary>
-    /// Pushes the new premium flag down to every row when it changes (the
-    /// construction-time read + a future refresh).
-    /// </summary>
-    partial void OnIsPremiumUserChanged(bool value) => PushGlobalStateToRows();
-
-    /// <summary>
-    /// Pushes the new global-busy flag down to every row when it changes (the
-    /// coordinator acquired or released).
-    /// </summary>
-    partial void OnAnyRowUpdatingChanged(bool value) => PushGlobalStateToRows();
-
-    /// <summary>
     /// The shared nxm registration state published a new last-known value
     /// (already on the UI thread). Re-read it into the empty-state hint flag.
     /// </summary>
@@ -836,6 +797,7 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
             var version = ResolveDisplayVersion(entry, container);
             var row = new ModItemViewModel(
                 _localization,
+                RowContext,
                 entry.ContainerId,
                 container?.Name ?? string.Empty,
                 source,
@@ -868,12 +830,12 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
         // directly without a parent walk.
         ApplyMoveAvailability();
 
-        // The freshly built rows default UpdateAvailable=false + carry no
-        // premium / global-busy state. Push the current global state down, then
-        // re-apply the persisted known-update state (profile-scoped) so a profile
-        // switch (or a post-edit reload, or a restart) reflects the recorded
-        // flags without waiting for the next check.
-        PushGlobalStateToRows();
+        // The freshly built rows default UpdateAvailable=false; their premium /
+        // busy / gaming halves read the shared row context (passed at
+        // construction), so no global push happens here. Re-apply the persisted
+        // known-update state (profile-scoped) so a profile switch (or a
+        // post-edit reload, or a restart) reflects the recorded flags without
+        // waiting for the next check.
         ApplyKnownUpdateState();
 
         // Hand the final row snapshot to the density coordinator so it can push
@@ -1334,7 +1296,7 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
             // installer revalidates it against the container's current state
             // inside the gate. The candidates are the entries the last Reload
             // loaded.
-            outcome = await _installer.TryInstallLatestAsync(
+            outcome = await RowContext.InstallLatestAsync(
                 profileId,
                 row.ContainerId,
                 modId,
@@ -1399,7 +1361,11 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
                 // fallback alert rather than swallowing it so the user can act
                 // (the URL is included for manual copy).
                 _logger.LogWarning("Opening the Nexus files page for {Container} failed.", row.ContainerId);
-                _ = ShowLaunchFailedAlertAsync(row.Name, url);
+                _ = LaunchAlerts.ShowAsync(
+                    _dialogs, _localization,
+                    "ModList_OpenFilesFailedTitle",
+                    "ModList_OpenFilesFailedMessage",
+                    row.Name, url);
             }
         }
         catch (Exception ex)
@@ -1407,20 +1373,12 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
             // The launcher's exception filter is narrow; a real wiring bug
             // surfaces here as a fallback alert rather than being swallowed.
             _logger.LogError(ex, "Launching the Nexus files page for {Container} threw.", row.ContainerId);
-            _ = ShowLaunchFailedAlertAsync(row.Name, url);
+            _ = LaunchAlerts.ShowAsync(
+                _dialogs, _localization,
+                "ModList_OpenFilesFailedTitle",
+                "ModList_OpenFilesFailedMessage",
+                row.Name, url);
         }
-    }
-
-    /// <summary>
-    /// Shows the localized launcher-failure alert (fire-and-forget on the UI
-    /// thread; the click handler is sync). Includes the files-page URL so the
-    /// user can open it manually.
-    /// </summary>
-    private async Task ShowLaunchFailedAlertAsync(string modName, string url)
-    {
-        await _dialogs.ShowAlertAsync(
-            _localization["ModList_OpenFilesFailedTitle"],
-            _localization.Format("ModList_OpenFilesFailedMessage", modName, url));
     }
 
     /// <summary>
@@ -1461,7 +1419,11 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
                 // fallback alert rather than swallowing it so the user can act
                 // (the URL is included for manual copy).
                 _logger.LogWarning("Opening the Nexus Mods games page failed.");
-                _ = ShowNexusModsLaunchFailedAlertAsync(url);
+                _ = LaunchAlerts.ShowAsync(
+                    _dialogs, _localization,
+                    "ModList_OpenNexusModsFailedTitle",
+                    "ModList_OpenNexusModsFailedMessage",
+                    url);
             }
         }
         catch (Exception ex)
@@ -1469,206 +1431,11 @@ public partial class ModListViewModel : ObservableObject, IModListRefresh
             // The launcher's exception filter is narrow; a real wiring bug
             // surfaces here as a fallback alert rather than being swallowed.
             _logger.LogError(ex, "Launching the Nexus Mods games page threw.");
-            _ = ShowNexusModsLaunchFailedAlertAsync(url);
+            _ = LaunchAlerts.ShowAsync(
+                _dialogs, _localization,
+                "ModList_OpenNexusModsFailedTitle",
+                "ModList_OpenNexusModsFailedMessage",
+                url);
         }
-    }
-
-    /// <summary>
-    /// Shows the localized launcher-failure alert for the Nexus Mods games page
-    /// (fire-and-forget on the UI thread; the click handler is sync). Includes
-    /// the URL so the user can open it manually.
-    /// </summary>
-    private async Task ShowNexusModsLaunchFailedAlertAsync(string url)
-    {
-        await _dialogs.ShowAlertAsync(
-            _localization["ModList_OpenNexusModsFailedTitle"],
-            _localization.Format("ModList_OpenNexusModsFailedMessage", url));
-    }
-
-    // ---- link-external-folder helper -------------------------------------
-
-    /// <summary>
-    /// Surfaces a link-external-folder failure alert for a source path + the
-    /// underlying exception, using the localized <c>Import_Failed</c> strings.
-    /// Logs the exception with its stack + shows the message text to the user.
-    /// (The copied local-import flow now surfaces its failures inline via
-    /// <see cref="ImportWorkflowViewModel.FailureMessage"/>; this helper is used
-    /// only by the linked-folder flow, which remains modal-alert-based.)
-    /// </summary>
-    private async Task AlertImportFailed(string path, Exception ex)
-    {
-        _logger.LogError(ex, "Import of {Path} failed", path);
-        await _dialogs.ShowAlertAsync(
-            _localization["Import_FailedTitle"],
-            _localization.Format("Import_FailedMessage", path) + " " + ex.Message);
-    }
-
-    // ---- link external folder (picker only, no modal, no copy) --------------
-
-    /// <summary>
-    /// Processes a list of external folder paths from the link flow (the "Link
-    /// external folder" picker), sequentially. Per path the flow mirrors the
-    /// copied-import flow minus the inline workflow (the folder is linked, not
-    /// copied): <b>(1)</b> peek the base folder name via
-    /// <see cref="IModImportService.GetBaseName"/> (validates the mod-folder
-    /// shape, throws on an invalid source); <b>(2)</b> hard-block a base-name
-    /// collision against the active profile (refuse, create nothing, alert),
-    /// excluding the container a re-link would dedup to (a re-link resolves to
-    /// the same container, and <see cref="IProfileService.AddMod"/> is idempotent
-    /// on it); <b>(3)</b> <see cref="IModImportService.LinkFolder"/> (record the
-    /// metadata-only container, no copy) + <see cref="IProfileService.AddMod"/>
-    /// with <see cref="ModVersionPolicy.Latest"/> (inert for linked; the external
-    /// folder is the single implicit version). A failed peek, a containment /
-    /// shape failure from <see cref="IModImportService.LinkFolder"/>, OR a
-    /// collision cancels the whole remaining batch (folders linked earlier in the
-    /// batch stay linked).
-    /// </summary>
-    /// <remarks>
-    /// No <c>ConfigureAwait(false)</c> anywhere: dialog + observable mutations
-    /// stay on the captured UI context (UI-layer convention).
-    /// </remarks>
-    [RelayCommand]
-    private async Task LinkMods(IReadOnlyList<string>? paths)
-    {
-        if (paths is null || paths.Count == 0)
-        {
-            return;
-        }
-
-        if (_session.ActiveProfileId is not Guid id)
-        {
-            _logger.LogWarning("Link flow ignored: no active profile");
-            return;
-        }
-
-        // Tracks whether any path actually landed a linked mod in the profile.
-        // A failed-peek or all-colliding batch links nothing, so it must not set
-        // the pending-changes flag (no structural change occurred).
-        var changed = false;
-        foreach (var path in paths)
-        {
-            // (1) Peek the base folder name. The picked folder IS the base; this
-            // validates the mod-folder shape (a matching <base>.mod descriptor)
-            // BEFORE any container is created. An invalid source throws here;
-            // catch it per path, surface an alert naming the failing source, and
-            // abort the remaining batch (the cancel-aborts-batch posture).
-            string baseName;
-            try
-            {
-                baseName = _importService.GetBaseName(path);
-            }
-            catch (Exception ex) when (
-                ex is InvalidOperationException or ArgumentException
-                    or IOException or UnauthorizedAccessException
-                    or System.IO.InvalidDataException)
-            {
-                await AlertImportFailed(path, ex);
-                break;
-            }
-
-            // (2) Base-name collision hard-block (same rule as the inline
-            // import workflow's collision check). The
-            // container a re-link would dedup to is excluded: a re-link resolves
-            // to the same linked container (Linked identity is the normalized
-            // external path), and AddMod is idempotent on it, so it must NOT be
-            // treated as a collision.
-            var linkedSource = new LinkedSource { ExternalPath = path };
-            var existing = _importService.FindExistingContainer(linkedSource, string.Empty);
-            var collision = _profiles.GetBaseNameCollision(id, baseName, existing?.Id);
-            if (collision is not null)
-            {
-                var conflictingName = _repo.Get(collision.ContainerId)?.Name ?? baseName;
-                _logger.LogWarning(
-                    "Link blocked at {Path}: base folder '{Base}' collides with existing mod '{Conflicting}' (container {Container}) on profile {Id}",
-                    path, baseName, conflictingName, collision.ContainerId, id);
-                await _dialogs.ShowAlertAsync(
-                    _localization["Import_CollisionTitle"],
-                    _localization.Format("Import_CollisionMessage", path, baseName, conflictingName));
-                break;
-            }
-
-            // (3) Record the linked container (metadata only, no copy) then add
-            // the profile reference with LatestPolicy (inert for linked).
-            Guid containerId;
-            try
-            {
-                containerId = _importService.LinkFolder(path);
-            }
-            catch (Exception ex) when (
-                ex is InvalidOperationException or ArgumentException)
-            {
-                await AlertImportFailed(path, ex);
-                break;
-            }
-
-            _profiles.AddMod(id, containerId, ModVersionPolicy.Latest);
-            changed = true;
-            _logger.LogInformation(
-                "Linked {Mod} from {Path} (policy=Latest) onto container {Container}",
-                baseName, path, containerId);
-        }
-
-        if (changed)
-        {
-            _session.HasPendingChanges = true;
-        }
-        Reload();
-    }
-
-    // ---- open external folder (linked row badge click) ----------------------
-
-    /// <summary>
-    /// Opens the OS file manager at a linked row's external folder via the
-    /// injected <see cref="IExternalLauncher"/>, surfacing a fallback alert on
-    /// launch failure. No-op for a non-linked row, a broken row (the folder is
-    /// missing), a row whose source carries no path, or while inside a Steam
-    /// Deck Gaming Mode session (file-manager opens depend on a desktop shell;
-    /// the disabled badge is the first gate, this is the programmatic one). The
-    /// row carries state only; this command owns the launch + alert, mirroring
-    /// the regular/unknown files-page open path.
-    /// </summary>
-    [RelayCommand]
-    private async Task OpenFolder(ModItemViewModel? row)
-    {
-        if (row is null || row.Source is not LinkedSource || row.IsExternalBroken)
-        {
-            return;
-        }
-
-        if (IsGamingMode)
-        {
-            return;
-        }
-
-        var path = row.ExternalFolderPath;
-        if (string.IsNullOrEmpty(path))
-        {
-            return;
-        }
-
-        try
-        {
-            if (!_externalLauncher.OpenPath(path))
-            {
-                _logger.LogWarning("Opening the external folder for {Container} failed.", row.ContainerId);
-                await ShowOpenFolderFailedAlertAsync(row.Name, path);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Launching the external folder for {Container} threw.", row.ContainerId);
-            await ShowOpenFolderFailedAlertAsync(row.Name, path);
-        }
-    }
-
-    /// <summary>
-    /// Shows the localized open-folder-failure alert (the launcher returned
-    /// false or threw). Includes the path so the user can open it manually.
-    /// </summary>
-    private async Task ShowOpenFolderFailedAlertAsync(string modName, string path)
-    {
-        await _dialogs.ShowAlertAsync(
-            _localization["ModList_OpenFolderFailedTitle"],
-            _localization.Format("ModList_OpenFolderFailedMessage", modName, path));
     }
 }

@@ -17,11 +17,11 @@ namespace Modificus.Curator.UI.ViewModels;
 /// The view model behind the Modificus Curator main window, the app shell.
 /// Owns the SplitView navigation rail (five hosted destinations), the global
 /// Launch action, the global running / pending / nxm / app-update status strip,
-/// and the deferred DMF install-prompt trigger (consumed on a real navigation
-/// into Mods). The active profile is owned by <see cref="IProfileSession"/>;
-/// launch availability derives directly from
-/// <see cref="IProfileSession.ActiveProfileId"/> + <see cref="IsGameRunning"/>
-/// + the shell's own launch-attempt state, never a cached snapshot.
+/// and the shell-owned modal queue (drained on destination entry). The active
+/// profile is owned by <see cref="IProfileSession"/>; launch availability
+/// derives directly from <see cref="IProfileSession.ActiveProfileId"/> +
+/// <see cref="IsGameRunning"/> + the shell's own launch-attempt state, never a
+/// cached snapshot.
 /// </summary>
 /// <remarks>
 /// <para><b>Navigation lifecycle:</b> a real destination change runs the current
@@ -31,26 +31,26 @@ namespace Modificus.Curator.UI.ViewModels;
 /// leaving Settings reloads the mod list +
 /// re-reads the startup-check toggle + refreshes the app-update notice. Enter
 /// effects: Settings rehydrates from config synchronously; Nexus
-/// awaits its auth refresh so the page paints while its state resolves. Entering
-/// Mods consumes any pending DMF trigger (set by
-/// <see cref="DmfPromptService"/>'s ProfileCreated subscription) AFTER setting
-/// CurrentDestination, so Mods is selected underneath the modal and an accepted
-/// existing/Premium DMF add is visible after the post-prompt reload. Selecting
-/// the current destination is a strict no-op (no guards, effects, or config
-/// reads), so a pending trigger survives visits to other destinations and is
-/// consumed only on a real Mods entry.</para>
+/// awaits its auth refresh so the page paints while its state resolves. After
+/// the enter effects the shell drains its modal queue for the entered
+/// destination (see <see cref="IShellModalQueue"/>), so a queued modal (the DMF
+/// install prompt after a profile create) runs as the topmost modal with the
+/// page already painted underneath. Selecting the current destination is a
+/// strict no-op (no guards, effects, queue drain, or config reads), so a queued
+/// modal survives visits to other destinations and runs only on a real entry
+/// into its destination.</para>
 /// <para><b>No kitchen-sink lifecycle interface:</b> Profiles, Settings, and
 /// Nexus have deliberately different capabilities, so the shell
 /// calls each concrete page VM directly rather than routing through a shared
 /// <c>IPage</c>/<c>INavigationService</c>. The hosted VMs are
 /// application-lifetime singletons; navigation never calls their old Window-
 /// close final-cleanup (<c>Detach</c>) paths.</para>
-/// <para><b>DMF trigger ownership is split:</b> <see cref="DmfPromptService"/>
-/// owns the prompt mechanism (subscribe, record, run, log/fail-isolated), while
-/// the shell owns WHEN the prompt fires (on the next real navigation into Mods,
-/// after the unsaved-changes three-choice guard). This keeps the coordinator narrowly focused
-/// on the DMF cases and the shell broadly owning cross-destination sequencing
-/// without the two being coupled through a page-level interface.</para>
+/// <para><b>Modal timing is the queue's, modal content is the enqueuer's:</b>
+/// the shell owns WHEN a queued modal fires (on the next real navigation into
+/// the modal's destination, after the enter effects, including after the
+/// Profiles unsaved-changes guard) while each enqueuing service owns WHAT the
+/// modal does + its post-modal follow-up. The shell does not know which
+/// services enqueue; that is the point.</para>
 /// <para><b>Running-state is live:</b> <see cref="IsGameRunning"/> is mirrored
 /// from <see cref="IProfileSession.IsRunning"/>, which a polling timer
 /// refreshes, so the status strip + launch-availability react within a few
@@ -74,12 +74,11 @@ namespace Modificus.Curator.UI.ViewModels;
 /// title re-resolve from <see cref="LocalizationService"/> on a culture
 /// change.</para>
 /// </remarks>
-public partial class ShellViewModel : ObservableObject, IShellNavigation
+public partial class ShellViewModel : LocalizedViewModel, IShellNavigation
 {
     private readonly IProfileSession _session;
     private readonly IRelayLaunchService _launchService;
     private readonly IDialogService _dialogs;
-    private readonly LocalizationService _localization;
     private readonly ModListViewModel _modList;
     private readonly ProfilesViewModel _profiles;
     private readonly IntegrationsViewModel _integrations;
@@ -89,7 +88,7 @@ public partial class ShellViewModel : ObservableObject, IShellNavigation
     private readonly IConfigLoader _configLoader;
     private readonly Action<Action> _invokeOnUi;
     private readonly INxmRegistrationState _nxmRegistration;
-    private readonly DmfPromptService _dmfPrompt;
+    private readonly IShellModalQueue _modalQueue;
     private readonly ILogger<ShellViewModel> _logger;
     private readonly Func<Task> _yieldForLaunchRender;
     private readonly Func<Task> _launchHandoffTimeout;
@@ -113,25 +112,25 @@ public partial class ShellViewModel : ObservableObject, IShellNavigation
         PreferencesViewModel preferences,
         SettingsViewModel settings,
         IAppUpdateService appUpdate,
-        DmfPromptService dmfPrompt,
+        IShellModalQueue modalQueue,
         Action<Action> invokeOnUi,
         ILogger<ShellViewModel> logger,
         IConfigLoader configLoader,
         INxmRegistrationState nxmRegistration,
         Func<Task>? yieldForLaunchRender = null,
         Func<Task>? launchHandoffTimeout = null)
+        : base(localization)
     {
         _session = session;
         _launchService = launchService;
         _dialogs = dialogs;
-        _localization = localization;
         _profiles = profiles;
         _modList = modList;
         _integrations = integrations;
         _preferences = preferences;
         _settings = settings;
         _appUpdate = appUpdate;
-        _dmfPrompt = dmfPrompt ?? throw new ArgumentNullException(nameof(dmfPrompt));
+        _modalQueue = modalQueue ?? throw new ArgumentNullException(nameof(modalQueue));
         _invokeOnUi = invokeOnUi ?? throw new ArgumentNullException(nameof(invokeOnUi));
         _logger = logger;
         _configLoader = configLoader ?? throw new ArgumentNullException(nameof(configLoader));
@@ -156,10 +155,6 @@ public partial class ShellViewModel : ObservableObject, IShellNavigation
         _nxmRegistration.RefreshFromOs();
 
         _session.PropertyChanged += OnSessionPropertyChanged;
-        // Re-resolve the localized strings (status strip + page title) when the
-        // UI culture flips so the shell refreshes in-step with the rest of the
-        // UI on a language switch.
-        _localization.PropertyChanged += OnCultureChanged;
 
         // Subscribe to the app self-update state changes so the status-strip
         // notice appears the moment a check resolves an update (the startup
@@ -257,16 +252,17 @@ public partial class ShellViewModel : ObservableObject, IShellNavigation
 
     /// <summary>
     /// The guarded navigation core. Same-destination is a strict no-op (so a
-    /// pending DMF trigger survives same-destination Mods clicks; it is consumed
-    /// only by a real navigation into Mods). For a real change: (1) leaving
+    /// queued modal survives same-destination clicks; it is consumed only by a
+    /// real navigation into its destination). For a real change: (1) leaving
     /// Profiles awaits the unsaved-changes three-choice guard, which on
     /// Cancel/Save-failure keeps everything unchanged; (2) run the current
     /// destination's other leave effects; (3) switch <see cref="CurrentDestination"/>;
     /// (4) run the target's enter effects (Settings rehydrates synchronously;
-    /// Nexus awaits its auth refresh; Mods consumes any pending DMF
-    /// trigger then reloads the mod list when one was consumed). The destination
-    /// is switched before any enter await so it stays active even if a refresh
-    /// or the DMF prompt reports an error through its own behavior.
+    /// Nexus awaits its auth refresh); (5) drain the shell-owned modal queue
+    /// for the destination, so a queued modal (the DMF prompt) runs as the
+    /// topmost modal over the painted page. The destination is switched before
+    /// any enter await so it stays active even if a refresh or a drained modal
+    /// reports an error through its own behavior.
     /// </summary>
     public async Task NavigateAsync(ShellDestination destination)
     {
@@ -304,18 +300,15 @@ public partial class ShellViewModel : ObservableObject, IShellNavigation
         }
 
         // Switch the destination BEFORE the enter awaits so the page paints
-        // underneath any modal the enter path raises (the DMF prompt runs after
-        // the destination is already Mods, so the modal sits over the Mods
-        // page).
+        // underneath any modal the enter path raises (a drained queue modal
+        // runs after the destination is already set, so the modal sits over
+        // the freshly painted page).
         CurrentDestination = destination;
 
         // Enter effects. Settings rehydrates from config synchronously so
         // escape-hatch / config changes are visible without a transient stale
         // page; Nexus shows first, then awaits its auth refresh
-        // (paint-then-resolve, matching the former dialog behavior); Mods
-        // consumes any pending DMF trigger (set by ProfilesViewModel.Save ->
-        // CreateProfile -> DmfPromptService's ProfileCreated subscription) then
-        // reloads the list so an accepted existing/Premium DMF add is visible.
+        // (paint-then-resolve, matching the former dialog behavior).
         if (destination == ShellDestination.Settings)
         {
             _settings.RefreshFromConfig();
@@ -324,19 +317,14 @@ public partial class ShellViewModel : ObservableObject, IShellNavigation
         {
             await _integrations.RefreshAsync();
         }
-        else if (destination == ShellDestination.Mods)
-        {
-            // ProcessPendingAsync consumes the trigger (if any) and returns
-            // true when one was consumed. Reloading after a consumed trigger
-            // surfaces an accepted existing/Premium DMF add immediately; a
-            // declined / no-op / browser-open prompt leaves the list as the
-            // authoritative load already painted it.
-            var consumed = await _dmfPrompt.ProcessPendingAsync();
-            if (consumed)
-            {
-                _modList.Reload();
-            }
-        }
+
+        // Drain the shell-owned modal queue for the entered destination (after
+        // the destination switch + the enter effects, so the page is painted
+        // underneath the modal). A same-destination call never reaches here,
+        // so a queued modal survives visits to other destinations and runs
+        // only on a real entry into its destination. Each drained modal owns
+        // its own follow-up (the DMF prompt reloads the list itself).
+        await _modalQueue.DrainAsync(destination);
     }
 
     // ---- hosted page view models ------------------------------------------
@@ -521,25 +509,19 @@ public partial class ShellViewModel : ObservableObject, IShellNavigation
     }
 
     /// <summary>
-    /// The UI culture flipped. Re-fire the property-changed events for the
-    /// localized derived strings (status strip + page title).
+    /// The shell's localized property names, re-fired by the shared
+    /// culture-refresh base on a culture change (status strip + page title).
     /// </summary>
-    private void OnCultureChanged(object? sender, PropertyChangedEventArgs e)
+    protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
-        if (e.PropertyName != nameof(LocalizationService.Culture)
-            && e.PropertyName != "Item[]")
-        {
-            return;
-        }
-
-        OnPropertyChanged(nameof(CurrentDestinationTitle));
-        OnPropertyChanged(nameof(GameRunningText));
-        OnPropertyChanged(nameof(NxmHandlerStatusText));
-        OnPropertyChanged(nameof(NxmHandlerStatusTooltip));
-        OnPropertyChanged(nameof(AppUpdateNoticeText));
-        OnPropertyChanged(nameof(AppUpdateNoticeTooltip));
-        OnPropertyChanged(nameof(AppUpdateDismissTooltip));
-    }
+        nameof(CurrentDestinationTitle),
+        nameof(GameRunningText),
+        nameof(NxmHandlerStatusText),
+        nameof(NxmHandlerStatusTooltip),
+        nameof(AppUpdateNoticeText),
+        nameof(AppUpdateNoticeTooltip),
+        nameof(AppUpdateDismissTooltip),
+    };
 
     /// <summary>
     /// Re-reads the OS <c>nxm://</c> handler registration into

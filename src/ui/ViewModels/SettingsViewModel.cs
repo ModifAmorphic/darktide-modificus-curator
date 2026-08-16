@@ -51,11 +51,10 @@ namespace Modificus.Curator.UI.ViewModels;
 /// <c>SuggestedStartLocation</c> so it opens where the user already is. No file
 /// paths cross the VM boundary.</para>
 /// </remarks>
-public partial class SettingsViewModel : ObservableObject
+public partial class SettingsViewModel : LocalizedViewModel
 {
     private readonly IConfigLoader _configLoader;
     private readonly ISteamService _steam;
-    private readonly LocalizationService _localization;
     private readonly IAppUpdateService _appUpdate;
     private readonly IDialogService _dialogs;
     private readonly IGamingModeState _gamingMode;
@@ -128,10 +127,10 @@ public partial class SettingsViewModel : ObservableObject
         Action<Action> invokeOnUi,
         ILogger<SettingsViewModel> logger,
         IExternalLauncher externalLauncher)
+        : base(localization)
     {
         _configLoader = configLoader;
         _steam = steam ?? throw new ArgumentNullException(nameof(steam));
-        _localization = localization;
         _appUpdate = appUpdate;
         _dialogs = dialogs;
         _gamingMode = gamingMode ?? throw new ArgumentNullException(nameof(gamingMode));
@@ -161,7 +160,6 @@ public partial class SettingsViewModel : ObservableObject
 
         // Subscribe for the localized section headers + labels; the row VMs
         // each subscribe on their own.
-        _localization.PropertyChanged += OnCultureChanged;
 
         // Subscribe to the app self-update state so a check that lands while
         // Settings is open refreshes the inline status. RefreshFromConfig then
@@ -430,20 +428,15 @@ public partial class SettingsViewModel : ObservableObject
     /// change. The per-row labels refresh themselves (each row subscribes on
     /// its own).
     /// </summary>
-    private void OnCultureChanged(object? sender, PropertyChangedEventArgs e)
+    protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
-        if (e.PropertyName is not (nameof(LocalizationService.Culture) or "Item[]"))
-        {
-            return;
-        }
-
-        OnPropertyChanged(nameof(DiscoverySectionHeader));
-        OnPropertyChanged(nameof(StorageSectionHeader));
-        OnPropertyChanged(nameof(StorageButtonsTooltip));
-        OnPropertyChanged(nameof(UpdatesSectionHeader));
-        OnPropertyChanged(nameof(CurrentVersionLabel));
-        OnPropertyChanged(nameof(CurrentVersionDisplay));
-    }
+        nameof(DiscoverySectionHeader),
+        nameof(StorageSectionHeader),
+        nameof(StorageButtonsTooltip),
+        nameof(UpdatesSectionHeader),
+        nameof(CurrentVersionLabel),
+        nameof(CurrentVersionDisplay),
+    };
 
     /// <summary>
     /// Opens the OS file manager (Windows Explorer, xdg-open on Linux, etc.) at

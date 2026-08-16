@@ -46,11 +46,10 @@ namespace Modificus.Curator.UI.ViewModels;
 /// omitted; the dialog always renders the fields it knows how to label +
 /// browse.</para>
 /// </remarks>
-public partial class DiscoveryEscapeHatchViewModel : ObservableObject
+public partial class DiscoveryEscapeHatchViewModel : LocalizedViewModel
 {
     private readonly IConfigLoader _configLoader;
     private readonly ISteamService _steam;
-    private readonly LocalizationService _localization;
     private readonly IGamingModeState _gamingMode;
 
     /// <summary>True while rehydrating the rows so the toggle handler + row
@@ -79,10 +78,10 @@ public partial class DiscoveryEscapeHatchViewModel : ObservableObject
         ISteamService steamService,
         LocalizationService localization,
         IGamingModeState gamingMode)
+        : base(localization)
     {
         _configLoader = configLoader;
         _steam = steamService ?? throw new ArgumentNullException(nameof(steamService));
-        _localization = localization;
         _gamingMode = gamingMode ?? throw new ArgumentNullException(nameof(gamingMode));
 
         var discovery = _configLoader.Load().Discovery;
@@ -117,7 +116,6 @@ public partial class DiscoveryEscapeHatchViewModel : ObservableObject
             _suppressApply = false;
         }
 
-        _localization.PropertyChanged += OnCultureChanged;
     }
 
     /// <summary>
@@ -241,7 +239,7 @@ public partial class DiscoveryEscapeHatchViewModel : ObservableObject
     /// </summary>
     public void Detach()
     {
-        _localization.PropertyChanged -= OnCultureChanged;
+        DetachLocalization();
         foreach (var row in Rows)
         {
             row.Detach();
@@ -249,20 +247,16 @@ public partial class DiscoveryEscapeHatchViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Re-fires the localized derived strings (header + retry hint) on a culture
-    /// change. The per-row labels refresh themselves.
+    /// The dialog's localized property names, re-fired by the shared
+    /// culture-refresh base on a culture change. The per-row labels refresh
+    /// themselves.
     /// </summary>
-    private void OnCultureChanged(object? sender, PropertyChangedEventArgs e)
+    protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
-        if (e.PropertyName is not (nameof(LocalizationService.Culture) or "Item[]"))
-        {
-            return;
-        }
-
-        OnPropertyChanged(nameof(Header));
-        OnPropertyChanged(nameof(RetryHint));
-        OnPropertyChanged(nameof(PickerGatingHint));
-    }
+        nameof(Header),
+        nameof(RetryHint),
+        nameof(PickerGatingHint),
+    };
 
     /// <summary>
     /// Submit: in manual mode, one read-modify-save writing every row's staged

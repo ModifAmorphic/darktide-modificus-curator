@@ -194,36 +194,63 @@ public static class CuratorComposition
             sp.GetRequiredService<IModImportService>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<ILogger<ImportWorkflowViewModel>>()));
-        services.AddSingleton(sp => new ModListViewModel(
+
+        // The link-external-folder child VM: an application-lifetime singleton
+        // registered BEFORE ModListViewModel (which takes it as a child +
+        // reloads the active list when its link flow finishes). Owns the
+        // picker-driven peek / collision-check / LinkFolder / AddMod loop, its
+        // failure alerts, and the linked row's open-external-folder badge
+        // command; the view's picker + badge forward paths route to its
+        // commands (the same forwarder shape the Add split button uses for the
+        // import workflow).
+        services.AddSingleton(sp => new LinkedModsViewModel(
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IModRepository>(),
             sp.GetRequiredService<IModImportService>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),
-            sp.GetRequiredService<IUpdateCheckService>(),
-            // The single install path for the manual Premium update action:
-            // coordinator-gated, revalidating, acknowledging, progress-
-            // reporting (shared with the automatic batch).
-            sp.GetRequiredService<IModUpdateInstaller>(),
+            sp.GetRequiredService<IExternalLauncher>(),
+            // Gaming Mode gates the linked-row open-folder badge (the picker
+            // side is gated by the Add split button).
+            sp.GetRequiredService<IGamingModeState>(),
+            sp.GetRequiredService<ILogger<LinkedModsViewModel>>()));
+        // The shared row context (premium / install-busy / gaming): created
+        // once before the mod-list VM, it reads the Nexus premium state at
+        // construction (fire-and-forget), mirrors the installer's busy flag +
+        // re-raises its per-container progress on the UI thread, and fronts
+        // the single install path for the manual Premium update action. The
+        // mod-list VM passes the same instance to every row; the rows read
+        // their global halves off it instead of receiving per-flag pushes.
+        services.AddSingleton(sp => new ModRowContext(
             sp.GetRequiredService<INexusAuthService>(),
+            sp.GetRequiredService<IModUpdateInstaller>(),
+            sp.GetRequiredService<IGamingModeState>(),
+            sp.GetRequiredService<Action<Action>>(),
+            sp.GetRequiredService<ILogger<ModRowContext>>()));
+
+        services.AddSingleton(sp => new ModListViewModel(
+            sp.GetRequiredService<IProfileService>(),
+            sp.GetRequiredService<IProfileSession>(),
+            sp.GetRequiredService<IModRepository>(),
+            sp.GetRequiredService<IDialogService>(),
+            sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<IUpdateStateStore>(),
-            // The runner owns the refresh gate; the VM renders its state.
+            // The runner owns the refresh gate + surfaces both update-family
+            // completions (check completed + the automatic batch applied) on
+            // the UI thread; the VM renders its state + hydrates rows from it.
             sp.GetRequiredService<UpdateCheckRunner>(),
-            sp.GetRequiredService<IAutomaticUpdateService>(),
+            sp.GetRequiredService<ModRowContext>(),
             sp.GetRequiredService<ImportWorkflowViewModel>(),
             sp.GetRequiredService<DetailedModRowsViewModel>(),
-            sp.GetRequiredService<Action<Action>>(),
-            sp.GetRequiredService<ILogger<ModListViewModel>>(),
+            sp.GetRequiredService<LinkedModsViewModel>(),
+            // The OS shell-open launcher: the Add NexusMods browser open +
+            // the regular-tier update action's files-page open.
+            sp.GetRequiredService<IExternalLauncher>(),
             // The shared last-known nxm registration state feeds the
             // empty-state Nexus hint; the mod list never probes the OS.
             sp.GetRequiredService<INxmRegistrationState>(),
-            // Gaming Mode gates the Add split button's picker paths + the
-            // linked-row open-folder badge.
-            sp.GetRequiredService<IGamingModeState>(),
-            // The OS shell-open launcher: the Add NexusMods browser open +
-            // the linked-row open-folder action.
-            sp.GetRequiredService<IExternalLauncher>()));
+            sp.GetRequiredService<ILogger<ModListViewModel>>()));
 
         // The hosted destination view models: singletons (one instance per page,
         // kept alive + subscribed for the application lifetime). Each page VM is
@@ -240,11 +267,10 @@ public static class CuratorComposition
         // ShellViewModel at startup establishes the subscription before any
         // profile can be created. When ProfilesViewModel.Save calls
         // CreateProfile, the event fires synchronously into the already-
-        // subscribed coordinator, which records it as pending; the shell
-        // consumes the pending trigger on the next real navigation into Mods
-        // (ProcessPendingAsync after CurrentDestination = Mods), then reloads
-        // the mod list when a trigger was consumed so an accepted existing /
-        // Premium DMF add is visible.
+        // subscribed coordinator, which enqueues its prompt onto the
+        // shell-owned modal queue; the shell drains the queue after the next
+        // real navigation into Mods, and the coordinator's own post-prompt
+        // reload surfaces an accepted existing / Premium DMF add.
         services.AddSingleton<ProfilesViewModel>(sp => new ProfilesViewModel(
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IProfileSession>(),
@@ -280,22 +306,29 @@ public static class CuratorComposition
             sp.GetRequiredService<ILogger<SettingsViewModel>>(),
             sp.GetRequiredService<IExternalLauncher>()));
 
+        // The shell-owned modal queue: services enqueue deferred modals for a
+        // destination; the shell drains them in its navigation lifecycle after
+        // the destination switch + enter effects. Registered before every
+        // enqueuer (the DMF coordinator + the shell itself).
+        services.AddSingleton<IShellModalQueue, ShellModalQueue>();
+
         // The DMF (Darktide Mod Framework) install-prompt coordinator.
         // Subscribes to the synchronous IProfileService.ProfileCreated event at
-        // construction. When ProfilesViewModel.Save later calls CreateProfile
-        // (firing ProfileCreated), the already-subscribed coordinator records it
-        // as pending; the shell consumes the trigger on the next real navigation
-        // into Mods (ProcessPendingAsync after CurrentDestination = Mods), so
-        // the DMF prompt runs as the topmost modal with Mods already selected
-        // underneath + the post-prompt mod-list reload surfaces an accepted
-        // existing/Premium DMF add. Singleton: owns the event subscription for
-        // the app lifetime. Takes the shared nxm registration state so the
-        // download confirm can tailor its message to the last-known handler
+        // construction; when ProfilesViewModel.Save later calls CreateProfile
+        // (firing ProfileCreated), the already-subscribed coordinator enqueues
+        // its prompt onto the shell-owned modal queue for the next real
+        // navigation into Mods, where the shell drains it after the
+        // destination switch + enter effects: the DMF prompt runs as the
+        // topmost modal with Mods already selected underneath, and the
+        // coordinator's own post-prompt reload surfaces an accepted
+        // existing/Premium DMF add. Takes the shared nxm registration state so
+        // the download confirm can tailor its message to the last-known handler
         // ownership (manager-download vs. manual-import guidance; no probe),
         // and the Gaming Mode state so the case-2 browser branch can divert to
         // Desktop Mode guidance there (Premium keeps the in-app download).
-        // Registered BEFORE ShellViewModel so ShellViewModel's factory can
-        // resolve it eagerly.
+        // Nothing depends on the coordinator (the shell no longer knows it
+        // exists), so it is resolved once eagerly after the provider is built
+        // to establish the subscription before any profile can be created.
         services.AddSingleton(sp => new DmfPromptService(
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IProfileSession>(),
@@ -307,15 +340,15 @@ public static class CuratorComposition
             sp.GetRequiredService<ILogger<DmfPromptService>>(),
             sp.GetRequiredService<INxmRegistrationState>(),
             sp.GetRequiredService<IGamingModeState>(),
-            sp.GetRequiredService<IExternalLauncher>()));
+            sp.GetRequiredService<IExternalLauncher>(),
+            sp.GetRequiredService<IShellModalQueue>(),
+            sp.GetRequiredService<IModListRefresh>()));
 
-        // ShellViewModel owns navigation + the deferred DMF trigger (consumed on
-        // a real Mods entry). The concrete DmfPromptService is injected (not a
-        // delegate or navigation interface) so the shell can call
-        // ProcessPendingAsync at its chosen point without coupling the
-        // coordinator to navigation sequencing. The shell's nxm status strip
-        // reads the shared registration state (seeded by the one startup probe
-        // inside its constructor).
+        // ShellViewModel owns navigation + drains the modal queue on
+        // destination entry. The shell has no knowledge of which services
+        // enqueue (that is the queue's point); its nxm status strip reads the
+        // shared registration state (seeded by the one startup probe inside
+        // its constructor).
         services.AddSingleton(sp => new ShellViewModel(
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IRelayLaunchService>(),
@@ -327,18 +360,24 @@ public static class CuratorComposition
             sp.GetRequiredService<PreferencesViewModel>(),
             sp.GetRequiredService<SettingsViewModel>(),
             sp.GetRequiredService<IAppUpdateService>(),
-            sp.GetRequiredService<DmfPromptService>(),
+            sp.GetRequiredService<IShellModalQueue>(),
             sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<ShellViewModel>>(),
             sp.GetRequiredService<IConfigLoader>(),
             sp.GetRequiredService<INxmRegistrationState>()));
+        // The narrow factory for the one dialog VM with service dependencies
+        // (the discovery escape hatch), so DialogService shows dialogs without
+        // constructing view models or carrying their dependencies.
+        services.AddSingleton<IDiscoveryEscapeHatchFactory>(sp => new DiscoveryEscapeHatchFactory(
+            sp.GetRequiredService<IConfigLoader>(),
+            sp.GetRequiredService<ISteamService>(),
+            sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<IGamingModeState>()));
         services.AddSingleton<IDialogService>(sp =>
             new DialogService(
                 sp.GetRequiredService<MainWindow>(),
                 sp.GetRequiredService<LocalizationService>(),
-                sp.GetRequiredService<IConfigLoader>(),
-                sp.GetRequiredService<ISteamService>(),
-                sp.GetRequiredService<IGamingModeState>()));
+                sp.GetRequiredService<IDiscoveryEscapeHatchFactory>()));
 
         // The UI-layer glue that fires an update check
         // (IUpdateCheckService, registered above via AddIntegrations) on the
@@ -489,10 +528,17 @@ public static class CuratorComposition
         // AppImage symlink; everywhere else it is a no-op.
         MaintainNxmRegistration(provider, loggerFactory);
 
+        // Resolve the DMF prompt coordinator once so its ProfileCreated
+        // subscription exists before the window shows (nothing else depends on
+        // it; the shell reaches its prompt only through the modal queue).
+        // Best-effort: a failure is logged + swallowed (the DMF prompt simply
+        // never fires this session).
+        ResolveDmfPromptService(provider, loggerFactory);
+
         // Start the update-check runner so a check fires on profile load
         // (startup with the restored id + active-profile switches).
         // Best-effort: a failure is logged + swallowed so a wiring problem never
-        // blocks startup (the mod-list update badges just stay blank until restart).
+        // blocks app startup (the mod-list update badges just stay blank until restart).
         StartUpdateCheck(provider, loggerFactory);
 
         // Start the app self-update runner so an availability check fires once
@@ -502,6 +548,27 @@ public static class CuratorComposition
         StartAppUpdateCheck(provider, loggerFactory);
 
         return provider;
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="DmfPromptService"/> singleton once so its
+    /// <c>ProfileCreated</c> subscription exists before the window shows (the
+    /// shell no longer injects it; the service is reached only through the
+    /// modal queue it feeds). Best-effort: a failure is logged + swallowed so
+    /// a wiring problem never blocks startup (the DMF prompt simply never
+    /// fires this session).
+    /// </summary>
+    private static void ResolveDmfPromptService(IServiceProvider provider, ILoggerFactory loggerFactory)
+    {
+        try
+        {
+            _ = provider.GetRequiredService<DmfPromptService>();
+        }
+        catch (Exception ex)
+        {
+            loggerFactory.CreateLogger(nameof(CuratorComposition))
+                .LogWarning(ex, "Failed to resolve the DMF prompt service (best-effort).");
+        }
     }
 
     /// <summary>

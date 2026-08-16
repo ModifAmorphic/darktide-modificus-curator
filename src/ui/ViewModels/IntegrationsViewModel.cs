@@ -72,10 +72,9 @@ namespace Modificus.Curator.UI.ViewModels;
 /// <see cref="LocalizationService"/>; the bound properties re-resolve on a
 /// culture flip.</para>
 /// </remarks>
-public partial class IntegrationsViewModel : ObservableObject
+public partial class IntegrationsViewModel : LocalizedViewModel
 {
     private readonly INexusAuthService _auth;
-    private readonly LocalizationService _localization;
     private readonly IConfigLoader _configLoader;
     private readonly IDialogService _dialogs;
     private readonly INxmHandlerRegistrar? _nxmRegistrar;
@@ -98,9 +97,9 @@ public partial class IntegrationsViewModel : ObservableObject
         INxmRegistrationState nxmRegistration,
         IExternalLauncher externalLauncher,
         ILogger<IntegrationsViewModel> logger)
+        : base(localization)
     {
         _auth = auth ?? throw new ArgumentNullException(nameof(auth));
-        _localization = localization ?? throw new ArgumentNullException(nameof(localization));
         _configLoader = configLoader ?? throw new ArgumentNullException(nameof(configLoader));
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
         _nxmRegistrar = nxmRegistrar;
@@ -108,7 +107,6 @@ public partial class IntegrationsViewModel : ObservableObject
         _externalLauncher = externalLauncher ?? throw new ArgumentNullException(nameof(externalLauncher));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-        _localization.PropertyChanged += OnCultureChanged;
     }
 
     // ---- state -----------------------------------------------------------
@@ -782,37 +780,35 @@ public partial class IntegrationsViewModel : ObservableObject
     /// culture flips so the destination refreshes in-step with the rest of the
     /// UI on a language switch.
     /// </summary>
-    private void OnCultureChanged(object? sender, PropertyChangedEventArgs e)
+    protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
-        if (e.PropertyName is not (nameof(LocalizationService.Culture) or "Item[]"))
-        {
-            return;
-        }
+        nameof(NexusHeader),
+        nameof(LoginWithOAuthLabel),
+        nameof(ClearNexusSignInLabel),
+        nameof(ApiKeyLabel),
+        nameof(ValidateLabel),
+        nameof(ApiKeyHelpLink),
+        nameof(ApiKeyHelpLabel),
+        nameof(SignOutLabel),
+        nameof(AutoUpdateHeader),
+        nameof(AutoUpdateEnabledLabel),
+        nameof(AutoUpdateIntervalLabel),
+        nameof(AutomaticUpdatesLabel),
+        nameof(AutomaticUpdatesTooltip),
+        nameof(ShowApiKeyTooltip),
+        nameof(HideApiKeyTooltip),
+        nameof(NxmSectionHeader),
+        nameof(NxmStatusText),
+        nameof(NxmActionLabel),
+        nameof(NxmActionTooltip),
+    };
 
-        OnPropertyChanged(nameof(NexusHeader));
-        OnPropertyChanged(nameof(LoginWithOAuthLabel));
-        OnPropertyChanged(nameof(ClearNexusSignInLabel));
-        OnPropertyChanged(nameof(ApiKeyLabel));
-        OnPropertyChanged(nameof(ValidateLabel));
-        OnPropertyChanged(nameof(ApiKeyHelpLink));
-        OnPropertyChanged(nameof(ApiKeyHelpLabel));
-        OnPropertyChanged(nameof(SignOutLabel));
-        OnPropertyChanged(nameof(AutoUpdateHeader));
-        OnPropertyChanged(nameof(AutoUpdateEnabledLabel));
-        OnPropertyChanged(nameof(AutoUpdateIntervalLabel));
-        OnPropertyChanged(nameof(AutomaticUpdatesLabel));
-        OnPropertyChanged(nameof(AutomaticUpdatesTooltip));
-        OnPropertyChanged(nameof(ShowApiKeyTooltip));
-        OnPropertyChanged(nameof(HideApiKeyTooltip));
-        OnPropertyChanged(nameof(NxmSectionHeader));
-        OnPropertyChanged(nameof(NxmStatusText));
-        OnPropertyChanged(nameof(NxmActionLabel));
-        OnPropertyChanged(nameof(NxmActionTooltip));
-        // The status line embeds a localized format; re-resolve it by re-applying
-        // the current state. Fire-and-forget: a culture flip mid-flight is rare,
-        // and the next state-resolve will pick up the new culture.
-        _ = RefreshAsync();
-    }
+    /// <summary>
+    /// The status line embeds a localized format; re-resolve it by re-applying
+    /// the current state. Fire-and-forget: a culture flip mid-flight is rare,
+    /// and the next state-resolve will pick up the new culture.
+    /// </summary>
+    protected override void OnCultureChanged() => _ = RefreshAsync();
 
     /// <summary>
     /// Navigation-away operation: cancels + disposes the current login/API-key

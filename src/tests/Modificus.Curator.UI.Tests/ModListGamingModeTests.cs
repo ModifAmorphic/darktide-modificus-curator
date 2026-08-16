@@ -177,7 +177,7 @@ public sealed class ModListGamingModeTests
         var row = vm.Mods.Single(m => m.Name == "DMF");
         Assert.True(row.IsLinkedAvailable); // the row is otherwise a valid target
 
-        await vm.OpenFolderCommand.ExecuteAsync(row);
+        await vm.LinkedMods.OpenFolderCommand.ExecuteAsync(row);
 
         Assert.Empty(launcher.OpenedPaths);
     }

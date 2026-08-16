@@ -161,7 +161,7 @@ public sealed class ModListOrderLockTests
         var vm = Build(profiles, new FakeProfileSession { ActiveProfileId = null }, new FakeModRepository());
 
         vm.ToggleOrderLockCommand.Execute(new ModItemViewModel(
-            Localization, Guid.NewGuid(), "X", new UntrackedSource(), "", true, 0,
+            Localization, TestDoubles.RowContext(), Guid.NewGuid(), "X", new UntrackedSource(), "", true, 0,
             ModVersionPolicy.Latest, Array.Empty<ModVersion>(), true));
 
         Assert.Empty(profiles.SetModOrderLockedCalls);

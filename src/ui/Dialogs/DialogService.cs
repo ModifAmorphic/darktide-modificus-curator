@@ -1,8 +1,5 @@
 using Avalonia.Controls;
-using Modificus.Curator.General;
-using Modificus.Curator.Steam;
 using Modificus.Curator.UI.Localization;
-using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.ViewModels;
 using Modificus.Curator.UI.Views;
 
@@ -15,7 +12,10 @@ namespace Modificus.Curator.UI.Dialogs;
 /// window (Welcome, confirm, discovery escape hatch, alert, unsaved changes,
 /// progress). This is the only place the app brings up a dialog window;
 /// everything else flows through the <see cref="IDialogService"/> seam, which
-/// tests replace with a fake.
+/// tests replace with a fake. The one dialog whose view model carries service
+/// dependencies (the escape hatch) builds that VM through the narrow
+/// <see cref="IDiscoveryEscapeHatchFactory"/>; this service never constructs
+/// view models itself.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -38,36 +38,25 @@ public sealed class DialogService : IDialogService
 {
     private readonly Window _owner;
     private readonly LocalizationService _localization;
-    private readonly IConfigLoader _configLoader;
-    private readonly ISteamService _steam;
-    private readonly IGamingModeState _gamingMode;
+    private readonly IDiscoveryEscapeHatchFactory _escapeHatchFactory;
 
     /// <param name="owner">The window dialog parents are shown over (the main
     /// window).</param>
     /// <param name="localization">The Localization service; handed to the
-    /// Welcome title, the import VM, and the escape-hatch VM (header + per-row
-    /// labels).</param>
-    /// <param name="configLoader">The live config reader/writer; handed to the
-    /// escape-hatch VM (its toggle + Discover + submit do read-modify-saves).</param>
-    /// <param name="steamService">The Steam discovery service; handed to the
-    /// escape-hatch VM so its global override toggle + Discover button drive the
-    /// same <see cref="ISteamService.Discover"/>/<see cref="ISteamService.Rediscover"/>
-    /// semantics as Settings.</param>
-    /// <param name="gamingMode">Whether the app runs inside a Steam Deck Gaming
-    /// Mode session; handed to the escape-hatch VM so its Browse buttons gate
-    /// (manual path entry + Submit stay available).</param>
+    /// Welcome title.</param>
+    /// <param name="escapeHatchFactory">Builds the escape-hatch dialog's view
+    /// model (the one dialog VM with service dependencies: the live config
+    /// reader/writer, the Steam discovery service, and the Gaming Mode
+    /// state).</param>
     public DialogService(
         Window owner,
         LocalizationService localization,
-        IConfigLoader configLoader,
-        ISteamService steamService,
-        IGamingModeState gamingMode)
+        IDiscoveryEscapeHatchFactory escapeHatchFactory)
     {
         _owner = owner;
         _localization = localization;
-        _configLoader = configLoader;
-        _steam = steamService ?? throw new ArgumentNullException(nameof(steamService));
-        _gamingMode = gamingMode ?? throw new ArgumentNullException(nameof(gamingMode));
+        _escapeHatchFactory = escapeHatchFactory
+            ?? throw new ArgumentNullException(nameof(escapeHatchFactory));
     }
 
     /// <summary>
@@ -176,8 +165,7 @@ public sealed class DialogService : IDialogService
             return false;
         }
 
-        var viewModel = new DiscoveryEscapeHatchViewModel(
-            missingFields, _configLoader, _steam, _localization, _gamingMode);
+        var viewModel = _escapeHatchFactory.Create(missingFields);
         var window = new DiscoveryEscapeHatchDialog
         {
             DataContext = viewModel,

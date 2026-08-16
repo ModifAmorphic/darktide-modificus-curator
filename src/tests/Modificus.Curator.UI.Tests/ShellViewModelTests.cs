@@ -728,8 +728,8 @@ public sealed class ShellViewModelTests
     [Fact]
     public async Task Second_Mods_entry_does_not_re_prompt_after_a_consumed_trigger()
     {
-        // ProcessPendingAsync consumes the trigger; a subsequent Mods entry
-        // finds nothing pending and does not prompt again.
+        // The drained queue entry is consumed; a subsequent Mods entry
+        // finds nothing queued and does not prompt again.
         var repo = new FakeModRepository();
         repo.Seed(new NexusSource { ModId = DmfPromptService.DmfModId }, "DMF", "1.0");
         var profiles = TestDoubles.Profiles();

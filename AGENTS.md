@@ -123,7 +123,14 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           factory in CuratorComposition, no service locator). It
                           persists its last unmaximized client size + whether the
                           last meaningful state was maximized under
-                          `IMainWindowStatePersistence.MainWindowState` (validated + clamped
+                          `IMainWindowStatePersistence.MainWindowState` (the
+                          geometry state machine lives on the plain
+                          headless-testable `WindowGeometryTracker` (ui/Views/,
+                          fed ObserveResize(Size, ResizeReason) +
+                          ObserveWindowState + NotifyOpened through an
+                          injectable post seam, queried for the seed, the
+                          close snapshot, + the CorrectionRequested reapply):
+                          validated + clamped
                           to the XAML minimums + the primary work area in DIP,
                           applied before first Show, maximized on first open
                           when flagged, tracked through deferred coalesced
@@ -153,7 +160,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           runs the target's enter effects (Settings calls
                           `SettingsViewModel.RefreshFromConfig` synchronously;
                           Nexus awaits `IntegrationsViewModel.RefreshAsync`
-                          so the page paints then resolves auth state)), the
+                          so the page paints then resolves auth state), then
+                          drains the shell-owned modal queue for the entered
+                          destination), the
                           global Launch (resolves the active id from
                           `IProfileSession.ActiveProfileId` at execution time, not a
                           cached selection; sets the shell-owned
@@ -214,11 +223,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           a programmatic call cannot start a second draft);
                           after a successful create + activation,
                           `ProfilesViewModel` does NO DMF or mod-list work;
-                          the shell consumes the DMF trigger on the next real
-                          navigation into Mods (`CurrentDestination = Mods` first,
-                          then `ProcessPendingAsync`, then a mod-list reload when
-                          a trigger was consumed) so an accepted DMF install shows
-                          immediately; the avatar palette is deterministic from the
+                          the DMF coordinator enqueues its prompt onto the
+                          shell-owned modal queue, which the shell drains on the
+                          next real navigation into Mods (after
+                          `CurrentDestination = Mods` + the enter effects) so an
+                          accepted DMF install shows immediately (the
+                          coordinator's drained delegate reloads the list
+                          itself); the avatar palette is deterministic from the
                           profile Guid so a profile keeps its color across reloads,
                           sorting, and app restarts;
                           the Mods destination (`ModListViewModel` + `ModListView`):
@@ -269,7 +280,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           thumbnail shrinks to 72 DIP spanning only name +
                           summary (`RowSpan=2`) and the same action strip moves to
                           a full-width row beneath all three columns
-                          (`Grid.ColumnSpan=3`). Width, height, row span, action
+                          (`Grid.ColumnSpan=3`, via the
+                          `ContentControl.detailedActions` styles). Width,
+                          height, row span, action
                           column, and action column span are driven by styles
                           (default wide styles + the container-query overrides),
                           not local values, so the breakpoint can change them;
@@ -277,10 +290,18 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           wide, 28 DIP constrained) through the same styles. The
                           action strip right-aligns every wrapped line
                           (`WrapPanel.ItemsAlignment=End`) and wraps at the edge
-                          in both states (no horizontal scrolling). All action
-                          controls + code-behind handlers are shared verbatim
-                          between the Compact + Detailed row roots, so no behavior
-                          forks between modes. `DetailedModRowsViewModel`
+                          in both states (no horizontal scrolling). The drag
+                          grip, the badge cluster, and the action strip are ONE
+                          shared definition each (DataTemplate resources in
+                          ModListView hosted by both row roots through
+                          `ContentControl.ContentTemplate`; the page styles +
+                          container query reach the realized template content,
+                          and the handlers resolve against the page code-behind
+                          unchanged), so no behavior can fork between modes; the
+                          Compact row keeps its single-line spacing through
+                          `Grid.compactRow`-scoped styles and the Enabled label
+                          is the row's density-aware `EnabledLabel` (null in
+                          Compact). `DetailedModRowsViewModel`
                           (ui/ViewModels/, an application-lifetime singleton child VM
                           registered before `ModListViewModel`, analogous to
                           `ImportWorkflowViewModel`) owns the persisted density
@@ -427,8 +448,14 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           reflection of the console that always shows under Proton
                           until a Relay-side GUI-subsystem fix) via
                           `IPreferencesService` + the i18n infrastructure
-                          (`Strings.resx` + `LocalizationService` for dynamic culture
-                          switching); each change applies + persists immediately;
+                          (`Strings.resx` + `LocalizationService` for dynamic
+                          culture switching; localized VMs derive from the
+                          small `LocalizedViewModel` base (ui/ViewModels/)
+                          which re-fires each VM's registered localized
+                          property names on a culture change, with a
+                          source-scan test failing when a localized property
+                          getter is not registered; each change applies +
+                          persists immediately;
                           the theme mapping honors Gaming Mode: `ThemeMode.System`
                           applies Dark as the effective runtime theme while gaming
                           (the Gaming Mode session reports no desktop appearance
@@ -469,7 +496,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `IDialogService` is narrowed to true modals only (the
                           six methods: `ShowWelcomeAsync`, `ConfirmAsync`,
                           `ShowDiscoveryEscapeHatchAsync`, `ShowAlertAsync`,
-                          `ShowUnsavedChangesAsync`, `ShowProgressAsync<T>`);
+                          `ShowUnsavedChangesAsync`, `ShowProgressAsync<T>`;
+                          the escape-hatch dialog VM is built by the narrow
+                          per-dialog `IDiscoveryEscapeHatchFactory`, so
+                          DialogService carries no Steam/config/gaming
+                          dependencies + constructs no view models);
                           hosted
                           destinations are not modals and never flow through it;
                           the inline import card is a hosted `UserControl`
@@ -546,8 +577,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            independent of the interval gate); registered + started
                            best-effort from CuratorComposition);
                           the mod-list update UI per-row update
-                          signal + per-mod update action. `ModListViewModel` subscribes
-                          to `IUpdateCheckService.CheckCompleted` and reads the
+                          signal + per-mod update action. `ModListViewModel`
+                          subscribes to `UpdateCheckRunner.CheckCompleted` +
+                          `UpdateCheckRunner.UpdatesApplied` (the runner
+                          re-raises both update-family completions on the UI
+                          thread; the VM holds neither update service) and
+                          reads the
                           profile-scoped `IUpdateStateStore` (persisted in
                           `IKnownUpdateState.KnownUpdates` / app-state.json, so a
                           restart inside the interval gate shows prior flags
@@ -572,14 +607,26 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           sent no reset), and the pill reads "Refresh disabled
                           due to rate-limiting" exactly while the button is
                           rate-limit-blocked, distinct from the client-side
-                          manual fire-count throttle which remains. The VM
-                          reads
-                          `INexusAuthService.GetCurrentStateAsync` once at construction
-                          for the per-row premium behavior (`IsPremiumUser` pushed
-                          down to rows; no mid-session refresh),
-                          and exposes an async `UpdateCommand(row)` that branches on
+                          manual fire-count throttle which remains. The three
+                          row-affecting globals live on one shared observable
+                          `ModRowContext` (ui/ViewModels/, created in
+                          composition before the list VM, passed once to every
+                          row): the one-shot construction-time premium read
+                          (no mid-session refresh), the installer's busy flag
+                          mirrored on the UI thread, + the constant gaming
+                          flag; it also re-raises the installer's per-container
+                          progress marshaled + fronts `InstallLatestAsync`
+                          (the single install path in Integrations) for the
+                          manual Premium action. Rows keep their public names
+                          as context-forwarding reads, + the list VM's single
+                          context subscription fans change notifications into
+                          the live rows (re-firing exactly the derived
+                          properties the former per-flag pushes re-fired; no
+                          per-row subscription, so rows dropped by a reload
+                          cannot leak). The VM exposes an async
+                          `UpdateCommand(row)` that branches on
                           premium: Premium hands the install to
-                          `IModUpdateInstaller.TryInstallLatestAsync` (the
+                          `ModRowContext.InstallLatestAsync` (the
                           single install path in Integrations:
                           coordinator-gated one-install-at-a-time, in-gate
                           eligibility revalidation, acquire + acknowledge-on-
@@ -613,9 +660,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            mode): "Add Nexus Mods" (the default; opens the
                            Darktide Nexus Mods games page in the browser), "Add
                            Mod (archive)", "Add Mod (folder)", and "Link
-                           external folder" (folder picker, no modal);
-                           `LinkModsCommand` peeks the base name, runs the
-                           collision check (excluding a re-link),
+                           external folder" (folder picker, no modal; the
+                           link flow lives on the `LinkedModsViewModel` child,
+                           the ImportWorkflowViewModel pattern, exposed as
+                           `vm.LinkedMods` and raised via its `ModsLinked`
+                           event for the parent's reload);
+                           `LinkedMods.LinkModsCommand` peeks the base name,
+                           runs the collision check (excluding a re-link),
                            then `LinkFolder` + `AddMod(LatestPolicy)`. In Gaming
                            Mode the Add button disables entirely (every mode is
                            desktop-dependent; `IsAddEnabled` + a Desktop Mode
@@ -640,9 +691,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            carries the INPC state + derived `SourceUrl`/`UpdatePageUrl`/
                            `IsNexusLatest`/`CanShowUpdateAction`/
                            `UpdateActionEnabled`/`UpdateActionTooltip`/`NexusModId`;
-                           `IsPremiumUser` + `AnyRowUpdating` + `IsGamingMode` are
-                           pushed down so the per-row enabled state + tooltip
-                           recompute without a parent walk (while gaming, a
+                           `IsPremiumUser` + `AnyRowUpdating` + `IsGamingMode`
+                           are context-forwarding reads off the shared
+                           `ModRowContext`, so the per-row enabled state +
+                           tooltip recompute from one source when the context
+                           flips (while gaming, a
                            regular/unverified flagged row's update action +
                            tooltip carry Desktop Mode guidance instead of the
                            files-page launch; Premium rows keep the in-app
@@ -723,24 +776,29 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           the DMF (Darktide Mod Framework)
                           install-prompt coordinator `DmfPromptService`
                           (ui/Session/) + the modal `ProgressDialog`
-                          (ui/Views/) used for its in-flight download. The
-                          coordinator subscribes to
-                          `IProfileService.ProfileCreated` at construction (the
-                          shell's DI registration resolves `DmfPromptService`
-                          before `ShellViewModel` so the subscription exists
-                          before any profile can be created); when
+                          (ui/Views/) used for its in-flight download, all
+                          routed through the shell-owned modal queue
+                          `IShellModalQueue` (ui/Session/:
+                          `Enqueue(owner, showOn, modal)` + `DrainAsync`; an
+                          owner's newer enqueue replaces its unconsumed entry,
+                          different owners queue independently, the drain
+                          consumes before running so a thrown modal cannot
+                          re-fire). The coordinator subscribes to
+                          `IProfileService.ProfileCreated` at construction
+                          (nothing depends on it, so composition resolves it
+                          once at startup to establish the subscription); when
                           `ProfilesViewModel.Save` calls `CreateProfile`, the
-                          already-subscribed coordinator records it as pending,
-                          and `ShellViewModel.NavigateAsync` consumes the
-                          pending trigger on the next real navigation into Mods
-                          (`CurrentDestination = Mods` first, then
-                          `ProcessPendingAsync`, then a mod-list reload when a
-                          trigger was consumed), so the DMF prompt runs as the
-                          topmost modal with Mods already selected underneath
-                          and an accepted existing/Premium DMF add is visible
-                          immediately afterward. A pending trigger survives
-                          visits to other destinations and is consumed only on a
-                          real Mods entry.
+                          already-subscribed coordinator enqueues its prompt
+                          for the Mods destination, and
+                          `ShellViewModel.NavigateAsync` drains the queue after
+                          the destination switch + enter effects, so the DMF
+                          prompt runs as the topmost modal with Mods already
+                          selected underneath; the drained delegate reloads
+                          the mod list itself so an accepted existing/Premium
+                          DMF add is visible immediately afterward. A queued
+                          entry survives visits to other destinations and runs
+                          only on a real Mods entry; the shell no longer knows
+                          DMF exists.
                           The prompt fires for one trigger
                           when DMF is not in the active profile: every new
                           profile that becomes active (no persisted flag: a
@@ -1288,8 +1346,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             edge-band auto-scroll + offset clamp);
                                             + the DmfPromptService (the two DMF
                                             cases: add existing / download + add or
-                                            browser-open, the new-profile trigger, the
-                                            decline path, the premium in-app download,
+                                            browser-open, the new-profile trigger
+                                            (enqueue on create, prompt on the modal
+                                            queue's Mods drain, reload after the
+                                            prompt), the decline path, the premium
+                                            in-app download,
                                             the non-premium/unknown/no-auth browser-open
                                             regardless of the registration state (the
                                             confirm wording follows the shared state
@@ -1303,15 +1364,33 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             Add-button availability, the gaming guidance
                                             alerts for AddNexusMods + regular-tier
                                             updates with zero launcher calls, the
-                                            empty-state hint matrix, row push-down;
-                                            GamingModeGatingXamlTests: XAML-source
+                                            empty-state hint matrix, the context
+                                            push-down; GamingModeGatingXamlTests:
+                                            XAML-source
                                             assertions on the disabled bindings +
                                             ShowOnDisabled + inline hints + the resx
-                                            keys; Settings/escape-hatch browse gating
+                                            keys (the shared-badge assertion reads the
+                                            one template definition);
+                                            ModRowSharedTemplatesTests: the
+                                            single-definition contract for the shared
+                                            row markup (every shared control exists
+                                            once, both roots host the templates, the
+                                            compact spacing styles, the 680-DIP
+                                            breakpoint); Settings/escape-hatch browse gating
                                             with manual submission preserved; the
                                             PreferencesService theme mapping
                                             ResolveThemeVariant + the stored-System
                                             guarantee under gaming)
+                                            + the ModRowContext (premium/busy/gaming
+                                            flips re-fire exactly the row + list
+                                            properties the per-flag pushes re-fired,
+                                            the install front delegates, dropped rows
+                                            receive no notifications, the premium-read
+                                            failure stays false) + the ShellModalQueue
+                                            (run-once after the drain, newest-wins per
+                                            owner, independent owners in enqueue order,
+                                            other destinations stay queued, a thrown
+                                            modal is consumed)
                                             + the OnboardingService (already complete no-op,
                                             Continue persists + skips Integrations, Set up Nexus
                                             persists before navigating to Integrations once, close
@@ -1327,10 +1406,20 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             URL coalescing with per-caller cancellation, corrupt-
                                             disk retry once, app-lifetime in-memory image cache,
                                             90-day prune), against in-memory fakes)
-                                            + the MainWindowStateTests (pure
-                                            window-size normalization/clamping +
-                                            the meaningful-state policy that ignores
-                                            Minimized/FullScreen)
+                                            + the WindowGeometryTracker (the pure
+                                            geometry policies + the state machine fed
+                                            headless through the post seam: deferred/
+                                            coalesced applies, Layout never
+                                            authoritative, the end-to-end #19431
+                                            correction with no recursion, the
+                                            close path; MainWindowStateTests keeps the
+                                            window constants + the screen-conversion
+                                            seam) + the LocalizedViewModelRegistrationTests
+                                            (the source scan: every localized property
+                                            getter must be in its VM's registered
+                                            refresh list, and every class with
+                                            localized getters must be in the known VM
+                                            set)
     Modificus.Curator.Nxm.Tests/             xUnit tests for the nxm library (parser, framing,
                                             IPC server resilience, SingleInstanceGuard, router,
                                             relay helper, standalone + AppImage Linux registrar
@@ -1553,9 +1642,9 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   `SteamService.Discover()`/`Rediscover()` automatic/manual mode policy). The DMF (Darktide
   Mod Framework) install-prompt coordinator `DmfPromptService` (ui/Session/)
   offers to add/download DMF every new profile that becomes active without DMF
-  in it; the prompt is a modal on the main window, fired by `ProfilesViewModel`
-  immediately after a successful create + activation (no intervening dialog to
-  wait for). The
+  in it; the prompt is enqueued on the shell-owned modal queue at the
+  ProfileCreated event + runs as the topmost modal on the next real navigation
+  into Mods (the coordinator's drained delegate reloads the list itself). The
   first-run `OnboardingService` (ui/Session/) owns the one-time Nexus setup
   offer: it shows the `WelcomeWindow` (ui/Views/) once on first startup
   (persisted via `IOnboardingState.OnboardingCompleted`), and on a "Set up Nexus"
