@@ -152,9 +152,9 @@ owned by `IProfileSession`; launch availability derives directly from
 - `NavigateCommand` (`RelayCommand`, parameter = `ShellDestination`): the nav-
   rail entry point, delegating to `NavigateAsync`.
 - `NavigateAsync(ShellDestination)`: the guarded navigation core. Same-
-  destination is a strict no-op (so a pending DMF trigger survives same-
-  destination Mods clicks; it is consumed only by a real navigation into
-  Mods). For a real change: (1) leaving Profiles awaits the unsaved-changes
+  destination is a strict no-op (so a queued modal survives same-destination
+  clicks; it runs only on a real navigation into its destination). For a real
+  change: (1) leaving Profiles awaits the unsaved-changes
   three-choice guard (`ProfilesViewModel.ConfirmCanNavigateAwayAsync`), and
   Cancel/ESC/X or a Save that the service rejected keeps everything
    unchanged; (2) run the current destination's leave effects (Nexus
@@ -162,11 +162,12 @@ owned by `IProfileSession`; launch availability derives directly from
    the way out; Settings:
    mod-list reload + re-read `CheckOnStartup` + refresh the app-update notice);
   (3) switch `CurrentDestination`; (4) run the target's enter effects (Settings:
-  `RefreshFromConfig` synchronously; Nexus: await `RefreshAsync`;
-  Mods: await `DmfPromptService.ProcessPendingAsync` after the destination is
-  already Mods, then reload the mod list when a trigger was consumed). The
-  destination is switched before any enter await so it stays active even if a
-  refresh or the DMF prompt reports an error.
+  `RefreshFromConfig` synchronously; Nexus: await `RefreshAsync`); (5) drain
+  the shell-owned modal queue for the entered destination, so a queued modal
+  (the DMF install prompt after a profile create) runs as the topmost modal
+  over the freshly painted page. The destination is switched before any enter
+  await so it stays active even if a refresh or a drained modal reports an
+  error.
 - `IShellNavigation` (implemented by the shell, registered as a lazy forward
   to the shell singleton): the guarded navigation surface UI-layer services
   consume; the first-run onboarding reuses it for its "Set up Nexus" choice, so
@@ -234,21 +235,11 @@ public partial class MainWindow : Window
     internal const double DefaultHeight = 640.0;       // matches XAML Height
     internal const double MinWindowWidth = 720.0;      // matches XAML MinWidth
     internal const double MinWindowHeight = 480.0;     // matches XAML MinHeight
-    internal const double CorrectionTolerance = 1.0;   // DIP, #19431 threshold
 
     public MainWindow();                               // XAML runtime/designer path (no store)
     internal MainWindow(IMainWindowStatePersistence stateStore);    // production path
 
     internal static double ComputeOpenPaneLength(double widestLabelWidth);
-    internal static (double Width, double Height) NormalizeSavedSize(
-        AppWindowState? saved, double? workAreaWidth, double? workAreaHeight,
-        double minWidth, double minHeight);
-    internal static bool NextMeaningfulMaximized(WindowState current, bool previous);
-    internal static bool IsTrustedResizeReason(WindowResizeReason reason);
-    internal static Size ResolveTrustedNormal(Size? trustedCandidate, WindowState state, Size current);
-    internal static bool ShouldCorrectFromLayout(
-        Size? layoutCandidate, bool layoutSawOpen, WindowState state, Size resolvedNormal);
-    internal static bool PersistedSeedsMaximized(AppWindowState? saved);
     internal static bool TryConvertWorkAreaDip(
         double scaling, double pixelWidth, double pixelHeight,
         out double widthDip, out double heightDip);
@@ -257,7 +248,8 @@ public partial class MainWindow : Window
 
 The Avalonia main window. Owns only view mechanics: SplitView pane sizing, the
 no-profile handoff link, the full-client launch overlay (in
-`MainWindow.axaml`), and the persisted window geometry. State, navigation, and
+`MainWindow.axaml`), and the persisted-window-geometry wiring (the state
+machine itself lives on the `WindowGeometryTracker`, below). State, navigation, and
 service calls stay in `ShellViewModel`. The public parameterless constructor
 loads XAML + safe in-memory defaults and is the Avalonia runtime/designer
 loader path (it performs no store IO and locates no service). Production
@@ -312,35 +304,32 @@ window is returned/shown.
 - **Persisted window geometry.** The last unmaximized (Normal) client size in
   DIP and whether the last meaningful state was Maximized are read from
   `IMainWindowStatePersistence.MainWindowState` on the production path, validated + clamped
-  by the pure `NormalizeSavedSize` helper to the XAML minimums (`MinWindowWidth`
+  by `WindowGeometryTracker.SeedPersisted` (the pure `NormalizeSavedSize`
+  policy inside the tracker) to the XAML minimums (`MinWindowWidth`
   / `MinWindowHeight`) and, when available, the primary screen's working area
   converted from physical pixels to DIP via `Screen.Scaling` (the pure
   `TryConvertWorkAreaDip` validates finite + positive scaling and dimensions),
   then applied as `Width`/`Height` before first Show so the platform has the
-  right restore size. The persisted maximized flag seeds the in-memory
-  meaningful-state flag and the one-shot first-open maximize immediately (the
-  pure `PersistedSeedsMaximized` seam); when the flag is set, the window
-  maximizes once in `OnOpened` (after Show) for Win32/X11 consistency, so a
-  later unmaximize restores to the saved Normal size. The last Normal size is
-  tracked through deferred, coalesced, reason-aware resize observation:
-  `OnResized` tags each observation by `WindowResizeReason` and whether the
-  window had opened, then posts one apply; the pure `IsTrustedResizeReason`
-  treats User, Unspecified, Application, and DpiChange as authoritative and
-  `Layout` as never authoritative, and `ResolveTrustedNormal` updates the last
-  Normal size only for a trusted observation while the settled state is Normal.
-  The meaningful-state flag is tracked through `OnPropertyChanged` for
-  `WindowStateProperty` via the pure `NextMeaningfulMaximized` policy: Normal
-  clears it, Maximized sets it, and Minimized and FullScreen leave the
-  preceding flag unchanged.
+  right restore size. The persisted maximized flag seeds the tracker's
+  meaningful-state flag and its one-shot first-open maximize (consumed by
+  `OnOpened`); when the flag is set, the window maximizes once (after Show)
+  for Win32/X11 consistency, so a later unmaximize restores to the saved
+  Normal size. The observation state machine (deferred, coalesced,
+  reason-aware tracking; the meaningful-state policy; the #19431 correction
+  decision) lives on the `WindowGeometryTracker` below; `MainWindow` feeds it
+  from `OnResized` and `OnPropertyChanged` and keeps only the Window
+  operations (apply size, one-shot maximize, the single close-time persist
+  write through `PrepareClose`).
 - **Avalonia #19431 visible-restore correction.** At Windows scaling such as
   175%, a Maximized to Normal transition can emit a correct `Unspecified`
   Normal resize followed by a stale `Layout` resize carrying the maximized
   `ClientSize`. `MainWindow` uses manual top-level sizing, so a post-open
-  `Layout` resize is not a user sizing intent. The pure
-  `ShouldCorrectFromLayout` seam decides, after the trusted candidate has been
-  resolved into the last Normal size, whether a post-open `Layout` observation
-  that materially conflicts (more than `CorrectionTolerance` DIP) while Normal
-  should trigger a reapply of the trusted size through `ClientSize`. The
+  `Layout` resize is not a user sizing intent. The tracker decides (its pure
+  `ShouldCorrectFromLayout` policy, after the trusted candidate has been
+  resolved into the last Normal size) whether a post-open `Layout` observation
+  that materially conflicts (more than the 1.0 DIP tolerance) while Normal
+  should trigger a reapply of the trusted size through `ClientSize`, surfaced
+  as the tracker's `CorrectionRequested` event. The
   correction never persists a new size from `Layout` and never manipulates
   window position; a trusted observation arriving in the same burst as the
   stale `Layout` wins first, so the correction targets the trusted value.
@@ -384,6 +373,50 @@ window is returned/shown.
 - **Falls back silently** to the XAML `OpenPaneLength=200` when the live
   `LocalizationService` is unavailable (design-time paths) or when
   measurement throws at runtime; never crashes the window.
+
+### `WindowGeometryTracker`
+
+```csharp
+internal sealed class WindowGeometryTracker
+{
+    internal const double CorrectionTolerance = 1.0;
+
+    public WindowGeometryTracker(Size defaultNormalSize, Action<Action>? post = null);
+
+    public Size LastNormalSize { get; }
+    public bool LastMeaningfulMaximized { get; }
+    public bool MaximizeOnFirstOpen { get; }
+    public event EventHandler<Size>? CorrectionRequested;
+
+    public bool SeedPersisted(AppWindowState? saved, Size? workAreaDip, double minWidth, double minHeight);
+    public bool ConsumeMaximizeOnFirstOpen();
+    public void NotifyOpened();
+    public void ObserveWindowState(WindowState state);
+    public void ObserveResize(Size clientSize, WindowResizeReason reason);
+    public void PrepareClose(WindowState closingState);
+
+    internal static (double Width, double Height) NormalizeSavedSize(...);
+    internal static bool NextMeaningfulMaximized(WindowState current, bool previous);
+    internal static bool IsTrustedResizeReason(WindowResizeReason reason);
+    internal static Size ResolveTrustedNormal(Size? trustedCandidate, WindowState state, Size current);
+    internal static bool ShouldCorrectFromLayout(...);
+    internal static bool PersistedSeedsMaximized(AppWindowState? saved);
+}
+```
+
+The main window's geometry state machine, extracted from `MainWindow` so it is
+unit-testable headless. The window feeds observations (`ObserveResize` /
+`ObserveWindowState` / `NotifyOpened`) and queries actions (`SeedPersisted`'s
+normalized size, `ConsumeMaximizeOnFirstOpen`, `PrepareClose`'s close-path
+snapshot, and the `CorrectionRequested` #19431 reapply); the tracker never
+touches a `Window`. The deferred apply posts through the injected `post` seam
+(the UI dispatcher in production, captured or inline in tests). The pure
+policy statics (`NormalizeSavedSize`, `NextMeaningfulMaximized`,
+`IsTrustedResizeReason`, `ResolveTrustedNormal`, `ShouldCorrectFromLayout`,
+`PersistedSeedsMaximized`) are the unit-testable seams the
+`WindowGeometryTrackerTests` exercise alongside the state-machine behaviors
+(deferred/coalesced applies, Layout never authoritative, the end-to-end
+#19431 burst, correction non-recursion, the close path).
 
 ## Dialog service
 
@@ -464,11 +497,30 @@ public sealed class DialogService : IDialogService
 
 The concrete implementation. `owner` is the main window (a singleton; resolved
 by the desktop lifetime and by `DialogService` for modal parenting).
-`localization` is handed to the Welcome title and the escape-hatch VM (header +
-per-row labels). `configLoader` is handed to the escape-hatch VM (one read-
-modify-save on submit). `DisableOwnerForModal` is the nesting-safe owner-
+`localization` is handed to the Welcome title. `escapeHatchFactory` builds the
+one dialog VM with service dependencies (the discovery escape hatch; see
+`IDiscoveryEscapeHatchFactory` below), so the service constructs no view
+models itself. `DisableOwnerForModal` is the nesting-safe owner-
 disable workaround (a reference count tracks overlapping modals; the owner
 re-enables only when the outermost modal closes).
+
+### `IDiscoveryEscapeHatchFactory`
+
+```csharp
+public interface IDiscoveryEscapeHatchFactory
+{
+    DiscoveryEscapeHatchViewModel Create(IReadOnlyList<string> missingFields);
+}
+```
+
+The narrow per-dialog factory for the one dialog VM with service dependencies:
+the escape-hatch VM needs the live `IConfigLoader`, `ISteamService`,
+`LocalizationService`, and `IGamingModeState`, none of which the
+`DialogService` otherwise has a reason to hold. Registered in
+`CuratorComposition`; returns the VM (not the Window) because the dialog's
+result lives on the VM and the VM-to-Window pairing belongs to the code that
+shows the Window. Deliberately not a generalized all-dialogs factory: the
+other dialogs need no VM dependencies.
 
 ## Preferences service
 
@@ -545,6 +597,39 @@ public sealed class LocalizationService : INotifyPropertyChanged
     string Format(string key, params object[] args);  // string.Format(culture, ...)
 }
 ```
+
+### `LocalizedViewModel`
+
+```csharp
+public abstract class LocalizedViewModel : ObservableObject
+{
+    protected LocalizationService _localization;
+
+    protected LocalizedViewModel(LocalizationService localization);
+
+    protected abstract IReadOnlyList<string> LocalizedProperties { get; }
+    protected virtual void OnCultureChanged();
+    protected void DetachLocalization();
+}
+```
+
+The shared culture-refresh mechanism for localized view models: subscribes
+once, and on a culture change re-fires the derived VM's registered localized
+property names (one `LocalizedProperties` declaration per VM, next to the
+properties) plus the `OnCultureChanged` hook for the non-list work a few VMs
+genuinely do (the mod list's per-row refresh + gate re-render, Integrations'
+state re-resolve, Profiles' editor validation refresh). Transient dialog VMs
+call `DetachLocalization` on close so they are collectable against the
+application-lifetime service. Deliberately tiny (no caching, no lookup
+helpers) so it cannot become a dumping ground. The row VM
+(`ModItemViewModel`) keeps its parent-driven `Refresh()` pattern instead.
+
+A source-scan unit test (`LocalizedViewModelRegistrationTests`) reads every VM
+source file, finds every property getter that indexes `_localization[...]`,
+and fails when such a getter is not in its class's registered refresh list
+(`LocalizedProperties`, or the Refresh re-fire list for `ModItemViewModel`) and
+when a class with localized getters is outside the known VM set, so the
+forget-to-register failure is a red test rather than stale text.
 
 - `Culture`: the current UI culture. Assigning a different culture raises
   `PropertyChanged` for `"Item[]"` (the indexer wildcard, so every
@@ -708,15 +793,16 @@ public interface IGamingModeState
 ### `DmfPromptService`
 
 The DMF (Darktide Mod Framework, Nexus mod 8) install-prompt coordinator.
-Subscribes to `IProfileService.ProfileCreated` at construction (the shell's DI
-registration resolves `DmfPromptService` before `ShellViewModel` so the
-subscription exists before any profile can be created), records the trigger as
-pending, and the shell consumes it on the next real navigation into Mods
-(`NavigateAsync` sets `CurrentDestination = Mods` first, then awaits
-`ProcessPendingAsync`, then reloads `ModListViewModel` when a trigger was
-consumed), so the DMF prompt runs as the topmost modal with Mods already
-selected underneath. A pending trigger survives visits to other destinations
-and is consumed only on a real Mods entry.
+Subscribes to `IProfileService.ProfileCreated` at construction (composition
+resolves it once at startup, before the window shows, so the subscription
+exists before any profile can be created; nothing depends on the coordinator)
+and enqueues its prompt onto the `IShellModalQueue` for the Mods destination;
+the shell's `NavigateAsync` drains the queue after the destination switch +
+enter effects, so the DMF prompt runs as the topmost modal with Mods already
+selected underneath. The drained delegate runs the prompt (fail-isolated) and
+reloads `ModListViewModel` itself (the reload is the enqueuer's business). A
+queued entry survives visits to other destinations, runs once, and a newer
+create replaces an unconsumed entry (newest-wins).
 
 ```csharp
 public sealed class DmfPromptService
@@ -733,25 +819,39 @@ public sealed class DmfPromptService
         LocalizationService localization,
         ILogger<DmfPromptService> logger,
         INxmRegistrationState nxmRegistration,
-        Func<Uri, bool>? launchExternal = null);
-
-    // Returns true when a pending trigger was consumed (a prompt may or may
-    // not have fired depending on the active-id + DMF checks); false when
-    // there was no pending trigger, so the caller knows no mod-list reload
-    // is warranted.
-    public Task<bool> ProcessPendingAsync();
+        IGamingModeState gamingMode,
+        IExternalLauncher externalLauncher,
+        IShellModalQueue modalQueue,
+        IModListRefresh modListRefresh);
 }
 ```
 
 - `DmfModId`: the Nexus mod id of Darktide Mod Framework (8). DMF is
   required for most Darktide mods; the prompt offers to install it when
   missing.
-- `ProcessPendingAsync()`: processes any pending new-profile trigger. Called by
-  `ProfilesViewModel` immediately after a successful create + activation. Safe
-  to call when nothing is pending (a no-op). The trigger is consumed (cleared)
-  before it is processed so an exception in the prompt does not leave it stuck
-  pending for the next call; the prompt is wrapped in a try/catch that logs
-  and swallows non-cancellation exceptions.
+
+### The shell modal queue (`IShellModalQueue`)
+
+```csharp
+public interface IShellModalQueue
+{
+    void Enqueue(object owner, ShellDestination showOn, Func<Task> modal);
+    Task DrainAsync(ShellDestination destination);
+}
+```
+
+The shell-owned queue of deferred modal operations: a service that needs a
+modal to run the next time the user enters a particular destination enqueues
+it here instead of coupling the shell to the service; the shell drains the
+queue in its navigation lifecycle, after the destination switch + the enter
+effects, so the page is painted underneath the modal. A queued entry for
+destination X runs once, survives visits to other destinations in between,
+and a newer enqueue from the same owner replaces that owner's unconsumed
+entry (newest-wins); different owners queue independently. `DrainAsync`
+consumes the matching entries before running any (an exception inside one
+modal cannot re-fire it) and awaits each sequentially in enqueue order. UI
+thread only. Single implementation (`ShellModalQueue`, an application-lifetime
+singleton).
 
 ### Trigger + cases
 
@@ -835,6 +935,9 @@ public sealed class UpdateCheckRunner
     public UpdateRefreshGate RefreshGate { get; }
     public DateTimeOffset? NextManualRefreshAllowedAt { get; }
 
+    public event EventHandler<UpdateCheckResult?>? CheckCompleted;
+    public event EventHandler? UpdatesApplied;
+
     public void Start();
     public Task CheckNowAsync();
 }
@@ -845,6 +948,14 @@ public sealed class UpdateCheckRunner
   captures is fed into it (`ApplyResult`), and a throttled manual attempt
   re-evaluates it so the countdown engages; the mod-list VM renders its state
   through the marshaled `StateChanged` event.
+- `CheckCompleted` / `UpdatesApplied`: the UI-facing re-raises of the two
+  update-family completions (a check landing on the underlying
+  `IUpdateCheckService`, and the automatic batch's
+  `IAutomaticUpdateService.UpdatesApplied`), both marshaled to the UI thread
+  through the injected `invokeOnUi` seam. The runner is the sole driver of
+  both services, so the mod list subscribes here instead of holding either
+  service; the raw services' own events stay untouched for their own
+  subscribers.
 
 - `TickInterval`: the periodic timer's fixed tick granularity (1 minute).
   The user-configured interval
@@ -1191,8 +1302,8 @@ public sealed class UpdateCoordinator
 ```
 
 - `IsBusy`: flips on acquire + release and raises `BusyChanged` (on the
-  acquiring/releasing thread). The installer surfaces it; `ModListViewModel`
-  subscribes through the installer.
+  acquiring/releasing thread). The installer surfaces it; the `ModRowContext`
+  mirrors it (marshaled) as the rows' install-busy global.
 - `TryAcquire`: non-blocking. The installer's manual semantics use it; a second
   click while an install runs is a clean no-op.
 - `AcquireAsync`: awaiting. The installer's automatic semantics use it; the
@@ -1229,10 +1340,12 @@ public interface IAutomaticUpdateService
   `installer.InstallLatestAsync` (the awaiting semantics). Per-mod failures are
   isolated into one aggregated localized alert; a fully successful batch is
   silent beyond the installer's per-row progress. `UpdatesApplied` is raised
-  when at least one install succeeded so `ModListViewModel` can reload the list
-  (new versions + cleared flags) without the service depending on it.
+  when at least one install succeeded so the mod list can reload (new versions
+  + cleared flags) without the service depending on it.
 - `UpdatesApplied`: raised (on the caller's thread) when at least one install in
-  the last batch succeeded. `ModListViewModel` subscribes and reloads.
+  the last batch succeeded. `UpdateCheckRunner` (the sole driver of the batch)
+  re-raises it on the UI thread; `ModListViewModel` subscribes there and
+  reloads.
 
 This is independent of `NexusConfig.AutoUpdateCheckEnabled`: periodic checking
 being off never disables automatic installation (startup + switch + manual
@@ -1419,10 +1532,16 @@ feature).
   narrow widths (full text in the tooltip) without pushing the density pair or
   Add out.
 - **Row template.** A `Panel` hosts two mutually exclusive roots selected by the
-  row's `IsDetailed` projection: the existing Compact `Grid` (now with a
-  left-edge drag-grip column + an order-lock button beside Move Up / Move Down)
-  and a Detailed `Border` (the `detailedRow` style: rounded, low-emphasis). The
-  Detailed card is one adaptive
+  row's `IsDetailed` projection: the Compact `Grid` (`compactRow`, four
+  columns: grip, name, badges, action strip) and a Detailed `Border` (the
+  `detailedRow` style: rounded, low-emphasis). The grip, the badge cluster,
+  and the action strip are ONE shared definition each (`ModRowGripTemplate`,
+  `ModRowBadgesTemplate`, `ModRowActionStripTemplate` DataTemplate resources
+  hosted by both roots through `ContentControl.ContentTemplate`), so no row
+  action can fork between modes; the page styles + the container query reach
+  the realized template instances (styles select through the logical tree),
+  and the event handlers resolve against the page code-behind unchanged.
+  The Detailed card is one adaptive
   Grid whose card root carries `Container.Name="detailedModRow"` +
   `Container.Sizing="Width"`, so a `ContainerQuery Name="detailedModRow"
   Query="max-width:680"` in `UserControl.Styles` swaps the layout at the 680-DIP
@@ -1434,11 +1553,14 @@ feature).
   strip occupies only the content column. Constrained (at or below 680 DIP): the
   thumbnail shrinks to 72 DIP spanning only name + summary (`RowSpan=2`) and the
   action strip moves to a full-width row beneath all three columns
-  (`Grid.ColumnSpan=3`). Width, height, row span, and action column/span that
+  (`Grid.ColumnSpan=3`, driven by the `ContentControl.detailedActions` styles).
+  Width, height, row span, and action column/span that
   change at the breakpoint are style-driven (default wide styles + the
   container-query overrides), not local values; constant row/column positions
-  stay local. Both roots bind the exact same per-row state + route to the exact
-  same code-behind handlers, so no action behavior forks between modes.
+  stay local. The shared strip's spacing is style-driven per density
+  (`WrapPanel.actionStrip` base + the `Grid.compactRow`-scoped margins that
+  reproduce the Compact single-line layout), and the Enabled checkbox's label
+  is the row's density-aware `EnabledLabel` (null in Compact).
 - **Summary.** `MaxLines="2"` + `TextWrapping="Wrap"` + `TextTrimming="CharacterEllipsis"`; the full text is retained in `ToolTip.Tip` (when non-null) + `AutomationProperties.Name` (always, so the fallback stays reachable by assistive tech).
 - **Thumbnail area.** A rounded `Border` with `ClipToBounds`; the `Image` shows
   only when `HasThumbnail`, otherwise a neutral drawn-geometry placeholder
@@ -1455,6 +1577,82 @@ feature).
   the action tree. The name ellipsizes safely (full text in tooltip + automation
   name). All actions remain available at the 720px minimum window width with the
   navigation pane expanded and at the maximum font scale.
+
+## The mod-list row context + the linked-mods child
+
+### `ModRowContext`
+
+```csharp
+public partial class ModRowContext : ObservableObject
+{
+    public ModRowContext(
+        INexusAuthService auth,          // the one-shot premium read
+        IModUpdateInstaller installer,   // busy + progress + the install front
+        IGamingModeState gamingMode,
+        Action<Action> invokeOnUi,       // marshals the installer's events
+        ILogger<ModRowContext> logger);
+
+    public bool IsGamingMode { get; }               // constant
+    public bool IsPremiumUser { get; set; }         // the read lands here
+    public bool AnyRowUpdating { get; set; }        // the installer's busy flag
+
+    public event EventHandler<ModUpdateProgressEventArgs>? ModUpdateProgress;
+
+    public Task<ModInstallOutcome> InstallLatestAsync(
+        Guid profileId, Guid containerId, int modId,
+        string expectedVersion, IReadOnlyList<ModListCandidate> candidates);
+}
+```
+
+The one shared observable context for the row-affecting global mod-update
+state (premium / install-busy / gaming). Created once in composition before
+`ModListViewModel`, which passes the same instance to every
+`ModItemViewModel` at construction: rows read their global halves off it
+(their public property names stay as context-forwarding reads, so bindings are
+unchanged), and the list VM's single context subscription fans change
+notifications into the live rows (no per-row subscription against the
+application-lifetime context, so rows dropped by a reload cannot leak).
+`ModUpdateProgress` re-raises the installer's per-container progress on the
+UI thread (the list VM finds the row and drives its spinner), and
+`InstallLatestAsync` delegates to the shared installer so the manual Premium
+install action and the state it produces share one seam.
+
+### `LinkedModsViewModel`
+
+```csharp
+public partial class LinkedModsViewModel : ObservableObject
+{
+    public LinkedModsViewModel(
+        IProfileService profiles,
+        IProfileSession session,
+        IModRepository repo,
+        IModImportService importService,
+        IDialogService dialogs,
+        LocalizationService localization,
+        IExternalLauncher externalLauncher,
+        IGamingModeState gamingMode,
+        ILogger<LinkedModsViewModel> logger);
+
+    public event EventHandler? ModsLinked;
+
+    public IAsyncRelayCommand<IReadOnlyList<string>?> LinkModsCommand { get; }
+    public IAsyncRelayCommand<ModItemViewModel?> OpenFolderCommand { get; }
+}
+```
+
+The link-external-folder child of `ModListViewModel` (the
+`ImportWorkflowViewModel` pattern: an application-lifetime singleton
+registered before the parent + exposed read-only for view binding; the parent
+keeps no `IModImportService` dependency). `LinkModsCommand` owns the picker
+flow (peek the base name, hard-block the base-name collision excluding a
+re-link, `LinkFolder`, `AddMod` with Latest policy; a failed peek, a
+containment failure, or a collision aborts the remaining batch) and
+`OpenFolderCommand` opens a linked row's external folder in the OS file
+manager (gated off in Gaming Mode, with a launcher-failure fallback alert).
+`ModsLinked` fires exactly where the flow finishes; the parent reloads the
+active list on it. The three launcher-failure alerts (files page, games page,
+external folder) share one internal `LaunchAlerts` helper (title key,
+message key, args).
 
 ## Mod thumbnail service
 
@@ -1650,14 +1848,19 @@ services.AddSingleton(sp => new DetailedModRowsViewModel(     // density coordin
     sp.GetRequiredService<IModThumbnailService>(),
     sp.GetRequiredService<ILogger<DetailedModRowsViewModel>>()));
 services.AddSingleton<ImportWorkflowViewModel>();            // inline import card (before ModListViewModel)
-services.AddSingleton<ModListViewModel>();                   // injects ImportWorkflowViewModel + DetailedModRowsViewModel as children
-services.AddSingleton<ProfilesViewModel>(sp => { /* resolves DmfPromptService eagerly */ });
+services.AddSingleton(sp => new LinkedModsViewModel(/* … */)); // link-external child (before ModListViewModel)
+services.AddSingleton(sp => new ModRowContext(/* auth, installer, gamingMode, Action<Action>, logger */)); // row globals (before ModListViewModel)
+services.AddSingleton<ModListViewModel>();                   // injects the three children + the row context
+services.AddSingleton<ProfilesViewModel>();
 services.AddSingleton<IntegrationsViewModel>();
 services.AddSingleton<PreferencesViewModel>();
 services.AddSingleton<SettingsViewModel>();
-services.AddSingleton(sp => new ShellViewModel(/* … all five page VMs, IAppUpdateService, Action<Action> */,
+services.AddSingleton<IShellModalQueue, ShellModalQueue>();  // the shell's modal queue (before its enqueuers)
+services.AddSingleton(sp => new DmfPromptService(/* … incl. IShellModalQueue + IModListRefresh */));
+services.AddSingleton(sp => new ShellViewModel(/* … all five page VMs, IAppUpdateService, IShellModalQueue, Action<Action> */,
                                               sp.GetRequiredService<INxmRegistrationState>()));
-services.AddSingleton<IDialogService>(sp => new DialogService(/* owner, localization, configLoader */));
+services.AddSingleton<IDiscoveryEscapeHatchFactory>(sp => new DiscoveryEscapeHatchFactory(/* config, steam, loc, gaming */));
+services.AddSingleton<IDialogService>(sp => new DialogService(/* owner, localization, factory */));
 services.AddSingleton(sp => new UpdateCheckRunner(/* … incl. IAutomaticUpdateService, StartUpdateCheckPolling */));
 #if CURATOR_VELOPACK
 services.AddSingleton<IAppUpdateService>(sp => new VelopackAppUpdateService(
@@ -1667,7 +1870,6 @@ services.AddSingleton<IAppUpdateService>(sp => new VelopackAppUpdateService(
 services.AddSingleton<IAppUpdateService, NoopAppUpdateService>();
 #endif
 services.AddSingleton(sp => new AppUpdateCheckRunner(/* IAppUpdateService, IConfigLoader, logger */));
-services.AddSingleton(sp => new DmfPromptService(/* … */, sp.GetRequiredService<INxmRegistrationState>()));
 services.AddSingleton<IShellNavigation>(sp => sp.GetRequiredService<ShellViewModel>()); // plain forward
 services.AddSingleton(sp => new OnboardingService(
     sp.GetRequiredService<IOnboardingState>(),
@@ -1686,14 +1888,14 @@ Key wiring notes:
 - The five hosted page view models (`ProfilesViewModel`, `ModListViewModel`,
   `IntegrationsViewModel`, `PreferencesViewModel`, `SettingsViewModel`) are
   registered as singletons (one instance per page, kept alive and subscribed
-  for the application lifetime) and injected into `ShellViewModel`.
-  `DmfPromptService` is registered BEFORE `ShellViewModel` so the shell's
-  factory can resolve it eagerly and inject it as a concrete dependency; the
-  coordinator's constructor subscribes to the synchronous
-  `IProfileService.ProfileCreated` event, so the subscription exists before
-  any profile can be created. The shell consumes the pending trigger on the
-  next real navigation into Mods; `ProfilesViewModel` is narrowly coupled to
-  profile workflow and does no DMF or mod-list work after Save.
+  for the application lifetime) and injected into `ShellViewModel`. Nothing
+  depends on `DmfPromptService`: the coordinator enqueues onto
+  `IShellModalQueue` (registered before it), and the composition root
+  resolves it once after the provider is built (best-effort) so its
+  `IProfileService.ProfileCreated` subscription exists before any profile
+  can be created. The shell drains the queue on destination entry;
+  `ProfilesViewModel` is narrowly coupled to profile workflow and does no DMF
+  or mod-list work after Save.
 - `INxmRegistrationState` is registered before the VMs/services that inject it
   (`ModListViewModel`, `IntegrationsViewModel`, `DmfPromptService`,
   `ShellViewModel`). It wraps the optional `INxmHandlerRegistrar` (resolved via
@@ -1857,7 +2059,8 @@ No backend library references the UI (the dependency direction is one-way).
   integration (child VM exposure, `ItemImported` reload for the active profile,
   no-misdirect for an inactive profile, add-mode stability, end-to-end
   create/activate/import), the linked-folder flow
-  (`LinkMods`: peek, collision-refusal, re-link refresh, `LatestPolicy` add;
+  (end-to-end through the `LinkedMods` child: peek, collision-refusal,
+  re-link refresh, `LatestPolicy` add, the parent's reload-on-`ModsLinked`;
   `OpenFolder`: launches the file manager at the normalized external path,
   failure alert, no-op for non-linked/broken rows; the linked badge two-state
   available/broken, disabled policy edit, empty update-action cell,
@@ -1869,6 +2072,36 @@ No backend library references the UI (the dependency direction is one-way).
   name refresh (refreshed when the flag is set, untouched when it is not), and
   the empty-state Nexus hint (construction + both `Reload` paths perform zero
   registration probes; `IsNxmRegistered` follows the shared state).
+- **`ModRowContextTests`**: the shared row-context contract -- a premium or
+  install-busy flip on the context re-fires exactly the row + list-VM
+  properties the former per-flag pushes re-fired, the gaming constant reads
+  through rows + the list VM, `InstallLatestAsync` delegates to the shared
+  installer, rows dropped by a reload receive no context notifications (no
+  per-row subscription to leak), and a failed premium read leaves the flag
+  false.
+- **`ModRowSharedTemplatesTests`**: the single-definition contract for the
+  shared row markup -- every shared row control exists exactly once in
+  `ModListView.axaml`, both row roots host the shared templates, the Compact
+  row keeps its single-line spacing through the scoped styles, and the
+  680-DIP container query still moves the strip + thumbnail.
+- **`ShellModalQueueTests`**: the queue contract -- run-once after the drain,
+  newest-wins per owner, independent owners in enqueue order, other
+  destinations' entries stay queued, and a drained entry that throws is
+  consumed (never re-fired).
+- **`WindowGeometryTrackerTests`**: the pure geometry policies (size
+  normalization + clamping, the meaningful-state policy, reason-aware trust,
+  the #19431 correction decision, the persisted seeding) plus the state
+  machine fed headless through the injectable post seam (deferred/coalesced
+  applies with latest-candidate resolution, Layout never authoritative, the
+  end-to-end #19431 burst resolving to the trusted size, correction
+  non-recursion, the pre-open Layout exclusion, post-close ignoring, the
+  close-path candidate consumption). `MainWindowStateTests` keeps the
+  constants + the screen conversion seam that stay on the window.
+- **`LocalizedViewModelRegistrationTests`**: the source scan -- every
+  property getter indexing `_localization[...]` must appear in its class's
+  registered refresh list, and every class with localized getters must be in
+  the known VM set, so a forget-to-register localized property is a red test
+  rather than stale text on a culture switch.
 - **`UpdateRefreshGateTests`**: the gate directly -- server-reset governance,
   the 1-minute fallback cooldown, immediate clearing on a non-rate-limited
   result, the null-result no-op, the shared countdown-timer lifecycle, the
@@ -1942,8 +2175,10 @@ No backend library references the UI (the dependency direction is one-way).
   wiring-mistake guard).
 - **`DmfPromptServiceTests`**: the two DMF cases (add existing / download +
   add or browser-open), the new-profile trigger, the decline path (nothing
-  opens), the prompt-timing-after-create (the prompt fires from
-  `ProfilesViewModel` immediately after the create + activation), the premium
+  opens), the prompt-timing-after-create (the coordinator enqueues on
+  `ProfileCreated`; the prompt itself fires only when the shell's modal queue
+  drains for Mods), the drained entry's post-prompt reload (including when
+  the prompt body skips), the premium
   in-app download, the non-premium / unknown / no-auth browser-open path (opens
   regardless of the registration state; the download-confirm wording follows
   the shared state with zero probes), and the browser-launch failure

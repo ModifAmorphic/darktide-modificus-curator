@@ -267,11 +267,10 @@ public static class CuratorComposition
         // ShellViewModel at startup establishes the subscription before any
         // profile can be created. When ProfilesViewModel.Save calls
         // CreateProfile, the event fires synchronously into the already-
-        // subscribed coordinator, which records it as pending; the shell
-        // consumes the pending trigger on the next real navigation into Mods
-        // (ProcessPendingAsync after CurrentDestination = Mods), then reloads
-        // the mod list when a trigger was consumed so an accepted existing /
-        // Premium DMF add is visible.
+        // subscribed coordinator, which enqueues its prompt onto the
+        // shell-owned modal queue; the shell drains the queue after the next
+        // real navigation into Mods, and the coordinator's own post-prompt
+        // reload surfaces an accepted existing / Premium DMF add.
         services.AddSingleton<ProfilesViewModel>(sp => new ProfilesViewModel(
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IProfileSession>(),

@@ -104,11 +104,11 @@ public sealed record ProfileChoice(Guid Id, string Name, string Description, str
 /// <para><b>DMF + mod-list reload owned by the shell:</b> this VM is narrowly
 /// coupled to profile workflow. The DMF (Darktide Mod Framework) install-prompt
 /// coordinator subscribes to <see cref="IProfileService.ProfileCreated"/> at
-/// construction (resolved eagerly when the shell is built, before this VM can
-/// create a profile), records the trigger, and the shell awaits
-/// <see cref="DmfPromptService.ProcessPendingAsync"/> on the next navigation
-/// into Mods. After a successful create-and-activate this VM does no DMF or
-/// mod-list work; the shell's post-DMF reload surfaces an accepted install.</para>
+/// construction (resolved eagerly at composition, before this VM can create a
+/// profile) and enqueues its prompt onto the shell's modal queue for the next
+/// real navigation into Mods. After a successful create-and-activate this VM
+/// does no DMF or mod-list work; the coordinator's own post-prompt reload
+/// surfaces an accepted install.</para>
 /// <para><b>Application-lifetime subscriptions:</b> subscribes to
 /// <see cref="IProfileSession.PropertyChanged"/> (active-id + IsRunning) +
 /// <see cref="LocalizationService.PropertyChanged"/> (culture) exactly once at

@@ -499,7 +499,7 @@ internal sealed class FakeProfileService : IProfileService
     /// <remarks>Raised from <see cref="CreateProfile"/>. The DMF prompt
     /// coordinator subscribes; tests that drive the new-profile trigger
     /// simulate a create through <see cref="CreateProfile"/> (the event fires)
-    /// + a call to <c>DmfPromptService.ProcessPendingAsync</c>.</remarks>
+    /// + a drain of the shell modal queue the coordinator enqueues onto.</remarks>
     public event EventHandler<ProfileSummary>? ProfileCreated;
 
     /// <summary>

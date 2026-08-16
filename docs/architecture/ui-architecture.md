@@ -78,9 +78,17 @@ a UI-layer singleton that the shell (and other view models) inject:
   │   │   │
   │   │   ├── ImportWorkflowViewModel  the inline import-workflow child VM
   │   │   │
+  │   │   ├── LinkedModsViewModel  the link-external-folder child VM (the
+  │   │   │                          peek / collision / LinkFolder / AddMod loop
+  │   │   │                          + the linked row's open-folder command)
+  │   │   │
   │   │   ├── DetailedModRowsViewModel the Compact/Detailed density coordinator
   │   │   │                             (persisted density, metadata backfill,
   │   │   │                             thumbnail hydration)
+  │   │   │
+  │   │   ├── ModRowContext ──── the shared observable row-affecting globals
+  │   │   │                     (premium / install-busy / gaming), passed once
+  │   │   │                     to every row
   │   │   │
   │   │   └── ModItemViewModel  one row; carries state only (no service calls)
   │   │
@@ -92,7 +100,9 @@ a UI-layer singleton that the shell (and other view models) inject:
   │
   ├── UpdateCheckRunner ─────── fires IUpdateCheckService on profile load,
   │                             active-profile switch, a periodic timer, and
-  │                             the manual "check now" affordance
+  │                             the manual "check now" affordance; re-raises
+  │                             CheckCompleted + UpdatesApplied on the UI
+  │                             thread for the mod list
   │
   ├── IAppUpdateService ─────── Curator's own self-update (Velopack-packaged
   │                             Windows installer and Linux AppImage);
@@ -108,19 +118,29 @@ a UI-layer singleton that the shell (and other view models) inject:
   │                             navigates the shell to Nexus on a
   │                             "Set up Nexus" choice
   │
-  ├── DmfPromptService ──────── records the new-profile trigger from
-  │                             IProfileService; the shell consumes it on the
-  │                             next real navigation into Mods (after setting
-  │                             CurrentDestination = Mods first)
+  ├── IShellModalQueue ──────── the shell-owned modal queue: services enqueue
+  │                             deferred modals for a destination; the shell
+  │                             drains them after the destination switch +
+  │                             enter effects
+  │
+  └── DmfPromptService ──────── subscribes to the new-profile event from
+                                IProfileService and enqueues its prompt onto
+                                the modal queue for the next real navigation
+                                into Mods (nothing depends on it; composition
+                                resolves it once at startup)
 
   IModThumbnailService ──────── the focused UI-owned presentation-media service
                              (the one deliberate exception to the domain-I/O
                              boundary): returns an Avalonia IImage, HTTPS-only,
                              owns the disk + in-memory thumbnail cache
   IDialogService ────────────── the testable dialog seam (six true-modal methods);
-                             production DialogService owns the real Window wiring
- LocalizationService ───────── the i18n indexer + dynamic-culture INPC refresh
- IPreferencesService ───────── applies theme / font scale / language + persists
+                             production DialogService owns the real Window wiring;
+                             the escape-hatch dialog VM comes from the narrow
+                             IDiscoveryEscapeHatchFactory
+  LocalizationService ───────── the i18n indexer + dynamic-culture INPC refresh
+                             (view models re-fire their registered localized
+                             property names through the LocalizedViewModel base)
+  IPreferencesService ───────── applies theme / font scale / language + persists
 ```
 
 The backend libraries (`Profiles`, `Mods`, `Integrations`, `Steam`,
@@ -273,19 +293,26 @@ never crash startup.
 The last Normal size is tracked through deferred, coalesced, reason-aware
 resize observation, because the platform's settled-state ordering is not
 reliable: Win32 reports the maximized resize BEFORE its managed `WindowState`
-change, while X11 generally reports the state first. `OnResized` tags each
-observation by `WindowResizeReason` and by whether the window had already
-opened, then posts ONE apply to the UI thread. At apply time the settled state
-has propagated, and a trusted observation (User, Unspecified, Application,
-DpiChange) becomes the last Normal size when the settled state is `Normal`,
-the window is not closing, and the candidate is valid. A `Layout` observation
-is never authoritative for the persisted size. The meaningful-state flag is
-tracked through `OnPropertyChanged` for `WindowStateProperty` via the pure
-`NextMeaningfulMaximized` policy: `Normal` clears the flag, `Maximized` sets
-it, and `Minimized` and `FullScreen` leave the preceding flag unchanged. So a
-Normal then Minimized then Close restores Normal, and a Maximized then
-Minimized then Close restores Maximized with the saved unmaximized size;
-Minimized is never persisted as a launch state.
+change, while X11 generally reports the state first. The observation state
+machine lives on the plain `WindowGeometryTracker` (fed
+`ObserveResize(Size, WindowResizeReason)` + `ObserveWindowState(WindowState)`
++ `NotifyOpened`, queried for the seed, the close snapshot, and the
+`CorrectionRequested` reapply; unit-testable headless through an injectable
+post seam). `MainWindow` feeds it from `OnResized` and
+`OnPropertyChanged` for `WindowStateProperty` and keeps only the Window
+operations (apply size, one-shot maximize, the single close-time persist
+write). The tracker tags each observation by reason and by whether the window
+had already opened, then posts ONE apply to the UI thread. At apply time the
+settled state has propagated, and a trusted observation (User, Unspecified,
+Application, DpiChange) becomes the last Normal size when the settled state is
+`Normal`, the tracker is not closing, and the candidate is valid. A `Layout`
+observation is never authoritative for the persisted size. The
+meaningful-state flag is tracked via the pure `NextMeaningfulMaximized`
+policy: `Normal` clears the flag, `Maximized` sets it, and `Minimized` and
+`FullScreen` leave the preceding flag unchanged. So a Normal then Minimized
+then Close restores Normal, and a Maximized then Minimized then Close
+restores Maximized with the saved unmaximized size; Minimized is never
+persisted as a launch state.
 
 A narrow post-open correction works around Avalonia issue #19431
 (https://github.com/AvaloniaUI/Avalonia/issues/19431): at Windows scaling such
@@ -294,8 +321,10 @@ Normal resize followed by a stale `Layout` resize carrying the maximized
 `ClientSize`. `MainWindow` uses manual top-level sizing, so a post-open
 `Layout` resize is not a user sizing intent. When the settled state is Normal
 and a post-open `Layout` observation materially conflicts (more than 1 DIP)
-with the trusted last Normal size, `MainWindow` reapplies that trusted size
-through `ClientSize`. The correction never persists a new size from `Layout`
+with the trusted last Normal size, the tracker raises its
+`CorrectionRequested` signal and `MainWindow` reapplies that trusted size
+through `ClientSize` (the tracker's re-entrancy guard covers the synchronous
+observations the reapply emits). The correction never persists a new size from `Layout`
 and never manipulates window position; a trusted observation arriving in the
 same burst as the stale `Layout` wins and becomes the last Normal size before
 the correction is decided, so the correction targets the trusted value.
@@ -336,12 +365,12 @@ Settings reloads the mod list, re-reads the `CheckOnStartup` toggle, and
 refreshes the app-update notice. Enter effects: Settings calls
 `SettingsViewModel.RefreshFromConfig` synchronously (so escape-hatch / config
 changes are visible without a transient stale page); Nexus awaits
-`IntegrationsViewModel.RefreshAsync` (paint-then-resolve); Mods awaits
-`DmfPromptService.ProcessPendingAsync` after `CurrentDestination` is already
-Mods, then reloads `ModListViewModel` when a trigger was consumed so an
-accepted existing/Premium DMF add is visible immediately. The destination is
-switched before any enter await so it stays active even if a refresh or the
-DMF prompt reports an error through its own behavior.
+`IntegrationsViewModel.RefreshAsync` (paint-then-resolve). After the enter
+effects the shell drains its modal queue for the entered destination, so a
+queued modal (the DMF install prompt after a profile create) runs as the
+topmost modal over the freshly painted page. The destination is switched
+before any enter await so it stays active even if a refresh or a drained
+modal reports an error through its own behavior.
 
 There is no shared `IPage` / `INavigationService` lifecycle interface:
 Profiles, Settings, and Nexus have deliberately different
@@ -441,35 +470,52 @@ state clear. Failure and discovery dialogs are separate OS-owned dialog
 windows (`Window.ShowDialog`), so they appear above the overlay while failure
 handling is in progress; the overlay remains behind them as the dimmed shell.
 
+### The shell-owned modal queue (`IShellModalQueue`)
+
+Services that need a modal to run the next time the user enters a particular
+destination enqueue it on the shell-owned `IShellModalQueue`
+(`Enqueue(owner, showOn, modal)`) instead of coupling the shell to the
+service. The shell drains the queue in `NavigateAsync` after the destination
+switch and the enter effects, so every queued modal runs as the topmost modal
+over the freshly painted page. A queued entry survives visits to other
+destinations (drains are destination-keyed) and runs at most once; a newer
+enqueue from the same owner replaces its unconsumed entry (newest-wins), and
+different owners queue independently. The drain consumes matching entries
+before running any, so an exception inside one modal cannot re-fire it.
+
+Modal timing is the queue's; modal content is the enqueuer's: the shell knows
+nothing about which services enqueue, and each drained delegate owns its own
+follow-up (a reload, a navigation, nothing).
+
 ### The DMF install-prompt timing
 
 The `DmfPromptService` subscribes to `IProfileService.ProfileCreated` at
-construction (the shell's DI registration resolves `DmfPromptService` before
-`ShellViewModel` so the subscription exists before any profile can be created).
-When `ProfilesViewModel.Save` calls `CreateProfile`, the already-subscribed
-coordinator records the trigger as pending; `ProfilesViewModel` itself does no
-DMF or mod-list work after Save. The shell consumes the pending trigger on the
-next real navigation into Mods: `NavigateAsync` sets `CurrentDestination = Mods`
-first, then awaits `ProcessPendingAsync`, then reloads `ModListViewModel` when a
-trigger was consumed. The DMF prompt therefore runs as the topmost modal with
-Mods already selected underneath, and an accepted existing/Premium DMF add is
-visible immediately afterward. A pending trigger survives visits to other
-destinations and is consumed only on a real Mods entry.
-
-`ProcessPendingAsync` snapshots and clears the pending trigger before
-processing it, so an exception in the prompt does not leave it stuck pending
-for the next call. The boolean return carries "a trigger was consumed" (whether
-the prompt actually fired stays internal) so the shell knows whether a
-post-prompt mod-list reload is warranted.
+construction (composition resolves it once at startup, before the window
+shows, so the subscription exists before any profile can be created; nothing
+depends on the coordinator, which is the point of the queue). When
+`ProfilesViewModel.Save` calls `CreateProfile`, the already-subscribed
+coordinator enqueues its prompt onto the modal queue for the Mods
+destination; `ProfilesViewModel` itself does no DMF or mod-list work after
+Save. The shell's drain runs it on the next real navigation into Mods, after
+`CurrentDestination` is already Mods: the DMF prompt is the topmost modal with
+Mods already selected underneath. The coordinator's drained delegate runs the
+prompt (fail-isolated) and then reloads `ModListViewModel` itself, so an
+accepted existing/Premium DMF add is visible immediately afterward (a declined
+or skipped prompt reloads the same authoritative state). A queued entry
+survives visits to other destinations and is consumed only on a real Mods
+entry; a second create before the entry drains replaces it (newest-wins).
 
 ## The mod list (`ModListViewModel` + `ModItemViewModel`)
 
 `ModListViewModel` owns the active profile's mod list (the dominant content
 area). It subscribes to `IProfileSession.PropertyChanged` (filtered to
-`ActiveProfileId`), `LocalizationService.PropertyChanged` (culture refresh),
-and `IUpdateCheckService.CheckCompleted` (badge refresh). The active profile
-is the session's; the list never decides the active id, it only reloads when
-the id changes.
+`ActiveProfileId`), `LocalizationService.PropertyChanged` (through the
+`LocalizedViewModel` culture-refresh base), `UpdateCheckRunner.CheckCompleted`
++ `UpdateCheckRunner.UpdatesApplied` (the runner re-raises both update-family
+completions on the UI thread; the list holds neither update service), and its
+`ModRowContext` (per-row install progress + the global premium / busy / gaming
+flips). The active profile is the session's; the list never decides the active
+id, it only reloads when the id changes.
 
 The command set:
 
@@ -524,8 +570,9 @@ The command set:
   pickers and share an entry point with drag-and-drop; all forward the selected
   paths to `ImportWorkflowViewModel.StartBatchCommand`, which owns the inline
   card (the batch state machine, the per-item editing form, and the per-item
-  import orchestration). The "Link external folder" mode reduces to `LinkMods`
-  instead (folder picker, no inline card).
+  import orchestration). The "Link external folder" mode forwards the picked
+  paths to the `LinkedModsViewModel` child instead (folder picker, no inline
+  card).
 
 ### The inline import workflow (`ImportWorkflowViewModel`)
 
@@ -580,13 +627,17 @@ the workflow resets; the new active profile's pending indicator is never set
 for the old profile's success. A failure (expected or unexpected) that lands
 after the profile changed also resets rather than showing a failure card.
 
-### The link flow (`LinkMods`)
+### The link flow (`LinkedModsViewModel`)
 
 The "Link external folder" flyout adds an external mod directory to the
 active profile **without copying it** (the folder is the user's; Curator
-controls only load order and enabled/disabled). No inline workflow card; the
-folder picker hands the path straight to `LinkMods`, which processes each path
-sequentially:
+controls only load order and enabled/disabled). The flow lives on the
+`LinkedModsViewModel` child (an application-lifetime singleton, the
+`ImportWorkflowViewModel` pattern: registered before `ModListViewModel` in
+`CuratorComposition`, exposed read-only on it, and taking no `IModImportService`
+dependency in the parent). No inline workflow card; the view's folder picker
+forwards the paths straight to the child's `LinkModsCommand`, which processes
+each path sequentially:
 
 1. Peek the base folder name via `IModImportService.GetBaseName` (the picked
    folder IS the base and must directly contain `<base>.mod`). An invalid
@@ -603,20 +654,73 @@ sequentially:
 A failed peek, a `LinkFolder` failure (e.g. a containment rejection of the
 mods/profiles root), or a collision cancels the remaining batch.
 
+The child also owns the linked row's open-external-folder badge command
+(`OpenFolder`: the OS file manager at the row's external folder, gated off in
+Gaming Mode, with a launcher-failure fallback alert). It raises a `ModsLinked`
+event exactly where the flow finishes; the parent reloads the active list on
+it. The three launcher-failure alerts (files page, games page, external
+folder) share one `LaunchAlerts` helper (title key, message key, args) used
+by both the list VM and the child.
+
+### The shared row context (`ModRowContext`)
+
+The three row-affecting globals live on one shared observable
+`ModRowContext`, created once in composition and passed to every row at
+construction (no per-flag value pushes):
+
+- `IsPremiumUser`: the one-shot construction-time Nexus premium read
+  (fire-and-forget; no mid-session refresh).
+- `AnyRowUpdating`: the installer's coordinator-backed busy flag, mirrored on
+  the UI thread.
+- `IsGamingMode`: constant for the process lifetime.
+- `ModUpdateProgress`: the installer's per-container install progress,
+  re-raised on the UI thread; the list VM finds the row and drives its
+  spinner.
+- `InstallLatestAsync`: the manual Premium install front over the shared
+  `IModUpdateInstaller` (the same installer whose busy + progress state the
+  context carries), so the list VM's install action + its row-rendered state
+  share one seam.
+
+Rows keep their public property names as context-forwarding reads
+(`row.IsPremiumUser` and friends bind exactly as before). The list VM holds
+ONE subscription to the context and fans change notifications into the live
+rows, re-firing exactly the derived properties the former per-flag pushes
+re-fired; rows dropped by a reload are never subscribed individually, so none
+can leak against the application-lifetime context.
+
+### One shared row markup
+
+The Compact and Detailed row roots share their row controls as ONE definition
+each: the drag grip, the badge cluster, and the action strip are DataTemplate
+resources in `ModListView.axaml`, hosted by both roots through
+`ContentControl.ContentTemplate`. Avalonia styles select by searching the
+logical tree upwards from a control, so the page-level styles and the
+`detailedModRow` container query reach the realized template instances
+exactly as they reached the former inline markup, and the event handlers
+resolve against the page code-behind unchanged. Per-density rendering is
+preserved structurally: the Detailed strip keeps its wrapping layout and the
+680-DIP breakpoint (the query targets the hosting
+`ContentControl.detailedActions`), the Compact strip keeps its single-line
+margins through `Grid.compactRow`-scoped styles, and the Enabled label is the
+row's density-aware `EnabledLabel` (null in Compact, matching the former
+contentless checkbox).
+
 ### Rows carry state only
 
 Each row is a `ModItemViewModel`: container id (immutable, the join key
 against `IModRepository`), display name, source, resolved version tag,
 enabled, order, policy, and the per-row policy-edit state. The row also
-carries optional display metadata (`ModDisplayMetadata`: summary, thumbnail
-URL, adult flag, joined from the container on reload), the decoded
-`Thumbnail` image, and an `IsDetailed` projection pushed down by the density
-coordinator. The row never talks to `IProfileService` directly; the parent
-owns every service call, and the view routes row interactions (toggle, move,
-policy, remove, update) through code-behind handlers calling the parent's
-commands with the row as the `CommandParameter`. This per-row code-behind
-pattern keeps each row a passive state holder while the parent owns the
-service boundary.
+carries the shared `ModRowContext` (its premium / busy / gaming halves are
+context-forwarding reads), optional display metadata
+(`ModDisplayMetadata`: summary, thumbnail URL, adult flag, joined from the
+container on reload), the decoded `Thumbnail` image, and an `IsDetailed`
+projection pushed down by the density coordinator. The row never talks to
+`IProfileService` directly; the parent owns every service call, and the view
+routes row interactions (toggle, move, policy, remove, update) through
+code-behind handlers calling the parent's commands with the row as the
+`CommandParameter` (the linked badge routes to the `LinkedModsViewModel`
+child). This per-row code-behind pattern keeps each row a passive state
+holder while the parent owns the service boundary.
 
 ## Compact / Detailed rows (`DetailedModRowsViewModel`)
 
@@ -759,14 +863,15 @@ is idempotent. One list-level flag still derives from the in-memory last result:
 
 ### The premium gate
 
-`IsPremiumUser` is read once at construction via
-`INexusAuthService.GetCurrentStateAsync()`, fire-and-forget, and pushed down to
-each row so the per-row tooltip and click behavior reflect it. The read hits
-the network, so blocking the UI-thread constructor on it would stall startup;
-the result lands sub-second and flips the flag. There is no mid-session
-refresh (re-checking on Integrations activation would burn an API call each
-time; a user signing in mid-session needs a restart for the click behavior to
-switch to in-app install).
+`IsPremiumUser` is read once, fire-and-forget, at the `ModRowContext`'s
+construction via `INexusAuthService.GetCurrentStateAsync()`; the rows' and the
+list VM's forwarding properties read the same context flag, so the per-row
+tooltip and click behavior reflect it the moment it lands. The read hits the
+network, so blocking the UI-thread construction path on it would stall startup;
+the result lands sub-second and flips the flag. There is no mid-session refresh
+(re-checking on Integrations activation would burn an API call each time; a
+user signing in mid-session needs a restart for the click behavior to switch
+to in-app install).
 
 ### The per-mod Update command
 
@@ -824,7 +929,8 @@ re-checks the active profile + re-pulls the candidates, then calls
 turn behind a manual install under the shared gate). A profile switch stops
 the batch, per-mod failures are isolated and aggregated into one alert, and a
 fully successful batch is silent beyond the installer's per-row progress. The
-VM reloads after the batch via the service's `UpdatesApplied` event.
+VM reloads after the batch via the runner's UI-thread re-raise of the
+service's `UpdatesApplied` event.
 
 ### The manual "check now" affordance
 
@@ -946,7 +1052,10 @@ already landed during construction. The event fires on a threadpool thread
 (the service publishes from its background check), so both handlers marshal to
 the UI thread through the same injected `Action<Action>` seam
 (`Dispatcher.UIThread.Post` in production, a synchronous pass-through in
-tests) that `ModListViewModel` uses for its `CheckCompleted` handler. The view
+tests) that the update-family services also use for their off-thread events
+(the runner re-raises `CheckCompleted` / `UpdatesApplied`, and the
+`ModRowContext` mirrors the installer's busy flag + progress, already on the
+UI thread when the list VM sees them). The view
 models use no `ConfigureAwait(false)` (the project rule); their network calls
 run inside `Task.Run`. Download failures surface an alert and never proceed to
 apply.
@@ -1015,25 +1124,26 @@ with DMF, the profile add boundary's fresh-add rule places it first (rank 0)
 and order-locked; the prompt itself carries no placement choreography (see
 the [profiles reference](../reference/profiles.md)).
 
-### Why the prompt is owned by the shell on Mods entry
+### Why the prompt runs through the shell's modal queue
 
 The trigger signal (`IProfileService.ProfileCreated`) fires synchronously from
 inside `ProfilesViewModel.Save`. The coordinator subscribes at construction
-(resolved eagerly in the shell composition path, before `ShellViewModel`
-itself, so the subscription exists before any profile can be created) and
-records the signal as pending; the shell's `NavigateAsync` consumes the
-pending trigger on the next real navigation into Mods, after setting
-`CurrentDestination = Mods` first, so the DMF prompt runs as the topmost modal
-with Mods already selected underneath. `ProcessPendingAsync` snapshots and
-clears the pending trigger before processing it, so an exception in the prompt
-does not leave it stuck pending for the next call. The prompt is wrapped in a
-try/catch that logs and swallows non-cancellation exceptions, so a wiring
-failure never blocks the shell's post-navigation return. Splitting ownership
-this way keeps the coordinator narrowly focused on the DMF cases (subscribe,
-record, run, fail-isolated) and the shell broadly owning cross-destination
-sequencing (when to prompt, which destination should be underneath the modal,
-when to reload the mod list), without the two being coupled through a
-page-level interface.
+(composition resolves it once at startup, before the window shows, so the
+subscription exists before any profile can be created; nothing depends on the
+coordinator) and enqueues its prompt onto the shell's modal queue for the Mods
+destination. The shell's `NavigateAsync` drains the queue after setting
+`CurrentDestination` and running the enter effects, so the DMF prompt runs as
+the topmost modal with Mods already selected underneath. The queue consumes
+matching entries before running them, so an exception in the prompt cannot
+re-fire it; the prompt itself is wrapped in a try/catch that logs and swallows
+non-cancellation exceptions, so a wiring failure never blocks the shell's
+post-navigation return. The drained delegate reloads the mod list itself (the
+enqueuer owns its follow-up), so an accepted existing/Premium DMF add is
+visible immediately. Splitting ownership this way keeps the coordinator
+narrowly focused on the DMF cases (subscribe, enqueue, run, fail-isolated,
+reload) and the shell broadly owning cross-destination sequencing (when a
+queued modal runs and which destination sits underneath it) without the two
+being coupled through a page-level interface.
 
 ## Dialogs, preferences, and i18n
 
@@ -1092,6 +1202,13 @@ reference-counted so the owner window re-enables only when the outermost modal
 closes (an inner modal closing does not prematurely re-enable it while an outer
 modal is still open); single-modal behavior is unchanged.
 
+The one dialog whose view model carries service dependencies (the discovery
+escape hatch: live config, Steam discovery, Gaming Mode) builds that VM
+through the narrow `IDiscoveryEscapeHatchFactory` (registered in
+composition); `DialogService` shows the Window + reads the VM's result and
+constructs no view models itself. Deliberately not a generalized
+all-dialogs factory: the other dialogs need no VM dependencies.
+
 ### `IPreferencesService`
 
 The single authority for applying user-facing preferences (theme, font scale,
@@ -1130,6 +1247,18 @@ missing key returns the key itself (visible, never throws). The service
 holds its own culture and resolves strings with it directly; it does not
 mutate the thread's `CurrentUICulture`, so only the UI text follows the
 chosen language.
+
+Localized view models derive from the `LocalizedViewModel` base: it takes the
+service, subscribes once, and on a culture change re-fires the VM's registered
+localized property names (one `LocalizedProperties` declaration per VM, next
+to the properties) plus a virtual `OnCultureChanged` hook for the non-list
+work a few VMs genuinely do (the mod list's per-row refresh + gate re-render,
+Integrations' state re-resolve, Profiles' editor validation refresh).
+Transient dialog VMs detach through the base. The public binding surface of
+every VM is unchanged; a source-scan unit test fails when a property getter
+indexing `_localization[...]` is not in its VM's registered list, so the
+forget-to-register failure is a red test rather than stale text. The row VM
+keeps its parent-driven `Refresh()` pattern (covered by the same scan).
 
 `App.OnFrameworkInitializationCompleted` swaps the XAML resource placeholder
 for the real DI singleton, so every view's `{Binding [Key],
