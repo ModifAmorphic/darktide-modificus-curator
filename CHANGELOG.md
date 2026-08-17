@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.30.3...v1.0.0) (2026-08-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* Modificus Curator 1.0.0 ([#219](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/219))
+
+### Features
+
+* Modificus Curator 1.0.0 ([#219](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/219)) ([8a541e0](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/8a541e07df046d11bdf69d7ea30ebf61cafba1fc))
+
 ## [0.30.3](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.30.2...v0.30.3) (2026-08-16)
 
 
