@@ -39,9 +39,9 @@ unmodified).
 
 ## Status
 
-Initial releases are published on the
-[releases page](https://github.com/ModifAmorphic/darktide-modificus-curator/releases) and
-are marked as prereleases while the release pipeline settles. To build from
+Releases are published on the
+[releases page](https://github.com/ModifAmorphic/darktide-modificus-curator/releases).
+To build from
 source instead, see [`src/README.md`](src/README.md). The bundled runtime
 artifacts (launcher, shell DLL, mod loader) come from the latest non-draft
 [Mod Relay](https://github.com/ModifAmorphic/darktide-mod-relay)

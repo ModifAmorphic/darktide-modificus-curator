@@ -1533,7 +1533,7 @@ scripts/            release.env: the install manifest (standalone RELEASE_URL /
                     links; deduplicates against existing open issues with the same
                     title; still post-release and non-gating for publication, but red
                     means scan signal invalid or VT upload failed)
-.release-please-config.json   release-please config (release-type simple, include-component-in-tag false, prerelease true)
+.release-please-config.json   release-please config (release-type simple, include-component-in-tag false, prerelease false; flip prerelease to true to cut prerelease-marked releases again)
 .release-please-manifest.json release-please version manifest (the source-of-truth version; no csproj Version metadata)
 .gitignore          ignores .NET bin/obj, build artifacts, _local/
 ```

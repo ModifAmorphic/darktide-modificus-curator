@@ -12,9 +12,10 @@ Releases are cut by
 product:
 
 - `.release-please-config.json` sets `release-type: simple`,
-  `include-component-in-tag: false`, and `prerelease: true`. Tags follow the
+  `include-component-in-tag: false`, and `prerelease: false`. Tags follow the
   `v0.1.0` style (no component prefix), and GitHub releases are marked as
-  prereleases (no suffix-style `v0.1.0-rc.1` tags).
+  stable (no suffix-style `v0.1.0-rc.1` tags; flip `prerelease` back to true
+  to mark releases as prereleases again).
 - `.release-please-manifest.json` is the source-of-truth version. The first
   release (v0.1.0) has already shipped, so the manifest now reflects the
   current release version. Steady-state is derived from conventional commits.
