@@ -1,8 +1,7 @@
 <!-- converter_ignore -->
-# Nexus Mods page draft
+# Nexus Mods page
 
-Draft for the Modificus Curator Nexus Mods page. The Description section is
-drafted prose; the remaining sections are still talking-point outlines.
+Source of truth for the Modificus Curator Nexus Mods page description.
 Placeholders in [brackets] mark links to fill in.
 
 Images use real markdown syntax. Until the Nexus page exists they point at the
