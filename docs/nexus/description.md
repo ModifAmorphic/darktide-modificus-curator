@@ -37,7 +37,7 @@ launch the game from Steam. To play modded, launch from Curator.
 
 ## Installation
 
-Modificus Curator can be installed on Windows, Linux or Steam Deck.  Instructions below for installers. For alternative options see the Modificus Curator [README.md](https://github.com/ModifAmorphic/darktide-modificus-curator/blob/main/README.md)
+Modificus Curator can be installed on Windows, Linux or Steam Deck.  Instructions below for installers. For alternative options see the Curator [README.md](https://github.com/ModifAmorphic/darktide-modificus-curator/blob/main/README.md)
 
 ### Windows
 
