@@ -176,9 +176,11 @@ classified as clean, detection, or tool_error. VirusTotal scanning requires
 the `VIRUSTOTAL_API_KEY` repo secret to be configured. The file is submitted
 via the pinned Marketplace action `crazy-max/ghaction-virustotal@936d8c5c00afe97d3d9a1af26d017cfdf26800a2`
 with `request_rate: 4` to respect the VirusTotal public API quota. The workflow
-opens a tracking issue with title "AV manual review for release <tag>" when
-VirusTotal upload succeeds and returns analysis links. The issue contains the
-Defender output and VirusTotal analysis links for manual review. No issue is
+opens a tracking issue (labeled `virus-scan`) with title "AV manual review
+for release <tag>" when VirusTotal upload succeeds and returns analysis
+links. The issue contains the Defender output and VirusTotal analysis links
+for manual review; the label collects every release's scan issues under one
+filterable list. No issue is
 created if VirusTotal upload fails. The workflow fails when Defender scan tool
 errors occur, when Defender detects threats, when VirusTotal upload fails, or
 when the VirusTotal key is missing. It is still post-release and non-gating for

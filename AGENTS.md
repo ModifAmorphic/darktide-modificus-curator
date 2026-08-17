@@ -1527,7 +1527,8 @@ scripts/            release.env: the install manifest (standalone RELEASE_URL /
                     crazy-max/ghaction-virustotal@936d8c5c00afe97d3d9a1af26d017cfdf26800a2
                     action with request_rate 4, requires VIRUSTOTAL_API_KEY,
                     fails on Defender tool errors, missing Defender, VT errors, or
-                    missing VT key, creates a GitHub issue with title "AV manual review
+                    missing VT key, creates a GitHub issue (labeled
+                    `virus-scan`) with title "AV manual review
                     for release <tag>" when VT upload succeeds and returns analysis
                     links; deduplicates against existing open issues with the same
                     title; still post-release and non-gating for publication, but red
