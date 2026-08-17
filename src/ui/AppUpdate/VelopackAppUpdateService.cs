@@ -11,7 +11,7 @@ namespace Modificus.Curator.UI.AppUpdate;
 /// is registered when <c>CURATOR_VELOPACK</c> is defined (a Velopack-packaged
 /// build: a Windows install or a Linux AppImage). Wraps a
 /// <see cref="UpdateManager"/> pointed at the Curator GitHub releases
-/// (anonymous, prereleases included), or at a config-supplied source override
+/// (anonymous, stable releases only), or at a config-supplied source override
 /// for local testing / self-hosted feeds, and exposes the check / download /
 /// apply flow through the engine-neutral <see cref="IAppUpdateService"/> surface.
 /// </summary>
@@ -114,6 +114,14 @@ internal sealed class VelopackAppUpdateService : IAppUpdateService
 
         try
         {
+            // The latest stable release is authoritative even when it is
+            // semver-older than the installed version, so an install sitting
+            // on a newer pre-release is offered the latest stable in-app and
+            // self-heals onto the release track. Velopack applies such an
+            // update as a full-package swap (no deltas), so the ordinary
+            // download / apply flow needs no other change.
+            var options = new UpdateOptions { AllowVersionDowngrade = true };
+
             // Read the optional source override once at construction:
             // UpdateManager is built once with its source, so the value is not
             // held beyond the ctor. null/whitespace (the default) uses the
@@ -127,17 +135,18 @@ internal sealed class VelopackAppUpdateService : IAppUpdateService
                 // releases feed alongside the .nupkg). Used only when the
                 // operator sets AppUpdates.SourceOverride in config.json; null in
                 // production (the GithubSource path below).
-                _manager = new UpdateManager(sourceOverride);
+                _manager = new UpdateManager(sourceOverride, options);
                 _logger.LogInformation("App update source overridden to {Source}.", sourceOverride);
             }
             else
             {
-                // Production: anonymous (no token), prereleases included. The
+                // Production: anonymous (no token), stable releases only;
+                // prereleases are excluded from the feed entirely. The
                 // downloader argument is null by design: it is the parameter's
                 // documented default in Velopack 1.2.0, and Velopack substitutes
                 // its own HttpClient-based downloader.
-                var source = new GithubSource(RepoUrl, accessToken: null, prerelease: true, downloader: null);
-                _manager = new UpdateManager(source);
+                var source = new GithubSource(RepoUrl, accessToken: null, prerelease: false, downloader: null);
+                _manager = new UpdateManager(source, options);
             }
         }
         catch (Exception ex)
