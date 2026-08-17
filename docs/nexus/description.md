@@ -1,3 +1,4 @@
+<!-- converter_ignore -->
 # Nexus Mods page draft
 
 Draft for the Modificus Curator Nexus Mods page. The Description section is
@@ -15,6 +16,11 @@ Template sections are suggestions only; the page uses its own structure. No
 Requirements section: the game is implicit (mods are organized under the
 game), Curator has no hard dependencies, and the optional bits (Nexus
 account, DMF) are covered in Getting started.
+
+Publish: markdown_to_bbcodenm -i docs/nexus/description.md -o <out>, then
+paste into the Nexus editor's BBCode source view. This preamble is wrapped in
+converter_ignore fences so it never reaches the page.
+<!-- /converter_ignore -->
 
 ## Description
 
