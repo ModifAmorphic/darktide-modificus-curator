@@ -89,7 +89,7 @@ Hit **Launch Darktide** to inject mods and launch the game.
 
 ## Migrating from Patched Darktide
 
-If you previously patched Darktide to load the Darktide Mod Loader, then it needs to be restored to Vanilla for mods to work properly. The easiest is to simply "Verify integrity of game files" from within Steam's Darktide properties under "Installed Files". This can take a bit of time (few minutes usually). You can also unpatch your game the same way you originally patched it. Whatever method you choose, DML (Not to be confused with DMF - Darktide Modding Framework) and Curator are not compatible.
+If you previously patched Darktide to load the Darktide Mod Loader, then it needs to be restored to Vanilla for mods to work properly. The easiest is to simply "Verify integrity of game files" from within Steam's Darktide properties under "Installed Files". This can take a bit of time (few minutes usually). You can also unpatch your game the same way you originally patched it. Whatever method you choose, DML (Not to be confused with DMF - Darktide Mod Framework) and Curator are not compatible.
 
 ## Vanilla
 
