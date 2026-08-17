@@ -12,7 +12,7 @@ stays out of the way for vanilla play (launch the game from Steam and it runs
 unmodified).
 
 <div align="center">
-  <img src="docs/images/main.png" alt="Modificus Curator main application window showing the mod list interface">
+  <img src="docs/images/screenshots/mods_detailed_2k.png" alt="Modificus Curator main application window showing the mod list interface">
 </div>
 
 ## Components
