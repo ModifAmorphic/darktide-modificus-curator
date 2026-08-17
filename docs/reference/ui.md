@@ -1162,9 +1162,12 @@ publish time for the Windows installer or Linux AppImage):
   `null`/whitespace (the default) builds the production anonymous `GithubSource`
   (`Velopack.Sources` namespace; repo
   `https://github.com/ModifAmorphic/darktide-modificus-curator`,
-  `accessToken: null`, `prerelease: true`); a set value (a local directory path
-  or a URL) builds the manager from `UpdateManager`'s `urlOrPath` overload
-  instead, the local-testing / self-hosted-feed path with no code change.
+  `accessToken: null`, `prerelease: false`, stable releases only); a set value
+  (a local directory path or a URL) builds the manager from `UpdateManager`'s
+  `urlOrPath` overload instead, the local-testing / self-hosted-feed path with
+  no code change. Both constructions pass
+  `UpdateOptions { AllowVersionDowngrade = true }`, so the latest stable
+  release is offered even when semver-older than the installed version.
   Construction catches `Velopack.Exceptions.NotInstalledException` (the expected
   throw for a non-Velopack run) and leaves the manager `null`, so
   `IsUpdateSupported` is `false`.

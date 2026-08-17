@@ -740,7 +740,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `CuratorConfig.AppUpdates.SourceOverride` (the default)
                           builds the production anonymous
                           `Velopack.Sources.GithubSource` pointing at the Curator
-                          repo, prereleases included; a set value (a local dir or
+                          repo, stable releases only; a set value (a local dir or
                           URL) builds the manager from `UpdateManager`'s
                           urlOrPath overload for local testing / self-hosted feeds,
                           read once at construction via the injected
