@@ -12,7 +12,7 @@ stays out of the way for vanilla play (launch the game from Steam and it runs
 unmodified).
 
 <div align="center">
-  <img src="docs/images/main.png" alt="Modificus Curator main application window showing the mod list interface">
+  <img src="docs/images/screenshots/mods_detailed_2k.png" alt="Modificus Curator main application window showing the mod list interface">
 </div>
 
 ## Components
@@ -39,9 +39,9 @@ unmodified).
 
 ## Status
 
-Initial releases are published on the
-[releases page](https://github.com/ModifAmorphic/darktide-modificus-curator/releases) and
-are marked as prereleases while the release pipeline settles. To build from
+Releases are published on the
+[releases page](https://github.com/ModifAmorphic/darktide-modificus-curator/releases).
+To build from
 source instead, see [`src/README.md`](src/README.md). The bundled runtime
 artifacts (launcher, shell DLL, mod loader) come from the latest non-draft
 [Mod Relay](https://github.com/ModifAmorphic/darktide-mod-relay)

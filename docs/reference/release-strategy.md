@@ -12,9 +12,10 @@ Releases are cut by
 product:
 
 - `.release-please-config.json` sets `release-type: simple`,
-  `include-component-in-tag: false`, and `prerelease: true`. Tags follow the
+  `include-component-in-tag: false`, and `prerelease: false`. Tags follow the
   `v0.1.0` style (no component prefix), and GitHub releases are marked as
-  prereleases (no suffix-style `v0.1.0-rc.1` tags).
+  stable (no suffix-style `v0.1.0-rc.1` tags; flip `prerelease` back to true
+  to mark releases as prereleases again).
 - `.release-please-manifest.json` is the source-of-truth version. The first
   release (v0.1.0) has already shipped, so the manifest now reflects the
   current release version. Steady-state is derived from conventional commits.
@@ -282,8 +283,11 @@ bytes (not a fresh build), so it scans what users receive:
   The action handles large uploads automatically by using the `/files/upload_url`
   endpoint for files 32MB or larger. It returns analysis links in the `analysis` output.
   The workflow does not poll the VirusTotal API for final results or verdicts.
-- **Issue creation**: opens a GitHub issue with the title "AV manual review
+- **Issue creation**: opens a GitHub issue (labeled `virus-scan`) with the
+  title "AV manual review
   for release <tag>" when VirusTotal upload succeeds and returns analysis links.
+  The label is created idempotently by the workflow and collects every
+  release's scan issues under one filterable list.
   The issue is created regardless of VirusTotal detection results, since CI does not
   poll the API to determine them. The issue body carries the release tag, the asset
   name, the Defender output, the VirusTotal analysis links, and a note that the

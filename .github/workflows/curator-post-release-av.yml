@@ -476,7 +476,12 @@ jobs:
             sed -i 's|VT_ANALYSIS_PLACEHOLDER|Analysis links not available|' issue.md
           fi
 
-          gh issue create --repo "$GH_REPO" --title "$TITLE" --body-file issue.md
+          # Ensure the virus-scan label exists (idempotent; tolerate races)
+          gh label create "virus-scan" --repo "$GH_REPO" \
+            --description "AV manual review + VirusTotal scan results for a release" \
+            --color "FBCA04" 2>/dev/null || true
+
+          gh issue create --repo "$GH_REPO" --title "$TITLE" --body-file issue.md --label "virus-scan"
           echo "created=true" >> $GITHUB_OUTPUT
           echo "Created GitHub issue for AV manual review"
 
