@@ -494,11 +494,6 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     [NotifyPropertyChangedFor(nameof(ShowAddModsHint))]
     private bool _hasActiveProfile;
 
-    /// <summary>Whether the active profile has at least one mod. Drives the
-    /// row-list Border's IsVisible (the rows render only when non-empty).</summary>
-    [ObservableProperty]
-    private bool _hasMods;
-
     /// <summary>
     /// The number of mods in the active profile. Drives
     /// <see cref="ShowAddModsHint"/> (the hint shows for zero or one mod, so a
@@ -893,7 +888,6 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         if (activeId is not Guid id)
         {
             HasActiveProfile = false;
-            HasMods = false;
             ModCount = 0;
             _loadedEntries = Array.Empty<ModListEntry>();
             // Hand an empty snapshot so old work is cancelled.
@@ -942,7 +936,6 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
             Mods.Add(row);
         }
 
-        HasMods = Mods.Count > 0;
         ModCount = Mods.Count;
 
         // Rebuild the visible projection (which also recomputes per-row move

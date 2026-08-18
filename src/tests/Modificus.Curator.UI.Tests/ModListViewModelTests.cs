@@ -67,7 +67,7 @@ public sealed class ModListViewModelTests
         var vm = Build(profiles, new FakeProfileSession { ActiveProfileId = a.Id }, repo);
 
         Assert.True(vm.HasActiveProfile);
-        Assert.True(vm.HasMods);
+        Assert.True(vm.HasVisibleMods);
         Assert.False(vm.ShowAddModsHint);
         Assert.Equal(2, vm.Mods.Count);
         // Sorted by Order.
@@ -92,7 +92,7 @@ public sealed class ModListViewModelTests
         var vm = Build(profiles, new FakeProfileSession { ActiveProfileId = null });
 
         Assert.False(vm.HasActiveProfile);
-        Assert.False(vm.HasMods);
+        Assert.False(vm.HasVisibleMods);
         Assert.Empty(vm.Mods);
     }
 
@@ -104,7 +104,7 @@ public sealed class ModListViewModelTests
         var vm = Build(profiles, new FakeProfileSession { ActiveProfileId = a.Id });
 
         Assert.True(vm.HasActiveProfile);
-        Assert.False(vm.HasMods);
+        Assert.False(vm.HasVisibleMods);
         Assert.True(vm.ShowAddModsHint);
         Assert.Empty(vm.Mods);
     }

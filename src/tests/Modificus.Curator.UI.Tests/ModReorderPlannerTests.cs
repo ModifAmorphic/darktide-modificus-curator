@@ -180,6 +180,25 @@ public sealed class ModReorderPlannerTests
     }
 
     [Fact]
+    public void Own_rank_drop_over_a_hidden_row_commits_a_real_reorder()
+    {
+        // [A, H(hidden), B]; A dropped at its own visible rank 0 -> [H, A, B],
+        // non-null. The anchor at rank 0 is B, and H sits between A and B in
+        // the stored order, so reinserting A before B settles it below H even
+        // though the visible subsequence is unchanged. This own-rank-over-
+        // hidden real-commit behavior is deliberate (documented in the
+        // filter/search projection section of ui-architecture.md); pinned
+        // here so a refactor of the exact-equality no-op detection cannot
+        // silently flip it to a no-op.
+        var rows = Rows(('A', false, true), ('H', false, false), ('B', false, true));
+
+        var full = ModReorderPlanner.BuildFullOrder(rows, Move('A', 0));
+
+        Assert.NotNull(full);
+        Assert.Equal([G('H'), G('A'), G('B')], full);
+    }
+
+    [Fact]
     public void Noop_when_the_rebuilt_order_equals_the_current_order()
     {
         // [A, B, H]; A dropped at its own rank 0 -> the rebuild reproduces the

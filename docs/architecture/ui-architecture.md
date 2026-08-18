@@ -609,7 +609,10 @@ immediately before the visible-unlocked row at that rank (immediately after
 the last one on a drop-at-end). Locked rows keep their exact indices; hidden
 rows never anchor the insertion, shift at most one slot as the source passes,
 and keep their relative order; when nothing is filtered the construction is
-identical to the pure lock-aware projection.
+identical to the pure lock-aware projection. One consequence is deliberate: a
+drop at the source's own visible rank can settle the source one slot past a
+hidden row (the visible list looks unchanged) while the stored order really
+changes, so the commit is real and `HasPendingChanges` is flagged.
 
 The empty states are exclusive: while a filter or search is active, the
 no-mods/add hints never render, and an active profile with a non-empty full

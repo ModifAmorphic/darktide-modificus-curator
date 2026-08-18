@@ -767,7 +767,7 @@
         hover.
       -->
       <SplitButton Grid.Column="4"
-                    Click="Add_Click"
+                   Click="Add_Click"
                    ToolTip.Tip="{Binding AddButtonTooltip}"
                    ToolTip.ShowOnDisabled="True"
                    IsEnabled="{Binding IsAddEnabled}"
