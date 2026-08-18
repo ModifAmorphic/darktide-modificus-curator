@@ -523,22 +523,29 @@ The command set:
   bound to its CheckBox; this persists the toggle through
   `IProfileService.SetModEnabled`.
 - **Reorder** (`MoveUp` / `MoveDown` / drag grip): moves an unlocked row one
-  unlocked rank, crossing any locked rows, and persists the full container-id
-  order through `IProfileService.SetModOrder` (exactly once) on a real order
-  change. A drag is initiated only from the per-row grip at the left edge (a
+  VISIBLE unlocked rank, crossing any locked or filter-hidden rows, and
+  persists the full container-id order through `IProfileService.SetModOrder`
+  (exactly once) on a real order change. A drag is initiated only from the
+  per-row grip at the left edge (a
   pointer press there calls `PreventGestureRecognition` + captures the pointer,
   and a reorder starts after an 8-DIP threshold); dragging anywhere else on a
   row stays touch scrolling, which matters on the Steam Deck. While dragging,
-  the target rank is computed among the other unlocked rows only (locked rows
-  are never destinations), a 2-DIP accent insertion line marks the target, the
+  the target rank is computed among the other visible unlocked rows only
+  (locked rows are never destinations; hidden rows are not realized so they
+  cannot be destinations either), a 2-DIP accent insertion line marks the
+  target, the
   realized item container (the full-width actual row) is lifted via a render
   transform + z-index so it follows the pointer while its layout slot stays
   reserved, and a `DispatcherTimer` edge-band auto-scrolls the
   list while keeping the lifted row under the pointer. Every mutated container
   property is restored on each finish/cancel path. A release inside the viewport commits one immutable `ReorderRequest`
-  (source container id + target unlocked rank) through `CommitReorder`; the pure
-  `ModReorderPlanner` builds the legal full order around locked slots and
-  rejects same-rank / out-of-range / locked-source / missing-source requests
+  (source container id + target rank among the visible unlocked other rows)
+  through `CommitReorder`; the pure
+  `ModReorderPlanner` builds the legal full order (locked rows keep their
+  exact slots, hidden rows shift at most one slot and keep their relative
+  order, and an all-visible input reproduces the pure lock projection) and
+  rejects same-order / out-of-range / locked-source / hidden-source /
+  missing-source requests
   without a service call. On release, the target is recomputed from the final
   release position (so it reflects the layout at release after any auto-scroll),
   then capture is released and `CommitReorder` runs. Escape, capture loss, view
@@ -563,16 +570,49 @@ The command set:
   The repository copy survives; the confirm is about the profile edit, not
   data loss.
 - **Add** (inline import workflow): the Add split button's four flyout items are
-  all modes that set themselves as the default on click (the face label tracks
-  the mode): "Add Nexus Mods" (the default; opens the Darktide Nexus Mods games
+  all modes that set themselves the default on click (the face label tracks the
+  mode): "Add Nexus Mods" (the default; opens the Darktide Nexus Mods games
   page in the browser via `AddNexusMods`), "Add Mod (archive)", "Add Mod
   (folder)", and "Link external folder". The archive + folder modes open their
-  pickers and share an entry point with drag-and-drop; all forward the selected
-  paths to `ImportWorkflowViewModel.StartBatchCommand`, which owns the inline
+  pickers and share an entry point with drag-and-drop; all forward the
+  selected paths to `ImportWorkflowViewModel.StartBatchCommand`, which owns the inline
   card (the batch state machine, the per-item editing form, and the per-item
   import orchestration). The "Link external folder" mode forwards the picked
   paths to the `LinkedModsViewModel` child instead (folder picker, no inline
   card).
+
+### Filter / search projection
+
+`Mods` stays the authoritative full list; the row list renders
+`VisibleMods`, the projection under two session-transient controls on the
+toolbar: `SearchText` (the search box, a case-insensitive ordinal substring
+match on the row display name, applied keystroke-live; null/whitespace matches
+everything) and `HideDisabledMods` (the hide-disabled visibility toggle). One
+`RebuildVisibleMods` rebuilds the projection at the end of every `Reload`, on
+every filter/search state change, and after an enable toggle (a row disabled
+under an active hide-filter leaves the visible set), and recomputes per-row
+move availability over the visible unlocked rows.
+
+The state is view-only: never persisted, surviving reloads and navigation,
+cleared on an active-profile change (a filter belongs to the profile the user
+was looking at). `DetailedModRowsViewModel.SetRowsAsync` keeps receiving the
+full row snapshot, so thumbnails and metadata hydrate regardless of visibility
+and a filter change never re-triggers hydration.
+
+Reordering works through the projection. Move and drag targets are computed
+among the visible unlocked rows (the ItemsControl realizes exactly the
+projection, so the gesture math is naturally visible-scoped), then committed to
+the stored order: `ReorderRequest.TargetUnlockedRank` is the insertion rank
+among the visible unlocked OTHER rows, and the planner anchors the source
+immediately before the visible-unlocked row at that rank (immediately after
+the last one on a drop-at-end). Locked rows keep their exact indices; hidden
+rows never anchor the insertion, shift at most one slot as the source passes,
+and keep their relative order; when nothing is filtered the construction is
+identical to the pure lock-aware projection.
+
+The empty states are exclusive: while a filter or search is active, the
+no-mods/add hints never render, and an active profile with a non-empty full
+list but an empty projection shows the localized no-matches message instead.
 
 ### The inline import workflow (`ImportWorkflowViewModel`)
 
@@ -946,19 +986,29 @@ re-hydrates from the store when the result lands.
 ### View affordances
 
 - **The Mods toolbar.** Refresh + an indeterminate spinner (the manual "check
-  now" affordance), the rate-limit notice pill, the
-  Compact/Detailed density selector, and the Add split button, in that order.
+  now" affordance), the rate-limit notice pill, the search box, the
+  Compact/Detailed density selector with the hide-disabled filter toggle, and
+  the Add split button, in that order.
   The rate-limit pill occupies the toolbar's single flexible (`*`) column with
   `HorizontalAlignment=Left`: at normal and wide widths it keeps its content
   width, while the star column still gives it a finite constraint so its inner
   text ellipsizes (`CharacterEllipsis`, full text in the tooltip) at narrow
-  widths rather than pushing the density pair or Add out of the toolbar. The
-  density selector is two adjacent drawn-icon buttons (`view_headline` for
+  widths rather than pushing the search box, the density pair, or Add out of
+  the toolbar. The search box is a fixed-width (200 DIP) TextBox between the
+  flexible column and the density pair: a keystroke-live TwoWay binding to
+  `SearchText` with a localized `PlaceholderText` watermark, plus an inner
+  clear button that reuses the Fluent theme's own text-box clear-button chrome
+  (`FluentTextBoxButton` + the theme's drawn X geometry, invoking the
+  TextBox's `Clear` method) and is visible only while search text is present.
+  The density selector is two adjacent drawn-icon buttons (`view_headline` for
   Compact, `view_agenda` for Detailed) bound to
   `DetailedModRowsViewModel.SetDensityCommand`; the active one carries the
   `selected` class (bound to `IsCompact` / `IsDetailed`). A click on the
   already-active density is a strict no-op (the coordinator's value-equal
-  guard), so the buttons stay enabled.
+  guard), so the buttons stay enabled. The hide-disabled toggle is a third
+  button in the same group (same `icon density` chrome, `selected` while
+  hiding, drawn `visibility` / `visibility_off` paths, dynamic hide/show
+  tooltip + automation name) bound to `ToggleHideDisabledCommand`.
 - **Row roots.** One row, two mutually exclusive roots selected by the row's
   `IsDetailed` projection: the existing Compact `Grid` (eight columns: name,
   badge area, enabled, policy, update-action cell, up, down, remove) and a

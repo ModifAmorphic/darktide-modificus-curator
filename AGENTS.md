@@ -232,11 +232,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           itself); the avatar palette is deterministic from the
                           profile Guid so a profile keeps its color across reloads,
                           sorting, and app restarts;
-                          the Mods destination (`ModListViewModel` + `ModListView`):
-                          the active profile's mod list (the dominant content area),
-                          with its own toolbar (refresh, rate-limit notice,
-                          the Compact/Detailed density selector, the Add split
-                          button) shown only on Mods, and the
+                           the Mods destination (`ModListViewModel` + `ModListView`):
+                           the active profile's mod list (the dominant content area),
+                           with its own toolbar (refresh, rate-limit notice, the
+                           search box, the Compact/Detailed density selector with the
+                           hide-disabled filter toggle, the Add split button) shown
+                           only on Mods, and the
                           inline import card (`ImportWorkflowViewModel` +
                           `ImportWorkflowView`, an application-lifetime singleton
                           child VM registered before `ModListViewModel`) directly
@@ -255,11 +256,33 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           The toolbar's density selector is two drawn-icon buttons
                           (view_headline for Compact, view_agenda for Detailed)
                           bound to `DetailedModRowsViewModel.SetDensityCommand`;
-                          the active one carries the `selected` class (the shell's
-                          conditional-class pattern, not a ToggleButton). Detailed is
-                          the default; absent/unknown normalizes to Detailed, and
-                          Compact survives only when persisted or selected.
-                          Detailed renders a rounded card per row laid
+                           the active one carries the `selected` class (the shell's
+                           conditional-class pattern, not a ToggleButton). Detailed is
+                           the default; absent/unknown normalizes to Detailed, and
+                           Compact survives only when persisted or selected.
+                           The toolbar also carries the view-projection pair: a
+                           fixed-width search box (keystroke-live TwoWay
+                           `SearchText`, case-insensitive ordinal substring on the
+                           row name, with an inner clear button built from the
+                           Fluent theme's own text-box clear-button chrome) and a
+                           hide-disabled visibility toggle (drawn
+                           visibility/visibility_off paths, `selected` while
+                           hiding). Both drive the VM's `VisibleMods` projection
+                           of the authoritative `Mods` list (rebuilt by one
+                           `RebuildVisibleMods` at the end of every Reload, on
+                           every filter/search change, and after an enable
+                           toggle under an active filter); the state is
+                           session-transient (never persisted, survives reloads
+                           + navigation, cleared on an active-profile change).
+                           `DetailedModRowsViewModel.SetRowsAsync` keeps
+                           receiving the FULL snapshot, so thumbnails + metadata
+                           hydrate regardless of visibility and a filter change
+                           never re-triggers hydration. An active profile with a
+                           non-empty full list but an empty projection shows the
+                           localized no-matches message, exclusive with the
+                           no-mods/add-hints empty state (the hints gate on
+                           `!IsFilterOrSearchActive` too).
+                           Detailed renders a rounded card per row laid
                           out as one adaptive Grid (the card root carries
                           `Container.Name="detailedModRow"` +
                           `Container.Sizing="Width"`, so a `ContainerQuery
@@ -354,49 +377,60 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           calls `PreventGestureRecognition`, marks handled, and
                           captures the pointer to the grip; a reorder starts only
                           after an 8-DIP movement threshold (a tap is inert).
-                          While dragging, the target rank is computed among the
-                          other unlocked rows only (locked rows are never
-                          destinations; an unlocked row may cross locks), a 2-DIP
-                          accent insertion line renders before/after the target
-                          row (non-hit-testable), the realized item container (the
-                          full-width actual row) is lifted via a `RenderTransform`
-                          `TranslateTransform` + `ZIndex` so it follows the pointer
-                          while its layout slot stays reserved (rows do not jump),
-                          and a `DispatcherTimer` edge-band auto-scrolls the
-                          ScrollViewer, keeping the lifted row under the pointer +
-                          recomputing the target/marker per step. Every mutated
-                          container property is restored from a snapshot on each
-                          finish/cancel path (before VM Reload on a valid drop).
-                          A release inside the viewport recomputes the target
-                          from the final release position (closing the one-tick
-                          auto-scroll/layout lag), releases capture, then commits
-                          through
-                          `ModListViewModel.CommitReorderCommand` (one immutable
-                          `ReorderRequest` of source ContainerId + target
-                          unlocked rank; the pure `ModReorderPlanner` builds the
-                          legal full order around locked slots; the planner
-                          rejects same-rank / out-of-range / locked-source /
-                          missing-source requests without a service call, so a
-                          no-op persists nothing). Escape, `PointerCaptureLost`,
-                          view detachment, a release outside the viewport, or an
-                          invalid target all cancel without persistence + restore
-                          the lifted container. Capture
-                          is released before the VM command runs because Reload
-                          rebuilds row containers. The gesture is single-pointer:
-                          a second grip press while a row gesture is armed is
-                          ignored before it can claim the gesture, and Move /
-                          Release / CaptureLost process only the active captured
-                          pointer (by reference), so a simultaneous second
-                          pointer cannot move, commit, cancel, or release the
-                          active gesture. The gesture is custom pointer
-                          handling, structurally separate from the outer Grid's
-                          native external file/folder `DragDrop.DoDragDropAsync`
-                          handlers (which are unchanged); native drag is rejected
-                          for reorder because Avalonia 12.1 X11 lacks Escape
-                          cancel and its platform modal loops make the touch
-                          threshold/marker/auto-scroll less dependable. Move Up /
-                          Move Down move an unlocked row one unlocked rank,
-                          crossing locked rows; the lock toggle
+                           While dragging, the target rank is computed among the
+                           other VISIBLE unlocked rows only (locked rows are
+                           never destinations; filter-hidden rows are not
+                           realized so they cannot be destinations either; an
+                           unlocked row may cross locks and hidden rows), a 2-DIP
+                           accent insertion line renders before/after the target
+                           row (non-hit-testable), the realized item container (the
+                           full-width actual row) is lifted via a `RenderTransform`
+                           `TranslateTransform` + `ZIndex` so it follows the pointer
+                           while its layout slot stays reserved (rows do not jump),
+                           and a `DispatcherTimer` edge-band auto-scrolls the
+                           ScrollViewer, keeping the lifted row under the pointer +
+                           recomputing the target/marker per step. Every mutated
+                           container property is restored from a snapshot on each
+                           finish/cancel path (before VM Reload on a valid drop).
+                           A release inside the viewport recomputes the target
+                           from the final release position (closing the one-tick
+                           auto-scroll/layout lag), releases capture, then commits
+                           through
+                           `ModListViewModel.CommitReorderCommand` (one immutable
+                           `ReorderRequest` of source ContainerId + target rank
+                           among the visible unlocked OTHER rows; the pure
+                           `ModReorderPlanner` builds the legal full order by
+                           remove+insert within the non-locked stream, anchored to
+                           visible-unlocked rows, so locked rows keep their exact
+                           indices, hidden rows never anchor, shift at most one
+                           slot, and keep their relative order, and an all-visible
+                           input reproduces the pure lock projection; the planner
+                           rejects same-order / out-of-range / locked-source /
+                           hidden-source / missing-source requests without a
+                           service call, so a no-op persists nothing). Escape,
+                           `PointerCaptureLost`,
+                           view detachment, a release outside the viewport, or an
+                           invalid target all cancel without persistence + restore
+                           the lifted container. Capture
+                           is released before the VM command runs because Reload
+                           rebuilds row containers. The gesture is single-pointer:
+                           a second grip press while a row gesture is armed is
+                           ignored before it can claim the gesture, and Move /
+                           Release / CaptureLost process only the active captured
+                           pointer (by reference), so a simultaneous second
+                           pointer cannot move, commit, cancel, or release the
+                           active gesture. The gesture is custom pointer
+                           handling, structurally separate from the outer Grid's
+                           native external file/folder `DragDrop.DoDragDropAsync`
+                           handlers (which are unchanged); native drag is rejected
+                           for reorder because Avalonia 12.1 X11 lacks Escape
+                           cancel and its platform modal loops make the touch
+                           threshold/marker/auto-scroll less dependable. Move Up /
+                           Move Down move an unlocked row one VISIBLE unlocked
+                           rank, crossing locked + hidden rows (`CanMoveUp` /
+                           `CanMoveDown` follow visible unlocked neighbors, so a
+                           row with only hidden or locked rows above it cannot
+                           move up); the lock toggle
                           (`ToggleOrderLockCommand` -> `SetModOrderLocked`)
                           flips lock metadata only and does NOT set
                           `HasPendingChanges` (lock metadata alone does not
@@ -1344,6 +1378,23 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             only, marker before/after/none, lift translation
                                             (pointer delta + scroll-offset delta, both directions),
                                             edge-band auto-scroll + offset clamp);
+                                            + the filter/search projection
+                                            (ModListFilterTests: hide-filter/search/combined
+                                            narrowing, clearing restores, projection survives
+                                            reload + clears on profile switch, ToggleEnabled
+                                            under the hide-filter, the no-matches vs add-hint
+                                            exclusivity, move availability over visible unlocked
+                                            neighbors, reorder-through-filter via Move Up/Down +
+                                            CommitReorder with hidden rows keeping relative order +
+                                            one SetModOrder call, locked rows keeping indices,
+                                            no-op/hidden-source/out-of-range rejections)
+                                            + the pure visibility-aware planner
+                                            (ModReorderPlannerTests: all-visible parity with the
+                                            lock projection, move up/down across hidden rows
+                                            landing the source adjacent in the stored order,
+                                            drop-at-end with trailing hidden rows, single visible
+                                            row, locked-interleaved, hidden/locked/missing source
+                                            + rank-range rejections);
                                             + the DmfPromptService (the two DMF
                                             cases: add existing / download + add or
                                             browser-open, the new-profile trigger
