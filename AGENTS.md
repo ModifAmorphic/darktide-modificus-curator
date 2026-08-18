@@ -1672,6 +1672,11 @@ dotnet run   --project src/ui --configuration Release   # app shell window
 - **Conventional Commits** (`type(scope): subject`); commit freely on feature
   branches. Branch + PR flow; no unreviewed merges to `main`.
 - Don't commit secrets, the game binary, or anything under `_local/`.
+- **Label GitHub issues.** Every issue carries at least one fitting label:
+  `enhancement` (new-capability asks), `bug` (something broken),
+  `documentation`, plus the specific ones where they apply (`steam-deck` for
+  Steam Deck / SteamOS Gaming Mode compatibility, `virus-scan` for the
+  post-release AV manual-review issue).
 - **Do not trust training data for framework/library version-specific APIs.** The
   project uses Avalonia 12.x + .NET 10, which postdate the model's training data.
   Before deciding an approach or delegating UI/framework work: determine the exact
