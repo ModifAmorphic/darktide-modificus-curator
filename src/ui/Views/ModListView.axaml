@@ -555,20 +555,22 @@
 
   <Grid RowDefinitions="Auto,Auto,*">
 
-    <!-- Header: check-now refresh + rate-limit notice +
-         Compact/Detailed density selector + Add split button (hidden until a
-         profile is active). The destination title lives in the global shell
-         header; this toolbar shows only the Mods-specific actions. Refresh is
-         first; the rate-limit notice follows it and occupies the single flexible
-         (*) column so the pill keeps its content width at wide widths while the
-         column still gives it a finite constraint for ellipsis at narrow widths
-         (its full text stays in the tooltip), never pushing the density pair or
-         Add out. The density pair sits adjacent immediately before Add. The
-         toolbar carries the page's safe left + right insets (the row
+    <!-- Header: check-now refresh + rate-limit notice + search box +
+         Compact/Detailed density selector with the hide-disabled filter +
+         Add split button (hidden until a profile is active). The destination
+         title lives in the global shell header; this toolbar shows only the
+         Mods-specific actions. Refresh is first; the rate-limit notice follows
+         it and occupies the single flexible (*) column so the pill keeps its
+         content width at wide widths while the column still gives it a finite
+         constraint for ellipsis at narrow widths (its full text stays in the
+         tooltip), never pushing the search box, the density pair, or Add out.
+         The fixed-width search box sits between the flexible column and the
+         density pair; the density pair sits adjacent immediately before Add.
+         The toolbar carries the page's safe left + right insets (the row
          ScrollViewer below spans to the destination edge so its scrollbar sits
          at the edge, not inset). -->
     <Grid Grid.Row="0"
-          ColumnDefinitions="Auto,*,Auto,Auto,Auto"
+          ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto"
           IsVisible="{Binding HasActiveProfile}"
           Margin="20,12,20,8">
       <!--
@@ -644,21 +646,54 @@
                      VerticalAlignment="Center" />
       </StackPanel>
       <!--
-        Compact / Detailed density selector. Two adjacent drawn-icon buttons
-        immediately before Add; the active one carries the `selected` class
-        (bound to DetailedRows.IsCompact / IsDetailed, the shell's conditional
-        class pattern) so the current density is visibly distinct. Clicking a
-        button runs DetailedRows.SetDensityCommand with the ModRowDensity enum
-        value as its parameter; the coordinator normalizes, persists, and
-        reprocesses rows. A click on the already-active density is a strict
-        no-op (the coordinator's value-equal guard), so the buttons stay
-        enabled. The compact-icon shape comes from the `icon` class; the
-        `density` class carries the selected/pointerover background chrome.
-        Icons are Material 24x24 source: view_headline (four dense lines) for
-        Compact, view_agenda (two stacked blocks) for Detailed, so the two read
-        as distinct densities rather than two near-identical lists.
+        Search box. A fixed-width TextBox between the flexible rate-limit
+        column and the density pair; TwoWay binding to SearchText is
+        keystroke-live (the projection rebuilds per keystroke). The inner
+        clear affordance reuses the Fluent theme's own text-box clear-button
+        chrome (FluentTextBoxButton, the same ControlTheme the theme's
+        built-in clearButton class applies) with the theme's drawn X geometry;
+        it is visible only while search text is present and invokes the
+        TextBox's own Clear method (no code-behind; the theme's button is
+        Focusable=False so the box keeps focus after the click).
       -->
-      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2"
+      <TextBox x:Name="ModSearchBox"
+               Grid.Column="2"
+               Width="200"
+               Margin="16,0,0,0"
+               VerticalAlignment="Center"
+               Text="{Binding SearchText, Mode=TwoWay}"
+               PlaceholderText="{ReflectionBinding [ModList_SearchWatermark], Source={StaticResource Loc}}">
+        <TextBox.InnerRightContent>
+          <Button Theme="{StaticResource FluentTextBoxButton}"
+                  Command="{Binding $parent[TextBox].Clear}"
+                  ClipToBounds="True"
+                  IsVisible="{Binding HasSearchText}"
+                  ToolTip.Tip="{ReflectionBinding [ModList_ClearSearchTooltip], Source={StaticResource Loc}}"
+                  AutomationProperties.Name="{ReflectionBinding [ModList_ClearSearchTooltip], Source={StaticResource Loc}}">
+            <PathIcon Width="10" Height="10"
+                      Data="{StaticResource TextBoxClearButtonData}" />
+          </Button>
+        </TextBox.InnerRightContent>
+      </TextBox>
+      <!--
+        Compact / Detailed density selector + the hide-disabled filter toggle.
+        Two adjacent drawn-icon buttons immediately before Add; the active one
+        carries the `selected` class (bound to DetailedRows.IsCompact /
+        IsDetailed, the shell's conditional class pattern) so the current
+        density is visibly distinct. Clicking a button runs
+        DetailedRows.SetDensityCommand with the ModRowDensity enum value as its
+        parameter; the coordinator normalizes, persists, and reprocesses rows.
+        A click on the already-active density is a strict no-op (the
+        coordinator's value-equal guard), so the buttons stay enabled. The
+        compact-icon shape comes from the `icon` class; the `density` class
+        carries the selected/pointerover background chrome. Icons are Material
+        24x24 source: view_headline (four dense lines) for Compact, view_agenda
+        (two stacked blocks) for Detailed, so the two read as distinct
+        densities rather than two near-identical lists. The trailing
+        visibility-toggle button (same icon/density chrome, selected while
+        hiding) filters the row list to enabled mods only.
+      -->
+      <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="2"
                    VerticalAlignment="Center" Margin="16,0,0,0">
         <Button Classes="icon density"
                 Classes.selected="{Binding DetailedRows.IsCompact}"
@@ -684,6 +719,37 @@
                 Fill="{Binding $parent[Button].Foreground}"
                 Data="M20 3H3c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h17c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zm0 10H3c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h17c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1z" />
         </Button>
+        <!--
+          Hide-disabled filter toggle. Same icon/density chrome; the selected
+          class tracks HideDisabledMods (the shell's conditional-class pattern).
+          The icon reads through shape like the order lock reads through color:
+          Material "visibility_off" (crossed-out eye) while hiding, Material
+          "visibility" (open eye) while showing all. The tooltip + automation
+          name describe the action the click performs (hide vs. show).
+        -->
+        <Button Classes="icon density"
+                Classes.selected="{Binding HideDisabledMods}"
+                Command="{Binding ToggleHideDisabledCommand}"
+                Margin="8,0,0,0"
+                ToolTip.Tip="{Binding HideDisabledTooltip}"
+                AutomationProperties.Name="{Binding HideDisabledTooltip}">
+          <Panel>
+            <!-- Material "visibility_off" (24x24 source): shown while the
+                 filter hides disabled mods. -->
+            <Path Width="16" Height="16" Stretch="Uniform"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  IsVisible="{Binding HideDisabledMods}"
+                  Fill="{Binding $parent[Button].Foreground}"
+                  Data="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 21 21 19.73 3.27 2 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z" />
+            <!-- Material "visibility" (24x24 source): shown while all rows are
+                 visible. -->
+            <Path Width="16" Height="16" Stretch="Uniform"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  IsVisible="{Binding !HideDisabledMods}"
+                  Fill="{Binding $parent[Button].Foreground}"
+                  Data="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
+          </Panel>
+        </Button>
       </StackPanel>
       <!--
         Add split button: primary click runs the current mode's action; the
@@ -701,8 +767,8 @@
         guidance while disabled, and the toolbar hint below explains without
         hover.
       -->
-      <SplitButton Grid.Column="3"
-                   Click="Add_Click"
+      <SplitButton Grid.Column="4"
+                    Click="Add_Click"
                    ToolTip.Tip="{Binding AddButtonTooltip}"
                    ToolTip.ShowOnDisabled="True"
                    IsEnabled="{Binding IsAddEnabled}"
@@ -738,7 +804,7 @@
         toolbar grid hard-clips rather than reflowing; Gaming-Mode-only and
         sized to fit with slack at the minimum width.
       -->
-      <TextBlock Grid.Column="4"
+      <TextBlock Grid.Column="5"
                  Text="{ReflectionBinding [ModList_AddGamingModeHint], Source={StaticResource Loc}}"
                  IsVisible="{Binding IsGamingMode}"
                  FontSize="11"
@@ -784,6 +850,19 @@
           DragDrop.DragOver="OnDragOver">
 
       <!--
+        No-matches state: an active profile whose full list is non-empty but
+        whose visible projection is empty under an active search/filter. Distinct
+        from the no-mods empty state below (they are mutually exclusive: while a
+        search or filter is active the add hints do not render), styled to match
+        it (centered, subdued).
+      -->
+      <TextBlock IsVisible="{Binding ShowNoMatchesMessage}"
+                 Text="{Binding NoMatchesText}"
+                 HorizontalAlignment="Center" VerticalAlignment="Center"
+                 Margin="20,0"
+                 Opacity="0.6" />
+
+      <!--
         Empty: active profile with zero or one mod (typically DMF-only right
         after onboarding). The primary hint invites the user to add their own
         mods alongside the framework. The secondary Nexus line shows when
@@ -792,7 +871,8 @@
         into the app, or inside a Gaming Mode session, where it reads as the
         Desktop Mode guidance instead (the nxm instruction cannot be followed
         there even when registered). The no-profile state is owned by the
-        shell.
+        shell. Suppressed while a search or filter is active (ShowAddModsHint);
+        the no-matches state above owns that case.
       -->
       <StackPanel IsVisible="{Binding ShowAddModsHint}"
                   HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8"
@@ -807,20 +887,24 @@
                    HorizontalAlignment="Center" />
       </StackPanel>
 
-      <!-- The mod rows (visible only when there is at least one mod). The
-           ScrollViewer spans to the destination edge so its vertical scrollbar
-           sits at the edge; horizontal scrolling is disabled (rows wrap their
-           content rather than extending the page). The inner ItemsControl
-           carries the page's safe left + right insets so the row content +
-           the action controls have a clear right inset from the scrollbar.
-           No rectangle Border around the populated list: the edge-spanning
+      <!-- The mod rows (the visible projection; rendered only when at least one
+           row is visible). The ScrollViewer spans to the destination edge so its
+           vertical scrollbar sits at the edge; horizontal scrolling is disabled
+           (rows wrap their content rather than extending the page). The inner
+           ItemsControl carries the page's safe left + right insets so the row
+           content + the action controls have a clear right inset from the
+           scrollbar. The ItemsSource is the VM's VisibleMods projection: the
+           drag gesture's realized-container math (target ranks, marker anchors,
+           lift lookup) is index-aligned to this collection, and commits map
+           visible ranks back onto the stored order through the planner. No
+           rectangle Border around the populated list: the edge-spanning
            ScrollViewer reads as a clean list, not a boxed region. -->
       <ScrollViewer x:Name="ModListScroll"
-                    IsVisible="{Binding HasMods}"
+                    IsVisible="{Binding HasVisibleMods}"
                     HorizontalScrollBarVisibility="Disabled"
                     VerticalScrollBarVisibility="Auto"
                     Padding="0">
-        <ItemsControl x:Name="ModListItems" ItemsSource="{Binding Mods}" Margin="20,0">
+        <ItemsControl x:Name="ModListItems" ItemsSource="{Binding VisibleMods}" Margin="20,0">
             <ItemsControl.ItemTemplate>
             <DataTemplate x:DataType="vm:ModItemViewModel">
               <!--

@@ -953,8 +953,10 @@ public partial class ModListView : UserControl
     /// <summary>
     /// Recomputes the target unlocked rank for the current pointer position +
     /// applies the insertion marker to the right row. Target rank is computed
-    /// against the OTHER unlocked rows' centers (source excluded, locked
-    /// excluded). Clears the marker for a no-op target.
+    /// against the centers of the OTHER visible unlocked row containers (the
+    /// source excluded, locked excluded, filter-hidden rows excluded: the
+    /// ItemsControl realizes exactly the visible projection, so only visible
+    /// rows are possible destinations). Clears the marker for a no-op target.
     /// </summary>
     private void UpdateTargetAndMarker(Point pointer)
     {
@@ -974,10 +976,13 @@ public partial class ModListView : UserControl
     }
 
     /// <summary>
-    /// Builds the ascending center-Y list of OTHER unlocked row containers (the
-    /// source excluded, locked excluded) for the current scroll position, and
-    /// resolves the source's unlocked rank. Returns the source rank (or -1 when
-    /// the source is no longer unlocked / present).
+    /// Builds the ascending center-Y list of OTHER visible unlocked row
+    /// containers (the source excluded, locked excluded, hidden excluded) for
+    /// the current scroll position, and resolves the source's rank among the
+    /// visible unlocked rows. Walks <see cref="ModListViewModel.VisibleMods"/>
+    /// (the ItemsControl's ItemsSource) so each item index aligns with its
+    /// realized container. Returns the source rank (or -1 when the source is
+    /// no longer visible + unlocked / present).
     /// </summary>
     private (List<double> OthersCenters, int SourceRank) CollectUnlockedCenterY(ModListViewModel vm)
     {
@@ -991,9 +996,9 @@ public partial class ModListView : UserControl
         var sourceRank = -1;
         var unlockedSeen = 0;
 
-        for (var i = 0; i < vm.Mods.Count; i++)
+        for (var i = 0; i < vm.VisibleMods.Count; i++)
         {
-            var row = vm.Mods[i];
+            var row = vm.VisibleMods[i];
             if (row.OrderLocked)
             {
                 continue;
@@ -1048,13 +1053,15 @@ public partial class ModListView : UserControl
 
     /// <summary>
     /// Applies the insertion marker for the current source rank + target rank.
-    /// The marker anchors to the row currently occupying the target unlocked
-    /// slot, drawn before it for an upward move, after it for a downward move.
-    /// Clears every row's marker for a no-op target.
+    /// The marker anchors to the visible unlocked row currently occupying the
+    /// target rank, drawn before it for an upward move, after it for a downward
+    /// move. Clears every row's marker for a no-op target.
     /// </summary>
-    /// <param name="vm">The mod-list VM (owns the row collection).</param>
-    /// <param name="sourceRank">The source's unlocked rank.</param>
-    /// <param name="targetRank">The computed target unlocked rank.</param>
+    /// <param name="vm">The mod-list VM (owns the row collections).</param>
+    /// <param name="sourceRank">The source's rank among the visible unlocked
+    /// rows.</param>
+    /// <param name="targetRank">The computed target rank among the visible
+    /// unlocked rows.</param>
     private void ApplyMarker(
         ModListViewModel vm,
         int sourceRank,
@@ -1074,11 +1081,13 @@ public partial class ModListView : UserControl
         }
 
         var m = marker.Value;
-        // The anchor is the unlocked row currently occupying the target rank.
-        // Walk the unlocked rows (in display order) to that rank.
+        // The anchor is the visible unlocked row currently occupying the target
+        // rank (hidden rows are never destinations, so the anchor is always
+        // rendered). Walk the visible unlocked rows (in display order) to that
+        // rank.
         var unlockedRank = 0;
         ModItemViewModel? anchor = null;
-        foreach (var row in vm.Mods)
+        foreach (var row in vm.VisibleMods)
         {
             if (row.OrderLocked)
             {
@@ -1188,7 +1197,10 @@ public partial class ModListView : UserControl
             return false;
         }
 
-        var index = vm.Mods.IndexOf(_dragRow);
+        // The container lookup indexes the ItemsControl's ItemsSource, which is
+        // the visible projection (the dragged grip is only reachable on a
+        // rendered, i.e. visible, row).
+        var index = vm.VisibleMods.IndexOf(_dragRow);
         if (index < 0 || ModListItems.ContainerFromIndex(index) is not { } container)
         {
             return false;

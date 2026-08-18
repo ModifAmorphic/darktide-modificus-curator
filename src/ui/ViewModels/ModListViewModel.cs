@@ -68,6 +68,17 @@ public enum ModAddMode
 /// a "not found" badge (staging warns at launch). A linked container's external
 /// availability is pushed down to its row from
 /// <see cref="IModRepository.IsExternalAvailable"/> at reload.</para>
+/// <para><b>Filter / search projection:</b> <see cref="Mods"/> stays the
+/// authoritative full list; the row list renders <see cref="VisibleMods"/>, the
+/// projection under the session-transient hide-disabled filter
+/// (<see cref="HideDisabledMods"/>) and name search (<see cref="SearchText"/>,
+/// case-insensitive ordinal substring). The projection state is view-only: it
+/// is never persisted, survives reloads and navigation, and clears on an
+/// active-profile change. Reordering works through the projection: move and
+/// drag targets are computed among the visible unlocked rows, then committed
+/// to the stored order through the visibility-aware
+/// <see cref="ModReorderPlanner"/> (hidden rows keep their relative order and
+/// shift at most one slot; locked rows keep their exact slots).</para>
 /// <para><b>Edits are allowed while the game runs:</b> the list is the active
 /// profile's config, not the running game's. The active profile is already locked
 /// against switching by the shell, so the list stays put while the game runs and
@@ -251,6 +262,108 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     public ObservableCollection<ModItemViewModel> Mods { get; } = new();
 
     /// <summary>
+    /// The visible projection of <see cref="Mods"/> the row list renders: the
+    /// full order minus rows excluded by the session-transient hide-disabled
+    /// filter and the name search. Rebuilt from <see cref="Mods"/> by
+    /// <see cref="RebuildVisibleMods"/> (end of every <see cref="Reload"/>, on
+    /// every filter/search state change, and after an enable toggle under an
+    /// active filter). <see cref="Mods"/> stays authoritative: everything that
+    /// consumed it before (move availability input, update hydration, the row
+    /// context fan-out, the density coordinator's full snapshot) still reads
+    /// the full list, so thumbnails and metadata hydrate regardless of
+    /// visibility and a filter change never re-triggers hydration.
+    /// </summary>
+    public ObservableCollection<ModItemViewModel> VisibleMods { get; } = new();
+
+    /// <summary>
+    /// Whether the visible projection holds at least one row. Drives the row
+    /// list's visibility (the ScrollViewer collapses when a filter empties the
+    /// visible set so the no-matches message owns the content area).
+    /// </summary>
+    [ObservableProperty]
+    private bool _hasVisibleMods;
+
+    /// <summary>
+    /// Whether disabled mods are hidden from the row list (the toolbar's
+    /// visibility filter toggle). Session-transient view state: never
+    /// persisted, survives reloads and navigation, and clears on an
+    /// active-profile change. Changing it rebuilds <see cref="VisibleMods"/>.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsFilterOrSearchActive))]
+    [NotifyPropertyChangedFor(nameof(ShowAddModsHint))]
+    [NotifyPropertyChangedFor(nameof(ShowNoMatchesMessage))]
+    private bool _hideDisabledMods;
+
+    /// <summary>
+    /// The search box text, filtering <see cref="VisibleMods"/> by row display
+    /// name (case-insensitive ordinal substring; null/whitespace matches
+    /// everything). Two-way bound to the toolbar TextBox and applied
+    /// keystroke-live. Session-transient view state: never persisted, survives
+    /// reloads and navigation, and clears on an active-profile change.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSearchText))]
+    [NotifyPropertyChangedFor(nameof(IsFilterOrSearchActive))]
+    [NotifyPropertyChangedFor(nameof(ShowAddModsHint))]
+    [NotifyPropertyChangedFor(nameof(ShowNoMatchesMessage))]
+    private string _searchText = string.Empty;
+
+    /// <summary>
+    /// Whether any text is typed in the search box (drives the inner clear
+    /// affordance's visibility). Distinct from
+    /// <see cref="IsFilterOrSearchActive"/>: whitespace-only text shows no
+    /// clear button (clearing it is meaningless) and filters nothing.
+    /// </summary>
+    public bool HasSearchText => !string.IsNullOrEmpty(SearchText);
+
+    /// <summary>
+    /// Whether the hide-disabled filter or a non-whitespace search is active.
+    /// Drives the no-matches state and suppresses the ordinary no-mods / add
+    /// hints (the two empty states are mutually exclusive: while a filter or
+    /// search is active, an empty visible set reads as "no matches", not as
+    /// "add a mod").
+    /// </summary>
+    public bool IsFilterOrSearchActive => HideDisabledMods || !string.IsNullOrWhiteSpace(SearchText);
+
+    /// <summary>
+    /// The localized tooltip + automation name for the hide-disabled filter
+    /// toggle, describing the action the click will perform (hide vs. show).
+    /// Re-fires on a culture change.
+    /// </summary>
+    public string HideDisabledTooltip => HideDisabledMods
+        ? _localization["ModList_ShowDisabledTooltip"]
+        : _localization["ModList_HideDisabledTooltip"];
+
+    /// <summary>
+    /// The localized no-matches message shown when the full list is non-empty
+    /// but the active filter/search excludes every row. Re-fires on a culture
+    /// change.
+    /// </summary>
+    public string NoMatchesText => _localization["ModList_NoMatches"];
+
+    /// <summary>
+    /// Whether the no-matches message should show: an active profile with a
+    /// non-empty full list whose visible projection is empty while a filter or
+    /// search is active. Mutually exclusive with the ordinary empty state (see
+    /// <see cref="ShowAddModsHint"/>).
+    /// </summary>
+    public bool ShowNoMatchesMessage =>
+        HasActiveProfile && Mods.Count > 0 && VisibleMods.Count == 0 && IsFilterOrSearchActive;
+
+    /// <summary>
+    /// Filter/search state hooks: every change rebuilds the visible projection
+    /// (and with it the visible-neighbor move availability + the derived
+    /// empty-state projections). The attribute-driven notifications cover the
+    /// derived flags; the rebuild here covers the collection + move buttons.
+    /// </summary>
+    partial void OnHideDisabledModsChanged(bool value) => RebuildVisibleMods();
+
+    /// <summary>Search counterpart of <see cref="OnHideDisabledModsChanged"/>:
+    /// each keystroke rebuilds the projection.</summary>
+    partial void OnSearchTextChanged(string value) => RebuildVisibleMods();
+
+    /// <summary>
     /// The inline import-workflow child VM (application-lifetime singleton,
     /// injected before this VM in composition). The view hosts its card below the
     /// toolbar; it owns the batch state machine, the editing form, and the per-item
@@ -398,11 +511,13 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// Whether the no-mods / DMF-only "add a mod" hint should show: an active
     /// profile with zero or one mod (so a freshly-onboarded DMF-only profile
-    /// still invites the user to add their own mods alongside the framework).
-    /// A dedicated derived property because the view cannot express the
-    /// conjunction in a single Avalonia compiled binding.
+    /// still invites the user to add their own mods alongside the framework)
+    /// and NO active filter/search (an empty visible set under an active
+    /// filter/search is the no-matches state, not the add-a-mod state; the two
+    /// are mutually exclusive). A dedicated derived property because the view
+    /// cannot express the conjunction in a single Avalonia compiled binding.
     /// </summary>
-    public bool ShowAddModsHint => HasActiveProfile && ModCount <= 1;
+    public bool ShowAddModsHint => HasActiveProfile && ModCount <= 1 && !IsFilterOrSearchActive;
 
     /// <summary>
     /// The Add split button's current mode (which action the primary click runs).
@@ -587,22 +702,26 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
 
     /// <summary>
     /// Session-driven reload: the active id changed (dropdown switch, create,
-    /// delete-of-active). Rebuilds the list from the new profile. Running-state
-    /// changes do not trigger a reload (the list stays put; edits are allowed
-    /// while the game runs).
+    /// delete-of-active). Rebuilds the list from the new profile and clears the
+    /// session-transient filter/search state first (a filter belongs to the
+    /// profile the user was looking at, not the one being switched to).
+    /// Running-state changes do not trigger a reload (the list stays put; edits
+    /// are allowed while the game runs).
     /// </summary>
     private void OnSessionPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(IProfileSession.ActiveProfileId))
         {
+            SearchText = string.Empty;
+            HideDisabledMods = false;
             Reload();
         }
     }
 
     /// <summary>
     /// The mod list's localized property names, re-fired by the shared
-    /// culture-refresh base on a culture change (header, empty-state, and
-    /// refresh-gate tooltip strings; the gate re-render in
+    /// culture-refresh base on a culture change (header, empty-state,
+    /// filter/search, and refresh-gate tooltip strings; the gate re-render in
     /// <see cref="OnCultureChanged"/> re-fires the non-localized gate
     /// renderings alongside them).
     /// </summary>
@@ -615,6 +734,8 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         nameof(RateLimitedTooltip),
         nameof(ManualRefreshTooltip),
         nameof(AddButtonTooltip),
+        nameof(HideDisabledTooltip),
+        nameof(NoMatchesText),
     };
 
     /// <summary>
@@ -777,6 +898,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
             _loadedEntries = Array.Empty<ModListEntry>();
             // Hand an empty snapshot so old work is cancelled.
             _ = DetailedRows.SetRowsAsync(Array.Empty<ModItemViewModel>());
+            RebuildVisibleMods();
             return;
         }
 
@@ -823,12 +945,11 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         HasMods = Mods.Count > 0;
         ModCount = Mods.Count;
 
-        // Compute per-row move availability over unlocked rows only: an unlocked
-        // row's move-up button is enabled when an unlocked row precedes it, and
-        // move-down when an unlocked row follows it. Locked rows disable both
-        // (their reorder grip is also disabled). Pushed down so the view binds
-        // directly without a parent walk.
-        ApplyMoveAvailability();
+        // Rebuild the visible projection (which also recomputes per-row move
+        // availability over the visible unlocked rows): the projection is
+        // defined over the freshly built full list, so it is rebuilt at the
+        // end of every reload, not only on a filter change.
+        RebuildVisibleMods();
 
         // The freshly built rows default UpdateAvailable=false; their premium /
         // busy / gaming halves read the shared row context (passed at
@@ -866,8 +987,10 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// Applies a row's enabled toggle through <see cref="IProfileService.SetModEnabled"/>.
     /// The row's <see cref="ModItemViewModel.Enabled"/> is already two-way bound
-    /// (the CheckBox flipped it); this persists it. Defense: no-op with no active
-    /// profile.
+    /// (the CheckBox flipped it); this persists it, then rebuilds the visible
+    /// projection so a row disabled under an active hide-filter leaves the
+    /// visible set (expected: the filter hides what the user just disabled).
+    /// Defense: no-op with no active profile.
     /// </summary>
     [RelayCommand]
     private void ToggleEnabled(ModItemViewModel? row)
@@ -879,46 +1002,113 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
 
         _profiles.SetModEnabled(id, row.ContainerId, row.Enabled);
         _session.HasPendingChanges = true;
+        RebuildVisibleMods();
         _logger.LogDebug("Toggled {Container} enabled={Enabled}", row.ContainerId, row.Enabled);
+    }
+
+    // ---- filter / search projection -----------------------------------------
+
+    /// <summary>
+    /// Toggles the hide-disabled filter (the toolbar visibility toggle; the
+    /// property change rebuilds the projection).
+    /// </summary>
+    [RelayCommand]
+    private void ToggleHideDisabled() => HideDisabledMods = !HideDisabledMods;
+
+    /// <summary>
+    /// Rebuilds <see cref="VisibleMods"/> from <see cref="Mods"/> under the
+    /// current filter/search: a row is visible when it is enabled or the
+    /// hide-disabled filter is off, AND its display name contains the search
+    /// text (case-insensitive ordinal substring; a null/whitespace search
+    /// matches everything). Called at the end of every <see cref="Reload"/>, on
+    /// every filter/search state change, and after an enable toggle. Also
+    /// recomputes per-row move availability over the visible unlocked rows (a
+    /// hidden row has no visible neighbors to cross) and re-fires the
+    /// derived empty-state projections. Never touches the density coordinator:
+    /// thumbnails and metadata hydrate from the full snapshot regardless of
+    /// visibility, so a filter change never re-triggers hydration.
+    /// </summary>
+    private void RebuildVisibleMods()
+    {
+        VisibleMods.Clear();
+        var search = SearchText;
+        var searching = !string.IsNullOrWhiteSpace(search);
+        foreach (var row in Mods)
+        {
+            if (HideDisabledMods && !row.Enabled)
+            {
+                continue;
+            }
+
+            if (searching && !row.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            VisibleMods.Add(row);
+        }
+
+        HasVisibleMods = VisibleMods.Count > 0;
+        ApplyMoveAvailability();
+        OnPropertyChanged(nameof(ShowNoMatchesMessage));
     }
 
     // ---- reorder (up / down / drag) ----------------------------------------
 
     /// <summary>
     /// Computes + pushes per-row <see cref="ModItemViewModel.CanMoveUp"/> /
-    /// <see cref="ModItemViewModel.CanMoveDown"/> over the unlocked rows only.
-    /// An unlocked row's move-up is enabled when an unlocked row precedes it, and
-    /// move-down when an unlocked row follows it; locked rows disable both.
-    /// Called at the end of <see cref="Reload"/> so the buttons reflect the
-    /// current order + lock state after every edit.
+    /// <see cref="ModItemViewModel.CanMoveDown"/> over the VISIBLE unlocked
+    /// rows only (the rows reorder within the visible projection: Move Up /
+    /// Move Down cross to the adjacent visible unlocked row, and a row with
+    /// only hidden or locked rows above it cannot move up). A hidden row
+    /// carries no move affordances at all (it is not rendered), so both flags
+    /// are cleared for it. Locked rows disable both. Called from
+    /// <see cref="RebuildVisibleMods"/> so the buttons reflect the current
+    /// order, lock state, and visibility after every edit or filter change.
     /// </summary>
     private void ApplyMoveAvailability()
     {
-        var unlockedIndex = 0;
-        var unlockedCount = Mods.Count(m => !m.OrderLocked);
+        // Hidden rows first: no visible neighbors, no move affordances.
         foreach (var row in Mods)
+        {
+            row.CanMoveUp = false;
+            row.CanMoveDown = false;
+        }
+
+        var visibleUnlockedCount = 0;
+        foreach (var row in VisibleMods)
+        {
+            if (!row.OrderLocked)
+            {
+                visibleUnlockedCount++;
+            }
+        }
+
+        var unlockedIndex = 0;
+        foreach (var row in VisibleMods)
         {
             if (row.OrderLocked)
             {
-                row.CanMoveUp = false;
-                row.CanMoveDown = false;
                 continue;
             }
 
             row.CanMoveUp = unlockedIndex > 0;
-            row.CanMoveDown = unlockedIndex < unlockedCount - 1;
+            row.CanMoveDown = unlockedIndex < visibleUnlockedCount - 1;
             unlockedIndex++;
         }
     }
 
     /// <summary>
-    /// The unlocked rank of <paramref name="containerId"/> in <see cref="Mods"/>,
-    /// or -1 when it is locked / missing. Unlocked rank counts only unlocked rows.
+    /// The unlocked rank of <paramref name="containerId"/> among the VISIBLE
+    /// unlocked rows, or -1 when it is locked, hidden by the current
+    /// filter/search, or missing. Visible unlocked rank counts only visible
+    /// unlocked rows: it is the space the move commands + drag gesture commit
+    /// targets in.
     /// </summary>
     private int UnlockedRankOf(Guid containerId)
     {
         var rank = 0;
-        foreach (var row in Mods)
+        foreach (var row in VisibleMods)
         {
             if (row.OrderLocked)
             {
@@ -937,11 +1127,12 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     }
 
     /// <summary>
-    /// Moves a row up one unlocked rank: the row swaps to the previous UNLOCKED
-    /// slot, crossing any locked rows it passes. Locked rows, the top unlocked
-    /// row, and a no-active-profile call are strict no-ops. Persists the new
-    /// full order through <see cref="IProfileService.SetModOrder"/> exactly once,
-    /// marks the session pending on a real order change, and reloads.
+    /// Moves a row up one visible unlocked rank: the row crosses to the previous
+    /// VISIBLE unlocked slot, skipping any hidden or locked rows it passes.
+    /// Locked rows, hidden rows, the top visible unlocked row, and a
+    /// no-active-profile call are strict no-ops. Persists the new full order
+    /// through <see cref="IProfileService.SetModOrder"/> exactly once, marks the
+    /// session pending on a real order change, and reloads.
     /// </summary>
     [RelayCommand]
     private void MoveUp(ModItemViewModel? row) => MoveTo(row, -1);
@@ -954,11 +1145,13 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     private void MoveDown(ModItemViewModel? row) => MoveTo(row, +1);
 
     /// <summary>
-    /// Shared move core: resolves the row's current unlocked rank, adds
-    /// <paramref name="delta"/>, and commits the reorder through
-    /// <see cref="CommitReorderCore"/>. Boundary rejection (target out of range
-    /// or a no-op) happens inside the planner, so a no-move call makes no service
-    /// call. No-op for a locked row or no active profile.
+    /// Shared move core: resolves the row's current rank among the VISIBLE
+    /// unlocked rows, adds <paramref name="delta"/>, and commits the reorder
+    /// through <see cref="CommitReorderCore"/> (the source crosses to the
+    /// adjacent visible unlocked row, skipping hidden rows). Boundary rejection
+    /// (target out of range or a no-op) happens inside the planner, so a
+    /// no-move call makes no service call. No-op for a locked row, a row hidden
+    /// by the current filter/search, or no active profile.
     /// </summary>
     private void MoveTo(ModItemViewModel? row, int delta)
     {
@@ -995,13 +1188,20 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     }
 
     /// <summary>
-    /// Builds + persists a reorder request against the current rows. The planner
-    /// returns null for any invalid or no-op request, so a no-change call makes
-    /// no service call and sets no pending flag.
+    /// Builds + persists a reorder request against the current rows. The
+    /// planner receives each row's locked flag AND its visibility under the
+    /// current filter/search, and constructs the full order that moves the
+    /// source within the visible subsequence while locked rows keep their
+    /// exact slots and hidden rows shift at most one slot. It returns null for
+    /// any invalid or no-op request (including a locked, hidden, or missing
+    /// source), so a no-change call makes no service call and sets no pending
+    /// flag.
     /// </summary>
     private void CommitReorderCore(Guid profileId, ReorderRequest request)
     {
-        var rows = Mods.Select(r => (r.ContainerId, r.OrderLocked)).ToArray();
+        var visibleIds = new HashSet<Guid>(VisibleMods.Select(r => r.ContainerId));
+        var rows = Mods.Select(r =>
+            (r.ContainerId, r.OrderLocked, Visible: visibleIds.Contains(r.ContainerId))).ToArray();
         var fullOrder = ModReorderPlanner.BuildFullOrder(rows, request);
         if (fullOrder is null)
         {
@@ -1012,7 +1212,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         _session.HasPendingChanges = true;
         Reload();
         _logger.LogDebug(
-            "Reordered container {Container} to unlocked rank {Rank}",
+            "Reordered container {Container} to visible unlocked rank {Rank}",
             request.SourceContainerId, request.TargetUnlockedRank);
     }
 

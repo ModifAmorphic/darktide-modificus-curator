@@ -412,6 +412,26 @@
     <value>Detailed mod descriptions</value>
     <comment>Tooltip + accessibility name on the Detailed density toolbar button.</comment>
   </data>
+  <data name="ModList_SearchWatermark" xml:space="preserve">
+    <value>Search mods</value>
+    <comment>Placeholder text in the mod-list search box (filters rows by mod name as you type).</comment>
+  </data>
+  <data name="ModList_ClearSearchTooltip" xml:space="preserve">
+    <value>Clear search</value>
+    <comment>Tooltip + accessibility name on the clear button inside the mod-list search box.</comment>
+  </data>
+  <data name="ModList_HideDisabledTooltip" xml:space="preserve">
+    <value>Hide disabled mods</value>
+    <comment>Tooltip + accessibility name on the visibility filter toggle while disabled mods are shown (the click hides them).</comment>
+  </data>
+  <data name="ModList_ShowDisabledTooltip" xml:space="preserve">
+    <value>Show disabled mods</value>
+    <comment>Tooltip + accessibility name on the visibility filter toggle while disabled mods are hidden (the click shows them again).</comment>
+  </data>
+  <data name="ModList_NoMatches" xml:space="preserve">
+    <value>No mods match the current search or filter.</value>
+    <comment>Inline message shown when the active profile has mods but the search box or hide-disabled filter excludes every row.</comment>
+  </data>
 
   <data name="ModRow_Enabled" xml:space="preserve">
     <value>Enabled</value>
