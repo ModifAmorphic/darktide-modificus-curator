@@ -656,8 +656,7 @@
         TextBox's own Clear method (no code-behind; the theme's button is
         Focusable=False so the box keeps focus after the click).
       -->
-      <TextBox x:Name="ModSearchBox"
-               Grid.Column="2"
+      <TextBox Grid.Column="2"
                Width="200"
                Margin="16,0,0,0"
                VerticalAlignment="Center"

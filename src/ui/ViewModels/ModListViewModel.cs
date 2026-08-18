@@ -297,7 +297,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
 
     /// <summary>
     /// The search box text, filtering <see cref="VisibleMods"/> by row display
-    /// name (case-insensitive ordinal substring; null/whitespace matches
+    /// name (case-insensitive ordinal substring; empty or whitespace matches
     /// everything). Two-way bound to the toolbar TextBox and applied
     /// keystroke-live. Session-transient view state: never persisted, survives
     /// reloads and navigation, and clears on an active-profile change.
@@ -312,8 +312,8 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// Whether any text is typed in the search box (drives the inner clear
     /// affordance's visibility). Distinct from
-    /// <see cref="IsFilterOrSearchActive"/>: whitespace-only text shows no
-    /// clear button (clearing it is meaningless) and filters nothing.
+    /// <see cref="IsFilterOrSearchActive"/>: whitespace-only text still shows
+    /// the clear button but filters nothing.
     /// </summary>
     public bool HasSearchText => !string.IsNullOrEmpty(SearchText);
 
@@ -1019,7 +1019,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// Rebuilds <see cref="VisibleMods"/> from <see cref="Mods"/> under the
     /// current filter/search: a row is visible when it is enabled or the
     /// hide-disabled filter is off, AND its display name contains the search
-    /// text (case-insensitive ordinal substring; a null/whitespace search
+    /// text (case-insensitive ordinal substring; an empty or whitespace search
     /// matches everything). Called at the end of every <see cref="Reload"/>, on
     /// every filter/search state change, and after an enable toggle. Also
     /// recomputes per-row move availability over the visible unlocked rows (a

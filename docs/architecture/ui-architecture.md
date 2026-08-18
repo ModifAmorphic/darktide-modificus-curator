@@ -586,8 +586,9 @@ The command set:
 `Mods` stays the authoritative full list; the row list renders
 `VisibleMods`, the projection under two session-transient controls on the
 toolbar: `SearchText` (the search box, a case-insensitive ordinal substring
-match on the row display name, applied keystroke-live; null/whitespace matches
-everything) and `HideDisabledMods` (the hide-disabled visibility toggle). One
+match on the row display name, applied keystroke-live; empty or whitespace
+matches everything) and `HideDisabledMods` (the hide-disabled visibility
+toggle). One
 `RebuildVisibleMods` rebuilds the projection at the end of every `Reload`, on
 every filter/search state change, and after an enable toggle (a row disabled
 under an active hide-filter leaves the visible set), and recomputes per-row
