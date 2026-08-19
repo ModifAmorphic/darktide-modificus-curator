@@ -943,6 +943,13 @@ internal sealed class FakeProfileService : IProfileService
         LaunchSettingsByProfile.TryGetValue(id, out var s) ? s : new LaunchSettings();
 
     public string PrepareModRoot(Guid id) => throw new NotImplementedException();
+
+    /// <summary>
+    /// The profiles root, unused by the shell/VM surface (the game-dir consent
+    /// flow goes through the injected host fake). Present to satisfy the
+    /// interface; a path that matches nothing.
+    /// </summary>
+    public string ProfilesRoot { get; } = "/nonexistent-curator-profiles";
 }
 
 /// <summary>

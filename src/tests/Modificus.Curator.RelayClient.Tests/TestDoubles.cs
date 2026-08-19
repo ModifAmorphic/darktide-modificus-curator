@@ -103,6 +103,13 @@ internal sealed class FakeProfileService : IProfileService
     public ModListEntry? GetBaseNameCollision(Guid id, string baseName, Guid? excludeContainerId) => throw new NotSupportedException();
 
     public LaunchSettings GetLaunchSettings(Guid id) => LaunchSettingsResult;
+
+    /// <summary>
+    /// The profiles root the game-dir host uses as its ownership prefix.
+    /// Default: a path that matches no test target. Tests driving the real
+    /// host's ladder point it (or the staged root) into the temp tree.
+    /// </summary>
+    public string ProfilesRoot { get; set; } = "/nonexistent-curator-profiles";
 }
 
 /// <summary>Hand-rolled test double for <see cref="ISteamService"/>.</summary>
