@@ -1121,10 +1121,9 @@ public sealed class RelayLaunchServiceTests
         Assert.True(Directory.Exists(link));
         var resolved = new DirectoryInfo(link).ResolveLinkTarget(returnFinalTarget: false);
         Assert.NotNull(resolved);
-        Assert.True(string.Equals(
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(resolved!.FullName)),
+        Assert.Equal(
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(stagedMods)),
-            StringComparison.Ordinal));
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(resolved!.FullName)));
 
         var args = fx.Launcher.Arguments!;
         var launcherFlags = args.Skip(2).ToList();
