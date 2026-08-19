@@ -208,7 +208,14 @@ public sealed class GameDirModsHostTests
         using var fx = new HostFixture();
         var deadTarget = Path.Combine(fx.ProfilesRoot, "gone-profile", "staged", "mods");
         CreatePlatformLink()(fx.ModsSlot, deadTarget); // dangling by construction
-        Assert.False(Directory.Exists(fx.ModsSlot));
+        // A dangling link's universal check is reparse-point presence + a
+        // missing target: on Windows a dangling junction still reports
+        // Directory.Exists true (the reparse point carries the directory
+        // attribute), so Directory.Exists alone cannot express "dangling".
+        Assert.True(
+            (File.GetAttributes(fx.ModsSlot) & FileAttributes.ReparsePoint) != 0,
+            "the slot must be a reparse point (a link)");
+        Assert.False(Directory.Exists(deadTarget));
 
         var result = fx.Host.EnsureHosting(fx.GameDir, fx.MakeStagedRoot("alpha"));
 
