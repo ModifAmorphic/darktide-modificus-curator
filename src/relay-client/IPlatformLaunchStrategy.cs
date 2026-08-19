@@ -45,6 +45,11 @@ internal interface IPlatformLaunchStrategy
     /// <param name="gameBinary">The resolved Darktide game binary (non-null:
     /// discovery completeness was checked by the caller).</param>
     /// <param name="modPath">The prepared mod root (the <c>--mod-path</c>).</param>
+    /// <param name="modManagerFile">The staged alternate mod-manager file
+    /// (Relay's <c>--mod-manager</c>), or <c>null</c> for Relay's built-in mod
+    /// manager. Emitted immediately after the <c>--mod-path</c> value pair;
+    /// verbatim on Windows, <c>Z:\</c>-translated on Linux (a path-valued
+    /// flag, like <c>--mod-path</c>).</param>
     /// <param name="logFile">The shell log file (the <c>--log-file</c>).</param>
     /// <param name="launchSettings">The profile's launch settings. Environment
     /// variables are merged into the spawn request (Linux: inherited -> AppImage
@@ -66,5 +71,5 @@ internal interface IPlatformLaunchStrategy
     /// Relay process's console window (flows through to the launch request's
     /// <see cref="ProcessLaunchRequest.CreateNoWindow"/>). The orchestrator
     /// derives this from the global <c>ShowRelayConsole</c> preference.</param>
-    ISpawnedProcess? Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings, bool createNoWindow);
+    ISpawnedProcess? Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string? modManagerFile, string logFile, LaunchSettings launchSettings, bool createNoWindow);
 }

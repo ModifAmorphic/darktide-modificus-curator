@@ -87,6 +87,22 @@ internal sealed class FakeProfileService : IProfileService
         return PrepareModRootResult;
     }
 
+    /// <summary>
+    /// The <see cref="ActiveModManager"/> returned by
+    /// <see cref="GetActiveModManager"/> (null = no manager mod; Relay's
+    /// built-in manager is used and no --mod-manager flag is emitted).
+    /// </summary>
+    public ActiveModManager? GetActiveModManagerResult { get; set; }
+
+    public int GetActiveModManagerCalls { get; private set; }
+
+    /// <inheritdoc />
+    public ActiveModManager? GetActiveModManager(Guid id)
+    {
+        GetActiveModManagerCalls++;
+        return GetActiveModManagerResult;
+    }
+
     // The remainder of the surface is unused by the launch path.
     public IReadOnlyList<ProfileSummary> ListProfiles() => throw new NotSupportedException();
     public Profile GetProfile(Guid id) => throw new NotSupportedException();

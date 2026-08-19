@@ -404,7 +404,7 @@ public sealed class LaunchSettingsTests
     [Fact]
     public void ReservedEnvironmentNames_is_exactly_the_documented_set()
     {
-        // 14 names: 7 Curator-owned OS/launch env + 7 Relay config env.
+        // 15 names: 7 Curator-owned OS/launch env + 8 Relay config env.
         var expected = new[]
         {
             "STEAM_COMPAT_DATA_PATH",
@@ -421,9 +421,10 @@ public sealed class LaunchSettingsTests
             "MODIFICUS_STEAM_APP_ID",
             "RELAY_LUA_LOGS",
             "RELAY_SKIP_SPLASH",
+            "RELAY_MOD_MANAGER",
         };
 
-        Assert.Equal(14, LaunchSettings.ReservedEnvironmentNames.Count);
+        Assert.Equal(15, LaunchSettings.ReservedEnvironmentNames.Count);
         foreach (var name in expected)
         {
             Assert.Contains(name, LaunchSettings.ReservedEnvironmentNames);
@@ -452,6 +453,7 @@ public sealed class LaunchSettingsTests
     [InlineData("MODIFICUS_STEAM_APP_ID")]
     [InlineData("RELAY_LUA_LOGS")]
     [InlineData("RELAY_SKIP_SPLASH")]
+    [InlineData("RELAY_MOD_MANAGER")]
     public void UpdateProfile_launch_settings_rejects_each_reserved_name(string reserved)
     {
         using var fx = new ProfileServiceFixture();

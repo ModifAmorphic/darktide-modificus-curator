@@ -38,7 +38,7 @@ internal sealed class WindowsLaunchStrategy : IPlatformLaunchStrategy
     }
 
     /// <inheritdoc />
-    public ISpawnedProcess? Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings, bool createNoWindow)
+    public ISpawnedProcess? Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string? modManagerFile, string logFile, LaunchSettings launchSettings, bool createNoWindow)
     {
         ArgumentNullException.ThrowIfNull(launchSettings);
 
@@ -46,7 +46,7 @@ internal sealed class WindowsLaunchStrategy : IPlatformLaunchStrategy
         // `discovery` is unused on Windows: the caller already extracted gameBinary
         // from it, and Windows needs no Proton/compat context. Game args append a
         // bare -- then one argv entry each (Relay's -- contract; empty emits no --).
-        var args = BuildLauncherArgs(gameBinary, modPath, logFile, launchSettings);
+        var args = BuildLauncherArgs(gameBinary, modPath, modManagerFile, logFile, launchSettings);
 
         // Profile env as overrides on the Relay process. No Steam-compat vars, no
         // AppImage removals (Windows never runs from an AppImage mount). Relay
@@ -70,12 +70,16 @@ internal sealed class WindowsLaunchStrategy : IPlatformLaunchStrategy
     /// <summary>
     /// Builds the launcher's own argument list (the flags AFTER
     /// <c>mod_relay.exe</c>). Paths pass through verbatim -- Windows needs no
-    /// <c>Z:\</c> translation. A bare <c>--log-append</c> is emitted
-    /// unconditionally right after <c>--log-file</c> (Relay writes a per-day
-    /// file shared across launches, so it must append rather than overwrite on
-    /// each launch). When <see cref="LaunchSettings.EnableLuaLogs"/> is true,
-    /// appends a bare <c>--log-lua</c> flag after <c>--log-append</c> (a
-    /// Relay-owned logging flag with no value, not path-translated), teeing Lua
+    /// <c>Z:\</c> translation. When <paramref name="modManagerFile"/> is
+    /// non-null, the pair <c>--mod-manager</c> + value lands immediately after
+    /// the <c>--mod-path</c> value pair (an absolute staged path, verbatim;
+    /// null means Relay's built-in manager and emits no flag). A bare
+    /// <c>--log-append</c> is emitted unconditionally right after
+    /// <c>--log-file</c> (Relay writes a per-day file shared across
+    /// launches, so it must append rather than overwrite on each launch). When
+    /// <see cref="LaunchSettings.EnableLuaLogs"/> is true, appends a bare
+    /// <c>--log-lua</c> flag after <c>--log-append</c> (a Relay-owned logging
+    /// flag with no value, not path-translated), teeing Lua
     /// <c>print</c> output into the log file. When
     /// <see cref="LaunchSettings.SkipSplash"/> is true, appends a bare
     /// <c>--skip-splash</c> flag after <c>--log-lua</c> (a Relay-owned flag
@@ -91,7 +95,7 @@ internal sealed class WindowsLaunchStrategy : IPlatformLaunchStrategy
     /// vocabulary differs, so forwarding the Serilog name silently mis-resolved levels.
     /// The two logs are decoupled; the launcher's <c>info</c> default is used.
     /// </remarks>
-    internal static List<string> BuildLauncherArgs(string gameBinary, string modPath, string logFile, LaunchSettings launchSettings)
+    internal static List<string> BuildLauncherArgs(string gameBinary, string modPath, string? modManagerFile, string logFile, LaunchSettings launchSettings)
     {
         ArgumentNullException.ThrowIfNull(launchSettings);
 
@@ -99,9 +103,15 @@ internal sealed class WindowsLaunchStrategy : IPlatformLaunchStrategy
         {
             "--game-binary", gameBinary,
             "--mod-path", modPath,
-            "--log-file", logFile,
-            "--log-append",
         };
+        if (modManagerFile is not null)
+        {
+            args.Add("--mod-manager");
+            args.Add(modManagerFile);
+        }
+        args.Add("--log-file");
+        args.Add(logFile);
+        args.Add("--log-append");
         if (launchSettings.EnableLuaLogs)
         {
             args.Add("--log-lua");

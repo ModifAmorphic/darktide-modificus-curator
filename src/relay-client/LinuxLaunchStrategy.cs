@@ -79,16 +79,16 @@ internal sealed class LinuxLaunchStrategy : IPlatformLaunchStrategy
     }
 
     /// <inheritdoc />
-    public ISpawnedProcess? Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string logFile, LaunchSettings launchSettings, bool createNoWindow)
+    public ISpawnedProcess? Start(string launcherPath, DiscoveryResult discovery, string gameBinary, string modPath, string? modManagerFile, string logFile, LaunchSettings launchSettings, bool createNoWindow)
     {
         ArgumentNullException.ThrowIfNull(launchSettings);
 
-        // The launcher's OWN args (--game-binary, --mod-path, --log-file) are
-        // Windows paths (the launcher runs under Wine); the proton command + the
-        // launcher.exe path are native Linux (Proton resolves the .exe from a
-        // native path). Game args append a bare -- then one argv entry each
-        // (Relay's -- contract; empty game args emit no --).
-        var launcherArgs = BuildLauncherArgs(gameBinary, modPath, logFile, launchSettings);
+        // The launcher's OWN args (--game-binary, --mod-path, --mod-manager,
+        // --log-file) are Windows paths (the launcher runs under Wine); the proton
+        // command + the launcher.exe path are native Linux (Proton resolves the
+        // .exe from a native path). Game args append a bare -- then one argv entry
+        // each (Relay's -- contract; empty game args emit no --).
+        var launcherArgs = BuildLauncherArgs(gameBinary, modPath, modManagerFile, logFile, launchSettings);
 
         var arguments = new List<string>(capacity: launcherArgs.Count + 2)
         {
@@ -133,11 +133,16 @@ internal sealed class LinuxLaunchStrategy : IPlatformLaunchStrategy
     /// <summary>
     /// Builds the launcher's own argument list (the flags AFTER
     /// <c>... proton run launcher.exe</c>). The path-valued flags are converted
-    /// to Wine <c>Z:\</c> form so the launcher-under-Wine can resolve them. A
-    /// bare <c>--log-append</c> is emitted unconditionally right after
-    /// <c>--log-file</c>'s value (Relay writes a per-day file shared across
-    /// launches, so it must append rather than overwrite on each launch); it is
-    /// a bare flag, NOT path-valued, so it is not <c>Z:\</c>-translated. When
+    /// to Wine <c>Z:\</c> form so the launcher-under-Wine can resolve them. When
+    /// <paramref name="modManagerFile"/> is non-null, the pair
+    /// <c>--mod-manager</c> + value lands immediately after the
+    /// <c>--mod-path</c> value pair, <c>Z:\</c>-translated like every
+    /// path-valued flag (an absolute staged path; null means Relay's built-in
+    /// manager and emits no flag). A bare <c>--log-append</c> is emitted
+    /// unconditionally right after <c>--log-file</c>'s value (Relay writes a
+    /// per-day file shared across launches, so it must append rather than
+    /// overwrite on each launch); it is a bare flag, NOT path-valued, so it is
+    /// not <c>Z:\</c>-translated. When
     /// <see cref="LaunchSettings.EnableLuaLogs"/> is true, appends a bare
     /// <c>--log-lua</c> flag after <c>--log-append</c> (a Relay-owned logging
     /// flag with no value, NOT path-valued, so it is not <c>Z:\</c>-translated),
@@ -159,7 +164,7 @@ internal sealed class LinuxLaunchStrategy : IPlatformLaunchStrategy
     /// are NOT <c>Z:\</c>-translated: they are Darktide's own args, opaque to
     /// Curator, forwarded verbatim; any path-like arg is the game's concern.
     /// </remarks>
-    internal static List<string> BuildLauncherArgs(string gameBinary, string modPath, string logFile, LaunchSettings launchSettings)
+    internal static List<string> BuildLauncherArgs(string gameBinary, string modPath, string? modManagerFile, string logFile, LaunchSettings launchSettings)
     {
         ArgumentNullException.ThrowIfNull(launchSettings);
 
@@ -167,9 +172,15 @@ internal sealed class LinuxLaunchStrategy : IPlatformLaunchStrategy
         {
             "--game-binary", WinePath.ToWine(gameBinary),
             "--mod-path", WinePath.ToWine(modPath),
-            "--log-file", WinePath.ToWine(logFile),
-            "--log-append",
         };
+        if (modManagerFile is not null)
+        {
+            args.Add("--mod-manager");
+            args.Add(WinePath.ToWine(modManagerFile));
+        }
+        args.Add("--log-file");
+        args.Add(WinePath.ToWine(logFile));
+        args.Add("--log-append");
         if (launchSettings.EnableLuaLogs)
         {
             args.Add("--log-lua");

@@ -124,6 +124,14 @@ internal sealed class RelayLaunchService : IRelayLaunchService
                     MissingDiscoveryFields: Array.Empty<string>());
             }
 
+            // The manager derivation shares the staging resolver, so its answer
+            // matches what the pass above staged; the just-created staging link
+            // means the manager file exists at the derived path. Null = no
+            // --mod-manager flag (Relay's built-in manager loads mods.lst). The
+            // staged path is passed in BOTH hosting modes: the staged tree is
+            // the authoritative location and Relay opens the path verbatim.
+            var modManager = _profiles.GetActiveModManager(profileId);
+
             var launcherPath = ResolveLauncherPath(
                 config.RelayDir, AppContext.BaseDirectory, OperatingSystem.IsWindows());
             if (launcherPath is null)
@@ -237,7 +245,7 @@ internal sealed class RelayLaunchService : IRelayLaunchService
             // console appears regardless, so the flag is a harmless no-op there.
             var createNoWindow = !config.Preferences.ShowRelayConsole;
 
-            var spawned = _strategy.Start(launcherPath, discovery, gameBinary, modPath, logFile, launchSettings, createNoWindow);
+            var spawned = _strategy.Start(launcherPath, discovery, gameBinary, modPath, modManager?.ManagerPath, logFile, launchSettings, createNoWindow);
 
             if (spawned is null)
             {

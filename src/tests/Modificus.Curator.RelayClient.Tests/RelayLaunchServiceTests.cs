@@ -1130,6 +1130,85 @@ public sealed class RelayLaunchServiceTests
         Assert.Equal(WinePath.ToWine(fx.GameDir), launcherFlags[IndexOf(launcherFlags, "--mod-path") + 1]);
     }
 
+    // ---- alternate mod manager (--mod-manager) -------------------------------
+
+    [Fact]
+    public void Active_manager_emits_the_flag_with_the_staged_path_in_game_dir_hosting_mode()
+    {
+        // Game-dir hosting is the default: --mod-path points at the game dir,
+        // but the manager flag carries the STAGED manager file (the staged
+        // tree is the authoritative location; Relay opens the path verbatim,
+        // and the hosted link resolves to the same file).
+        using var fx = new RelayFixture();
+        fx.Steam.Result = fx.CompleteWindows;
+        const string StagedRoot = @"C:\curator\profiles\abc\staged";
+        const string ManagerFile = @"C:\curator\profiles\abc\staged\mods\base\mod_manager.lua";
+        fx.Profiles.PrepareModRootResult = StagedRoot;
+        fx.Profiles.GetActiveModManagerResult = new ActiveModManager(Guid.NewGuid(), ManagerFile);
+        var svc = fx.BuildWindowsService();
+
+        var result = svc.Launch(Guid.NewGuid());
+
+        Assert.Equal(LaunchStatus.Launched, result.Status);
+        var args = fx.Launcher.Arguments!;
+        Assert.Equal(ManagerFile, args[IndexOf(args, "--mod-manager") + 1]);
+        Assert.Equal(IndexOf(args, "--mod-path") + 2, IndexOf(args, "--mod-manager"));
+        Assert.NotEqual(args[IndexOf(args, "--mod-path") + 1], args[IndexOf(args, "--mod-manager") + 1]);
+        Assert.Equal(1, fx.Profiles.GetActiveModManagerCalls);
+    }
+
+    [Fact]
+    public void Active_manager_emits_the_flag_with_the_staged_path_in_external_hosting_mode()
+    {
+        // The external-hosting opt-out hands Relay the staged root as
+        // --mod-path; the manager flag carries the same staged manager file
+        // either way.
+        using var fx = new RelayFixture();
+        fx.Steam.Result = fx.CompleteWindows;
+        const string StagedRoot = @"C:\curator\profiles\abc\staged";
+        const string ManagerFile = @"C:\curator\profiles\abc\staged\mods\base\mod_manager.lua";
+        fx.Profiles.PrepareModRootResult = StagedRoot;
+        fx.Profiles.GetActiveModManagerResult = new ActiveModManager(Guid.NewGuid(), ManagerFile);
+        fx.Config.Preferences.ExternalModHosting = true;
+        var svc = fx.BuildWindowsService();
+
+        var result = svc.Launch(Guid.NewGuid());
+
+        Assert.Equal(LaunchStatus.Launched, result.Status);
+        var args = fx.Launcher.Arguments!;
+        Assert.Equal(ManagerFile, args[IndexOf(args, "--mod-manager") + 1]);
+        Assert.Equal(StagedRoot, args[IndexOf(args, "--mod-path") + 1]);
+    }
+
+    [Fact]
+    public void No_active_manager_emits_no_flag_and_derives_once_per_launch()
+    {
+        using var fx = new RelayFixture();
+        fx.Steam.Result = fx.CompleteWindows;
+        var svc = fx.BuildWindowsService();
+
+        var result = svc.Launch(Guid.NewGuid());
+
+        Assert.Equal(LaunchStatus.Launched, result.Status);
+        Assert.DoesNotContain("--mod-manager", fx.Launcher.Arguments!);
+        Assert.Equal(1, fx.Profiles.GetActiveModManagerCalls);
+    }
+
+    [Fact]
+    public void Discovery_incomplete_launch_never_derives_the_manager()
+    {
+        // The derivation runs after staging; a launch that stops at discovery
+        // must not read the manager state at all.
+        using var fx = new RelayFixture();
+        fx.Steam.Result = fx.CompleteWindows with { DarktideGameBinaryPath = null };
+        var svc = fx.BuildWindowsService();
+
+        var result = svc.Launch(Guid.NewGuid());
+
+        Assert.Equal(LaunchStatus.DiscoveryIncomplete, result.Status);
+        Assert.Equal(0, fx.Profiles.GetActiveModManagerCalls);
+    }
+
     /// <summary>
     /// Resolves the real platform-selective staging-link creator through the
     /// Profiles DI registration (junction on Windows, symlink on Linux), so
