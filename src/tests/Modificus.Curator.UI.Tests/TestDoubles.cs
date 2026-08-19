@@ -1317,8 +1317,24 @@ internal sealed class FakeDialogService : IDialogService
     public Task ShowAlertAsync(string title, string message)
     {
         ((List<(string, string)>)AlertCalls).Add((title, message));
+        if (NextAlertGate is { } gate)
+        {
+            NextAlertGate = null;
+            return AwaitGateAsync(gate);
+        }
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Optional task the next <see cref="ShowAlertAsync"/> call awaits after
+    /// recording its arguments, so a test can hold an alert open and observe
+    /// in-flight ordering (e.g. the rename notice shown before the launch
+    /// retry). Consumed (reset to <c>null</c>) by that call. Default
+    /// <c>null</c> = returns immediately.
+    /// </summary>
+    public Task? NextAlertGate { get; set; }
+
+    private static async Task AwaitGateAsync(Task gate) => await gate;
 
     /// <summary>
     /// The result returned by the next <see cref="ShowUnsavedChangesAsync"/>
@@ -1616,6 +1632,13 @@ internal sealed class FakeLaunchService : IRelayLaunchService
 /// </summary>
 internal sealed class FakeGameDirModsHost : IGameDirModsHost
 {
+    /// <summary>
+    /// The renamed path returned by <see cref="TakeOver"/>. Default non-null
+    /// (the ordinary rename case); set <c>null</c> to drive the no-rename
+    /// case.
+    /// </summary>
+    public string? TakeOverResult { get; set; } = "/game/mods_20250101-0000";
+
     /// <summary>When set, <see cref="TakeOver"/> throws this exception after
     /// recording the call (a rename failure).</summary>
     public Exception? TakeOverThrows { get; set; }
@@ -1625,13 +1648,14 @@ internal sealed class FakeGameDirModsHost : IGameDirModsHost
     public GameDirHostingResult EnsureHosting(string gameDir, string stagedRoot) =>
         new(GameDirHostingOutcome.Hosted);
 
-    public void TakeOver(string gameDir)
+    public string? TakeOver(string gameDir)
     {
         ((List<string>)TakeOverCalls).Add(gameDir);
         if (TakeOverThrows is not null)
         {
             throw TakeOverThrows;
         }
+        return TakeOverResult;
     }
 
     public void RemoveOwnedLink(string gameDir)

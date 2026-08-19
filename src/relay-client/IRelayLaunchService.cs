@@ -93,7 +93,7 @@ public enum LaunchStatus
     /// <summary>A foreign entry occupies the game-dir <c>mods</c> slot, so
     /// game-dir hosting (the default) could not be set up and nothing was
     /// launched or mutated. <see cref="LaunchResult.Message"/> carries the
-    /// detected path; the caller surfaces a consent prompt whose Proceed choice
+    /// detected path; the caller surfaces a consent prompt whose Rename choice
     /// performs the takeover and retries the launch once.</summary>
     GameDirConflict,
 

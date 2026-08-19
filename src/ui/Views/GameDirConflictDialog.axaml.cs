@@ -6,10 +6,9 @@ namespace Modificus.Curator.UI.Views;
 
 /// <summary>
 /// The game-dir conflict modal: a foreign entry occupies the game-dir
-/// <c>mods</c> slot, and the user decides between letting Curator take over
-/// (rename aside, nothing deleted), keeping their current setup (the external
-/// hosting preference), or cancelling the launch. Caller sets the message via
-/// <see cref="SetMessage"/> before awaiting
+/// <c>mods</c> slot, and the user decides between renaming it aside (nothing
+/// deleted) so Curator can host its own link, or cancelling the launch. Caller
+/// sets the message via <see cref="SetMessage"/> before awaiting
 /// <see cref="Window.ShowDialog(Avalonia.Controls.Window)"/>; the title is
 /// supplied by <c>DialogService</c>. <see cref="GameDirConflictChoice.Cancel"/>
 /// is the default, so ESC (via <c>EscapeClosesBehavior</c>), the title-bar
@@ -33,15 +32,9 @@ public partial class GameDirConflictDialog : Window
     /// <summary>Sets the explanatory prompt body above the buttons.</summary>
     public void SetMessage(string message) => MessageText.Text = message;
 
-    private void Proceed_Click(object? sender, RoutedEventArgs e)
+    private void Rename_Click(object? sender, RoutedEventArgs e)
     {
-        Result = GameDirConflictChoice.Proceed;
-        Close();
-    }
-
-    private void KeepSetup_Click(object? sender, RoutedEventArgs e)
-    {
-        Result = GameDirConflictChoice.KeepCurrentSetup;
+        Result = GameDirConflictChoice.Rename;
         Close();
     }
 

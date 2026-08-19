@@ -115,7 +115,7 @@ both privilege-free, via the Profiles `StagingLinkCreator` primitive).
 public interface IGameDirModsHost
 {
     GameDirHostingResult EnsureHosting(string gameDir, string stagedRoot);
-    void TakeOver(string gameDir);
+    string? TakeOver(string gameDir);
     void RemoveOwnedLink(string gameDir);
 }
 ```
@@ -141,7 +141,9 @@ public interface IGameDirModsHost
   receipt recorded in the app-state (`IRenamedModsFoldersState`), then a
   best-effort `README.txt` inside the renamed folder (folder case only)
   explaining the move and that nothing was deleted (a README failure is
-  logged, never surfaced). No-op for an absent or already-owned slot.
+  logged, never surfaced). Returns the renamed entry's full path (the shell's
+  rename notice carries it), or `null` when nothing was renamed (an absent or
+  already-owned slot).
 - `RemoveOwnedLink` is the external-hosting opt-out's cleanup: it removes a
   Curator-owned link best-effort (an absent slot, a foreign entry, or an IO
   failure leaves everything as it was; failures are logged, never thrown).

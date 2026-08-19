@@ -57,23 +57,16 @@ public enum UnsavedChangesChoice
 public enum GameDirConflictChoice
 {
     /// <summary>
-    /// Abort the launch. No game-dir mutation, no preference change.
+    /// Abort the launch. No game-dir mutation.
     /// </summary>
     Cancel,
 
     /// <summary>
-    /// Keep the user's current setup: persist the external-hosting preference
-    /// (serve mods from staging, no game-dir link) and retry the launch once
-    /// under it.
-    /// </summary>
-    KeepCurrentSetup,
-
-    /// <summary>
     /// Let Curator take over: rename the foreign entry aside (nothing
-    /// deleted, a README + a receipt record the move) and retry the launch
+    /// deleted; a README + a receipt record the move) and retry the launch
     /// once, now hosted.
     /// </summary>
-    Proceed,
+    Rename,
 }
 
 /// <summary>
@@ -82,7 +75,7 @@ public enum GameDirConflictChoice
 /// against a fake of this seam. Each member shows exactly one modal over the
 /// owning main window: the first-run Welcome, a yes/no confirm, the launch
 /// discovery escape hatch, a single-button alert, an unsaved-changes three-
-/// choice prompt, the game-dir conflict three-choice prompt, or a
+/// choice prompt, the game-dir conflict prompt, or a
 /// non-dismissable progress spinner. Hosted destinations
 /// (Profiles, Mods, Nexus, Preferences, Settings) are not modals and live
 /// entirely on the shell's SplitView content region; the inline import card is
@@ -150,16 +143,14 @@ public interface IDialogService
     Task<UnsavedChangesChoice> ShowUnsavedChangesAsync(string title, string message, bool canSave);
 
     /// <summary>
-    /// Shows the game-dir conflict modal: three choices left to right
+    /// Shows the game-dir conflict modal: two choices left to right
     /// (<see cref="GameDirConflictChoice.Cancel"/>,
-    /// <see cref="GameDirConflictChoice.KeepCurrentSetup"/>,
-    /// <see cref="GameDirConflictChoice.Proceed"/>), with Proceed the accent
+    /// <see cref="GameDirConflictChoice.Rename"/>), with Rename the accent
     /// button. ESC, the title-bar close, and a window close return
     /// <see cref="GameDirConflictChoice.Cancel"/> (the enum default).
     /// </summary>
     /// <param name="title">The localized dialog title.</param>
-    /// <param name="message">The localized prompt body (already carrying the
-    /// detected game-dir mods path).</param>
+    /// <param name="message">The localized prompt body.</param>
     Task<GameDirConflictChoice> ShowGameDirConflictAsync(string title, string message);
 
     /// <summary>

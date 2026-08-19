@@ -659,13 +659,13 @@ succeeds and the game binary is known:
 3. A foreign entry (a real directory, a real file, a link to elsewhere, a
    dead link outside Curator's space) is never deleted or modified: the
    launch returns `GameDirConflict` before any game-dir mutation and the UI
-   shows a three-choice modal. **Proceed** renames the foreign entry to
+   shows a two-choice modal. **Rename** renames the foreign entry to
    `mods_<yyyyMMdd-HHmm>` (nothing deleted; an app-state receipt records the
-   move, + a best-effort README inside the renamed folder explains it) and
-   retries the launch
-   once, now hosted. **Keep my current setup** persists the experimental
-   `Preferences.ExternalModHosting` and retries once under it. **Cancel**
-   aborts. The retry is one-shot per consent.
+   move, + a best-effort README inside the renamed folder explains it),
+   shows a one-line notice carrying the renamed folder's path, and retries
+   the launch once, now hosted (the notice precedes the retry so the
+   information survives a later launch failure). **Cancel** aborts. The
+   retry is one-shot per consent.
 4. With hosting active, `--mod-path` is `GAME_DIR` (native path; the Linux
    strategy `Z:\`-translates it exactly as before). Relay's contract is
    unchanged: it receives the parent of the `mods\` folder.
@@ -673,9 +673,10 @@ succeeds and the game binary is known:
 The external preference (`Preferences.ExternalModHosting`, default off,
 read live per launch) restores the staging-only launch: `--mod-path` is the
 staged root, plus a best-effort removal of a Curator-owned game-dir link if
-one exists (a foreign entry is never touched in this mode). The Preferences
-destination presents it as experimental with its known issue stated (mods
-that require game-folder paths will not load). A plain Steam launch stays
+one exists (a foreign entry is never touched in this mode). It is set only
+in the Preferences destination, which presents it as experimental with its
+limitation stated (may experience issues with mods that require absolute
+paths); the conflict flow never writes it. A plain Steam launch stays
 vanilla: nothing injects or loads mods without Curator launching through
 Relay, with or without the link.
 

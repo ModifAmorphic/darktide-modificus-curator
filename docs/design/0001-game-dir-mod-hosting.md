@@ -70,17 +70,16 @@ Claim ladder for the thing at `GAME_DIR\mods`:
 
 A foreign entry never gets deleted or modified. The launch returns the new
 `LaunchStatus.GameDirConflict` (message carries the detected path) before any
-game-dir mutation. The UI shows a three-choice modal:
+game-dir mutation. The UI shows a two-choice modal (Rename / Cancel):
 
-- **Proceed:** Curator renames the foreign entry to
+- **Rename:** Curator renames the foreign entry to
   `mods_<yyyyMMdd-HHmm>` (bump `-1`, `-2`, ... on collision), records a
   receipt in app-state (original path, new path, timestamp), then best-effort
   writes a short `README.txt` inside the renamed folder (folder case only)
   explaining what happened and that nothing was deleted (a README failure is
-  logged, never surfaced), then retries the launch once.
-- **Keep my current setup:** persists `Preferences.ExternalModHosting = true`
-  (the experimental external mode) and retries the launch once; that launch
-  and all later ones serve mods from staging without the game-dir link.
+  logged, never surfaced), then shows a one-line notice carrying the renamed
+  folder's path, then retries the launch once. The notice precedes the retry
+  so the information survives a later launch failure.
 - **Cancel:** abort the launch.
 
 The retry is one-shot per consent: a second `GameDirConflict` in the same
@@ -91,9 +90,10 @@ attempt chain surfaces the standard error alert (no loop).
 `CuratorConfig.Preferences.ExternalModHosting`, default `false`, global
 (one `GAME_DIR\mods` slot, one authority). `true` restores the pre-hosting
 behavior: `--mod-path` = staged root as today, plus a best-effort removal of a
-Curator-owned game-dir link if one exists. The Preferences destination
-presents it as experimental with its known issue stated (mods that require
-game-folder paths will not load).
+Curator-owned game-dir link if one exists. Set only in the Preferences
+destination, which presents it as experimental with its limitation stated
+(may experience issues with mods that require absolute paths); the conflict
+flow never writes it.
 
 Read live per launch like the other launch-affecting preferences.
 
@@ -110,10 +110,10 @@ Read live per launch like the other launch-affecting preferences.
 | `src/config/CuratorConfig` | `Preferences.ExternalModHosting` (bool, default false) + defaults + XML docs. |
 | `src/general/` app-state | `RenamedModsFolders` receipts list (original, renamed, timestamp) + atomic round-trip + old-file compat. |
 | `src/ui/CuratorComposition.cs` | Register `IGameDirModsHost`; wire receipt seam. |
-| `src/ui/ViewModels/ShellViewModel.cs` | `GameDirConflict` branch: modal via `IDialogService`, Proceed -> `TakeOver` + one retry, Keep-setup -> persist pref + one retry, Cancel -> abort; overlay/attempt state machine held through the modal exactly like failure dialogs. |
-| `src/ui/IDialogService`/`DialogService` + new dialog view/VM | `ShowGameDirConflictAsync` returning the three-way choice; styled after `ConfirmDialog` (ESC = Cancel via `EscapeClosesBehavior`). |
+| `src/ui/ViewModels/ShellViewModel.cs` | `GameDirConflict` branch: modal via `IDialogService`, Rename -> `TakeOver` (returns the renamed path) + rename-notice alert + one retry, Cancel -> abort; overlay/attempt state machine held through the modal + notice + retry exactly like failure dialogs. |
+| `src/ui/IDialogService`/`DialogService` + new dialog view/VM | `ShowGameDirConflictAsync` returning the two-way choice (Cancel / Rename); styled after `ConfirmDialog` (ESC = Cancel via `EscapeClosesBehavior`). |
 | `src/ui/ViewModels/PreferencesViewModel.cs` + `PreferencesView` + `Strings.resx` | Experimental toggle + localized copy. |
-| Tests | Profiles: marker written/rewritten per pass. RelayClient: every ladder row, `modPath` switch, external removal, conflict result shape, Linux path translation. UI: modal branch, all three choices, retry-once guard, attempt-state invariants. Config + General: round-trips + old-file compat. |
+| Tests | Profiles: marker written/rewritten per pass. RelayClient: every ladder row, `modPath` switch, external removal, conflict result shape, Linux path translation. UI: modal branch, both choices, retry-once guard, rename notice + ordering, attempt-state invariants. Config + General: round-trips + old-file compat. |
 | Docs (same PR) | `AGENTS.md`, root `README.md`, `docs/architecture/MODIFICUS-CURATOR.md`, `docs/reference/` for profiles + relay-client + config + general + ui: replace "no game-directory footprint" language with the one-link story (no patched game files, no copies, one self-identifying opt-in link, vanilla Steam launches stay vanilla). |
 
 ## Design notes
@@ -138,16 +138,16 @@ Read live per launch like the other launch-affecting preferences.
 2. Profile switch then launch: link silently re-points; marker reflects the
    newly active profile.
 3. Pre-existing real `mods` folder (manual DMF user upgrading): launch returns
-   `GameDirConflict`; Proceed renames to `mods_<timestamp>` with `README.txt`
-   inside + receipt persisted; retry launches hosted.
+   `GameDirConflict`; Rename renames to `mods_<timestamp>` with `README.txt`
+   inside + receipt persisted + the rename notice shown; retry launches
+   hosted.
 4. User-made junction/symlink without our marker and outside the profiles
    root: treated as foreign (modal), never claimed or deleted.
 5. Dead link whose target is under the profiles root: silently re-created.
 6. Toggle external on: next launch serves from staging with the old
    `--mod-path` and removes a Curator-owned link if present; a foreign entry
    is never touched in this mode.
-7. Cancel aborts; Keep-setup persists the preference and launches externally,
-   both without game-dir mutation.
+7. Cancel aborts without game-dir mutation or any preference write.
 8. Staging rebuilds never delete repository content through the game-dir link
    (existing data-safety tests still pass).
 9. `dotnet build` + `dotnet test` green on the solution.

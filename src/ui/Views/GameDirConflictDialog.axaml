@@ -20,8 +20,8 @@
     button's contract. SizeToContent="Height" honors font scale at show time
     in Avalonia 12.x.
 
-    Three buttons, left to right: Cancel, Keep my current setup, Proceed.
-    Proceed is the accent affordance.
+    Two buttons, left to right: Cancel, Rename. Rename is the accent
+    affordance.
   -->
   <Border BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
           BorderThickness="1">
@@ -40,15 +40,11 @@
                     Content="{ReflectionBinding [GameDir_CancelButton], Source={StaticResource Loc}}"
                     Click="Cancel_Click"
                     MinWidth="80" />
-            <Button Name="KeepSetupButton"
-                    Content="{ReflectionBinding [GameDir_KeepSetupButton], Source={StaticResource Loc}}"
-                    Click="KeepSetup_Click"
-                    MinWidth="110" />
-            <Button Name="ProceedButton"
-                    Content="{ReflectionBinding [GameDir_ProceedButton], Source={StaticResource Loc}}"
-                    Click="Proceed_Click"
+            <Button Name="RenameButton"
+                    Content="{ReflectionBinding [GameDir_RenameButton], Source={StaticResource Loc}}"
+                    Click="Rename_Click"
                     Classes="accent"
-                    MinWidth="110" />
+                    MinWidth="80" />
           </StackPanel>
         </StackPanel>
       </Border>

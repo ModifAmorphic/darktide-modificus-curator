@@ -290,11 +290,14 @@ public sealed class GameDirModsHostTests
         File.WriteAllText(Path.Combine(fx.ModsSlot, "usermod"), "user data");
         var before = DateTimeOffset.UtcNow.AddSeconds(-5);
 
-        fx.Host.TakeOver(fx.GameDir);
+        var returned = fx.Host.TakeOver(fx.GameDir);
 
         Assert.False(Directory.Exists(fx.ModsSlot)); // the slot is free for the link
         var renamed = Directory.GetDirectories(fx.GameDir, "mods_*").Single();
         Assert.Matches(@"mods_\d{8}-\d{4}$", Path.GetFileName(renamed));
+        // The return value is the renamed entry's full path (the rename
+        // notice the shell shows carries it).
+        Assert.Equal(renamed, returned);
         // Nothing deleted: the user's content moved aside intact.
         Assert.Equal("user data", File.ReadAllText(Path.Combine(renamed, "usermod")));
         Assert.True(File.Exists(Path.Combine(renamed, GameDirModsHost.TakeOverReadmeFileName)));
@@ -320,9 +323,10 @@ public sealed class GameDirModsHostTests
         File.WriteAllText(Path.Combine(fx.ModsSlot, "usermod"), "user data");
         Directory.CreateDirectory(Path.Combine(fx.ModsSlot, GameDirModsHost.TakeOverReadmeFileName));
 
-        fx.Host.TakeOver(fx.GameDir); // must not throw
+        var returned = fx.Host.TakeOver(fx.GameDir); // must not throw
 
         var renamed = Directory.GetDirectories(fx.GameDir, "mods_*").Single();
+        Assert.Equal(renamed, returned);
         Assert.True(Directory.Exists(Path.Combine(renamed, GameDirModsHost.TakeOverReadmeFileName)));
         Assert.Equal("user data", File.ReadAllText(Path.Combine(renamed, "usermod")));
 
@@ -341,12 +345,14 @@ public sealed class GameDirModsHostTests
         fx.State.RenamedModsFolders = new[] { earlier };
         Directory.CreateDirectory(fx.ModsSlot);
 
-        fx.Host.TakeOver(fx.GameDir);
+        var returned = fx.Host.TakeOver(fx.GameDir);
 
+        Assert.NotNull(returned);
         var receipts = new AppStateStore(fx.StatePath).RenamedModsFolders!;
         Assert.Equal(2, receipts.Count);
         Assert.Equal(earlier, receipts[0]);
         Assert.Equal(fx.ModsSlot, receipts[1].OriginalPath);
+        Assert.Equal(returned, receipts[1].RenamedPath);
     }
 
     [Fact]
@@ -356,19 +362,21 @@ public sealed class GameDirModsHostTests
         Directory.CreateDirectory(fx.ModsSlot);
         File.WriteAllText(Path.Combine(fx.ModsSlot, "usermod"), "user data");
 
-        fx.Host.TakeOver(fx.GameDir);
+        var first = fx.Host.TakeOver(fx.GameDir);
         // Recreate a second foreign entry + pre-occupy the plain-stamp sibling
         // shape by taking over again within the same minute boundary: the
         // candidate name must not collide with the first rename.
         Directory.CreateDirectory(fx.ModsSlot);
         File.WriteAllText(Path.Combine(fx.ModsSlot, "usermod2"), "more data");
-        fx.Host.TakeOver(fx.GameDir);
+        var second = fx.Host.TakeOver(fx.GameDir);
 
         var renamed = Directory.GetDirectories(fx.GameDir, "mods_*")
             .OrderBy(p => p, StringComparer.Ordinal)
             .ToList();
         Assert.Equal(2, renamed.Count);
         Assert.NotEqual(renamed[0], renamed[1]);
+        Assert.Equal(renamed[0], first);
+        Assert.Equal(renamed[1], second);
         Assert.Equal("user data", File.ReadAllText(Path.Combine(renamed[0], "usermod")));
         Assert.Equal("more data", File.ReadAllText(Path.Combine(renamed[1], "usermod2")));
     }
@@ -379,9 +387,10 @@ public sealed class GameDirModsHostTests
         using var fx = new HostFixture();
         File.WriteAllText(fx.ModsSlot, "not a folder");
 
-        fx.Host.TakeOver(fx.GameDir);
+        var returned = fx.Host.TakeOver(fx.GameDir);
 
         var renamedFile = Directory.GetFiles(fx.GameDir, "mods_*").Single();
+        Assert.Equal(renamedFile, returned);
         Assert.Equal("not a folder", File.ReadAllText(renamedFile));
         Assert.False(File.Exists(Path.Combine(renamedFile, GameDirModsHost.TakeOverReadmeFileName)));
         Assert.NotNull(new AppStateStore(fx.StatePath).RenamedModsFolders);
@@ -391,15 +400,15 @@ public sealed class GameDirModsHostTests
     public void TakeOver_is_a_no_op_for_an_absent_slot_or_an_owned_link()
     {
         using var fx = new HostFixture();
-        // Absent: nothing to move aside.
-        fx.Host.TakeOver(fx.GameDir);
+        // Absent: nothing to move aside, nothing renamed.
+        Assert.Null(fx.Host.TakeOver(fx.GameDir));
         Assert.False(Directory.Exists(fx.ModsSlot));
         Assert.Null(new AppStateStore(fx.StatePath).RenamedModsFolders);
 
         // Owned: the link is Curator's; a takeover must not rename it.
         var stagedRoot = fx.MakeStagedRoot("alpha");
         fx.Host.EnsureHosting(fx.GameDir, stagedRoot);
-        fx.Host.TakeOver(fx.GameDir);
+        Assert.Null(fx.Host.TakeOver(fx.GameDir));
         Assert.True(Directory.Exists(fx.ModsSlot));
         Assert.True(SamePath(stagedRoot + Path.DirectorySeparatorChar + "mods", ResolveTarget(fx.ModsSlot)));
         Assert.Null(new AppStateStore(fx.StatePath).RenamedModsFolders);

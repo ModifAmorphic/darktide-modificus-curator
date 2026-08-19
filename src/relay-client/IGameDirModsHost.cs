@@ -72,14 +72,15 @@ public interface IGameDirModsHost
     /// app-state, then best-effort writes a short <c>README.txt</c> inside the
     /// renamed entry (folder case only) explaining what happened and that
     /// nothing was deleted (a README failure is logged, never thrown; the
-    /// receipt already records the move). No-op when the slot is absent or
-    /// already Curator-owned.
+    /// receipt already records the move). Returns the renamed entry's full
+    /// path, or <c>null</c> when nothing was renamed (the slot is absent or
+    /// already Curator-owned).
     /// </summary>
     /// <exception cref="System.IO.IOException">The rename or receipt write
     /// failed.</exception>
     /// <exception cref="System.UnauthorizedAccessException">The caller lacks
     /// write access to <paramref name="gameDir"/>.</exception>
-    void TakeOver(string gameDir);
+    string? TakeOver(string gameDir);
 
     /// <summary>
     /// Removes <c>&lt;gameDir&gt;/mods</c> when it is a Curator-owned link (the

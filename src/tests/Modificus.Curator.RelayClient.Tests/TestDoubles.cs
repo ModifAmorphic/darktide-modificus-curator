@@ -130,6 +130,13 @@ internal sealed class FakeGameDirModsHost : IGameDirModsHost
     /// (the external-mode launch must not be blocked by cleanup).</summary>
     public Exception? RemoveOwnedLinkThrows { get; set; }
 
+    /// <summary>
+    /// The renamed path returned by <see cref="TakeOver"/>. Default
+    /// <c>null</c> (nothing renamed; the launch path never consumes the
+    /// value).
+    /// </summary>
+    public string? TakeOverResult { get; set; }
+
     public IReadOnlyList<(string GameDir, string StagedRoot)> EnsureCalls { get; } =
         new List<(string, string)>();
     public IReadOnlyList<string> TakeOverCalls { get; } = new List<string>();
@@ -145,7 +152,11 @@ internal sealed class FakeGameDirModsHost : IGameDirModsHost
         return NextResult;
     }
 
-    public void TakeOver(string gameDir) => ((List<string>)TakeOverCalls).Add(gameDir);
+    public string? TakeOver(string gameDir)
+    {
+        ((List<string>)TakeOverCalls).Add(gameDir);
+        return TakeOverResult;
+    }
 
     public void RemoveOwnedLink(string gameDir)
     {

@@ -679,13 +679,12 @@ public partial class ShellViewModel : LocalizedViewModel, IShellNavigation
     /// <description>opens the escape-hatch dialog with the missing fields. No
     /// retry.</description></item>
     /// <item><term><see cref="LaunchStatus.GameDirConflict"/></term>
-    /// <description>shows the three-choice game-dir conflict modal. Proceed
-    /// performs the consented takeover (<see cref="IGameDirModsHost.TakeOver"/>)
-    /// and retries the launch once; Keep my current setup persists the
-    /// external-hosting preference and retries the launch once under it;
-    /// Cancel aborts. The retry is one-shot per consent: a second conflict in
-    /// the same attempt chain surfaces the standard error alert (no
-    /// loop).</description></item>
+    /// <description>shows the two-choice game-dir conflict modal. Rename
+    /// performs the consented takeover (<see cref="IGameDirModsHost.TakeOver"/>),
+    /// shows a one-line notice carrying the renamed folder's path, and retries
+    /// the launch once; Cancel aborts. The retry is one-shot per consent: a
+    /// second conflict in the same attempt chain surfaces the standard error
+    /// alert (no loop).</description></item>
     /// <item><term><see cref="LaunchStatus.StagingFailed"/></term>
     /// <description>shows a localized modal alert with the framing + the raised
     /// exception's body.</description></item>
@@ -731,10 +730,10 @@ public partial class ShellViewModel : LocalizedViewModel, IShellNavigation
     /// The launch core including the game-dir consent chain: runs the launch
     /// service, handles the result, and on a
     /// <see cref="LaunchStatus.GameDirConflict"/> shows the consent modal and
-    /// retries the launch exactly once per consent (Proceed after the
-    /// takeover, Keep-setup after persisting the external-hosting preference).
-    /// A second conflict in the same chain surfaces the standard error alert
-    /// instead of another prompt, so the flow can never loop.
+    /// retries the launch exactly once per consent (Rename, after the takeover
+    /// + the rename notice). A second conflict in the same chain surfaces the
+    /// standard error alert instead of another prompt, so the flow can never
+    /// loop.
     /// </summary>
     private async Task LaunchWithGameDirConsentAsync(Guid profileId)
     {
@@ -779,7 +778,7 @@ public partial class ShellViewModel : LocalizedViewModel, IShellNavigation
                         // path; the user clicks Launch again.
                         await _dialogs.ShowAlertAsync(
                             _localization["Launch_ErrorTitle"],
-                            _localization.Format("GameDir_Message", result.Message ?? string.Empty));
+                            _localization.Format("GameDir_StillConflicts", result.Message ?? string.Empty));
                         _logger.LogWarning(
                             "Game-dir conflict recurred after consent on launch of {Id} at {Path}.",
                             profileId, result.Message);
@@ -788,7 +787,7 @@ public partial class ShellViewModel : LocalizedViewModel, IShellNavigation
 
                     var choice = await _dialogs.ShowGameDirConflictAsync(
                         _localization["GameDir_Title"],
-                        _localization.Format("GameDir_Message", result.Message ?? string.Empty));
+                        _localization["GameDir_Message"]);
                     if (choice == GameDirConflictChoice.Cancel)
                     {
                         _logger.LogInformation(
@@ -797,46 +796,40 @@ public partial class ShellViewModel : LocalizedViewModel, IShellNavigation
                     }
 
                     consentConsumed = true;
-                    if (choice == GameDirConflictChoice.Proceed)
+                    if (result.GameDirPath is null)
                     {
-                        if (result.GameDirPath is null)
-                        {
-                            // The contract populates GameDirPath for this
-                            // status; a malformed result cannot be consented
-                            // around, so it degrades to the error path.
-                            await _dialogs.ShowAlertAsync(
-                                _localization["Launch_ErrorTitle"], result.Message ?? string.Empty);
-                            _logger.LogWarning(
-                                "GameDirConflict result for profile {Id} carried no game dir.", profileId);
-                            return;
-                        }
-
-                        try
-                        {
-                            _gameDirHost.TakeOver(result.GameDirPath);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex,
-                                "Game-dir takeover failed on launch of {Id}.", profileId);
-                            await _dialogs.ShowAlertAsync(
-                                _localization["Launch_ErrorTitle"],
-                                _localization["GameDir_TakeOverFailed"] + " " + ex.Message);
-                            return;
-                        }
+                        // The contract populates GameDirPath for this
+                        // status; a malformed result cannot be consented
+                        // around, so it degrades to the error path.
+                        await _dialogs.ShowAlertAsync(
+                            _localization["Launch_ErrorTitle"], result.Message ?? string.Empty);
+                        _logger.LogWarning(
+                            "GameDirConflict result for profile {Id} carried no game dir.", profileId);
+                        return;
                     }
-                    else
+
+                    string? renamedPath;
+                    try
                     {
-                        // Keep my current setup: persist the external-hosting
-                        // preference. The retry reads it live (one snapshot
-                        // per launch), so it launches externally without the
-                        // game-dir link.
-                        var config = _configLoader.Load();
-                        config.Preferences.ExternalModHosting = true;
-                        _configLoader.Save(config);
-                        _logger.LogInformation(
-                            "Game-dir conflict on launch of {Id}: user kept their setup; external hosting persisted.",
-                            profileId);
+                        renamedPath = _gameDirHost.TakeOver(result.GameDirPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex,
+                            "Game-dir takeover failed on launch of {Id}.", profileId);
+                        await _dialogs.ShowAlertAsync(
+                            _localization["Launch_ErrorTitle"],
+                            _localization["GameDir_TakeOverFailed"] + " " + ex.Message);
+                        return;
+                    }
+
+                    // The rename notice lands BEFORE the retry so the
+                    // information survives a later launch failure.
+                    if (renamedPath is not null)
+                    {
+                        await _dialogs.ShowAlertAsync(
+                            _localization["GameDir_Title"],
+                            _localization.Format("GameDir_RenamedNotice", renamedPath));
                     }
 
                     result = _launchService.Launch(profileId);

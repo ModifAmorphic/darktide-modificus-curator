@@ -91,7 +91,7 @@ public sealed class GameDirModsHost : IGameDirModsHost
     }
 
     /// <inheritdoc />
-    public void TakeOver(string gameDir)
+    public string? TakeOver(string gameDir)
     {
         ArgumentNullException.ThrowIfNull(gameDir);
 
@@ -100,7 +100,7 @@ public sealed class GameDirModsHost : IGameDirModsHost
         {
             // Nothing to move aside (the slot is empty or already ours); the
             // caller's retry hosts through the ordinary ladder.
-            return;
+            return null;
         }
 
         var renamedPath = RenameAside(modsPath, attrs);
@@ -131,6 +131,8 @@ public sealed class GameDirModsHost : IGameDirModsHost
                     ex, "Failed to write the takeover README inside {Renamed} (best-effort).", renamedPath);
             }
         }
+
+        return renamedPath;
     }
 
     /// <inheritdoc />

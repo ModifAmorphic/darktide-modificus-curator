@@ -487,10 +487,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            shown checked + disabled on Linux as a display-only
                            reflection of the console that always shows under Proton
                            until a Relay-side GUI-subsystem fix) + the experimental
-                           external-mod-hosting toggle (presented with its known
-                           issue stated: mods that require game-folder paths will
-                           not load; persisted through its own focused
-                           read-modify-save + read live per launch) via
+                           external-mod-hosting toggle (labeled "Load mods from
+                           Curator's profile directory (experimental)" with the
+                           hint "May experience issues with mods that require
+                           absolute paths"; the preference is set only here,
+                           never from the conflict flow; persisted through its
+                           own focused read-modify-save + read live per launch)
+                           via
                            `IPreferencesService` + the i18n infrastructure
                           (`Strings.resx` + `LocalizationService` for dynamic
                           culture switching; localized VMs derive from the
@@ -1210,8 +1213,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                          LaunchStatus.GameDirConflict with the detected path on
                          Message + the game dir on GameDirPath before any
                          mutation; TakeOver performs the consented rename-aside
-                         takeover: mods_<yyyyMMdd-HHmm> with numeric bump on
-                         collision + a receipt through
+                         takeover (returning the renamed entry's path, null
+                         when nothing was renamed): mods_<yyyyMMdd-HHmm> with
+                         numeric bump on collision + a receipt through
                          IRenamedModsFoldersState + a best-effort README.txt
                          inside the renamed folder (folder case only, a
                          failure logged never surfaced);
@@ -1399,10 +1403,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             dialog then clear, exception path clears, direct
                                             concurrent execution rejected) + the
                                             ShellGameDirConflictTests (the game-dir consent
-                                            flow: all three choices, the retry-once guard with a
+                                            flow: both choices, the retry-once guard with a
                                             second conflict surfacing the error alert, the
-                                            takeover-failure alert, the attempt state held
-                                            through the modal, + the malformed-result
+                                            rename notice + its before-the-retry ordering +
+                                            the null-return skip, the takeover-failure alert,
+                                            the attempt state held through the modal, + the
+                                            malformed-result
                                             degradation) + the LaunchOverlayTests
                                             (the full-client launch overlay as XML source tests:
                                             overlay bound to the attempt state + SplitView disabled,
@@ -1761,16 +1767,16 @@ dotnet run   --project src/ui --configuration Release   # app shell window
    launch/switch gates react at once, and clears `HasPendingChanges` since the
    successful stage re-staged the profile; `DiscoveryIncomplete` -> the focused discovery
    escape-hatch modal over the shared `DiscoveryField` descriptor; `GameDirConflict`
-   -> the three-choice game-dir conflict modal (`ShowGameDirConflictAsync`,
+   -> the two-choice game-dir conflict modal (`ShowGameDirConflictAsync`,
    the UnsavedChangesDialog pattern incl. EscapeClosesBehavior, Cancel the enum
-   default so ESC/X/close abort): Proceed performs the consented
-   `IGameDirModsHost.TakeOver(result.GameDirPath)` + retries the launch once,
-   Keep my current setup persists `Preferences.ExternalModHosting` (a focused
-   read-modify-save the retry reads live) + retries once, Cancel aborts, and a
+   default so ESC/X/close abort): Rename performs the consented
+   `IGameDirModsHost.TakeOver(result.GameDirPath)` (returning the renamed
+   path), shows the one-line rename notice carrying it, then retries the
+   launch once; Cancel aborts; a
    second conflict in the same attempt chain surfaces the standard error alert
    (no loop; a takeover failure surfaces an alert with no retry; the
-   launch-attempt overlay state holds through the modal + retry exactly like
-   the failure dialogs); `StagingFailed`
+   launch-attempt overlay state holds through the modal + notice + retry
+   exactly like the failure dialogs); `StagingFailed`
    -> a localized modal alert whose body appends the raised staging exception's
    message (a runtime/OS error) to the localized framing; `Error` -> modal alert) + a Settings destination editing `CuratorConfig.Discovery` (the global
   `OverrideAutomaticDiscovery` mode + Discover button over the shared
