@@ -61,6 +61,17 @@ public static class CuratorComposition
         services.AddIntegrations();
         services.AddSteam();
         services.AddRelayClient();
+        // The game-dir mods host (the ladder + takeover over <game>/mods).
+        // Registered here rather than inside AddRelayClient because it wires
+        // cross-library collaborators: the Profiles staging-link primitive
+        // (junction/symlink per OS, registered by AddProfiles above) + the
+        // app-state receipts role (AddGeneral). The launch service reads the
+        // ladder; the shell performs the consented takeover.
+        services.AddSingleton<IGameDirModsHost>(sp => new GameDirModsHost(
+            sp.GetRequiredService<StagingLinkCreator>(),
+            sp.GetRequiredService<IProfileService>(),
+            sp.GetRequiredService<IRenamedModsFoldersState>(),
+            sp.GetRequiredService<ILogger<GameDirModsHost>>()));
         // The nxm scheme-handler plumbing: IPC server (single-instance via
         // process enumeration, pipe bind degrades gracefully on failure), router
         // + no-op handler defaults, and the platform OS registrar. The IPC
@@ -352,6 +363,7 @@ public static class CuratorComposition
         services.AddSingleton(sp => new ShellViewModel(
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IRelayLaunchService>(),
+            sp.GetRequiredService<IGameDirModsHost>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<ProfilesViewModel>(),

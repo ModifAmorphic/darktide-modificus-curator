@@ -78,6 +78,7 @@ public partial class ShellViewModel : LocalizedViewModel, IShellNavigation
 {
     private readonly IProfileSession _session;
     private readonly IRelayLaunchService _launchService;
+    private readonly IGameDirModsHost _gameDirHost;
     private readonly IDialogService _dialogs;
     private readonly ModListViewModel _modList;
     private readonly ProfilesViewModel _profiles;
@@ -104,6 +105,7 @@ public partial class ShellViewModel : LocalizedViewModel, IShellNavigation
     public ShellViewModel(
         IProfileSession session,
         IRelayLaunchService launchService,
+        IGameDirModsHost gameDirHost,
         IDialogService dialogs,
         LocalizationService localization,
         ProfilesViewModel profiles,
@@ -123,6 +125,7 @@ public partial class ShellViewModel : LocalizedViewModel, IShellNavigation
     {
         _session = session;
         _launchService = launchService;
+        _gameDirHost = gameDirHost ?? throw new ArgumentNullException(nameof(gameDirHost));
         _dialogs = dialogs;
         _profiles = profiles;
         _modList = modList;
@@ -675,15 +678,23 @@ public partial class ShellViewModel : LocalizedViewModel, IShellNavigation
     /// <item><term><see cref="LaunchStatus.DiscoveryIncomplete"/></term>
     /// <description>opens the escape-hatch dialog with the missing fields. No
     /// retry.</description></item>
+    /// <item><term><see cref="LaunchStatus.GameDirConflict"/></term>
+    /// <description>shows the three-choice game-dir conflict modal. Proceed
+    /// performs the consented takeover (<see cref="IGameDirModsHost.TakeOver"/>)
+    /// and retries the launch once; Keep my current setup persists the
+    /// external-hosting preference and retries the launch once under it;
+    /// Cancel aborts. The retry is one-shot per consent: a second conflict in
+    /// the same attempt chain surfaces the standard error alert (no
+    /// loop).</description></item>
     /// <item><term><see cref="LaunchStatus.StagingFailed"/></term>
     /// <description>shows a localized modal alert with the framing + the raised
     /// exception's body.</description></item>
     /// <item><term><see cref="LaunchStatus.Error"/></term><description>shows a
     /// modal alert with the result's message.</description></item>
     /// </list>
-    /// The attempt state stays set while a failure dialog is open and clears
-    /// after the dialog handling (and on any exception path), so retry becomes
-    /// possible exactly then.
+    /// The attempt state stays set while a failure dialog (or the conflict
+    /// consent modal + its retry) is open and clears after the dialog handling
+    /// (and on any exception path), so retry becomes possible exactly then.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanLaunch))]
     private async Task Launch()
@@ -704,7 +715,33 @@ public partial class ShellViewModel : LocalizedViewModel, IShellNavigation
             // button before the synchronous launch work resumes.
             await _yieldForLaunchRender();
 
-            var result = _launchService.Launch(profileId);
+            await LaunchWithGameDirConsentAsync(profileId);
+        }
+        finally
+        {
+            // The single clear point: after failure-dialog handling, after the
+            // post-spawn handoff resolves (signal or timeout), and on any
+            // exception path. When Darktide was observed, IsGameRunning keeps
+            // Launch disabled; on timeout, retry becomes possible.
+            IsLaunchAttemptInProgress = false;
+        }
+    }
+
+    /// <summary>
+    /// The launch core including the game-dir consent chain: runs the launch
+    /// service, handles the result, and on a
+    /// <see cref="LaunchStatus.GameDirConflict"/> shows the consent modal and
+    /// retries the launch exactly once per consent (Proceed after the
+    /// takeover, Keep-setup after persisting the external-hosting preference).
+    /// A second conflict in the same chain surfaces the standard error alert
+    /// instead of another prompt, so the flow can never loop.
+    /// </summary>
+    private async Task LaunchWithGameDirConsentAsync(Guid profileId)
+    {
+        var result = _launchService.Launch(profileId);
+        var consentConsumed = false;
+        while (true)
+        {
             switch (result.Status)
             {
                 case LaunchStatus.Launched:
@@ -723,7 +760,7 @@ public partial class ShellViewModel : LocalizedViewModel, IShellNavigation
                     // the game and the spawned process exits (or the bounded
                     // timeout releases the wait) so the gap cannot double-launch.
                     await WaitForRunningStateHandoffAsync(result.RelayExited);
-                    break;
+                    return;
 
                 case LaunchStatus.DiscoveryIncomplete:
                     // No retry: the user explicitly clicks Launch again after
@@ -732,30 +769,93 @@ public partial class ShellViewModel : LocalizedViewModel, IShellNavigation
                     _logger.LogInformation(
                         "Discovery incomplete on launch of {Id}; showed escape-hatch for fields: {Fields}.",
                         profileId, string.Join(", ", result.MissingDiscoveryFields));
-                    break;
+                    return;
+
+                case LaunchStatus.GameDirConflict:
+                    if (consentConsumed)
+                    {
+                        // One retry per consent. A second conflict in the same
+                        // chain (a takeover race) surfaces the ordinary error
+                        // path; the user clicks Launch again.
+                        await _dialogs.ShowAlertAsync(
+                            _localization["Launch_ErrorTitle"],
+                            _localization.Format("GameDir_Message", result.Message ?? string.Empty));
+                        _logger.LogWarning(
+                            "Game-dir conflict recurred after consent on launch of {Id} at {Path}.",
+                            profileId, result.Message);
+                        return;
+                    }
+
+                    var choice = await _dialogs.ShowGameDirConflictAsync(
+                        _localization["GameDir_Title"],
+                        _localization.Format("GameDir_Message", result.Message ?? string.Empty));
+                    if (choice == GameDirConflictChoice.Cancel)
+                    {
+                        _logger.LogInformation(
+                            "Game-dir conflict on launch of {Id}: user cancelled.", profileId);
+                        return;
+                    }
+
+                    consentConsumed = true;
+                    if (choice == GameDirConflictChoice.Proceed)
+                    {
+                        if (result.GameDirPath is null)
+                        {
+                            // The contract populates GameDirPath for this
+                            // status; a malformed result cannot be consented
+                            // around, so it degrades to the error path.
+                            await _dialogs.ShowAlertAsync(
+                                _localization["Launch_ErrorTitle"], result.Message ?? string.Empty);
+                            _logger.LogWarning(
+                                "GameDirConflict result for profile {Id} carried no game dir.", profileId);
+                            return;
+                        }
+
+                        try
+                        {
+                            _gameDirHost.TakeOver(result.GameDirPath);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex,
+                                "Game-dir takeover failed on launch of {Id}.", profileId);
+                            await _dialogs.ShowAlertAsync(
+                                _localization["Launch_ErrorTitle"],
+                                _localization["GameDir_TakeOverFailed"] + " " + ex.Message);
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        // Keep my current setup: persist the external-hosting
+                        // preference. The retry reads it live (one snapshot
+                        // per launch), so it launches externally without the
+                        // game-dir link.
+                        var config = _configLoader.Load();
+                        config.Preferences.ExternalModHosting = true;
+                        _configLoader.Save(config);
+                        _logger.LogInformation(
+                            "Game-dir conflict on launch of {Id}: user kept their setup; external hosting persisted.",
+                            profileId);
+                    }
+
+                    result = _launchService.Launch(profileId);
+                    continue;
 
                 case LaunchStatus.StagingFailed:
                     await _dialogs.ShowAlertAsync(
                         _localization["Launch_StagingFailedTitle"],
                         _localization["Launch_StagingFailedMessage"] + " " + (result.Message ?? string.Empty));
                     _logger.LogWarning("Staging failed on launch of {Id}.", profileId);
-                    break;
+                    return;
 
                 case LaunchStatus.Error:
                     await _dialogs.ShowAlertAsync(
                         _localization["Launch_ErrorTitle"],
                         result.Message ?? string.Empty);
                     _logger.LogWarning("Launch of {Id} failed: {Message}.", profileId, result.Message);
-                    break;
+                    return;
             }
-        }
-        finally
-        {
-            // The single clear point: after failure-dialog handling, after the
-            // post-spawn handoff resolves (signal or timeout), and on any
-            // exception path. When Darktide was observed, IsGameRunning keeps
-            // Launch disabled; on timeout, retry becomes possible.
-            IsLaunchAttemptInProgress = false;
         }
     }
 

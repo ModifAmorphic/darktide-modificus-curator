@@ -355,6 +355,18 @@
     <value>On Linux the Relay console always shows under Proton and can't be hidden from here.</value>
     <comment>Tooltip on the Show console on launch row in the Preferences dialog on Linux, where the checkbox is shown checked + disabled (Wine spawns the console regardless of the setting until a Relay-side GUI-subsystem fix, so the persisted value is not forced or written).</comment>
   </data>
+  <data name="Preferences_ExternalModHosting" xml:space="preserve">
+    <value>Serve mods without the game-folder link (experimental)</value>
+    <comment>Checkbox in the Preferences dialog for the external mod-hosting mode: launch with mods served from Curator's staging folder only, no mods-folder link in the game directory.</comment>
+  </data>
+  <data name="Preferences_ExternalModHostingTooltip" xml:space="preserve">
+    <value>Launches the game with mods served from Curator's staging folder and removes Curator's game-folder mods link. A mods folder you manage yourself is never touched.</value>
+    <comment>Tooltip on the external mod-hosting row in the Preferences dialog.</comment>
+  </data>
+  <data name="Preferences_ExternalModHostingWarning" xml:space="preserve">
+    <value>Known issue: mods that require game-folder paths will not load.</value>
+    <comment>Inline experimental-mode warning shown beneath the external mod-hosting checkbox, stating the known issue.</comment>
+  </data>
 
   <!-- ============================================================ -->
   <!-- Mod list (ModListView / ModListViewModel / ModItemViewModel) -->
@@ -858,6 +870,35 @@
   <data name="Launch_StagingFailedMessage" xml:space="preserve">
     <value>Curator couldn't create the staging links for this profile. Check that Curator has write access to the profile's folder, and on Windows that the folder is on an NTFS volume (staging links require NTFS).</value>
     <comment>Localized framing + actionable hint for the StagingFailed alert body. The raised exception's body (a runtime/OS error) is appended after this at the call site, so this reads as a lead-in to the detail.</comment>
+  </data>
+
+  <!-- ============================================================ -->
+  <!-- Game-dir conflict (GameDirConflictDialog / shell launch flow) -->
+  <!-- ============================================================ -->
+
+  <data name="GameDir_Title" xml:space="preserve">
+    <value>Found an existing mods folder</value>
+    <comment>Title of the three-choice game-dir conflict modal shown when a launch finds a foreign entry at the game directory's mods slot.</comment>
+  </data>
+  <data name="GameDir_Message" xml:space="preserve">
+    <value>Curator serves mods through the mods folder at {0}, but something Curator doesn't own is already there. Nothing has been changed. Curator can move it aside (nothing is deleted) and host your mods there, or keep your current setup and serve mods from Curator's staging folder instead.</value>
+    <comment>Body of the game-dir conflict modal. {0} is the detected game-dir mods path carried on the launch result.</comment>
+  </data>
+  <data name="GameDir_CancelButton" xml:space="preserve">
+    <value>Cancel</value>
+    <comment>The Cancel button in the game-dir conflict modal. Aborts the launch; no game-dir mutation, no preference change.</comment>
+  </data>
+  <data name="GameDir_KeepSetupButton" xml:space="preserve">
+    <value>Keep my current setup</value>
+    <comment>The Keep my current setup button in the game-dir conflict modal. Persists the external hosting preference and retries the launch once under it.</comment>
+  </data>
+  <data name="GameDir_ProceedButton" xml:space="preserve">
+    <value>Move it aside and continue</value>
+    <comment>The Proceed (accent) button in the game-dir conflict modal. Renames the foreign entry aside (nothing deleted, README + receipt recorded) and retries the launch once, now hosted.</comment>
+  </data>
+  <data name="GameDir_TakeOverFailed" xml:space="preserve">
+    <value>Curator couldn't move the existing mods folder aside.</value>
+    <comment>Localized framing for the alert shown when the consented takeover fails. The exception's message is appended after this at the call site.</comment>
   </data>
 
   <!-- ============================================================ -->

@@ -296,6 +296,7 @@ internal static class TestDoubles
         FakeProfileSession Session,
         FakeDialogService Dialogs,
         FakeLaunchService Launch,
+        FakeGameDirModsHost GameDirHost,
         FakeAppUpdateService AppUpdate,
         FakeConfigLoader Config,
         FakeNexusAuthService Auth,
@@ -335,6 +336,7 @@ internal static class TestDoubles
         FakeProfileSession? session = null,
         FakeDialogService? dialogs = null,
         FakeLaunchService? launch = null,
+        FakeGameDirModsHost? gameDirHost = null,
         FakeAppUpdateService? appUpdate = null,
         FakeConfigLoader? config = null,
         FakeNexusAuthService? auth = null,
@@ -350,6 +352,7 @@ internal static class TestDoubles
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
         dialogs ??= new FakeDialogService();
         launch ??= new FakeLaunchService();
+        gameDirHost ??= new FakeGameDirModsHost();
         appUpdate ??= new FakeAppUpdateService();
         config ??= new FakeConfigLoader();
         auth ??= new FakeNexusAuthService();
@@ -403,7 +406,7 @@ internal static class TestDoubles
             new FakeExternalLauncher());
 
         var shell = new ShellViewModel(
-            session, launch, dialogs, localization,
+            session, launch, gameDirHost, dialogs, localization,
             profilesPage, modsPage, integrationsPage, preferencesPage, settingsPage,
             appUpdate,
             modalQueue,
@@ -414,7 +417,7 @@ internal static class TestDoubles
             launchHandoffTimeout);
 
         return new ShellParts(
-            shell, profiles, session, dialogs, launch, appUpdate, config,
+            shell, profiles, session, dialogs, launch, gameDirHost, appUpdate, config,
             auth, nxmRegistrar, nxmRegistration, profilesPage, modsPage, integrationsPage,
             preferencesPage, settingsPage, steam, dmf, modalQueue);
     }
@@ -1345,6 +1348,38 @@ internal sealed class FakeDialogService : IDialogService
     }
 
     /// <summary>
+    /// The result returned by the next game-dir conflict call. Default
+    /// <see cref="GameDirConflictChoice.Cancel"/> (the enum default, so ESC /
+    /// close behave like the explicit Cancel button, matching the production
+    /// dialog).
+    /// </summary>
+    public GameDirConflictChoice GameDirConflictResult { get; set; } = GameDirConflictChoice.Cancel;
+
+    /// <summary>
+    /// Optional task the next <see cref="ShowGameDirConflictAsync"/> call
+    /// awaits before recording its result, so a test can hold the modal open
+    /// and observe in-flight state (the launch attempt staying set while the
+    /// consent prompt is showing). Consumed (reset to <c>null</c>) by that
+    /// call. Default <c>null</c> = returns immediately.
+    /// </summary>
+    public Task? NextGameDirConflictGate { get; set; }
+
+    /// <summary>The messages the shell asked the game-dir conflict modal to
+    /// show, in call order.</summary>
+    public IReadOnlyList<string> GameDirConflictCalls { get; } = new List<string>();
+
+    public async Task<GameDirConflictChoice> ShowGameDirConflictAsync(string title, string message)
+    {
+        ((List<string>)GameDirConflictCalls).Add(message);
+        if (NextGameDirConflictGate is { } gate)
+        {
+            NextGameDirConflictGate = null;
+            await gate;
+        }
+        return GameDirConflictResult;
+    }
+
+    /// <summary>
     /// The work passed to <see cref="ShowProgressAsync{T}"/>, in call order.
     /// Tests assert on this to verify the DMF download path was driven through
     /// the spinner. Each entry is invoked (awaited) so the work's result /
@@ -1542,6 +1577,15 @@ internal sealed class FakeLaunchService : IRelayLaunchService
     public LaunchResult NextResult { get; set; } =
         new(LaunchStatus.Launched, null, Array.Empty<string>());
 
+    /// <summary>
+    /// Results returned one per launch call, in order (dequeued before
+    /// falling back to <see cref="NextResult"/>), so a test can script a
+    /// conflict-then-launched retry chain.
+    /// </summary>
+    public IReadOnlyList<LaunchResult> ResultQueue { get; set; } = Array.Empty<LaunchResult>();
+
+    private int _queueCursor;
+
     public IReadOnlyList<Guid> LaunchCalls { get; } = new List<Guid>();
 
     /// <summary>
@@ -1557,7 +1601,41 @@ internal sealed class FakeLaunchService : IRelayLaunchService
         {
             throw LaunchThrows;
         }
+        if (_queueCursor < ResultQueue.Count)
+        {
+            return ResultQueue[_queueCursor++];
+        }
         return NextResult;
+    }
+}
+
+/// <summary>
+/// Recording <see cref="IGameDirModsHost"/> for the shell tests: captures the
+/// consented takeovers + optional throw, so the consent flow is asserted
+/// without touching the filesystem.
+/// </summary>
+internal sealed class FakeGameDirModsHost : IGameDirModsHost
+{
+    /// <summary>When set, <see cref="TakeOver"/> throws this exception after
+    /// recording the call (a rename failure).</summary>
+    public Exception? TakeOverThrows { get; set; }
+
+    public IReadOnlyList<string> TakeOverCalls { get; } = new List<string>();
+
+    public GameDirHostingResult EnsureHosting(string gameDir, string stagedRoot) =>
+        new(GameDirHostingOutcome.Hosted);
+
+    public void TakeOver(string gameDir)
+    {
+        ((List<string>)TakeOverCalls).Add(gameDir);
+        if (TakeOverThrows is not null)
+        {
+            throw TakeOverThrows;
+        }
+    }
+
+    public void RemoveOwnedLink(string gameDir)
+    {
     }
 }
 

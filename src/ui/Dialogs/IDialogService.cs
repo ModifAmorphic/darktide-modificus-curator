@@ -49,12 +49,41 @@ public enum UnsavedChangesChoice
 }
 
 /// <summary>
+/// The user's choice in the game-dir conflict prompt, returned through
+/// <see cref="IDialogService.ShowGameDirConflictAsync"/>. <see cref="Cancel"/>
+/// is the zero value so ESC, the title-bar close, and a window close all map
+/// to "abort the launch without touching anything."
+/// </summary>
+public enum GameDirConflictChoice
+{
+    /// <summary>
+    /// Abort the launch. No game-dir mutation, no preference change.
+    /// </summary>
+    Cancel,
+
+    /// <summary>
+    /// Keep the user's current setup: persist the external-hosting preference
+    /// (serve mods from staging, no game-dir link) and retry the launch once
+    /// under it.
+    /// </summary>
+    KeepCurrentSetup,
+
+    /// <summary>
+    /// Let Curator take over: rename the foreign entry aside (nothing
+    /// deleted, a README + a receipt record the move) and retry the launch
+    /// once, now hosted.
+    /// </summary>
+    Proceed,
+}
+
+/// <summary>
 /// The application's true-modal dialog abstraction. Keeps view models free of
 /// direct Avalonia <c>Window</c> construction so their logic stays unit-testable
 /// against a fake of this seam. Each member shows exactly one modal over the
 /// owning main window: the first-run Welcome, a yes/no confirm, the launch
 /// discovery escape hatch, a single-button alert, an unsaved-changes three-
-/// choice prompt, or a non-dismissable progress spinner. Hosted destinations
+/// choice prompt, the game-dir conflict three-choice prompt, or a
+/// non-dismissable progress spinner. Hosted destinations
 /// (Profiles, Mods, Nexus, Preferences, Settings) are not modals and live
 /// entirely on the shell's SplitView content region; the inline import card is
 /// a hosted UserControl, not a modal.
@@ -119,6 +148,19 @@ public interface IDialogService
     /// means the caller should try the same save the Save button runs and only
     /// proceed on success.</returns>
     Task<UnsavedChangesChoice> ShowUnsavedChangesAsync(string title, string message, bool canSave);
+
+    /// <summary>
+    /// Shows the game-dir conflict modal: three choices left to right
+    /// (<see cref="GameDirConflictChoice.Cancel"/>,
+    /// <see cref="GameDirConflictChoice.KeepCurrentSetup"/>,
+    /// <see cref="GameDirConflictChoice.Proceed"/>), with Proceed the accent
+    /// button. ESC, the title-bar close, and a window close return
+    /// <see cref="GameDirConflictChoice.Cancel"/> (the enum default).
+    /// </summary>
+    /// <param name="title">The localized dialog title.</param>
+    /// <param name="message">The localized prompt body (already carrying the
+    /// detected game-dir mods path).</param>
+    Task<GameDirConflictChoice> ShowGameDirConflictAsync(string title, string message);
 
     /// <summary>
     /// Shows a buttonless modal spinner over the supplied async work, awaits

@@ -15,14 +15,18 @@ namespace Modificus.Curator.RelayClient;
 /// <see cref="TakeOver"/>.
 /// </summary>
 /// <remarks>
-/// Registered as a singleton: it holds no per-call state (the profiles root is
-/// read live from <see cref="IProfileService.ProfilesRoot"/> on each ladder
-/// run, so a runtime folder change via the Settings window takes effect on the
-/// next launch). Link creation + deletion reuse the Profiles staging-link
-/// primitive and its reparse-aware delete semantics (remove the link, never
-/// follow it into the target).
+/// <para>
+/// Registered as a singleton from the composition root (after
+/// <c>AddProfiles</c> supplies the staging-link primitive and
+/// <c>AddGeneral</c> the receipts role): it holds no per-call state, and the
+/// profiles root is read live from <see cref="IProfileService.ProfilesRoot"/>
+/// on each ladder run, so a runtime folder change via the Settings window
+/// takes effect on the next launch. Link creation + deletion reuse the
+/// Profiles staging-link primitive and its reparse-aware delete semantics
+/// (remove the link, never follow it into the target).
+/// </para>
 /// </remarks>
-internal sealed class GameDirModsHost : IGameDirModsHost
+public sealed class GameDirModsHost : IGameDirModsHost
 {
     /// <summary>The hosted entry's name inside the game dir.</summary>
     internal const string ModsFolderName = "mods";
