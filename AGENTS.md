@@ -9,7 +9,11 @@
 Darktide (.NET 10 + Avalonia 12). The app is user-usable. It launches the game
 modded via
 [Mod Relay](https://github.com/ModifAmorphic/darktide-mod-relay) (DLL
-injection: no game-directory footprint, no bundle-database patching; the runtime
+injection: no patched game files, no copies, no bundle-database patching; the
+one game-dir footprint is a self-identifying, opt-in mods link at
+`<game>/mods` pointing at the active profile's staged tree, so mods that
+resolve game-directory-relative paths work -- a foreign entry at that slot is
+never claimed or deleted; the runtime
 is a separate repo) and stays out of the way for vanilla play (launch from Steam
 = unmodified game). See `docs/architecture/` for the architecture.
 
@@ -170,9 +174,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           yields once to the Avalonia dispatcher at Loaded
                           priority so the freshly-disabled button paints, then
                           runs the synchronous launch on the UI thread;
-                           branches on `LaunchResult.Status`, keeping the
-                           attempt state through failure-dialog handling; after
-                           `Launched` + the eager refresh the attempt state
+                            branches on `LaunchResult.Status`, keeping the
+                            attempt state through failure-dialog handling
+                            (incl. the GameDirConflict consent modal + its
+                            one-shot retry); after
+                            `Launched` + the eager refresh the attempt state
                            stays set until BOTH the session's running-state
                            signal observes Darktide AND the spawned Relay
                            process exits (the exit task carried on the result:
@@ -475,13 +481,17 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           refreshes auth state (one registration probe per
                           enter), leaving cancels in-flight auth via
                           `Deactivate`;
-                          the Preferences destination (`PreferencesViewModel` +
-                          `PreferencesView`): theme + font scale + language + the
-                          show-Relay-console toggle (hidden by default; Windows-only,
-                          shown checked + disabled on Linux as a display-only
-                          reflection of the console that always shows under Proton
-                          until a Relay-side GUI-subsystem fix) via
-                          `IPreferencesService` + the i18n infrastructure
+                           the Preferences destination (`PreferencesViewModel` +
+                           `PreferencesView`): theme + font scale + language + the
+                           show-Relay-console toggle (hidden by default; Windows-only,
+                           shown checked + disabled on Linux as a display-only
+                           reflection of the console that always shows under Proton
+                           until a Relay-side GUI-subsystem fix) + the experimental
+                           external-mod-hosting toggle (presented with its known
+                           issue stated: mods that require game-folder paths will
+                           not load; persisted through its own focused
+                           read-modify-save + read live per launch) via
+                           `IPreferencesService` + the i18n infrastructure
                           (`Strings.resx` + `LocalizationService` for dynamic
                           culture switching; localized VMs derive from the
                           small `LocalizedViewModel` base (ui/ViewModels/)
@@ -527,14 +537,15 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           visible on a later visit); leaving Settings reloads the mod
                           list + re-reads the startup-check toggle + refreshes the
                           app-update notice;
-                          `IDialogService` is narrowed to true modals only (the
-                          six methods: `ShowWelcomeAsync`, `ConfirmAsync`,
-                          `ShowDiscoveryEscapeHatchAsync`, `ShowAlertAsync`,
-                          `ShowUnsavedChangesAsync`, `ShowProgressAsync<T>`;
-                          the escape-hatch dialog VM is built by the narrow
-                          per-dialog `IDiscoveryEscapeHatchFactory`, so
-                          DialogService carries no Steam/config/gaming
-                          dependencies + constructs no view models);
+                           `IDialogService` is narrowed to true modals only (the
+                           seven methods: `ShowWelcomeAsync`, `ConfirmAsync`,
+                           `ShowDiscoveryEscapeHatchAsync`, `ShowAlertAsync`,
+                           `ShowUnsavedChangesAsync`,
+                           `ShowGameDirConflictAsync`, `ShowProgressAsync<T>`;
+                           the escape-hatch dialog VM is built by the narrow
+                           per-dialog `IDiscoveryEscapeHatchFactory`, so
+                           DialogService carries no Steam/config/gaming
+                           dependencies + constructs no view models);
                           hosted
                           destinations are not modals and never flow through it;
                           the inline import card is a hosted `UserControl`
@@ -896,12 +907,15 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         URL, file manager for a folder, narrow failure filter),
                         the NexusGameIdentity constants (the Darktide game
                         domain + game id),
-                        app-state store (active profile id +
-                        last update-check timestamp + manual-refresh throttle
-                        window + profile-scoped known-update snapshots +
-                        last Nexus display-metadata backfill timestamp +
-                        the main window's persisted geometry as the atomic
-                        `AppWindowState` record under `MainWindowState`), AddGeneral() DI ext)
+                         app-state store (active profile id +
+                         last update-check timestamp + manual-refresh throttle
+                         window + profile-scoped known-update snapshots +
+                         last Nexus display-metadata backfill timestamp +
+                         the main window's persisted geometry as the atomic
+                         `AppWindowState` record under `MainWindowState` +
+                         the game-dir takeover receipts as `RenamedModsFolder`
+                         records under `RenamedModsFolders` via the
+                         `IRenamedModsFoldersState` role), AddGeneral() DI ext)
   config/               Modificus.Curator.Config -- the CuratorConfig schema + defaults (POCO),
                         including the NexusConfig slot under Integrations
                         (AuthMethod {None,OAuth,ApiKey}, ApiKey, OAuth tokens, base URLs,
@@ -913,20 +927,31 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         CompatdataPath/ProtonBinaryPath snapshot fields; automatic
                         mode rewrites the active-platform fields from the discoverer,
                         manual mode validates the stored paths as-is)
-                        + the Preferences.ModRowDensity slot (Detailed default,
-                        Compact the one-line variant; absent/unknown normalizes to
-                        Detailed) + the AppPaths.ModThumbnailCacheDir root
-                        (<app-data>/cache/mod-thumbnails)
-  profiles/             Modificus.Curator.Profiles -- profile data model, persistence,
+                         + the Preferences.ModRowDensity slot (Detailed default,
+                         Compact the one-line variant; absent/unknown normalizes to
+                         Detailed) + the Preferences.ExternalModHosting slot
+                         (the experimental staging-only launch opt-out; default
+                         false = game-dir hosting; read live per launch) + the
+                         AppPaths.ModThumbnailCacheDir root
+                         (<app-data>/cache/mod-thumbnails)
+   profiles/             Modificus.Curator.Profiles -- profile data model, persistence,
                           container-based staging (ProfileService.PrepareModRoot
                           discovers each enabled mod's base folder name inside the
                           resolved version folder + staging links (an NTFS junction
                           on Windows, a symlink on Linux) staged/mods/<baseName> ->
-                          <versionFolder>/<baseName>/, then writes mods.lst; the
+                          <versionFolder>/<baseName>/, then writes mods.lst + the
+                          staging ownership marker (.curator.json inside the
+                          staged mods/, rewritten every pass with schema +
+                          profile id/name + projection timestamp via the shared
+                          StagingOwnership.MarkerFileName contract, so a game-dir
+                          hosting link aimed at the tree can prove Curator owns
+                          it; relay-client reads only the file's presence); the
                           base name, not the container's display name, is the link
                           + mods.lst name; the StagingLinkCreator delegate selects
                           junction vs symlink per OS; a linked container stages
-                          directly from its external folder, no version resolution) + SetModPolicy transitions + the
+                          directly from its external folder, no version
+                          resolution; the focused ProfilesRoot read feeds the
+                          game-dir ownership prefix check) + SetModPolicy transitions + the
                         profile-scoped load-order lock (ModListEntry.OrderLocked:
                         a locked entry keeps its exact zero-based index across
                         SetModOrder, so a reorder projects the requested ordering
@@ -1175,7 +1200,32 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         configured RelayDir, then on both platforms falls back to the
                         app-local relay/ shipped inside a Velopack payload at
                         <BaseDirectory>/relay/, then uses the portable sibling fallback
-                        on Windows only)
+                         on Windows only; the game-dir mod host step between
+                         staging + spawn: IGameDirModsHost/GameDirModsHost owns
+                         the <game>/mods ownership ladder (claims proven by the
+                         staging marker inside the link's target or a target
+                         under the profiles root, never reparse-ness alone;
+                         absent -> create silently, ours -> re-point silently
+                         via delete+recreate of the link only, foreign ->
+                         LaunchStatus.GameDirConflict with the detected path on
+                         Message + the game dir on GameDirPath before any
+                         mutation; TakeOver performs the consented rename-aside
+                         takeover: mods_<yyyyMMdd-HHmm> with numeric bump on
+                         collision + README.txt inside the renamed folder
+                         (folder case only) + a receipt through
+                         IRenamedModsFoldersState; RemoveOwnedLink is the
+                         best-effort external-mode cleanup that never touches a
+                         foreign entry; link creation reuses the Profiles
+                         StagingLinkCreator primitive; registered in the
+                         composition root after AddProfiles + AddGeneral).
+                         Hosting is the default: GAME_DIR =
+                         dirname(dirname(DarktideGameBinaryPath)) validated to
+                         exist, --mod-path = GAME_DIR (the Linux strategy
+                         Z:\-translates it exactly as before); the
+                         Preferences.ExternalModHosting opt-out (read live per
+                         launch) restores --mod-path = staged root + the
+                         best-effort owned-link removal; link IO/Win32 failures
+                         map to LaunchStatus.Error with the exception message)
   nxm/                  Modificus.Curator.Nxm -- the nxm:// scheme-handler plumbing:
                         NxmUrlParser (mod-download / oauth-callback /
                         collection URL types), NxmIpcFraming (length-prefixed UTF-8 frames),
@@ -1214,8 +1264,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
     Modificus.Curator.General.Tests/         xUnit tests for the general library
                                           (incl. the AppStateStore KnownUpdates round-trip +
                                           old-file-without-field compatibility + the
-                                          atomic MainWindowState record round-trip)
+                                          atomic MainWindowState record round-trip + the
+                                          RenamedModsFolders receipts round-trip/no-clobber/
+                                          old-file compatibility)
     Modificus.Curator.Profiles.Tests/        xUnit tests for the profiles library (incl. staging
+                                          + the staging ownership marker (written/rewritten
+                                          per pass, profile identity + timestamp, the
+                                          renamed-profile refresh) + ProfilesRoot
                                           + the launch-settings round-trip/normalization/validation
                                           + DmfAddTests: the DMF fresh-add rule -- Nexus mod 8 +
                                           canonical dmf/dmf.mod recognition (untracked + linked),
@@ -1274,7 +1329,15 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             `dotnet test` = xUnit; `dotnet run` = composition smoke harness);
                                             covers RelayLaunchServiceTests (Windows + Linux arg
                                             assembly + DiscoveryIncomplete/StagingFailed/Error
-                                            mapping + the RelayExited exit tracking over the
+                                            mapping + the game-dir hosting step: the --mod-path
+                                            switch to GAME_DIR under hosting + back to the staged
+                                            root under the external preference read live per
+                                            launch, the owned-link removal call, the
+                                            GameDirConflict result shape, the link-failure +
+                                            underivable-game-dir Error mappings, the Linux Z:\
+                                            translation of GAME_DIR, + a real-host end-to-end
+                                            launch from the temp game dir
+                                            + the RelayExited exit tracking over the
                                             fake ISpawnedProcess: completes when the fake exits,
                                             completes + disposes when exit observation throws,
                                             null on every non-Launched result + the Linux five-key AppImage-identity
@@ -1283,7 +1346,17 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             before Proton startup alongside the AppImage
                                             removals + STEAM_COMPAT_* overrides, Windows
                                             profile env as overrides, empty/legacy when no
-                                            settings) + GameArgumentsTests (the bare-`--`
+                                            settings) + GameDirModsHostTests (every claim-ladder
+                                            row against the real platform link primitive + the
+                                            real receipts store: absent creates, ours-by-marker
+                                            left in place, ours re-pointed with the old target
+                                            surviving, ours by marker outside the profiles root,
+                                            a dead link under the profiles root silently
+                                            recreated, foreign real dir/file/link/dead-link
+                                            conflicts reported untouched, the takeover rename +
+                                            README + receipt incl. collision bump + file case +
+                                            no-op cases + the host-through-ladder retry, + the
+                                            best-effort removal semantics) + GameArgumentsTests (the bare-`--`
                                             contract via the pure BuildLauncherArgs seam),
                                             ProcessLauncherTests (the deterministic BuildStartInfo
                                             path: a requested inherited key is removed, an
@@ -1320,7 +1393,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             the exit lands, timeout clears the attempt
                                             for retry when the combined wait stays unresolved, failure results keep the attempt through the
                                             dialog then clear, exception path clears, direct
-                                            concurrent execution rejected) + the LaunchOverlayTests
+                                            concurrent execution rejected) + the
+                                            ShellGameDirConflictTests (the game-dir consent
+                                            flow: all three choices, the retry-once guard with a
+                                            second conflict surfacing the error alert, the
+                                            takeover-failure alert, the attempt state held
+                                            through the modal, + the malformed-result
+                                            degradation) + the LaunchOverlayTests
                                             (the full-client launch overlay as XML source tests:
                                             overlay bound to the attempt state + SplitView disabled,
                                             top-layered hit-testable scrim, localized card + stock
@@ -1672,14 +1751,24 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   copying it, joined to containers via `IModRepository` by
   `ContainerId`; a persisted Compact/Detailed row density with cached
   thumbnails + a stable-v1 display-metadata backfill, owned by the
-  `DetailedModRowsViewModel` child + the UI-layer `IModThumbnailService`), and Launch (`LaunchCommand` -> `IRelayLaunchService.Launch`
-  -> branch on `LaunchResult.Status` (`Launched` -> an immediate
-  `IsGameRunning` refresh (the session's `Refresh`) so the running indicator +
-  launch/switch gates react at once, and clears `HasPendingChanges` since the
-  successful stage re-staged the profile; `DiscoveryIncomplete` -> the focused discovery
-  escape-hatch modal over the shared `DiscoveryField` descriptor; `StagingFailed`
-  -> a localized modal alert whose body appends the raised staging exception's
-  message (a runtime/OS error) to the localized framing; `Error` -> modal alert) + a Settings destination editing `CuratorConfig.Discovery` (the global
+   `DetailedModRowsViewModel` child + the UI-layer `IModThumbnailService`), and Launch (`LaunchCommand` -> `IRelayLaunchService.Launch`
+   -> branch on `LaunchResult.Status` (`Launched` -> an immediate
+   `IsGameRunning` refresh (the session's `Refresh`) so the running indicator +
+   launch/switch gates react at once, and clears `HasPendingChanges` since the
+   successful stage re-staged the profile; `DiscoveryIncomplete` -> the focused discovery
+   escape-hatch modal over the shared `DiscoveryField` descriptor; `GameDirConflict`
+   -> the three-choice game-dir conflict modal (`ShowGameDirConflictAsync`,
+   the UnsavedChangesDialog pattern incl. EscapeClosesBehavior, Cancel the enum
+   default so ESC/X/close abort): Proceed performs the consented
+   `IGameDirModsHost.TakeOver(result.GameDirPath)` + retries the launch once,
+   Keep my current setup persists `Preferences.ExternalModHosting` (a focused
+   read-modify-save the retry reads live) + retries once, Cancel aborts, and a
+   second conflict in the same attempt chain surfaces the standard error alert
+   (no loop; a takeover failure surfaces an alert with no retry; the
+   launch-attempt overlay state holds through the modal + retry exactly like
+   the failure dialogs); `StagingFailed`
+   -> a localized modal alert whose body appends the raised staging exception's
+   message (a runtime/OS error) to the localized framing; `Error` -> modal alert) + a Settings destination editing `CuratorConfig.Discovery` (the global
   `OverrideAutomaticDiscovery` mode + Discover button over the shared
   `DiscoveryField` descriptor; automatic mode keeps the rows read-only with the
   discoverer owning the snapshot, manual mode makes them editable + validates the

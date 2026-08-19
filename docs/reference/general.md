@@ -148,7 +148,7 @@ public static class NexusGameIdentity
 ### App-state role interfaces / `AppStateStore`
 
 Persists **runtime application state**: values that capture "where the app left
-off" rather than user system settings. The surface is split into six role
+off" rather than user system settings. The surface is split into seven role
 interfaces, one per actual consumer slice; the single JSON-backed
 `AppStateStore` implements them all, and every role resolves to that one
 singleton (one cached model, one writer). A separate file (not `CuratorConfig`)
@@ -180,10 +180,20 @@ public interface IMainWindowStatePersistence // the main window's geometry
 {
     AppWindowState? MainWindowState { get; set; }      // set persists immediately
 }
+public interface IRenamedModsFoldersState    // game-dir takeover receipts
+{
+    IReadOnlyList<RenamedModsFolder>? RenamedModsFolders { get; set; }
+}
 
 public sealed record KnownUpdateSnapshot(
     Guid ProfileId, Guid ContainerId, int ModId,
     string CurrentVersion, DateTimeOffset CheckedAt, DateTimeOffset? LatestUpdateAt);
+
+/// One persisted receipt for a foreign game-dir mods entry renamed aside with
+/// consent: original path, renamed path, timestamp. Audit data only; nothing
+/// reads it back to drive behavior.
+public sealed record RenamedModsFolder(
+    string OriginalPath, string RenamedPath, DateTimeOffset RenamedAtUtc);
 
 /// The persisted main-window geometry: the last valid Normal client size in
 /// DIP plus whether the last meaningful state was Maximized. Primitives only
@@ -192,7 +202,8 @@ public sealed record AppWindowState(double Width, double Height, bool IsMaximize
 
 public sealed class AppStateStore :
     IOnboardingState, IProfileActivationState, IUpdateCheckScheduleState,
-    IKnownUpdateState, INexusMetadataBackfillState, IMainWindowStatePersistence
+    IKnownUpdateState, INexusMetadataBackfillState, IMainWindowStatePersistence,
+    IRenamedModsFoldersState
 {
     public AppStateStore(string? path = null);
     public string Path { get; }

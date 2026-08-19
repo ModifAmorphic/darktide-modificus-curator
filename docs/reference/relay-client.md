@@ -30,13 +30,30 @@ expected conditions:
   launch that won't happen) -- `MissingDiscoveryFields` lists them. The
   per-platform required set comes from the active `IPlatformLaunchStrategy`.
 - Prepares the mod root (`IProfileService.PrepareModRoot(profileId)` -- writes
-  `mods.lst` and returns the `--mod-path`). A staging-link creation failure
+  `mods.lst` + the staging ownership marker and returns the staged root). A
+  staging-link creation failure
   (the raised built-in exception: `Win32Exception` from the junction path on
   Windows, `IOException` / `UnauthorizedAccessException` from the symlink path
   on Linux) is caught here and mapped to `StagingFailed`, carrying the
   exception's body on `Message` (the full exception is also logged). An unknown
   profile (`KeyNotFoundException` from PrepareModRoot) is caught and mapped to
   `Error`.
+- Hosts the staged tree in the game dir (the default) or applies the external
+  opt-out, both read live from the launch's config snapshot:
+  - **Game-dir hosting (the default):** derives `GAME_DIR` from the discovered
+    game binary (`dirname(dirname(binary))`, validated to exist) and runs
+    `IGameDirModsHost.EnsureHosting(GAME_DIR, stagedRoot)`. The `--mod-path`
+    handed to the strategy becomes `GAME_DIR` (Relay's contract is unchanged:
+    the parent of the `mods/` folder it consumes). A foreign entry at the
+    game-dir `mods` slot returns `GameDirConflict` before the spawn, carrying
+    the detected path on `Message` and the game dir on `GameDirPath`; nothing
+    was mutated, and the caller surfaces a consent prompt. A hosting-link
+    IO/Win32 failure is mapped to `Error` with the exception's message.
+  - **External hosting (`Preferences.ExternalModHosting = true`):** the
+    `--mod-path` is the staged root as before, plus a best-effort
+    `IGameDirModsHost.RemoveOwnedLink(GAME_DIR)` (a foreign entry is never
+    touched in this mode; a removal failure is logged, never thrown). With no
+    derivable game dir, the removal is skipped and the launch proceeds.
 - Reads the profile's launch settings (`IProfileService.GetLaunchSettings`) fresh
   on each launch + passes them to the strategy (environment merge + game-arg
   emission). No Relay version preflight: `--` + game args are emitted
@@ -54,11 +71,12 @@ expected conditions:
 ```csharp
 public sealed record LaunchResult(
     LaunchStatus Status,
-    string? Message,                         // populated for Error + StagingFailed
+    string? Message,                         // Error + StagingFailed (exception body); GameDirConflict (detected path)
     IReadOnlyList<string> MissingDiscoveryFields,  // populated only for DiscoveryIncomplete
-    Task? RelayExited = null);               // Launched only: completes when the spawned process exits
+    Task? RelayExited = null,                // Launched only: completes when the spawned process exits
+    string? GameDirPath = null);             // GameDirConflict only: the resolved game dir
 
-public enum LaunchStatus { Launched, DiscoveryIncomplete, StagingFailed, Error }
+public enum LaunchStatus { Launched, DiscoveryIncomplete, GameDirConflict, StagingFailed, Error }
 ```
 
 - `Launched` -- the launcher process was started; `RelayExited` completes when
@@ -68,17 +86,70 @@ public enum LaunchStatus { Launched, DiscoveryIncomplete, StagingFailed, Error }
   not tracked.
 - `DiscoveryIncomplete` -- discovery is missing required fields; the field names
   mirror `DiscoveryResult` properties so the UI can map them to a prompt.
+- `GameDirConflict` -- a foreign entry occupies the game-dir `mods` slot, so
+  hosting was not set up and the game was not launched. `Message` carries the
+  detected path (the caller's localized consent prompt interpolates it);
+  `GameDirPath` carries the game dir so the consented takeover needs no
+  re-derivation. No game-dir mutation happened.
 - `StagingFailed` -- the profile's mod root could not be prepared (a staging
   link could not be created). `Message` carries the raised exception's body (a
   runtime/OS error); the UI surfaces it after the localized framing.
-- `Error` -- unknown profile, missing runtime dir, or process-start failure; see
-  `Message`.
+- `Error` -- unknown profile, missing runtime dir, an underivable game dir,
+  game-dir hosting failure, or process-start failure; see `Message`.
 
 `MissingDiscoveryFields` is derived from the `DiscoveryResult` fields directly
 (Linux needs Steam + the game binary + compatdata + Proton; Windows needs only
 the game binary), so it and `DiscoveryStatus` cannot diverge -- it is equivalent
 to `Status != Complete`. The per-platform required set is owned by the active
 `IPlatformLaunchStrategy` (`RequiredDiscoveryFields`).
+
+### `IGameDirModsHost`
+
+The one service that reads the game-dir `mods` ownership ladder and performs
+game-dir mutations. Some mods resolve game-directory-relative paths at runtime,
+so the default launch serves the staged tree under `<game>/mods` through a
+single self-identifying link (an NTFS junction on Windows, a symlink on Linux,
+both privilege-free, via the Profiles `StagingLinkCreator` primitive).
+
+```csharp
+public interface IGameDirModsHost
+{
+    GameDirHostingResult EnsureHosting(string gameDir, string stagedRoot);
+    void TakeOver(string gameDir);
+    void RemoveOwnedLink(string gameDir);
+}
+```
+
+- **Ownership is decided by the marker, never the reparse point.** A link at
+  `<gameDir>/mods` is Curator's when either proof holds: the staging marker
+  (`.curator.json`, written by every `PrepareModRoot` pass) exists inside the
+  link's target, or the resolved target lies under the profiles root
+  (`IProfileService.ProfilesRoot`) -- the prefix rule keeps a dead link
+  Curator's after a data move. Reparse-ness alone proves nothing: a user may
+  have made their own junction or symlink.
+- `EnsureHosting` ladder: an absent slot creates the link silently; a
+  Curator-owned link is left in place (already pointing at
+  `<stagedRoot>/mods`) or silently re-pointed (delete + recreate of the link
+  only; the staged tree is never touched through the link); anything else (a
+  real directory, a real file, a user link to elsewhere, a dead link outside
+  Curator's space) is foreign and returned as
+  `GameDirHostingOutcome.Conflict` with the detected path -- nothing is
+  mutated. Link IO failures propagate as the raised built-in exceptions (the
+  launch service maps them to `Error`).
+- `TakeOver` performs the consented takeover of a foreign entry: rename to a
+  `mods_<yyyyMMdd-HHmm>` sibling (bumping a numeric suffix on collision), a
+  short `README.txt` inside the renamed folder (folder case only) explaining
+  the move and that nothing was deleted, and a receipt recorded in the
+  app-state (`IRenamedModsFoldersState`). No-op for an absent or
+  already-owned slot.
+- `RemoveOwnedLink` is the external-hosting opt-out's cleanup: it removes a
+  Curator-owned link best-effort (an absent slot, a foreign entry, or an IO
+  failure leaves everything as it was; failures are logged, never thrown).
+
+The default implementation `GameDirModsHost` (public, registered from the
+composition root after `AddProfiles` supplies the link primitive and
+`AddGeneral` the receipts role) holds no per-call state; the profiles root is
+read live per ladder run.
 
 ### Injectable seams
 
@@ -346,10 +417,25 @@ public static IServiceCollection AddRelayClient(this IServiceCollection services
 wiring a custom launch hook) can pre-register an override before calling
 `AddRelayClient` -- the same pattern the Steam library uses for its platform
 seams. The strategy is selected once, here, from the host OS, so the launch
-service contains no per-call OS branch. `IRelayLaunchService` is `AddSingleton`
+service contains no per-launch OS branch. `IRelayLaunchService` is `AddSingleton`
 (holds no per-launch state). Resolves `IProfileService`, `ISteamService`,
-`CuratorConfig`, `IPlatformLaunchStrategy`, and `ILogger<RelayLaunchService>`
-from the container.
+`CuratorConfig`, `IPlatformLaunchStrategy`, `IGameDirModsHost`, and
+`ILogger<RelayLaunchService>` from the container.
+
+`IGameDirModsHost` is registered by the composition root (not inside
+`AddRelayClient`) because its collaborators span the Profiles staging-link
+primitive and the app-state receipts role:
+
+```csharp
+services.AddSingleton<IGameDirModsHost>(sp => new GameDirModsHost(
+    sp.GetRequiredService<StagingLinkCreator>(),     // AddProfiles
+    sp.GetRequiredService<IProfileService>(),         // AddProfiles
+    sp.GetRequiredService<IRenamedModsFoldersState>(),// AddGeneral
+    sp.GetRequiredService<ILogger<GameDirModsHost>>()));
+```
+
+A host wiring `AddRelayClient` alone must supply an `IGameDirModsHost`
+registration (tests register a fake).
 
 ## Dependencies
 
@@ -377,7 +463,20 @@ and the Windows empty-removal/override assertion, plus the launch-settings merge
 Linux profile env before Proton startup alongside the AppImage removals + the
 `STEAM_COMPAT_*` overrides; Windows profile env as overrides; empty/legacy when no
 settings, plus the `CreateNoWindow` derivation from the global `ShowRelayConsole`
-preference read live per launch), `GameArgumentsTests` (the bare-`--` contract via the pure
+preference read live per launch), `GameDirModsHostTests` (the full claim ladder
+against the real platform link primitive + the real app-state receipts store:
+absent-creates, ours-by-marker left in place, ours re-pointed with the old
+target surviving, ours by marker outside the profiles root, dead link under the
+profiles root silently recreated, foreign real dir/file/link/dead-link
+conflicts reported untouched, the takeover rename + README + receipt incl.
+collision bump + file case + no-op cases + the host-through-ladder retry, and
+the best-effort removal semantics), the game-dir hosting step inside
+`RelayLaunchServiceTests` (the `--mod-path` switch to `GAME_DIR` under hosting
+and back to the staged root under the external preference read live per launch,
+the owned-link removal call, the `GameDirConflict` result shape, the link-failure
++ underivable-game-dir `Error` mappings, the Linux `Z:\` translation of
+`GAME_DIR`, and a real-host end-to-end launch from the temp game dir),
+`GameArgumentsTests` (the bare-`--` contract via the pure
 `BuildLauncherArgs(gameBinary, modPath, logFile, LaunchSettings)` seam: empty
 emits no `--`, multiple emit one `--` then each arg as its own element in order,
 values with spaces + quotes stay one element; the unconditional bare
