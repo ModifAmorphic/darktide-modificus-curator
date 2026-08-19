@@ -1607,18 +1607,19 @@ scripts/            release.env: the install manifest (standalone RELEASE_URL /
                     in place of the download, for offline extraction tests) /
                     CURATOR_APPIMAGE (local AppImage) / VELOPACK_STATE_DIR.
 .github/workflows/  curator-build (the PR gate: an Ubuntu-only format job
-                    auto-commits `dotnet format` as `style: dotnet format [skip ci]`
-                    for same-repo PRs, verify-only for fork PRs and workflow_dispatch;
-                    build + test on a Windows/Ubuntu matrix and a separate Ubuntu 22.04
-                    AppImage publish/pack/extract/feed/syntax-check/installer/uninstaller
-                    smoke (shell syntax checks on all four production Linux scripts
-                    install.sh, install-standalone.sh, uninstall.sh,
-                    uninstall-standalone.sh; runs the AppImage installer + AppImage
-                    uninstaller + standalone uninstaller harnesses; also asserts the
-                    Velopack-generated internal desktop file carries
-                    StartupWMClass=ModifAmorphic.ModificusCurator) depend on the format
-                    job; no artifact upload; release-please-only PRs are ignored via
-                    paths-ignore; there is intentionally no push trigger),
+                     auto-commits `dotnet format` as `style: dotnet format [skip ci]`
+                     for same-repo PRs, verify-only for fork PRs and workflow_dispatch;
+                     build + test on a Windows/Ubuntu matrix and a separate Ubuntu 22.04
+                     AppImage publish/pack/extract/feed/syntax-check/installer/uninstaller
+                     smoke (shell syntax checks on all four production Linux scripts
+                     install.sh, install-standalone.sh, uninstall.sh,
+                     uninstall-standalone.sh; runs the AppImage installer + AppImage
+                     uninstaller + standalone uninstaller harnesses; also asserts the
+                     Velopack-generated internal desktop file carries
+                     StartupWMClass=ModifAmorphic.ModificusCurator) depend on the format
+                     job; no artifact upload; release-please-only PRs are ignored via
+                     paths-ignore; runs on PRs into any branch; there is intentionally
+                     no push trigger),
                     release (release-please cuts the release; each platform job resolves
                     the newest non-draft stable Relay release and downloads its
                     Windows x64

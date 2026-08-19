@@ -1,5 +1,7 @@
 # Modificus Curator: PR build gate: auto-format (same-repo PRs only), build, test.
 #
+# This workflow runs on pull requests targeting any branch.
+#
 # There is intentionally no `push:` trigger here. The release workflow
 # (.github/workflows/release.yml) runs on push to main. This workflow is the
 # trust gate for merges.
@@ -16,7 +18,6 @@ name: curator-build
 
 on:
   pull_request:
-    branches: [main]
     paths-ignore:
       - 'CHANGELOG.md'
       - '.release-please-manifest.json'
