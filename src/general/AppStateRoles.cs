@@ -95,3 +95,18 @@ public interface IMainWindowStatePersistence
     /// </summary>
     AppWindowState? MainWindowState { get; set; }
 }
+
+/// <summary>
+/// The persisted receipts for foreign game-dir <c>mods</c> entries renamed
+/// aside with user consent. Append-only audit data: assignments replace the
+/// whole list, and the writer (the relay-client game-dir host) reads the
+/// current list, appends, and assigns back.
+/// </summary>
+public interface IRenamedModsFoldersState
+{
+    /// <summary>
+    /// The recorded receipts in append order, or <c>null</c> when none are
+    /// recorded.
+    /// </summary>
+    IReadOnlyList<RenamedModsFolder>? RenamedModsFolders { get; set; }
+}
