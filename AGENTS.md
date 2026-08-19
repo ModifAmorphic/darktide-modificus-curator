@@ -701,17 +701,17 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `IsUpdating`). The button shows for Nexus + Latest rows
                           regardless of tier (disabled + neutral when no update,
                           enabled + accent-blue arrow when flagged); Pinned/
-                           Untracked rows keep the reserved cell but no button. The
-                            rate-limit notice sits in the Mods toolbar. While
-                           the active profile has an enabled alternate mod
-                           manager mod, a full-width non-dismissible caution
-                           banner (a drawn swap-vert icon +
-                            `ModManagerBannerText` carrying the manager mod's
-                            display name, the same `GetActiveModManager`
-                            derivation the launch flag consumes, read at every
-                            Reload + the enable-toggle path) sits between the
-                            import card + the row list, gating nothing
-                            (reorder/lock controls stay fully functional). The Add split
+                          Untracked rows keep the reserved cell but no button. The
+                          rate-limit notice sits in the Mods toolbar. While
+                          the active profile has an enabled alternate mod
+                          manager mod, a full-width non-dismissible caution
+                          banner (a drawn swap-vert icon +
+                          `ModManagerBannerText` carrying the manager mod's
+                          display name, the same `GetActiveModManager`
+                          derivation the launch flag consumes, read at every
+                          Reload + the enable-toggle path) sits between the
+                          import card + the row list, gating nothing
+                          (reorder/lock controls stay fully functional). The Add split
                            button has four flyout items, all modes that set
                            the default on click (the face label tracks the
                            mode): "Add Nexus Mods" (the default; opens the
@@ -993,30 +993,30 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         (LaunchSettingsValidationError: index + field + kind;
                         single source of truth consumed by both the service and
                         the UI) -- names non-empty/no =/no NUL, no NUL in values,
-                         case-insensitive duplicate rejection, reserved-name block
-                         of 15 Curator-owned OS/launch + Relay config env (adds
-                         RELAY_LUA_LOGS + RELAY_SKIP_SPLASH +
-                         RELAY_MOD_MANAGER, the last owned by the manager-mod
-                         detection behind Relay's --mod-manager flag);
-                         backward-
-                         compat null/missing normalization to empty, mirroring Mods;
-                         GetLaunchSettings is the focused read the launch path uses;
-                         apply at launch) + the alternate-mod-manager derivation
-                         (GetActiveModManager: the focused read returning the
-                         ActiveModManager record -- the enabled mod whose
-                         resolved staging target is a base folder containing
-                         mod_manager.lua, plus the staged manager file path;
-                         content-based + manager-agnostic (no Nexus id, no
-                         base.mod involvement, no special AddMod behavior),
-                         shares the staging resolver so the answer matches what
-                         PrepareModRoot stages, yields null when the manager
-                         file is missing from the resolved target (never a path
-                         Relay would hard-refuse), first-in-order-wins over a
-                         hand-shaped duplicate; the manager mod stages +
-                         lists like any ordinary mod; one derivation consumed
-                         by both the launch flag + the mod-list banner) + ModCleanup (the startup
-                         prune orchestration; keeps a referenced linked container by
-                         containerId sentinel, since a linked container has no versions)
+                        case-insensitive duplicate rejection, reserved-name block
+                        of 15 Curator-owned OS/launch + Relay config env (adds
+                        RELAY_LUA_LOGS + RELAY_SKIP_SPLASH +
+                        RELAY_MOD_MANAGER, the last owned by the manager-mod
+                        detection behind Relay's --mod-manager flag);
+                        backward-
+                        compat null/missing normalization to empty, mirroring Mods;
+                        GetLaunchSettings is the focused read the launch path uses;
+                        apply at launch) + the alternate-mod-manager derivation
+                        (GetActiveModManager: the focused read returning the
+                        ActiveModManager record -- the enabled mod whose
+                        resolved staging target is a base folder containing
+                        mod_manager.lua, plus the staged manager file path;
+                        content-based + manager-agnostic (no Nexus id, no
+                        base.mod involvement, no special AddMod behavior),
+                        shares the staging resolver so the answer matches what
+                        PrepareModRoot stages, yields null when the manager
+                        file is missing from the resolved target (never a path
+                        Relay would hard-refuse), first-in-order-wins over a
+                        hand-shaped duplicate; the manager mod stages +
+                        lists like any ordinary mod; one derivation consumed
+                        by both the launch flag + the mod-list banner) + ModCleanup (the startup
+                        prune orchestration; keeps a referenced linked container by
+                        containerId sentinel, since a linked container has no versions)
   mods/          Modificus.Curator.Mods -- the unified mod repository
                         (IModRepository: UUID containers per (source, identity),
                         opaque-ID version subfolders, per-container container.json
@@ -1205,21 +1205,21 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         Linux); a profile's EnableLuaLogs emits Relay's bare
                         --log-lua flag appended after --log-append (a tee of
                         Lua print output into the log file, no value, not
-                         Z:\-translated on Linux); a profile's SkipSplash emits
-                         Relay's bare --skip-splash flag appended after --log-lua
-                         (skips Darktide's intro splash state, no value, not
-                         Z:\-translated on Linux); when the profile has an
-                         enabled alternate mod manager (derived right after the
-                         staging pass via GetActiveModManager), the pair
-                         --mod-manager + the ABSOLUTE staged manager file lands
-                         immediately after the --mod-path value pair (verbatim
-                         on Windows, Z:\-translated on Linux; the STAGED path in
-                         both hosting modes -- game-dir hosting's link resolves
-                         to the same file; null means Relay's built-in manager
-                         and no flag, and a manager file missing from the
-                         resolved target never gets one); game args append one bare -- then
-                         each arg as its own ArgumentList entry (Relay's --
-                          contract; no version preflight); the spawn seam IProcessLauncher takes
+                        Z:\-translated on Linux); a profile's SkipSplash emits
+                        Relay's bare --skip-splash flag appended after --log-lua
+                        (skips Darktide's intro splash state, no value, not
+                        Z:\-translated on Linux); when the profile has an
+                        enabled alternate mod manager (derived right after the
+                        staging pass via GetActiveModManager), the pair
+                        --mod-manager + the ABSOLUTE staged manager file lands
+                        immediately after the --mod-path value pair (verbatim
+                        on Windows, Z:\-translated on Linux; the STAGED path in
+                        both hosting modes -- game-dir hosting's link resolves
+                        to the same file; null means Relay's built-in manager
+                        and no flag, and a manager file missing from the
+                        resolved target never gets one); game args append one bare -- then
+                        each arg as its own ArgumentList entry (Relay's --
+                         contract; no version preflight); the spawn seam IProcessLauncher takes
                          one immutable ProcessLaunchRequest with FilePath,
                          Arguments, EnvironmentOverrides, EnvironmentVariablesToRemove,
                          and CreateNoWindow, applied by ProcessLauncher
@@ -1501,12 +1501,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             broken, OpenFolderCommand launch + failure alert, the
                                             disabled policy + empty update-action cell for linked
                                             rows, IsExternalBroken on Reload);
-                                             + the mod-list manager banner
-                                             (ModListModManagerBannerTests: IsModManagerActive +
-                                             ModManagerBannerText follow the GetActiveModManager
-                                             result at every Reload + on the enable-toggle path,
-                                             flipping off when the result clears, the row/repo/
-                                             "base" name fallback chain);
+                                            + the mod-list manager banner
+                                            (ModListModManagerBannerTests: IsModManagerActive +
+                                            ModManagerBannerText follow the GetActiveModManager
+                                            result at every Reload + on the enable-toggle path,
+                                            flipping off when the result clears, the row/repo/
+                                            "base" name fallback chain);
                                             + the profile-scoped load-order lock + drag-reorder
                                             surface (the lock-aware FakeProfileService projection,
                                             OrderLocked carried on Reload + move/grip availability,

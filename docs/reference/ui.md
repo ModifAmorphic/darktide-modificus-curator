@@ -1509,6 +1509,19 @@ and a row with only hidden or locked rows above it cannot move up. Reorder
 commits map visible ranks onto the stored order through the visibility-aware
 `ModReorderPlanner` (below).
 
+### `ModListViewModel` manager-banner state
+
+The list surfaces the alternate-mod-manager derivation as two members:
+
+| Member | Meaning |
+| --- | --- |
+| `bool IsModManagerActive` | Whether the active profile has an enabled alternate mod manager mod. Read from the same `IProfileService.GetActiveModManager` derivation the launch path hands to Relay as its `--mod-manager` flag (one derivation, so the banner and the flag can never disagree); re-derived on every `Reload` and on the enable-toggle path (in place: the toggle deliberately skips the row rebuild). Drives the banner's visibility. |
+| `string ModManagerBannerText` | The localized caution text, formatted with the manager mod's display name: the loaded row's name, falling back to the repository container's name, then the literal `base`. Re-fires on a culture change. |
+
+The banner is live state, not a notification: it is visible exactly while the
+manager is active, is not dismissible (disable or remove the manager mod to
+clear it), and gates nothing (reorder/lock controls stay fully functional).
+
 ### `ModItemViewModel` display state
 
 The row gains observable state + derived projections for display metadata,
@@ -1604,6 +1617,13 @@ feature).
   `visibility_off`/`visibility` paths swapped by the flag, bound to
   `ToggleHideDisabledCommand`, with the dynamic hide/show tooltip +
   automation name.
+- **Manager banner.** A full-width caution `Border` in the page grid's row 2,
+  between the inline import card (row 1) and the row list (row 3):
+  `IsVisible` bound to `IsModManagerActive`, a `CuratorCautionBackgroundBrush`
+  face carrying a drawn Material `swap_vert` icon (caution foreground) + the
+  wrapping `ModManagerBannerText`. Non-dismissible live state (no close
+  affordance) that gates nothing; it clears when the manager mod is disabled
+  or removed.
 - **Row template.** A `Panel` hosts two mutually exclusive roots selected by the
   row's `IsDetailed` projection: the Compact `Grid` (`compactRow`, four
   columns: grip, name, badges, action strip) and a Detailed `Border` (the
@@ -2145,6 +2165,11 @@ No backend library references the UI (the dependency direction is one-way).
   name refresh (refreshed when the flag is set, untouched when it is not), and
   the empty-state Nexus hint (construction + both `Reload` paths perform zero
   registration probes; `IsNxmRegistered` follows the shared state).
+- **`ModListModManagerBannerTests`**: the manager-banner state through the VM
+  (the banner follows the `GetActiveModManager` result at every `Reload` and on
+  the enable-toggle path without an intervening reload, both directions, an
+  unrelated toggle leaving state + text unchanged, and the row / repository /
+  `base` name fallback chain).
 - **`ModRowContextTests`**: the shared row-context contract -- a premium or
   install-busy flip on the context re-fires exactly the row + list-VM
   properties the former per-flag pushes re-fired, the gaming constant reads
