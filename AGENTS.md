@@ -1607,9 +1607,10 @@ scripts/            release.env: the install manifest (standalone RELEASE_URL /
                     in place of the download, for offline extraction tests) /
                     CURATOR_APPIMAGE (local AppImage) / VELOPACK_STATE_DIR.
 .github/workflows/  curator-build (the PR gate: an Ubuntu-only format job
-                     auto-commits `dotnet format` as `style: dotnet format [skip ci]`
-                     for same-repo PRs, verify-only for fork PRs and workflow_dispatch;
-                     build + test on a Windows/Ubuntu matrix and a separate Ubuntu 22.04
+                     checks out the PR head branch, runs `dotnet format`,
+                     and auto-commits with `[skip ci]` on pull requests (format runs
+                     without committing on workflow_dispatch); build + test on a
+                     Windows/Ubuntu matrix and a separate Ubuntu 22.04
                      AppImage publish/pack/extract/feed/syntax-check/installer/uninstaller
                      smoke (shell syntax checks on all four production Linux scripts
                      install.sh, install-standalone.sh, uninstall.sh,
