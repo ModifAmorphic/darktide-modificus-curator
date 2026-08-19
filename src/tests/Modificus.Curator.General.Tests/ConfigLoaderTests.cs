@@ -188,6 +188,7 @@ public sealed class ConfigLoaderTests
             config.Preferences.FontScale = 1.5;
             config.Preferences.Language = "fr";
             config.Preferences.ShowRelayConsole = true;
+            config.Preferences.ExternalModHosting = true;
 
             loader.Save(config);
             var reloaded = loader.Load();
@@ -196,6 +197,36 @@ public sealed class ConfigLoaderTests
             Assert.Equal(1.5, reloaded.Preferences.FontScale);
             Assert.Equal("fr", reloaded.Preferences.Language);
             Assert.True(reloaded.Preferences.ShowRelayConsole);
+            Assert.True(reloaded.Preferences.ExternalModHosting);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ExternalModHosting_defaults_to_false_and_survives_an_absent_field()
+    {
+        // The standard behavior (game-dir hosting) is the default: an absent or
+        // partially-populated Preferences section yields false, and an old
+        // config file written before the field existed is not mistaken for an
+        // opt-in.
+        var dir = Path.Combine(Path.GetTempPath(), "curator-cfg-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        var configPath = Path.Combine(dir, "config.json");
+        File.WriteAllText(configPath, """
+            {
+              "Preferences": {
+                "Theme": "Dark"
+              }
+            }
+            """);
+
+        try
+        {
+            Assert.False(CuratorConfig.CreateDefault().Preferences.ExternalModHosting);
+            Assert.False(new ConfigLoader(configPath).Load().Preferences.ExternalModHosting);
         }
         finally
         {
