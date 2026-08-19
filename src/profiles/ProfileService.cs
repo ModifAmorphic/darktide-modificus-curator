@@ -21,6 +21,7 @@ namespace Modificus.Curator.Profiles;
 ///       mods/                        (the mod host folder Relay consumes)
 ///         &lt;baseName&gt;               (staging link -> &lt;versionFolder&gt;/&lt;baseName&gt;/)
 ///         mods.lst                   (successfully-staged enabled mods, in order)
+///         .curator.json              (Curator's staging ownership marker)
 /// </code>
 /// <para>
 /// A profile references mods by <see cref="ModListEntry.ContainerId"/>; it stores
@@ -466,8 +467,37 @@ internal sealed class ProfileService : IProfileService
         }
 
         WriteModList(stagedNames, mods);
+        WriteOwnershipMarker(mods, profile);
         _logger.LogInformation("Staged {Count} mod(s) for profile {Id} at {Path}", stagedNames.Count, id, staged);
         return staged;
+    }
+
+    // ---- staging ownership marker -------------------------------------------
+
+    /// <summary>The marker schema version. Bump only on a breaking marker-shape
+    /// change (the game-dir host treats an unreadable marker as absent).</summary>
+    internal const int OwnershipMarkerSchema = 1;
+
+    /// <summary>
+    /// The persisted shape of <see cref="OwnershipMarkerFileName"/>: identifies
+    /// the profile the staged tree was projected for + when. Profiles holds the
+    /// profile identity and owns the staged tree, so the write lives here; the
+    /// relay-client game-dir host only reads the marker back to prove a link is
+    /// Curator's. App version is deliberately absent (Profiles does not know it;
+    /// profile identity + timestamp carry the troubleshooting value).
+    /// </summary>
+    internal sealed record OwnershipMarker(int Schema, Guid ProfileId, string ProfileName, DateTimeOffset ProjectedAtUtc);
+
+    /// <summary>
+    /// Rewrites the ownership marker into the staged <c>mods/</c> each pass
+    /// (the pass cleared + rebuilt the tree, so the prior marker is gone; a
+    /// marker that survived would misattribute a rebuilt tree).
+    /// </summary>
+    private static void WriteOwnershipMarker(string mods, Profile profile)
+    {
+        var marker = new OwnershipMarker(OwnershipMarkerSchema, profile.Id, profile.Name, DateTimeOffset.UtcNow);
+        var json = JsonSerializer.Serialize(marker, JsonOptions);
+        File.WriteAllText(Path.Combine(mods, StagingOwnership.MarkerFileName), json, ModListEncoding);
     }
 
     // ---- DMF fresh-add recognition ------------------------------------------
@@ -664,6 +694,9 @@ internal sealed class ProfileService : IProfileService
     }
 
     // ---- launch settings ----------------------------------------------------
+
+    /// <inheritdoc />
+    public string ProfilesRoot => EnsureBaseFolder();
 
     /// <inheritdoc />
     public LaunchSettings GetLaunchSettings(Guid id)

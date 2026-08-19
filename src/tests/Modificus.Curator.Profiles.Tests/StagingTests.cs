@@ -113,23 +113,25 @@ public sealed class StagingTests
         var rootEntry = Assert.Single(rootEntries);
         Assert.Equal("mods", Path.GetFileName(rootEntry));
 
-        // staged/mods/ contains exactly the symlink + mods.lst.
+        // staged/mods/ contains exactly the symlink + mods.lst + the ownership
+        // marker.
         var modsDir = Path.Combine(fx.StagedDir(profile.Id), "mods");
         var stagedEntries = Directory.GetFileSystemEntries(modsDir);
-        Assert.Equal(2, stagedEntries.Length);
+        Assert.Equal(3, stagedEntries.Length);
 
         foreach (var entry in stagedEntries)
         {
-            if (Path.GetFileName(entry) == "mods.lst")
+            var name = Path.GetFileName(entry);
+            if (name == "mods.lst" || name == StagingOwnership.MarkerFileName)
             {
                 var attrs = File.GetAttributes(entry);
                 Assert.True((attrs & FileAttributes.ReparsePoint) == 0,
-                    "mods.lst should be a real file, not a symlink");
+                    $"{name} should be a real file, not a symlink");
             }
             else
             {
                 Assert.True(IsSymlink(entry),
-                    $"staged mod entry '{Path.GetFileName(entry)}' must be a symlink, not a copied directory");
+                    $"staged mod entry '{name}' must be a symlink, not a copied directory");
             }
         }
 
