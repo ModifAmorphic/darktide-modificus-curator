@@ -140,6 +140,15 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     private IReadOnlyList<ModListEntry> _loadedEntries = Array.Empty<ModListEntry>();
 
     /// <summary>
+    /// The active profile's enabled alternate mod manager, from the same
+    /// <see cref="IProfileService.GetActiveModManager"/> derivation the launch
+    /// path hands to Relay (set by <see cref="Reload"/>; null with no active
+    /// profile or no manager mod). Drives the caution banner: while a manager
+    /// mod is enabled, it (not Curator's order) controls in-game load order.
+    /// </summary>
+    private ActiveModManager? _activeModManager;
+
+    /// <summary>
     /// Creates the list VM, subscribes to the session (reload on
     /// active-profile change), the update-check runner (row hydration on every
     /// completed check + reload after an automatic batch installs mods), the
@@ -680,6 +689,34 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
             : _localization["ModList_RateLimitedTooltip"];
 
     /// <summary>
+    /// Whether the active profile has an enabled alternate mod manager mod.
+    /// Drives the full-width caution banner above the row list; visible
+    /// exactly while the manager is active (live state, never dismissed).
+    /// </summary>
+    public bool IsModManagerActive => _activeModManager is not null;
+
+    /// <summary>
+    /// The localized caution-banner text while an alternate mod manager is
+    /// active, formatted with the manager mod's display name (the loaded row's
+    /// name, falling back to the repository container's name, then the literal
+    /// "base" if even that is gone). Re-fires on a culture change.
+    /// </summary>
+    public string ModManagerBannerText => _localization.Format(
+        "ModList_ModManagerBanner",
+        _activeModManager is { } manager ? ModManagerDisplayName(manager.ContainerId) : "base");
+
+    /// <summary>
+    /// The manager mod's display name for the banner: the loaded row's name
+    /// when the manager's container is in the list, the repository
+    /// container's name otherwise, then the literal "base" (defense; the
+    /// container should always be resolvable for an enabled manager).
+    /// </summary>
+    private string ModManagerDisplayName(Guid containerId) =>
+        Mods.FirstOrDefault(m => m.ContainerId == containerId)?.Name
+            ?? _repo.Get(containerId)?.Name
+            ?? "base";
+
+    /// <summary>
     /// The inline import workflow finished a successful per-item import on the
     /// captured profile id. Reload the list only when that profile is the active
     /// one (the user is looking at it); an import that landed on a now-inactive
@@ -716,9 +753,9 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// The mod list's localized property names, re-fired by the shared
     /// culture-refresh base on a culture change (header, empty-state,
-    /// filter/search, and refresh-gate tooltip strings; the gate re-render in
-    /// <see cref="OnCultureChanged"/> re-fires the non-localized gate
-    /// renderings alongside them).
+    /// filter/search, refresh-gate tooltip, and manager-banner strings; the
+    /// gate re-render in <see cref="OnCultureChanged"/> re-fires the
+    /// non-localized gate renderings alongside them).
     /// </summary>
     protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
@@ -731,6 +768,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         nameof(AddButtonTooltip),
         nameof(HideDisabledTooltip),
         nameof(NoMatchesText),
+        nameof(ModManagerBannerText),
     };
 
     /// <summary>
@@ -890,6 +928,9 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
             HasActiveProfile = false;
             ModCount = 0;
             _loadedEntries = Array.Empty<ModListEntry>();
+            _activeModManager = null;
+            OnPropertyChanged(nameof(IsModManagerActive));
+            OnPropertyChanged(nameof(ModManagerBannerText));
             // Hand an empty snapshot so old work is cancelled.
             _ = DetailedRows.SetRowsAsync(Array.Empty<ModItemViewModel>());
             RebuildVisibleMods();
@@ -937,6 +978,16 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         }
 
         ModCount = Mods.Count;
+
+        // The manager banner reads the same derivation the launch path hands
+        // to Relay, so the banner and the --mod-manager flag can never
+        // disagree. Read after the rows are built so the banner's name lookup
+        // finds the manager's row. The text notify fires even when the active
+        // flag is unchanged (a profile switch between two manager profiles
+        // changes only the name).
+        _activeModManager = _profiles.GetActiveModManager(id);
+        OnPropertyChanged(nameof(IsModManagerActive));
+        OnPropertyChanged(nameof(ModManagerBannerText));
 
         // Rebuild the visible projection (which also recomputes per-row move
         // availability over the visible unlocked rows): the projection is
