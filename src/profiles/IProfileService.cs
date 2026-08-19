@@ -228,6 +228,14 @@ public interface IProfileService
     ModListEntry? GetBaseNameCollision(Guid id, string baseName, Guid? excludeContainerId);
 
     /// <summary>
+    /// The profiles' base folder (the live <c>ProfilesBaseFolder</c> from
+    /// config), ensured to exist. A focused read for consumers that need the
+    /// root as an ownership prefix: a staging link whose target lies under this
+    /// folder is Curator's even when the target is currently missing.
+    /// </summary>
+    string ProfilesRoot { get; }
+
+    /// <summary>
     /// The profile's launch settings (environment variables + game arguments).
     /// A focused read (no full profile + mod-list load) used by the launch path;
     /// the hosted Profiles page edits launch settings through the atomic
@@ -240,8 +248,11 @@ public interface IProfileService
     /// Regenerates the profile's staged mod root (the <c>--mod-path</c>) from the
     /// current per-mod version resolution, and writes <c>mods.lst</c> from the
     /// successfully-staged enabled mods in <see cref="ModListEntry.Order"/>.
-    /// Idempotent (each call clears + rebuilds <c>staged/</c>). Returns the
-    /// <c>--mod-path</c> to pass to the Relay launcher.
+    /// Idempotent (each call clears + rebuilds <c>staged/</c>). Also rewrites
+    /// the staging ownership marker (<c>.curator.json</c>: schema, profile id +
+    /// name, projection timestamp) into the staged <c>mods/</c> on every pass,
+    /// so a game-dir hosting link aimed at this tree can prove Curator owns it.
+    /// Returns the <c>--mod-path</c> to pass to the Relay launcher.
     /// </summary>
     /// <remarks>
     /// Staging links, not copies (the repository holds the files). A staging-link

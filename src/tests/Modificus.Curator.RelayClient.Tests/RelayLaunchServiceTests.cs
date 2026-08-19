@@ -1,4 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Modificus.Curator.General;
 using Modificus.Curator.Profiles;
 using Modificus.Curator.Steam;
 
@@ -19,7 +21,7 @@ public sealed class RelayLaunchServiceTests
     public void Windows_assembles_correct_args_and_invokes_launcher_directly()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Steam.Result = fx.CompleteWindows;
         fx.Profiles.PrepareModRootResult = @"C:\curator\profiles\abc\staged";
         var profileId = Guid.NewGuid();
         var svc = fx.BuildWindowsService();
@@ -40,8 +42,8 @@ public sealed class RelayLaunchServiceTests
         var expectedRelayLog = RelayLog.ResolveRelayLogPath(fx.Config.Logging.RelayLogFile, DateTime.Now);
 
         Assert.Equal(
-            new[] { "--game-binary", FakeDiscovery.WindowsGameBinary,
-                    "--mod-path",    @"C:\curator\profiles\abc\staged",
+            new[] { "--game-binary", fx.WindowsGameBinary,
+                    "--mod-path",    fx.GameDir,
                     "--log-file",    expectedRelayLog,
                     "--log-append" },
             fx.Launcher.Arguments);
@@ -59,7 +61,7 @@ public sealed class RelayLaunchServiceTests
         // (no Z:\ prefix) -- translation is a Linux-only concern. The --log-file
         // value is the computed relay-<date>.log resolved from RelayLogFile.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Steam.Result = fx.CompleteWindows;
         const string RelayLogFile = @"C:\curator\logs\relay-.log";
         fx.Config.Logging.RelayLogFile = RelayLogFile;
         var svc = fx.BuildWindowsService();
@@ -69,7 +71,7 @@ public sealed class RelayLaunchServiceTests
         var args = fx.Launcher.Arguments!;
         var game = args[IndexOf(args, "--game-binary") + 1];
         var log = args[IndexOf(args, "--log-file") + 1];
-        Assert.Equal(FakeDiscovery.WindowsGameBinary, game);
+        Assert.Equal(fx.WindowsGameBinary, game);
         Assert.Equal(RelayLog.ResolveRelayLogPath(RelayLogFile, DateTime.Now), log);
         Assert.DoesNotContain("Z:", game);
         Assert.DoesNotContain("Z:", log);
@@ -85,7 +87,7 @@ public sealed class RelayLaunchServiceTests
         // not a bootstrap-pinned path. Uses the Windows strategy so the path
         // passes through verbatim (no Z:\ translation).
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Steam.Result = fx.CompleteWindows;
         const string ConfiguredRelayLog = @"C:\curator\logs\relay-.log";
         fx.Config.Logging.RelayLogFile = ConfiguredRelayLog;
         var svc = fx.BuildWindowsService();
@@ -104,7 +106,7 @@ public sealed class RelayLaunchServiceTests
     public void Windows_launch_returns_launched_when_process_starts()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Steam.Result = fx.CompleteWindows;
         fx.Launcher.Returns = true;
         var svc = fx.BuildWindowsService();
 
@@ -121,8 +123,7 @@ public sealed class RelayLaunchServiceTests
     public void Linux_translates_mod_path_and_game_binary_to_wine_paths()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
-        fx.Profiles.PrepareModRootResult = "/home/u/.local/share/Modificus Curator/profiles/abc/staged";
+        fx.Steam.Result = fx.CompleteLinux;
         var svc = fx.BuildLinuxService();
 
         svc.Launch(Guid.NewGuid());
@@ -134,10 +135,11 @@ public sealed class RelayLaunchServiceTests
         var game = launcherFlags[IndexOf(launcherFlags, "--game-binary") + 1];
         var mod = launcherFlags[IndexOf(launcherFlags, "--mod-path") + 1];
 
-        Assert.Equal(@"Z:\home\u\.local\share\Modificus Curator\profiles\abc\staged", mod);
-        Assert.Equal(
-            @"Z:\home\u\.steam\steam\steamapps\common\Warhammer 40,000 DARKTIDE\binaries\Darktide.exe",
-            game);
+        // Game-dir hosting is the default, so --mod-path is the derived GAME_DIR
+        // (the parent of the hosted mods tree), Z:\-translated like every
+        // path-valued flag; the game binary likewise.
+        Assert.Equal(WinePath.ToWine(fx.GameDir), mod);
+        Assert.Equal(WinePath.ToWine(fx.LinuxGameBinary), game);
     }
 
     [Fact]
@@ -148,7 +150,7 @@ public sealed class RelayLaunchServiceTests
         // where Curator expects). The value is the computed relay-<date>.log
         // resolved from the configured RelayLogFile stem.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         const string RelayLogFile = "/home/u/.local/share/Modificus Curator/logs/relay-.log";
         fx.Config.Logging.RelayLogFile = RelayLogFile;
         var svc = fx.BuildLinuxService();
@@ -164,7 +166,7 @@ public sealed class RelayLaunchServiceTests
     public void Linux_sets_both_steam_compat_env_vars_from_discovery()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         var svc = fx.BuildLinuxService();
 
         svc.Launch(Guid.NewGuid());
@@ -185,7 +187,7 @@ public sealed class RelayLaunchServiceTests
         // overrides must still be applied; nothing unrelated may be requested
         // for removal.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         var svc = fx.BuildLinuxService();
 
         svc.Launch(Guid.NewGuid());
@@ -212,7 +214,7 @@ public sealed class RelayLaunchServiceTests
     public void Linux_invokes_proton_run_with_launcher_not_launcher_alone()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         var svc = fx.BuildLinuxService();
 
         svc.Launch(Guid.NewGuid());
@@ -231,7 +233,7 @@ public sealed class RelayLaunchServiceTests
     public void Linux_launch_returns_launched_when_process_starts()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         fx.Launcher.Returns = true;
         var svc = fx.BuildLinuxService();
 
@@ -247,7 +249,7 @@ public sealed class RelayLaunchServiceTests
     public async Task Launched_exit_task_completes_when_the_spawned_process_exits_and_disposes_the_handle()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         var svc = fx.BuildLinuxService();
 
         var result = svc.Launch(Guid.NewGuid());
@@ -273,7 +275,7 @@ public sealed class RelayLaunchServiceTests
         // exited: the exit task still completes, never faults, and the handle
         // is still disposed.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Steam.Result = fx.CompleteWindows;
         fx.Launcher.ThrowOnWaitForExit = true;
         var svc = fx.BuildWindowsService();
 
@@ -294,7 +296,7 @@ public sealed class RelayLaunchServiceTests
         // DiscoveryIncomplete: short-circuits before any spawn.
         using (var fx = new RelayFixture())
         {
-            fx.Steam.Result = FakeDiscovery.CompleteLinux with
+            fx.Steam.Result = fx.CompleteLinux with
             {
                 ProtonBinaryPath = null,
                 ProtonVersion = null,
@@ -309,7 +311,7 @@ public sealed class RelayLaunchServiceTests
         // StagingFailed: the mod root failed before any spawn.
         using (var fx = new RelayFixture())
         {
-            fx.Steam.Result = FakeDiscovery.CompleteLinux;
+            fx.Steam.Result = fx.CompleteLinux;
             fx.Profiles.PrepareModRootThrows = true;
             var result = fx.BuildLinuxService().Launch(Guid.NewGuid());
 
@@ -320,7 +322,7 @@ public sealed class RelayLaunchServiceTests
         // Error: the spawn itself failed (a null handle).
         using (var fx = new RelayFixture())
         {
-            fx.Steam.Result = FakeDiscovery.CompleteLinux;
+            fx.Steam.Result = fx.CompleteLinux;
             fx.Launcher.Returns = false;
             var result = fx.BuildLinuxService().Launch(Guid.NewGuid());
 
@@ -336,7 +338,7 @@ public sealed class RelayLaunchServiceTests
     {
         // Steam + Darktide found, but compatdata + Proton missing on Linux.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux with
+        fx.Steam.Result = fx.CompleteLinux with
         {
             CompatdataPath = null,
             ProtonBinaryPath = null,
@@ -361,7 +363,7 @@ public sealed class RelayLaunchServiceTests
     public void DiscoveryIncomplete_windows_partial_returns_missing_game_binary()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows with
+        fx.Steam.Result = fx.CompleteWindows with
         {
             DarktideGameBinaryPath = null,
             Status = DiscoveryStatus.Partial,
@@ -420,7 +422,7 @@ public sealed class RelayLaunchServiceTests
         // Windows launch is not blocked (no DiscoveryIncomplete) and reaches the
         // launcher directly.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows with { SteamInstallPath = null };
+        fx.Steam.Result = fx.CompleteWindows with { SteamInstallPath = null };
         fx.Launcher.Returns = true;
         var svc = fx.BuildWindowsService();
 
@@ -428,7 +430,7 @@ public sealed class RelayLaunchServiceTests
 
         Assert.Equal(LaunchStatus.Launched, result.Status);
         Assert.Equal(fx.LauncherPath, fx.Launcher.FilePath);
-        Assert.Contains(FakeDiscovery.WindowsGameBinary, fx.Launcher.Arguments!);
+        Assert.Contains(fx.WindowsGameBinary, fx.Launcher.Arguments!);
     }
 
     [Fact]
@@ -483,7 +485,7 @@ public sealed class RelayLaunchServiceTests
         // CreateNoWindow=true (the console window is suppressed). Read live from
         // the config snapshot the fixture injects.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Steam.Result = fx.CompleteWindows;
         var svc = fx.BuildWindowsService();
 
         svc.Launch(Guid.NewGuid());
@@ -498,7 +500,7 @@ public sealed class RelayLaunchServiceTests
         // Relay console window appears. One platform is enough: both strategies
         // thread createNoWindow through the same ProcessLaunchRequest ctor.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Steam.Result = fx.CompleteWindows;
         fx.Config.Preferences.ShowRelayConsole = true;
         var svc = fx.BuildWindowsService();
 
@@ -513,7 +515,7 @@ public sealed class RelayLaunchServiceTests
         // The preference is read from the live config snapshot each launch (no
         // cached value), so flipping it between launches flips the request flag.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         var svc = fx.BuildLinuxService();
 
         svc.Launch(Guid.NewGuid());
@@ -529,10 +531,14 @@ public sealed class RelayLaunchServiceTests
     [Fact]
     public void Launch_calls_PrepareModRoot_with_profile_id_before_invoking()
     {
+        // External mode: the staged root PrepareModRoot returns IS the
+        // --mod-path (Z:\-translated on Linux), preserving the pre-hosting
+        // behavior the opt-out restores.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         const string PreparedRoot = "/tmp/prepared-mod-root";
         fx.Profiles.PrepareModRootResult = PreparedRoot;
+        fx.Config.Preferences.ExternalModHosting = true;
         var profileId = Guid.NewGuid();
         var svc = fx.BuildLinuxService();
 
@@ -554,7 +560,7 @@ public sealed class RelayLaunchServiceTests
     public void Launch_reads_the_profile_launch_settings_each_launch()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Steam.Result = fx.CompleteWindows;
         fx.Profiles.LaunchSettingsResult = new LaunchSettings
         {
             EnvironmentVariables = new[] { new EnvVar("PROTON_LOG", "1") },
@@ -577,7 +583,7 @@ public sealed class RelayLaunchServiceTests
     public void Windows_profile_with_enable_lua_logs_emits_flag()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Steam.Result = fx.CompleteWindows;
         fx.Profiles.LaunchSettingsResult = new LaunchSettings { EnableLuaLogs = true };
         var svc = fx.BuildWindowsService();
 
@@ -592,7 +598,7 @@ public sealed class RelayLaunchServiceTests
     public void Linux_profile_with_enable_lua_logs_emits_flag()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         fx.Profiles.LaunchSettingsResult = new LaunchSettings { EnableLuaLogs = true };
         var svc = fx.BuildLinuxService();
 
@@ -611,7 +617,7 @@ public sealed class RelayLaunchServiceTests
     {
         // Default LaunchSettings: EnableLuaLogs is false, so no --log-lua.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Steam.Result = fx.CompleteWindows;
         var svc = fx.BuildWindowsService();
 
         svc.Launch(Guid.NewGuid());
@@ -623,7 +629,7 @@ public sealed class RelayLaunchServiceTests
     public void Windows_profile_with_skip_splash_emits_flag()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Steam.Result = fx.CompleteWindows;
         fx.Profiles.LaunchSettingsResult = new LaunchSettings { SkipSplash = true };
         var svc = fx.BuildWindowsService();
 
@@ -638,7 +644,7 @@ public sealed class RelayLaunchServiceTests
     public void Linux_profile_with_skip_splash_emits_flag()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         fx.Profiles.LaunchSettingsResult = new LaunchSettings { SkipSplash = true };
         var svc = fx.BuildLinuxService();
 
@@ -657,7 +663,7 @@ public sealed class RelayLaunchServiceTests
     {
         // Default LaunchSettings: SkipSplash is false, so no --skip-splash.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Steam.Result = fx.CompleteWindows;
         var svc = fx.BuildWindowsService();
 
         svc.Launch(Guid.NewGuid());
@@ -673,7 +679,7 @@ public sealed class RelayLaunchServiceTests
         // flags is not a Relay contract, so it is not asserted. One platform
         // is enough (the signature is shared).
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Steam.Result = fx.CompleteWindows;
         fx.Profiles.LaunchSettingsResult = new LaunchSettings
         {
             EnableLuaLogs = true,
@@ -702,7 +708,7 @@ public sealed class RelayLaunchServiceTests
         // request's EnvironmentOverrides, applied by the launcher onto the
         // ProcessStartInfo.Environment snapshot before the proton process starts.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         fx.Profiles.LaunchSettingsResult = new LaunchSettings
         {
             EnvironmentVariables = new[]
@@ -725,7 +731,7 @@ public sealed class RelayLaunchServiceTests
     {
         // The five AppImage/desktop-identity removals hold alongside profile env.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         fx.Profiles.LaunchSettingsResult = new LaunchSettings
         {
             EnvironmentVariables = new[] { new EnvVar("PROTON_LOG", "1") },
@@ -751,7 +757,7 @@ public sealed class RelayLaunchServiceTests
         // practice) would be overridden. The two compat vars are present with
         // the discovery values, alongside the profile env.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         fx.Profiles.LaunchSettingsResult = new LaunchSettings
         {
             EnvironmentVariables = new[]
@@ -775,7 +781,7 @@ public sealed class RelayLaunchServiceTests
     public void Windows_request_contains_profile_env_as_overrides()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Steam.Result = fx.CompleteWindows;
         fx.Profiles.LaunchSettingsResult = new LaunchSettings
         {
             EnvironmentVariables = new[]
@@ -803,7 +809,7 @@ public sealed class RelayLaunchServiceTests
         // environment overrides on the Relay process (the child inherits the
         // parent env verbatim).
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteWindows;
+        fx.Steam.Result = fx.CompleteWindows;
         var svc = fx.BuildWindowsService();
 
         svc.Launch(Guid.NewGuid());
@@ -817,7 +823,7 @@ public sealed class RelayLaunchServiceTests
         // A profile with empty settings launches exactly as the pre-launch-
         // settings path: no profile env beyond STEAM_COMPAT_*, no game args, no --.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         var svc = fx.BuildLinuxService();
 
         svc.Launch(Guid.NewGuid());
@@ -841,7 +847,7 @@ public sealed class RelayLaunchServiceTests
         // exception's body on Message (surfaced after the localized framing in
         // the UI), with an empty missing-fields list.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         fx.Profiles.PrepareModRootThrows = true;
         var profileId = Guid.NewGuid();
         var svc = fx.BuildLinuxService();
@@ -859,7 +865,7 @@ public sealed class RelayLaunchServiceTests
     public void Error_unknown_profile_returns_error_not_thrown()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux; // discovery OK, but profile unknown
+        fx.Steam.Result = fx.CompleteLinux; // discovery OK, but profile unknown
         fx.Profiles.UnknownProfile = true;
         var profileId = Guid.NewGuid();
         var svc = fx.BuildLinuxService();
@@ -875,7 +881,7 @@ public sealed class RelayLaunchServiceTests
     public void Error_missing_runtime_launcher_returns_error()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         fx.DeleteLauncher(); // Relay not deployed
         var svc = fx.BuildLinuxService();
 
@@ -891,7 +897,7 @@ public sealed class RelayLaunchServiceTests
     public void Error_process_start_failure_returns_error()
     {
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         fx.Launcher.Returns = false; // process.Start failed (file missing, perms, etc.)
         var svc = fx.BuildLinuxService();
 
@@ -908,7 +914,7 @@ public sealed class RelayLaunchServiceTests
     {
         // Error (not DiscoveryIncomplete) must always carry an empty missing-fields list.
         using var fx = new RelayFixture();
-        fx.Steam.Result = FakeDiscovery.CompleteLinux;
+        fx.Steam.Result = fx.CompleteLinux;
         fx.DeleteLauncher();
         var svc = fx.BuildLinuxService();
 
@@ -916,6 +922,226 @@ public sealed class RelayLaunchServiceTests
 
         Assert.Equal(LaunchStatus.Error, result.Status);
         Assert.Empty(result.MissingDiscoveryFields);
+    }
+
+    // ---- Game-dir hosting ----------------------------------------------------
+
+    [Fact]
+    public void Hosting_passes_the_game_dir_as_mod_path_and_ensures_hosting()
+    {
+        // The default: --mod-path is the derived GAME_DIR (the parent of the
+        // hosted mods tree), and the game-dir host ran the ladder for exactly
+        // that dir + the staged root.
+        using var fx = new RelayFixture();
+        fx.Steam.Result = fx.CompleteWindows;
+        const string PreparedRoot = @"C:\curator\profiles\abc\staged";
+        fx.Profiles.PrepareModRootResult = PreparedRoot;
+        var svc = fx.BuildWindowsService();
+
+        svc.Launch(Guid.NewGuid());
+
+        var ensure = Assert.Single(fx.GameDirHost.EnsureCalls);
+        Assert.Equal(fx.GameDir, ensure.GameDir);
+        Assert.Equal(PreparedRoot, ensure.StagedRoot);
+        Assert.Empty(fx.GameDirHost.RemoveOwnedLinkCalls);
+
+        var args = fx.Launcher.Arguments!;
+        Assert.Equal(fx.GameDir, args[IndexOf(args, "--mod-path") + 1]);
+    }
+
+    [Fact]
+    public void External_mode_passes_the_staged_root_and_removes_the_owned_link()
+    {
+        // The opt-out restores the staging-only launch AND cleans up a
+        // Curator-owned game-dir link, without ever consulting the ladder for
+        // hosting.
+        using var fx = new RelayFixture();
+        fx.Steam.Result = fx.CompleteWindows;
+        const string PreparedRoot = @"C:\curator\profiles\abc\staged";
+        fx.Profiles.PrepareModRootResult = PreparedRoot;
+        fx.Config.Preferences.ExternalModHosting = true;
+        var svc = fx.BuildWindowsService();
+
+        svc.Launch(Guid.NewGuid());
+
+        Assert.Empty(fx.GameDirHost.EnsureCalls);
+        Assert.Equal(fx.GameDir, Assert.Single(fx.GameDirHost.RemoveOwnedLinkCalls));
+
+        var args = fx.Launcher.Arguments!;
+        Assert.Equal(PreparedRoot, args[IndexOf(args, "--mod-path") + 1]);
+    }
+
+    [Fact]
+    public void External_mode_preference_is_read_live_per_launch()
+    {
+        // Flipping the preference between launches flips the mod-path source,
+        // exactly like the other launch-affecting preferences.
+        using var fx = new RelayFixture();
+        fx.Steam.Result = fx.CompleteWindows;
+        const string PreparedRoot = @"C:\curator\profiles\abc\staged";
+        fx.Profiles.PrepareModRootResult = PreparedRoot;
+        var svc = fx.BuildWindowsService();
+
+        svc.Launch(Guid.NewGuid());
+        Assert.Single(fx.GameDirHost.EnsureCalls);
+        Assert.Empty(fx.GameDirHost.RemoveOwnedLinkCalls);
+
+        fx.Config.Preferences.ExternalModHosting = true;
+        svc.Launch(Guid.NewGuid());
+        Assert.Single(fx.GameDirHost.RemoveOwnedLinkCalls);
+
+        var args = fx.Launcher.Arguments!;
+        Assert.Equal(PreparedRoot, args[IndexOf(args, "--mod-path") + 1]);
+    }
+
+    [Fact]
+    public void Foreign_game_dir_mods_returns_GameDirConflict_before_spawning()
+    {
+        using var fx = new RelayFixture();
+        fx.Steam.Result = fx.CompleteWindows;
+        fx.GameDirHost.NextResult = new GameDirHostingResult(
+            GameDirHostingOutcome.Conflict,
+            Path.Combine(fx.GameDir, "mods"));
+        var profileId = Guid.NewGuid();
+        var svc = fx.BuildWindowsService();
+
+        var result = svc.Launch(profileId);
+
+        Assert.Equal(LaunchStatus.GameDirConflict, result.Status);
+        // The message carries the detected path (for the localized consent
+        // prompt); GameDirPath carries the dir for the consented takeover.
+        Assert.Equal(Path.Combine(fx.GameDir, "mods"), result.Message);
+        Assert.Equal(fx.GameDir, result.GameDirPath);
+        Assert.Empty(result.MissingDiscoveryFields);
+        Assert.Null(result.RelayExited);
+        Assert.Equal(0, fx.Launcher.Calls); // never spawned, nothing mutated further
+    }
+
+    [Fact]
+    public void Hosting_link_failure_returns_Error_with_the_exception_message()
+    {
+        // Link IO/Win32 failures map to Error, carrying the raised built-in
+        // exception's body (a runtime/OS error, not a string we invented).
+        using var fx = new RelayFixture();
+        fx.Steam.Result = fx.CompleteWindows;
+        fx.GameDirHost.EnsureThrows = new IOException("simulated link failure");
+        var svc = fx.BuildWindowsService();
+
+        var result = svc.Launch(Guid.NewGuid());
+
+        Assert.Equal(LaunchStatus.Error, result.Status);
+        Assert.Contains("simulated link failure", result.Message);
+        Assert.Equal(0, fx.Launcher.Calls);
+    }
+
+    [Fact]
+    public void Derived_game_dir_that_does_not_exist_returns_Error()
+    {
+        // dirname(dirname(binary)) is validated to exist before any hosting
+        // mutation.
+        using var fx = new RelayFixture();
+        fx.Steam.Result = fx.CompleteWindows with
+        {
+            DarktideGameBinaryPath = Path.Combine(fx.TempRoot, "missing-game", "binaries", "Darktide.exe"),
+        };
+        var svc = fx.BuildWindowsService();
+
+        var result = svc.Launch(Guid.NewGuid());
+
+        Assert.Equal(LaunchStatus.Error, result.Status);
+        Assert.Contains("game directory", result.Message);
+        Assert.Empty(fx.GameDirHost.EnsureCalls);
+        Assert.Equal(0, fx.Launcher.Calls);
+    }
+
+    [Fact]
+    public void External_mode_skips_removal_when_the_game_dir_does_not_exist()
+    {
+        // Best-effort cleanup: with no derivable game dir there is nothing to
+        // remove, and the staging-only launch still proceeds.
+        using var fx = new RelayFixture();
+        fx.Steam.Result = fx.CompleteWindows with
+        {
+            DarktideGameBinaryPath = Path.Combine(fx.TempRoot, "missing-game", "binaries", "Darktide.exe"),
+        };
+        const string PreparedRoot = @"C:\curator\profiles\abc\staged";
+        fx.Profiles.PrepareModRootResult = PreparedRoot;
+        fx.Config.Preferences.ExternalModHosting = true;
+        var svc = fx.BuildWindowsService();
+
+        var result = svc.Launch(Guid.NewGuid());
+
+        Assert.Equal(LaunchStatus.Launched, result.Status);
+        Assert.Empty(fx.GameDirHost.RemoveOwnedLinkCalls);
+        var args = fx.Launcher.Arguments!;
+        Assert.Equal(PreparedRoot, args[IndexOf(args, "--mod-path") + 1]);
+    }
+
+    [Fact]
+    public void DeriveGameDir_returns_the_binary_grandparent_directory()
+    {
+        // Use the running platform's separator: GetDirectoryName only splits
+        // on the platform separators, and the derivation is exercised through
+        // real paths on both CI OSes.
+        var sep = Path.DirectorySeparatorChar;
+        var expected = $"{sep}games{sep}DARKTIDE";
+        Assert.Equal(expected, RelayLaunchService.DeriveGameDir($"{expected}{sep}binaries{sep}Darktide.exe"));
+    }
+
+    [Fact]
+    public void DeriveGameDir_returns_null_for_a_path_with_no_grandparent()
+    {
+        Assert.Null(RelayLaunchService.DeriveGameDir("Darktide.exe"));
+        Assert.Null(RelayLaunchService.DeriveGameDir($"{Path.DirectorySeparatorChar}Darktide.exe"));
+    }
+
+    [Fact]
+    public void Real_host_end_to_end_creates_the_link_and_launches_from_the_game_dir()
+    {
+        // The real host against the real platform link primitive: the launch
+        // creates <game>/mods -> <staged>/mods and hands Relay the game dir.
+        using var fx = new RelayFixture();
+        fx.Steam.Result = fx.CompleteLinux;
+        var stagedRoot = Path.Combine(fx.TempRoot, "profiles", "abc", "staged");
+        var stagedMods = Path.Combine(stagedRoot, "mods");
+        Directory.CreateDirectory(stagedMods);
+        fx.Profiles.PrepareModRootResult = stagedRoot;
+        fx.Profiles.ProfilesRoot = Path.Combine(fx.TempRoot, "profiles");
+        var host = new GameDirModsHost(
+            CreatePlatformLink(),
+            fx.Profiles,
+            new AppStateStore(Path.Combine(fx.TempRoot, "app-state.json")),
+            NullLogger<GameDirModsHost>.Instance);
+        var svc = fx.BuildService(new LinuxLaunchStrategy(fx.Launcher, NullLogger<LinuxLaunchStrategy>.Instance), host);
+
+        var result = svc.Launch(Guid.NewGuid());
+
+        Assert.Equal(LaunchStatus.Launched, result.Status);
+        var link = Path.Combine(fx.GameDir, "mods");
+        Assert.True(Directory.Exists(link));
+        var resolved = new DirectoryInfo(link).ResolveLinkTarget(returnFinalTarget: false);
+        Assert.NotNull(resolved);
+        Assert.Equal(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(stagedMods)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(resolved!.FullName)));
+
+        var args = fx.Launcher.Arguments!;
+        var launcherFlags = args.Skip(2).ToList();
+        Assert.Equal(WinePath.ToWine(fx.GameDir), launcherFlags[IndexOf(launcherFlags, "--mod-path") + 1]);
+    }
+
+    /// <summary>
+    /// Resolves the real platform-selective staging-link creator through the
+    /// Profiles DI registration (junction on Windows, symlink on Linux), so
+    /// the host tests exercise the same primitive production wires.
+    /// </summary>
+    private static StagingLinkCreator CreatePlatformLink()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfigLoader>(new FakeConfigLoader());
+        services.AddProfiles();
+        using var provider = services.BuildServiceProvider();
+        return provider.GetRequiredService<StagingLinkCreator>();
     }
 
     /// <summary>

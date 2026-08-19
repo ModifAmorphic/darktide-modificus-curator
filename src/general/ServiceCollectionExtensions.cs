@@ -53,6 +53,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IKnownUpdateState>(sp => sp.GetRequiredService<AppStateStore>());
         services.TryAddSingleton<INexusMetadataBackfillState>(sp => sp.GetRequiredService<AppStateStore>());
         services.TryAddSingleton<IMainWindowStatePersistence>(sp => sp.GetRequiredService<AppStateStore>());
+        services.TryAddSingleton<IRenamedModsFoldersState>(sp => sp.GetRequiredService<AppStateStore>());
         return services;
     }
 }

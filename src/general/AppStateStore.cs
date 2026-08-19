@@ -9,7 +9,8 @@ namespace Modificus.Curator.General;
 /// <see cref="IProfileActivationState"/>,
 /// <see cref="IUpdateCheckScheduleState"/>, <see cref="IKnownUpdateState"/>,
 /// <see cref="INexusMetadataBackfillState"/>,
-/// <see cref="IMainWindowStatePersistence"/>). Loads + saves a single JSON
+/// <see cref="IMainWindowStatePersistence"/>,
+/// <see cref="IRenamedModsFoldersState"/>). Loads + saves a single JSON
 /// file at
 /// <c>&lt;app-data&gt;/app-state.json</c> (<c>{ "OnboardingCompleted": true | false,
 /// "ActiveProfileId": "&lt;guid&gt;" | null,
@@ -17,7 +18,8 @@ namespace Modificus.Curator.General;
 /// "ManualRefreshTimestamps": [ "&lt;iso-8601&gt;", ... ] | null,
 /// "KnownUpdates": { "&lt;profile-guid&gt;": [ { ...snapshot... }, ... ] } | null,
 /// "LastNexusMetadataBackfillUtc": "&lt;iso-8601&gt;" | null,
-/// "MainWindowState": { "Width": &lt;dip&gt;, "Height": &lt;dip&gt;, "IsMaximized": true | false } | null }</c>).
+/// "MainWindowState": { "Width": &lt;dip&gt;, "Height": &lt;dip&gt;, "IsMaximized": true | false } | null,
+/// "RenamedModsFolders": [ { ...receipt... }, ... ] | null }</c>).
 /// The app-data dir is derived the same way <see cref="ConfigLoader"/> derives its
 /// config path (both via <see cref="AppPaths.AppDataDir"/>). JSON is handled with
 /// <see cref="JsonSerializer"/> (direct, read+write) rather than
@@ -49,7 +51,8 @@ public sealed class AppStateStore :
     IUpdateCheckScheduleState,
     IKnownUpdateState,
     INexusMetadataBackfillState,
-    IMainWindowStatePersistence
+    IMainWindowStatePersistence,
+    IRenamedModsFoldersState
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -145,6 +148,15 @@ public sealed class AppStateStore :
         set => Mutate(m => m.MainWindowState = value);
     }
 
+    /// <inheritdoc />
+    public IReadOnlyList<RenamedModsFolder>? RenamedModsFolders
+    {
+        get => Load().RenamedModsFolders;
+        set => Mutate(m => m.RenamedModsFolders = value is null
+            ? null
+            : new List<RenamedModsFolder>(value));
+    }
+
     /// <summary>The conventional state-file location: <c>&lt;app-data&gt;/app-state.json</c>.</summary>
     public static string DefaultStatePath() =>
         System.IO.Path.Combine(AppPaths.AppDataDir, "app-state.json");
@@ -234,5 +246,6 @@ public sealed class AppStateStore :
         public Dictionary<Guid, List<KnownUpdateSnapshot>>? KnownUpdates { get; set; }
         public DateTimeOffset? LastNexusMetadataBackfillUtc { get; set; }
         public AppWindowState? MainWindowState { get; set; }
+        public List<RenamedModsFolder>? RenamedModsFolders { get; set; }
     }
 }

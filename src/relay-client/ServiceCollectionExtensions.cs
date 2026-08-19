@@ -13,9 +13,11 @@ public static class ServiceCollectionExtensions
     /// <see cref="IProcessLauncher"/> spawn seam and the platform
     /// <see cref="IPlatformLaunchStrategy"/>. The service resolves
     /// <c>IProfileService</c>, <c>ISteamService</c>, <c>IConfigLoader</c>, the
-    /// strategy, and <see cref="IProcessLauncher"/> from the container (all
-    /// provided by the other <c>Add&lt;Library&gt;()</c> extensions +
-    /// <c>AddGeneral()</c>).
+    /// strategy, <see cref="IProcessLauncher"/>, and
+    /// <see cref="IGameDirModsHost"/> from the container (all provided by the
+    /// other <c>Add&lt;Library&gt;()</c> extensions + <c>AddGeneral()</c>,
+    /// except <see cref="IGameDirModsHost"/>, which the composition root
+    /// registers).
     /// </summary>
     /// <remarks>
     /// <para>

@@ -296,6 +296,7 @@ internal static class TestDoubles
         FakeProfileSession Session,
         FakeDialogService Dialogs,
         FakeLaunchService Launch,
+        FakeGameDirModsHost GameDirHost,
         FakeAppUpdateService AppUpdate,
         FakeConfigLoader Config,
         FakeNexusAuthService Auth,
@@ -335,6 +336,7 @@ internal static class TestDoubles
         FakeProfileSession? session = null,
         FakeDialogService? dialogs = null,
         FakeLaunchService? launch = null,
+        FakeGameDirModsHost? gameDirHost = null,
         FakeAppUpdateService? appUpdate = null,
         FakeConfigLoader? config = null,
         FakeNexusAuthService? auth = null,
@@ -350,6 +352,7 @@ internal static class TestDoubles
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
         dialogs ??= new FakeDialogService();
         launch ??= new FakeLaunchService();
+        gameDirHost ??= new FakeGameDirModsHost();
         appUpdate ??= new FakeAppUpdateService();
         config ??= new FakeConfigLoader();
         auth ??= new FakeNexusAuthService();
@@ -403,7 +406,7 @@ internal static class TestDoubles
             new FakeExternalLauncher());
 
         var shell = new ShellViewModel(
-            session, launch, dialogs, localization,
+            session, launch, gameDirHost, dialogs, localization,
             profilesPage, modsPage, integrationsPage, preferencesPage, settingsPage,
             appUpdate,
             modalQueue,
@@ -414,7 +417,7 @@ internal static class TestDoubles
             launchHandoffTimeout);
 
         return new ShellParts(
-            shell, profiles, session, dialogs, launch, appUpdate, config,
+            shell, profiles, session, dialogs, launch, gameDirHost, appUpdate, config,
             auth, nxmRegistrar, nxmRegistration, profilesPage, modsPage, integrationsPage,
             preferencesPage, settingsPage, steam, dmf, modalQueue);
     }
@@ -943,6 +946,13 @@ internal sealed class FakeProfileService : IProfileService
         LaunchSettingsByProfile.TryGetValue(id, out var s) ? s : new LaunchSettings();
 
     public string PrepareModRoot(Guid id) => throw new NotImplementedException();
+
+    /// <summary>
+    /// The profiles root, unused by the shell/VM surface (the game-dir consent
+    /// flow goes through the injected host fake). Present to satisfy the
+    /// interface; a path that matches nothing.
+    /// </summary>
+    public string ProfilesRoot { get; } = "/nonexistent-curator-profiles";
 }
 
 /// <summary>
@@ -1307,8 +1317,24 @@ internal sealed class FakeDialogService : IDialogService
     public Task ShowAlertAsync(string title, string message)
     {
         ((List<(string, string)>)AlertCalls).Add((title, message));
+        if (NextAlertGate is { } gate)
+        {
+            NextAlertGate = null;
+            return AwaitGateAsync(gate);
+        }
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Optional task the next <see cref="ShowAlertAsync"/> call awaits after
+    /// recording its arguments, so a test can hold an alert open and observe
+    /// in-flight ordering (e.g. the rename notice shown before the launch
+    /// retry). Consumed (reset to <c>null</c>) by that call. Default
+    /// <c>null</c> = returns immediately.
+    /// </summary>
+    public Task? NextAlertGate { get; set; }
+
+    private static async Task AwaitGateAsync(Task gate) => await gate;
 
     /// <summary>
     /// The result returned by the next <see cref="ShowUnsavedChangesAsync"/>
@@ -1335,6 +1361,38 @@ internal sealed class FakeDialogService : IDialogService
         LastUnsavedMessage = message;
         LastUnsavedCanSave = canSave;
         return Task.FromResult(UnsavedResult);
+    }
+
+    /// <summary>
+    /// The result returned by the next game-dir conflict call. Default
+    /// <see cref="GameDirConflictChoice.Cancel"/> (the enum default, so ESC /
+    /// close behave like the explicit Cancel button, matching the production
+    /// dialog).
+    /// </summary>
+    public GameDirConflictChoice GameDirConflictResult { get; set; } = GameDirConflictChoice.Cancel;
+
+    /// <summary>
+    /// Optional task the next <see cref="ShowGameDirConflictAsync"/> call
+    /// awaits before recording its result, so a test can hold the modal open
+    /// and observe in-flight state (the launch attempt staying set while the
+    /// consent prompt is showing). Consumed (reset to <c>null</c>) by that
+    /// call. Default <c>null</c> = returns immediately.
+    /// </summary>
+    public Task? NextGameDirConflictGate { get; set; }
+
+    /// <summary>The messages the shell asked the game-dir conflict modal to
+    /// show, in call order.</summary>
+    public IReadOnlyList<string> GameDirConflictCalls { get; } = new List<string>();
+
+    public async Task<GameDirConflictChoice> ShowGameDirConflictAsync(string title, string message)
+    {
+        ((List<string>)GameDirConflictCalls).Add(message);
+        if (NextGameDirConflictGate is { } gate)
+        {
+            NextGameDirConflictGate = null;
+            await gate;
+        }
+        return GameDirConflictResult;
     }
 
     /// <summary>
@@ -1535,6 +1593,15 @@ internal sealed class FakeLaunchService : IRelayLaunchService
     public LaunchResult NextResult { get; set; } =
         new(LaunchStatus.Launched, null, Array.Empty<string>());
 
+    /// <summary>
+    /// Results returned one per launch call, in order (dequeued before
+    /// falling back to <see cref="NextResult"/>), so a test can script a
+    /// conflict-then-launched retry chain.
+    /// </summary>
+    public IReadOnlyList<LaunchResult> ResultQueue { get; set; } = Array.Empty<LaunchResult>();
+
+    private int _queueCursor;
+
     public IReadOnlyList<Guid> LaunchCalls { get; } = new List<Guid>();
 
     /// <summary>
@@ -1550,7 +1617,49 @@ internal sealed class FakeLaunchService : IRelayLaunchService
         {
             throw LaunchThrows;
         }
+        if (_queueCursor < ResultQueue.Count)
+        {
+            return ResultQueue[_queueCursor++];
+        }
         return NextResult;
+    }
+}
+
+/// <summary>
+/// Recording <see cref="IGameDirModsHost"/> for the shell tests: captures the
+/// consented takeovers + optional throw, so the consent flow is asserted
+/// without touching the filesystem.
+/// </summary>
+internal sealed class FakeGameDirModsHost : IGameDirModsHost
+{
+    /// <summary>
+    /// The renamed path returned by <see cref="TakeOver"/>. Default non-null
+    /// (the ordinary rename case); set <c>null</c> to drive the no-rename
+    /// case.
+    /// </summary>
+    public string? TakeOverResult { get; set; } = "/game/mods_20250101-0000";
+
+    /// <summary>When set, <see cref="TakeOver"/> throws this exception after
+    /// recording the call (a rename failure).</summary>
+    public Exception? TakeOverThrows { get; set; }
+
+    public IReadOnlyList<string> TakeOverCalls { get; } = new List<string>();
+
+    public GameDirHostingResult EnsureHosting(string gameDir, string stagedRoot) =>
+        new(GameDirHostingOutcome.Hosted);
+
+    public string? TakeOver(string gameDir)
+    {
+        ((List<string>)TakeOverCalls).Add(gameDir);
+        if (TakeOverThrows is not null)
+        {
+            throw TakeOverThrows;
+        }
+        return TakeOverResult;
+    }
+
+    public void RemoveOwnedLink(string gameDir)
+    {
     }
 }
 

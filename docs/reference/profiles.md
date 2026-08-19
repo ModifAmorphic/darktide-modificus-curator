@@ -149,15 +149,22 @@ Method behavior:
   `KeyNotFoundException` for an unknown profile; `ArgumentException` for a
   null/whitespace `baseName`. Used by the add flow to REFUSE an import that
   would stage two mods under the same folder name.
-- `PrepareModRoot(id)` -- regenerates the staged mod root (the `--mod-path`) from
-  the current per-mod version resolution and writes `mods.lst`. Idempotent
-  (clears + rebuilds `staged/` each call). Returns the `--mod-path` to pass to
-  the Relay launcher. A staging-link creation failure propagates the raised
-  built-in exception (`Win32Exception` from the junction path on Windows,
+- `PrepareModRoot(id)` -- regenerates the staged mod root from
+  the current per-mod version resolution and writes `mods.lst` + the staging
+  ownership marker. Idempotent (clears + rebuilds `staged/` each call). Returns
+  the staged root (the parent of the `mods/` tree Relay consumes; the launch
+  façade hands Relay either this or the game dir, depending on hosting mode). A
+  staging-link creation failure propagates the raised built-in exception
+  (`Win32Exception` from the junction path on Windows,
   `IOException` / `UnauthorizedAccessException` from the symlink path on Linux;
   the manager never silently copies); the relay-client launch façade catches
   that and maps it to `LaunchStatus.StagingFailed`, carrying the exception's
   body, and the UI surfaces it after the localized framing.
+- `ProfilesRoot` -- a focused read of the profiles' base folder (the live
+  `ProfilesBaseFolder` from config, ensured to exist). Consumed by the
+  relay-client game-dir host as the ownership prefix: a game-dir hosting link
+  whose stored target lies under this folder is Curator's even when the target
+  is currently missing.
 - `GetLaunchSettings(id)` -- a focused read of the profile's launch settings
   (environment variables + Darktide command-line arguments), used by the launch
   path (relay-client reads it on each launch). The hosted Profiles destination
@@ -201,6 +208,10 @@ Method behavior:
   the junction path; `IOException` / `UnauthorizedAccessException` from the
   symlink path); the staging call site lets it propagate, so the staging layer
   never silently copies.
+- `StagingOwnership` -- the shared staging-ownership contract: the marker
+  filename (`.curator.json`) Curator writes into the staged `mods/` on every
+  `PrepareModRoot` pass. Profiles is the writer; relay-client's game-dir host
+  reads the file's presence to prove a hosting link is Curator's.
 
 `ModVersionPolicy` (PinnedPolicy/LatestPolicy), `ModSource`, `ModContainer`, and
 `ModVersion` live in the [mods](mods.md) library; Profiles consumes
@@ -351,15 +362,29 @@ only config source) is itself a singleton.
 <ProfilesBaseFolder>/              (auto-created on first run)
   <guid>/                          (profile dir; id-named)
     profile.json                   (metadata + mod list + launch settings - the source of truth)
-    staged/                        (the staged mod root = the --mod-path;
+    staged/                        (the staged mod root;
                                      REGENERATED each launch - a projection)
-      mods/                        (the mod host folder Relay consumes)
+      mods/                        (the mod host folder the game-dir link points at)
         <baseName>                 (staging link -> <versionFolder>/<baseName>/)
         mods.lst                   (successfully-staged enabled mods, in order)
+        .curator.json              (the staging ownership marker)
 ```
 
 `profile.json` and `mods.lst` are UTF-8 without BOM. There is no per-profile
 `mods/` directory (mods live in the repository).
+
+### The staging ownership marker
+
+Every `PrepareModRoot` pass rewrites `staged/mods/.curator.json` (the name is
+the shared `StagingOwnership.MarkerFileName` contract) with the projected
+profile's identity: `{ schema, profileId, profileName, projectedAtUtc }`.
+The marker -- not reparse-ness -- is what proves a game-dir hosting link aimed
+at the staged tree is Curator's (see the relay-client
+[`IGameDirModsHost`](relay-client.md#igamedirmodshost) ladder); relay-client
+reads only the file's presence. App version is deliberately absent: Profiles
+does not know it, and profile identity + timestamp carry the troubleshooting
+value. The pass cleared + rebuilt the tree, so the marker is rewritten (a
+stale marker surviving a rebuild would misattribute the tree).
 
 ### Staging (`PrepareModRoot`)
 

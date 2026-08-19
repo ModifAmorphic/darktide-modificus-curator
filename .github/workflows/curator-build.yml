@@ -1,13 +1,14 @@
-# Modificus Curator: PR build gate: auto-format (same-repo PRs only), build, test.
+# Modificus Curator: PR build gate: auto-format, build, test.
+#
+# This workflow runs on pull requests targeting any branch.
 #
 # There is intentionally no `push:` trigger here. The release workflow
 # (.github/workflows/release.yml) runs on push to main. This workflow is the
 # trust gate for merges.
 #
 # Format behavior:
-# - On pull_request from same repo: checkout PR head, run dotnet format, commit/push if changes
-# - On pull_request from fork: run format in no-commit mode, skip push (forks cannot be auto-formatted)
-# - On workflow_dispatch: verify-only mode (no auto-commit)
+# - On pull_request: checkout PR head, run dotnet format, auto-commit with [skip ci]
+# - On workflow_dispatch: run format without committing
 #
 # paths-ignore skips release-please's bot-authored release PRs (they only touch
 # version/changelog files). Without this, those GITHUB_TOKEN-authored PRs would
@@ -16,7 +17,6 @@ name: curator-build
 
 on:
   pull_request:
-    branches: [main]
     paths-ignore:
       - 'CHANGELOG.md'
       - '.release-please-manifest.json'
@@ -40,25 +40,22 @@ jobs:
         working-directory: src
     steps:
       - uses: actions/checkout@v7
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         with:
-          ref: ${{ github.head_ref }}
-
-      - uses: actions/checkout@v7
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
-      - name: Format and commit (same-repo PR)
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      - name: Format
+        run: dotnet format modificus-curator.sln
+
+      - name: Commit formatting changes
+        if: github.event_name != 'workflow_dispatch'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          dotnet format modificus-curator.sln
 
           if ! git diff --quiet; then
             git add -A
@@ -68,16 +65,6 @@ jobs:
           else
             echo "No formatting changes needed"
           fi
-
-      - name: Format check only (fork PR or workflow_dispatch)
-        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "Fork PR detected - running format in no-commit mode only"
-          else
-            echo "Manual workflow_dispatch - running format verification"
-          fi
-          dotnet format modificus-curator.sln --verify-no-changes
 
   build:
     name: build (${{ matrix.os }})

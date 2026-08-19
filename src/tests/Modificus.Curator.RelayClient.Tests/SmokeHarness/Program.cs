@@ -173,6 +173,13 @@ internal static class Program
         services.AddProfiles();
         services.AddSteam();
         services.AddRelayClient();
+        // The game-dir mods host, mirroring the UI composition root (the link
+        // primitive from AddProfiles + the receipts role from AddGeneral).
+        services.AddSingleton<IGameDirModsHost>(sp => new GameDirModsHost(
+            sp.GetRequiredService<StagingLinkCreator>(),
+            sp.GetRequiredService<IProfileService>(),
+            sp.GetRequiredService<IRenamedModsFoldersState>(),
+            sp.GetRequiredService<ILogger<GameDirModsHost>>()));
         return services.BuildServiceProvider();
     }
 

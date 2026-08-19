@@ -202,6 +202,10 @@ take effect live) and persists through `ConfigLoader.Save`; there is no commit
 step.
 `ShowRelayConsole` has no live-apply step: it is read at launch time by the
 Relay launcher.
+`ExternalModHosting` likewise has no live-apply step: the launch path reads it
+live to pick game-dir hosting (the default, `false`) or the staging-only
+external mode, and the Preferences destination persists it through its own
+focused read-modify-save.
 `ModRowDensity` is the exception to the "owned by the Preferences destination"
 rule: it lives in this section but is read + persisted by the Mods toolbar's
 density coordinator (see [ui](ui.md#mod-list-density--detailed-rows)), which
@@ -217,6 +221,7 @@ public sealed class PreferencesConfig
     public double FontScale { get; set; } = 1.0;
     public string Language { get; set; } = "en";
     public bool ShowRelayConsole { get; set; }            // default false (hidden)
+    public bool ExternalModHosting { get; set; }          // default false (game-dir hosting)
     public ModRowDensity ModRowDensity { get; set; } = ModRowDensity.Detailed;
 }
 

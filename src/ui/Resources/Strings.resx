@@ -355,6 +355,18 @@
     <value>On Linux the Relay console always shows under Proton and can't be hidden from here.</value>
     <comment>Tooltip on the Show console on launch row in the Preferences dialog on Linux, where the checkbox is shown checked + disabled (Wine spawns the console regardless of the setting until a Relay-side GUI-subsystem fix, so the persisted value is not forced or written).</comment>
   </data>
+  <data name="Preferences_ExternalModHosting" xml:space="preserve">
+    <value>Load mods from Curator's profile directory (experimental)</value>
+    <comment>Checkbox in the Preferences dialog for the external mod-hosting mode: launch with mods served from Curator's profile directory only, no mods-folder link in the game directory.</comment>
+  </data>
+  <data name="Preferences_ExternalModHostingTooltip" xml:space="preserve">
+    <value>Launches the game with mods hosted from Curator's profile directory instead of the game directory.</value>
+    <comment>Tooltip on the external mod-hosting row in the Preferences dialog.</comment>
+  </data>
+  <data name="Preferences_ExternalModHostingWarning" xml:space="preserve">
+    <value>May experience issues with mods that require absolute paths</value>
+    <comment>Inline experimental-mode hint shown beneath the external mod-hosting checkbox.</comment>
+  </data>
 
   <!-- ============================================================ -->
   <!-- Mod list (ModListView / ModListViewModel / ModItemViewModel) -->
@@ -858,6 +870,43 @@
   <data name="Launch_StagingFailedMessage" xml:space="preserve">
     <value>Curator couldn't create the staging links for this profile. Check that Curator has write access to the profile's folder, and on Windows that the folder is on an NTFS volume (staging links require NTFS).</value>
     <comment>Localized framing + actionable hint for the StagingFailed alert body. The raised exception's body (a runtime/OS error) is appended after this at the call site, so this reads as a lead-in to the detail.</comment>
+  </data>
+
+  <!-- ============================================================ -->
+  <!-- Game-dir conflict (GameDirConflictDialog / shell launch flow) -->
+  <!-- ============================================================ -->
+
+  <data name="GameDir_Title" xml:space="preserve">
+    <value>Existing mods folder</value>
+    <comment>Title of the game-dir conflict modal (and its follow-up notice) shown when a launch finds a foreign entry at the game directory's mods slot.</comment>
+  </data>
+  <data name="GameDir_Message" xml:space="preserve">
+    <value>Found an existing mods folder in the Darktide game directory. Curator needs to rename it to continue (or you can cancel and take care of the folder).</value>
+    <comment>Body of the game-dir conflict modal; asks whether to rename the foreign mods folder aside so Curator can deploy mods there.</comment>
+  </data>
+  <data name="GameDir_MessageFootnote" xml:space="preserve">
+    <value>* If you previously patched Darktide make sure to unpatch it or run verify integrity of game files in Steam.</value>
+    <comment>Small-print advisory under the game-dir conflict modal body, for setups where the game itself was patched by an older modding method.</comment>
+  </data>
+  <data name="GameDir_CancelButton" xml:space="preserve">
+    <value>Cancel</value>
+    <comment>The Cancel button in the game-dir conflict modal. Aborts the launch; no game-dir mutation.</comment>
+  </data>
+  <data name="GameDir_RenameButton" xml:space="preserve">
+    <value>Rename</value>
+    <comment>The Rename (accent) button in the game-dir conflict modal. Renames the foreign entry aside (nothing deleted, receipt + best-effort README recorded) and retries the launch once, now hosted.</comment>
+  </data>
+  <data name="GameDir_RenamedNotice" xml:space="preserve">
+    <value>Renamed the existing mods folder to {0}.</value>
+    <comment>One-line alert shown after a successful takeover, before the launch retry. {0} is the renamed folder's path returned by the takeover.</comment>
+  </data>
+  <data name="GameDir_StillConflicts" xml:space="preserve">
+    <value>The game's mods folder is still occupied by something Curator didn't create: {0}</value>
+    <comment>Body of the error alert shown when a game-dir conflict recurs in the same launch attempt (the retry is one-shot per consent). {0} is the detected path.</comment>
+  </data>
+  <data name="GameDir_TakeOverFailed" xml:space="preserve">
+    <value>Curator couldn't move the existing mods folder aside.</value>
+    <comment>Localized framing for the alert shown when the consented takeover fails. The exception's message is appended after this at the call site.</comment>
   </data>
 
   <!-- ============================================================ -->

@@ -103,6 +103,69 @@ internal sealed class FakeProfileService : IProfileService
     public ModListEntry? GetBaseNameCollision(Guid id, string baseName, Guid? excludeContainerId) => throw new NotSupportedException();
 
     public LaunchSettings GetLaunchSettings(Guid id) => LaunchSettingsResult;
+
+    /// <summary>
+    /// The profiles root the game-dir host uses as its ownership prefix.
+    /// Default: a path that matches no test target. Tests driving the real
+    /// host's ladder point it (or the staged root) into the temp tree.
+    /// </summary>
+    public string ProfilesRoot { get; set; } = "/nonexistent-curator-profiles";
+}
+
+/// <summary>Hand-rolled test double for <see cref="IGameDirModsHost"/>: records
+/// every call + answers EnsureHosting with a configurable outcome (Hosted by
+/// default; set <see cref="NextResult"/> to drive the conflict path, or
+/// <see cref="EnsureThrows"/> to drive the IO-failure mapping).</summary>
+internal sealed class FakeGameDirModsHost : IGameDirModsHost
+{
+    /// <summary>The result returned by the next <see cref="EnsureHosting"/>
+    /// call. Default Hosted (the ordinary launch path).</summary>
+    public GameDirHostingResult NextResult { get; set; } = new(GameDirHostingOutcome.Hosted);
+
+    /// <summary>When set, <see cref="EnsureHosting"/> throws this exception
+    /// after recording the call (a link IO failure).</summary>
+    public Exception? EnsureThrows { get; set; }
+
+    /// <summary>When set, <see cref="RemoveOwnedLink"/> throws this exception
+    /// (the external-mode launch must not be blocked by cleanup).</summary>
+    public Exception? RemoveOwnedLinkThrows { get; set; }
+
+    /// <summary>
+    /// The renamed path returned by <see cref="TakeOver"/>. Default
+    /// <c>null</c> (nothing renamed; the launch path never consumes the
+    /// value).
+    /// </summary>
+    public string? TakeOverResult { get; set; }
+
+    public IReadOnlyList<(string GameDir, string StagedRoot)> EnsureCalls { get; } =
+        new List<(string, string)>();
+    public IReadOnlyList<string> TakeOverCalls { get; } = new List<string>();
+    public IReadOnlyList<string> RemoveOwnedLinkCalls { get; } = new List<string>();
+
+    public GameDirHostingResult EnsureHosting(string gameDir, string stagedRoot)
+    {
+        ((List<(string, string)>)EnsureCalls).Add((gameDir, stagedRoot));
+        if (EnsureThrows is not null)
+        {
+            throw EnsureThrows;
+        }
+        return NextResult;
+    }
+
+    public string? TakeOver(string gameDir)
+    {
+        ((List<string>)TakeOverCalls).Add(gameDir);
+        return TakeOverResult;
+    }
+
+    public void RemoveOwnedLink(string gameDir)
+    {
+        ((List<string>)RemoveOwnedLinkCalls).Add(gameDir);
+        if (RemoveOwnedLinkThrows is not null)
+        {
+            throw RemoveOwnedLinkThrows;
+        }
+    }
 }
 
 /// <summary>Hand-rolled test double for <see cref="ISteamService"/>.</summary>

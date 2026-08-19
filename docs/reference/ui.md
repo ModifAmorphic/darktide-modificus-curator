@@ -213,6 +213,22 @@ owned by `IProfileSession`; launch availability derives directly from
   timeout. Bounded detector handoff, not process supervision (no process
   handle is taken; the facade owns the spawned handle and its disposal, and
   Darktide stays untracked beyond the session signal).
+- `LaunchCommand` result handling, including the game-dir consent chain: a
+  `GameDirConflict` result shows the two-choice game-dir conflict modal
+  through `IDialogService.ShowGameDirConflictAsync`. Rename performs the
+  consented `IGameDirModsHost.TakeOver(result.GameDirPath)` (returning the
+  renamed entry's path), shows a one-line notice carrying it, and retries the
+  launch once (the notice precedes the retry so the information survives a
+  later launch failure; a null return skips the notice and still retries);
+  Cancel aborts. The retry is
+  one-shot per consent: a second conflict in the same attempt chain surfaces
+  the standard error alert instead of another prompt, so the flow can never
+  loop. A takeover failure surfaces an alert (the exception's message after
+  the localized framing) with no retry. The attempt state holds through the
+  modal + notice + retry exactly like the failure dialogs. The other statuses
+  are unchanged: `DiscoveryIncomplete` opens the escape hatch (no retry),
+  `StagingFailed` + `Error` show alerts, and `Launched` runs the running-state
+  handoff described above.
 
 The hosted page view models are application-lifetime singletons; navigation
 never calls an old Window-close final-cleanup (`Detach`) path. There is no
@@ -438,13 +454,15 @@ public interface IDialogService
     Task<bool> ShowDiscoveryEscapeHatchAsync(IReadOnlyList<string> missingFields);
     Task ShowAlertAsync(string title, string message);
     Task<UnsavedChangesChoice> ShowUnsavedChangesAsync(string title, string message, bool canSave);
+    Task<GameDirConflictChoice> ShowGameDirConflictAsync(string title, string message);
     Task<T> ShowProgressAsync<T>(string title, string message, Func<Task<T>> work);
 }
 ```
 
-Six true-modal methods: the first-run Welcome, a binary confirm, the launch
+Seven true-modal methods: the first-run Welcome, a binary confirm, the launch
 discovery escape hatch, a single-button alert, an unsaved-changes three-choice
-prompt, and a non-dismissable progress spinner. Copied local-import failures
+prompt, the game-dir conflict prompt, and a non-dismissable
+progress spinner. Copied local-import failures
 surface inline in the `ImportWorkflowView` card (not through this seam); the
 linked-folder flow continues using `ShowAlertAsync` for its failures.
 
@@ -478,6 +496,14 @@ linked-folder flow continues using `ShowAlertAsync` for its failures.
   available. Caller-side semantics: Save runs the caller's save core and
   proceeds only on success, Don't save reloads authority and proceeds,
   Cancel preserves the staged state and stops the attempted transition.
+- `ShowGameDirConflictAsync(title, message)`: the game-dir conflict prompt
+  (left to right: Cancel, Rename; Rename is the
+  accent button). Shown when a launch returns `GameDirConflict` (a foreign
+  entry occupies the game-dir `mods` slot; nothing was mutated). The
+  `GameDirConflictChoice` enum defaults to `Cancel`, so ESC, the title-bar
+  close, and a window close behave like the explicit Cancel button. Caller-
+  side semantics: Rename performs `IGameDirModsHost.TakeOver` (whose return
+  value drives the rename notice) + one retry, Cancel aborts.
 - `ShowProgressAsync<T>(title, message, work)`: a buttonless, non-closeable
   modal spinner over the supplied async work. The user cannot dismiss the
   spinner: the work runs to completion and the caller surfaces its result.
