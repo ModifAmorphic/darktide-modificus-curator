@@ -360,7 +360,7 @@
     <comment>Checkbox in the Preferences dialog for the external mod-hosting mode: launch with mods served from Curator's profile directory only, no mods-folder link in the game directory.</comment>
   </data>
   <data name="Preferences_ExternalModHostingTooltip" xml:space="preserve">
-    <value>Launches the game with mods served from Curator's staging folder and removes Curator's game-folder mods link. A mods folder you manage yourself is never touched.</value>
+    <value>Launches the game with mods hosted from Curator's profile directory instead of the game directory.</value>
     <comment>Tooltip on the external mod-hosting row in the Preferences dialog.</comment>
   </data>
   <data name="Preferences_ExternalModHostingWarning" xml:space="preserve">
@@ -881,8 +881,12 @@
     <comment>Title of the game-dir conflict modal (and its follow-up notice) shown when a launch finds a foreign entry at the game directory's mods slot.</comment>
   </data>
   <data name="GameDir_Message" xml:space="preserve">
-    <value>Curator found a mods folder in the Darktide game directory that it didn't create; rename it so Curator can manage mods there? Nothing is deleted.</value>
-    <comment>Body of the game-dir conflict modal. Deliberately short (two sentences); the detected path is not shown.</comment>
+    <value>Found an existing mods folder in the Darktide game directory. Curator needs to rename it to continue (or you can cancel and take care of the folder).</value>
+    <comment>Body of the game-dir conflict modal; asks whether to rename the foreign mods folder aside so Curator can deploy mods there.</comment>
+  </data>
+  <data name="GameDir_MessageFootnote" xml:space="preserve">
+    <value>* If you previously patched Darktide make sure to unpatch it or run verify integrity of game files in Steam.</value>
+    <comment>Small-print advisory under the game-dir conflict modal body, for setups where the game itself was patched by an older modding method.</comment>
   </data>
   <data name="GameDir_CancelButton" xml:space="preserve">
     <value>Cancel</value>
