@@ -76,6 +76,11 @@ public sealed class RelayClientServiceCollectionExtensionsTests
         services.AddSingleton<IConfigLoader>(new FakeConfigLoader());
         services.AddSingleton<IProfileService, FakeProfileService>();
         services.AddSingleton<ISteamService, FakeSteamService>();
+        // The game-dir host is registered by the composition root (it needs
+        // the Profiles staging-link primitive + the app-state receipts role),
+        // so the minimal AddRelayClient composition supplies a fake like a
+        // host/tests would.
+        services.AddSingleton<IGameDirModsHost>(new FakeGameDirModsHost());
         services.AddRelayClient();
         return services;
     }

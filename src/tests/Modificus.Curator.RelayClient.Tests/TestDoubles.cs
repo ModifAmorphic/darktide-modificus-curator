@@ -112,6 +112,51 @@ internal sealed class FakeProfileService : IProfileService
     public string ProfilesRoot { get; set; } = "/nonexistent-curator-profiles";
 }
 
+/// <summary>Hand-rolled test double for <see cref="IGameDirModsHost"/>: records
+/// every call + answers EnsureHosting with a configurable outcome (Hosted by
+/// default; set <see cref="NextResult"/> to drive the conflict path, or
+/// <see cref="EnsureThrows"/> to drive the IO-failure mapping).</summary>
+internal sealed class FakeGameDirModsHost : IGameDirModsHost
+{
+    /// <summary>The result returned by the next <see cref="EnsureHosting"/>
+    /// call. Default Hosted (the ordinary launch path).</summary>
+    public GameDirHostingResult NextResult { get; set; } = new(GameDirHostingOutcome.Hosted);
+
+    /// <summary>When set, <see cref="EnsureHosting"/> throws this exception
+    /// after recording the call (a link IO failure).</summary>
+    public Exception? EnsureThrows { get; set; }
+
+    /// <summary>When set, <see cref="RemoveOwnedLink"/> throws this exception
+    /// (the external-mode launch must not be blocked by cleanup).</summary>
+    public Exception? RemoveOwnedLinkThrows { get; set; }
+
+    public IReadOnlyList<(string GameDir, string StagedRoot)> EnsureCalls { get; } =
+        new List<(string, string)>();
+    public IReadOnlyList<string> TakeOverCalls { get; } = new List<string>();
+    public IReadOnlyList<string> RemoveOwnedLinkCalls { get; } = new List<string>();
+
+    public GameDirHostingResult EnsureHosting(string gameDir, string stagedRoot)
+    {
+        ((List<(string, string)>)EnsureCalls).Add((gameDir, stagedRoot));
+        if (EnsureThrows is not null)
+        {
+            throw EnsureThrows;
+        }
+        return NextResult;
+    }
+
+    public void TakeOver(string gameDir) => ((List<string>)TakeOverCalls).Add(gameDir);
+
+    public void RemoveOwnedLink(string gameDir)
+    {
+        ((List<string>)RemoveOwnedLinkCalls).Add(gameDir);
+        if (RemoveOwnedLinkThrows is not null)
+        {
+            throw RemoveOwnedLinkThrows;
+        }
+    }
+}
+
 /// <summary>Hand-rolled test double for <see cref="ISteamService"/>.</summary>
 internal sealed class FakeSteamService : ISteamService
 {
