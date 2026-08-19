@@ -308,6 +308,32 @@ public sealed class GameDirModsHostTests
     }
 
     [Fact]
+    public void TakeOver_records_the_receipt_when_the_readme_write_fails()
+    {
+        // The receipt is the audit trail for a mutation that already happened:
+        // a README failure must neither fail the takeover nor lose the receipt.
+        // A directory occupying the README path makes the write fail
+        // deterministically on both platforms (IOException on Unix,
+        // UnauthorizedAccessException on Windows).
+        using var fx = new HostFixture();
+        Directory.CreateDirectory(fx.ModsSlot);
+        File.WriteAllText(Path.Combine(fx.ModsSlot, "usermod"), "user data");
+        Directory.CreateDirectory(Path.Combine(fx.ModsSlot, GameDirModsHost.TakeOverReadmeFileName));
+
+        fx.Host.TakeOver(fx.GameDir); // must not throw
+
+        var renamed = Directory.GetDirectories(fx.GameDir, "mods_*").Single();
+        Assert.True(Directory.Exists(Path.Combine(renamed, GameDirModsHost.TakeOverReadmeFileName)));
+        Assert.Equal("user data", File.ReadAllText(Path.Combine(renamed, "usermod")));
+
+        // The receipt landed through the real store despite the README failure.
+        var receipts = new AppStateStore(fx.StatePath).RenamedModsFolders;
+        var receipt = Assert.Single(receipts!);
+        Assert.Equal(fx.ModsSlot, receipt.OriginalPath);
+        Assert.Equal(renamed, receipt.RenamedPath);
+    }
+
+    [Fact]
     public void TakeOver_appends_to_existing_receipts_without_clobbering()
     {
         using var fx = new HostFixture();

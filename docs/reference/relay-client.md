@@ -138,10 +138,10 @@ public interface IGameDirModsHost
   launch service maps them to `Error`).
 - `TakeOver` performs the consented takeover of a foreign entry: rename to a
   `mods_<yyyyMMdd-HHmm>` sibling (bumping a numeric suffix on collision), a
-  short `README.txt` inside the renamed folder (folder case only) explaining
-  the move and that nothing was deleted, and a receipt recorded in the
-  app-state (`IRenamedModsFoldersState`). No-op for an absent or
-  already-owned slot.
+  receipt recorded in the app-state (`IRenamedModsFoldersState`), then a
+  best-effort `README.txt` inside the renamed folder (folder case only)
+  explaining the move and that nothing was deleted (a README failure is
+  logged, never surfaced). No-op for an absent or already-owned slot.
 - `RemoveOwnedLink` is the external-hosting opt-out's cleanup: it removes a
   Curator-owned link best-effort (an absent slot, a foreign entry, or an IO
   failure leaves everything as it was; failures are logged, never thrown).

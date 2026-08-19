@@ -68,12 +68,14 @@ public interface IGameDirModsHost
     /// <summary>
     /// Performs the consented takeover of a foreign game-dir <c>mods</c>
     /// entry: renames it to a <c>mods_&lt;yyyyMMdd-HHmm&gt;</c> sibling (bumping a
-    /// numeric suffix on collision), writes a short <c>README.txt</c> inside
-    /// the renamed entry (folder case only) explaining what happened and that
-    /// nothing was deleted, and records a receipt in the persisted app-state.
-    /// No-op when the slot is absent or already Curator-owned.
+    /// numeric suffix on collision), records a receipt in the persisted
+    /// app-state, then best-effort writes a short <c>README.txt</c> inside the
+    /// renamed entry (folder case only) explaining what happened and that
+    /// nothing was deleted (a README failure is logged, never thrown; the
+    /// receipt already records the move). No-op when the slot is absent or
+    /// already Curator-owned.
     /// </summary>
-    /// <exception cref="System.IO.IOException">The rename or README write
+    /// <exception cref="System.IO.IOException">The rename or receipt write
     /// failed.</exception>
     /// <exception cref="System.UnauthorizedAccessException">The caller lacks
     /// write access to <paramref name="gameDir"/>.</exception>

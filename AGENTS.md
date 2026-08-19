@@ -1211,9 +1211,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                          Message + the game dir on GameDirPath before any
                          mutation; TakeOver performs the consented rename-aside
                          takeover: mods_<yyyyMMdd-HHmm> with numeric bump on
-                         collision + README.txt inside the renamed folder
-                         (folder case only) + a receipt through
-                         IRenamedModsFoldersState; RemoveOwnedLink is the
+                         collision + a receipt through
+                         IRenamedModsFoldersState + a best-effort README.txt
+                         inside the renamed folder (folder case only, a
+                         failure logged never surfaced);
+                         RemoveOwnedLink is the
                          best-effort external-mode cleanup that never touches a
                          foreign entry; link creation reuses the Profiles
                          StagingLinkCreator primitive; registered in the
@@ -1354,8 +1356,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             a dead link under the profiles root silently
                                             recreated, foreign real dir/file/link/dead-link
                                             conflicts reported untouched, the takeover rename +
-                                            README + receipt incl. collision bump + file case +
-                                            no-op cases + the host-through-ladder retry, + the
+                                            receipt + best-effort README incl. a README-write
+                                            failure still recording the receipt, collision bump +
+                                            file case + no-op cases + the host-through-ladder
+                                            retry, + the
                                             best-effort removal semantics) + GameArgumentsTests (the bare-`--`
                                             contract via the pure BuildLauncherArgs seam),
                                             ProcessLauncherTests (the deterministic BuildStartInfo

@@ -73,10 +73,11 @@ A foreign entry never gets deleted or modified. The launch returns the new
 game-dir mutation. The UI shows a three-choice modal:
 
 - **Proceed:** Curator renames the foreign entry to
-  `mods_<yyyyMMdd-HHmm>` (bump `-1`, `-2`, ... on collision), writes a short
-  `README.txt` inside the renamed folder (folder case only) explaining what
-  happened and that nothing was deleted, records a receipt in app-state
-  (original path, new path, timestamp), then retries the launch once.
+  `mods_<yyyyMMdd-HHmm>` (bump `-1`, `-2`, ... on collision), records a
+  receipt in app-state (original path, new path, timestamp), then best-effort
+  writes a short `README.txt` inside the renamed folder (folder case only)
+  explaining what happened and that nothing was deleted (a README failure is
+  logged, never surfaced), then retries the launch once.
 - **Keep my current setup:** persists `Preferences.ExternalModHosting = true`
   (the experimental external mode) and retries the launch once; that launch
   and all later ones serve mods from staging without the game-dir link.

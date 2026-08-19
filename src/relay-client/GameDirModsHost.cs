@@ -107,18 +107,30 @@ public sealed class GameDirModsHost : IGameDirModsHost
         _logger.LogInformation(
             "Renamed the foreign game-dir mods entry {Original} -> {Renamed} after consent.", modsPath, renamedPath);
 
-        // The README goes inside a real folder only: a file (or a foreign
-        // link) has no inside to explain from.
+        // The receipt is the audit trail for a mutation that already happened:
+        // record it before anything best-effort.
+        var receipts = _renamedFolders.RenamedModsFolders?.ToList() ?? new List<RenamedModsFolder>();
+        receipts.Add(new RenamedModsFolder(modsPath, renamedPath, DateTimeOffset.UtcNow));
+        _renamedFolders.RenamedModsFolders = receipts;
+
+        // The README is a convenience for the user browsing the renamed folder:
+        // a write failure is logged, never surfaced. It goes inside a real
+        // folder only (a file or a foreign link has no inside to explain
+        // from).
         var isRealDirectory = (attrs & FileAttributes.Directory) != 0
             && (attrs & FileAttributes.ReparsePoint) == 0;
         if (isRealDirectory)
         {
-            WriteTakeOverReadme(renamedPath, modsPath);
+            try
+            {
+                WriteTakeOverReadme(renamedPath, modsPath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
+            {
+                _logger.LogWarning(
+                    ex, "Failed to write the takeover README inside {Renamed} (best-effort).", renamedPath);
+            }
         }
-
-        var receipts = _renamedFolders.RenamedModsFolders?.ToList() ?? new List<RenamedModsFolder>();
-        receipts.Add(new RenamedModsFolder(modsPath, renamedPath, DateTimeOffset.UtcNow));
-        _renamedFolders.RenamedModsFolders = receipts;
     }
 
     /// <inheritdoc />

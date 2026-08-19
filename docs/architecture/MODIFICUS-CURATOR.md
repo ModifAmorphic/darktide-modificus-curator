@@ -660,8 +660,9 @@ succeeds and the game binary is known:
    dead link outside Curator's space) is never deleted or modified: the
    launch returns `GameDirConflict` before any game-dir mutation and the UI
    shows a three-choice modal. **Proceed** renames the foreign entry to
-   `mods_<yyyyMMdd-HHmm>` (nothing deleted; a README inside the renamed
-   folder + an app-state receipt record the move) and retries the launch
+   `mods_<yyyyMMdd-HHmm>` (nothing deleted; an app-state receipt records the
+   move, + a best-effort README inside the renamed folder explains it) and
+   retries the launch
    once, now hosted. **Keep my current setup** persists the experimental
    `Preferences.ExternalModHosting` and retries once under it. **Cancel**
    aborts. The retry is one-shot per consent.

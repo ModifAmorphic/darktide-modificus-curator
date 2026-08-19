@@ -4,10 +4,9 @@ namespace Modificus.Curator.General;
 /// One persisted receipt for a foreign game-dir <c>mods</c> entry Curator renamed
 /// aside with user consent before hosting its own link there. A plain
 /// serializable DTO (no domain behavior) so <see cref="IRenamedModsFoldersState"/>
-/// can persist it in <c>app-state.json</c>; the relay-client game-dir host owns
-/// when a rename happens. The receipts are an audit trail: nothing reads them
-/// back to drive behavior, but they record exactly what was moved and when so a
-/// user can find their previous setup after the fact.
+/// can persist it in <c>app-state.json</c>. The receipts are an audit trail:
+/// nothing reads them back to drive behavior, but they record exactly what was
+/// moved and when so a user can find their previous setup after the fact.
 /// </summary>
 /// <param name="OriginalPath">The full path of the entry before the rename
 /// (always <c>&lt;game-dir&gt;/mods</c> for the takeover flow, but recorded as a
