@@ -30,10 +30,15 @@ and it runs unmodified).
    Reorder mods by dragging the grip at the left edge of a row, or with the Move
    Up and Move Down buttons; lock a mod's load-order position so reordering
    leaves it in place.
+   Curator also supports an alternate mod manager mod (for example
+   [AML](https://www.nexusmods.com/warhammer40kdarktide/mods/246)): add it to a
+   profile like any other mod and Curator stages it with the profile, hands it
+   to the launcher at launch, and shows a banner on the Mods page while the
+   manager (rather than Curator) controls mod ordering.
    On first startup a one-time Welcome window introduces Curator and offers to
-  set up the Nexus integration. See
-  [`src/README.md`](src/README.md) for developer/build
-  details.
+   set up the Nexus integration. See
+   [`src/README.md`](src/README.md) for developer/build
+   details.
 - **Mod Relay** (separate repo):
   [darktide-mod-relay](https://github.com/ModifAmorphic/darktide-mod-relay): the
   injected modding runtime + its launcher (including the mod loader that loads

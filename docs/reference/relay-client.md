@@ -38,6 +38,15 @@ expected conditions:
   exception's body on `Message` (the full exception is also logged). An unknown
   profile (`KeyNotFoundException` from PrepareModRoot) is caught and mapped to
   `Error`.
+- Derives the profile's enabled alternate mod manager
+  (`IProfileService.GetActiveModManager(profileId)` -- an enabled mod whose
+  resolved staging target is a `base` folder containing `mod_manager.lua`).
+  The derivation shares the staging resolver, so the answer matches what the
+  pass above staged; a non-null result becomes the `--mod-manager` value
+  (below), and `null` means Relay's built-in mod manager (no flag). The
+  staged manager path is passed in BOTH hosting modes: the staged tree is the
+  authoritative location, Relay opens the path verbatim, and the game-dir
+  hosting link resolves to the same file.
 - Hosts the staged tree in the game dir (the default) or applies the external
   opt-out, both read live from the launch's config snapshot:
   - **Game-dir hosting (the default):** derives `GAME_DIR` from the discovered
@@ -159,10 +168,13 @@ read live per ladder run.
   - `RequiredDiscoveryFields(discovery)` -- the discovery fields this platform
     requires but could not resolve (Windows: the game binary only; Linux: Steam +
     game binary + compatdata + Proton).
-  - `Start(launcherPath, discovery, gameBinary, modPath, logFile, launchSettings, createNoWindow) → ISpawnedProcess?`
+  - `Start(launcherPath, discovery, gameBinary, modPath, modManagerFile, logFile, launchSettings, createNoWindow) → ISpawnedProcess?`
     -- the spawn. Windows: a direct invocation of the launcher with native
     (untranslated) args; Linux: `<proton> run <launcher.exe> <args>` with both
     `STEAM_COMPAT_*` env vars and the path-valued flags `Z:\`-translated. The
+    `modManagerFile` parameter is the staged alternate-manager file (Relay's
+    `--mod-manager`), or `null` for Relay's built-in manager; verbatim on
+    Windows, `Z:\`-translated on Linux. The
     `launchSettings` parameter carries the profile's environment variables
     (merged into the spawn request) + game arguments (appended after the
     launcher's own flags as a bare `--` separator then one argv entry each).
@@ -271,7 +283,11 @@ so the precedence is unit-testable on any CI OS.
 native Windows paths. Args: `--game-binary`, `--mod-path`, `--log-file`
 (verbatim, untranslated; the value is Relay's own per-day log path
 `relay-<yyyyMMdd>.log` resolved at launch by `RelayLog` from the configured
-`Logging.RelayLogFile` stem); then an unconditional bare `--log-append` flag
+`Logging.RelayLogFile` stem); an optional `--mod-manager` pair immediately
+after the `--mod-path` value pair when the profile has an enabled alternate
+mod manager (the absolute staged manager path, verbatim; absent when there is
+none -- see the "Alternate mod manager" note under the launch-settings merge); then an
+unconditional bare `--log-append` flag
 (Relay writes a per-day file shared across launches, so it must append rather
 than overwrite each launch; no value, appended right after `--log-file`); then,
 when the profile's `EnableLuaLogs` toggle is on, a bare `--log-lua` flag (tees
@@ -299,11 +315,15 @@ Command: `<proton> run <launcher.exe> <args>`, where:
 - The `proton` command + the launcher.exe path are **native Linux paths**
   (Proton resolves the `.exe` from a native path).
 - The launcher's *own* path-valued flags (`--game-binary`, `--mod-path`,
-  `--log-file`) are **`Z:\`-translated** (the launcher runs under Wine and needs
-  Windows paths) -- including `--log-file`, otherwise the Relay shell log
-  couldn't be written where Curator expects. The `--log-file` value is Relay's
-  own per-day log path `relay-<yyyyMMdd>.log` (resolved at launch by `RelayLog`
-  from the configured `Logging.RelayLogFile` stem, then `Z:\`-translated). After
+  `--mod-manager` when present, `--log-file`) are **`Z:\`-translated** (the
+  launcher runs under Wine and needs Windows paths) -- including `--log-file`,
+  otherwise the Relay shell log couldn't be written where Curator expects. The
+  `--log-file` value is Relay's own per-day log path `relay-<yyyyMMdd>.log`
+  (resolved at launch by `RelayLog` from the configured
+  `Logging.RelayLogFile` stem, then `Z:\`-translated). The optional
+  `--mod-manager` pair sits immediately after the `--mod-path` value pair when
+  the profile has an enabled alternate mod manager (its staged path,
+  `Z:\`-translated like every path-valued flag). After
   `--log-file`'s value comes an unconditional bare `--log-append` flag (Relay
   writes a per-day file shared across launches, so it must append; a bare flag,
   NOT path-valued, so it is not `Z:\`-translated). When the profile's
@@ -349,7 +369,7 @@ right after `--log-file`'s value (before `--log-lua`, `--skip-splash`, and any
 `--` + game args). Relay writes a per-day `relay-<yyyyMMdd>.log` shared across
 launches, so it must append rather than overwrite each launch. The flag carries
 no value, so on Linux it is NOT `Z:\`-translated (only `--game-binary`,
-`--mod-path`, `--log-file` are path-valued).
+`--mod-path`, `--mod-manager`, `--log-file` are path-valued).
 
 **Lua logging:** when the profile's `EnableLuaLogs` toggle is on, Curator appends
 the bare `--log-lua` flag right after `--log-append` (before `--skip-splash` and
@@ -365,6 +385,27 @@ It skips Darktide's intro splash state (the splash screens and intro video) so
 the game advances directly to the title screen. The flag carries no value, so on
 Linux it is NOT `Z:\`-translated. Its Relay env form `RELAY_SKIP_SPLASH` is
 reserved so the toggle is the single source of truth.
+
+**Alternate mod manager:** when the profile has an enabled alternate mod-manager
+mod (an enabled mod whose resolved staging target is a `base` folder containing
+`mod_manager.lua`, per Relay v1.1.0's manager slot), Curator passes
+`--mod-manager <absolute staged path>` immediately after the `--mod-path` value
+pair, in BOTH hosting modes (game-dir hosting and external staging alike): the
+staged tree is the authoritative location, Relay uses the path verbatim with no
+canonicalization (a relative path would resolve against the game's `binaries/`
+CWD, so Curator always passes an absolute one), and the game-dir hosting link
+resolves to the same file. When no manager is active -- none enabled, the mod
+unresolvable, or `mod_manager.lua` missing from the resolved target -- no flag
+is emitted (Relay's built-in manager loads `mods.lst` as before), never a path
+to a missing file: the launcher hard-refuses (exit 2) a configured-but-missing
+manager, so a stale flag would turn into a launch failure. The value is
+`Z:\`-translated on Linux exactly like `--mod-path` (the launcher-under-Wine
+opens the file itself). Its Relay env form `RELAY_MOD_MANAGER` is reserved so
+the detection is the single source of truth. No Relay version preflight is
+performed for the flag (consistent with the `--` forwarding decision: Curator
+bundles Relay >= the manager slot). The staging + `mods.lst` projection are
+unchanged: the manager mod stages + lists like any ordinary mod, and the mod
+list surfaces a caution banner while it controls ordering.
 
 #### AppImage desktop-identity sanitization
 
@@ -477,14 +518,20 @@ the best-effort removal semantics), the game-dir hosting step inside
 and back to the staged root under the external preference read live per launch,
 the owned-link removal call, the `GameDirConflict` result shape, the link-failure
 + underivable-game-dir `Error` mappings, the Linux `Z:\` translation of
-`GAME_DIR`, and a real-host end-to-end launch from the temp game dir),
+`GAME_DIR`, and a real-host end-to-end launch from the temp game dir, plus the
+alternate-manager handoff: the `--mod-manager` pair carries the exact staged
+path in both hosting modes (game-dir default + external preference), no flag +
+one derivation call per launch reaching staging, and zero derivation calls on a
+launch that stops at discovery),
 `GameArgumentsTests` (the bare-`--` contract via the pure
-`BuildLauncherArgs(gameBinary, modPath, logFile, LaunchSettings)` seam: empty
+`BuildLauncherArgs(gameBinary, modPath, modManagerFile, logFile, LaunchSettings)` seam: empty
 emits no `--`, multiple emit one `--` then each arg as its own element in order,
 values with spaces + quotes stay one element; the unconditional bare
 `--log-append` appends right after `--log-file`'s value, and the bare `--log-lua`
 + `--skip-splash` flags append after it when the matching toggles are on, none
-path-translated), `RelayLogTests` (Relay's own per-day log path resolution +
+path-translated; the `--mod-manager` pair lands immediately after the
+`--mod-path` pair when a manager file is passed (verbatim on Windows,
+`Z:\`-translated on Linux) and is absent when null), `RelayLogTests` (Relay's own per-day log path resolution +
 the best-effort prune of old `relay-*.log` to the shared retained count),
 `ProcessLauncherTests`
 (the deterministic `ProcessLauncher.BuildStartInfo` path: a requested inherited
