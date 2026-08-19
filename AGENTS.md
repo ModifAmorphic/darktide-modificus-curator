@@ -706,12 +706,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            the active profile has an enabled alternate mod
                            manager mod, a full-width non-dismissible caution
                            banner (a drawn swap-vert icon +
-                           `ModManagerBannerText` carrying the manager mod's
-                           display name, the same `GetActiveModManager`
-                           derivation the launch flag consumes, read at every
-                           Reload) sits between the import card + the row list,
-                           gating nothing (reorder/lock controls stay fully
-                           functional). The Add split
+                            `ModManagerBannerText` carrying the manager mod's
+                            display name, the same `GetActiveModManager`
+                            derivation the launch flag consumes, read at every
+                            Reload + the enable-toggle path) sits between the
+                            import card + the row list, gating nothing
+                            (reorder/lock controls stay fully functional). The Add split
                            button has four flyout items, all modes that set
                            the default on click (the face label tracks the
                            mode): "Add Nexus Mods" (the default; opens the
@@ -1501,11 +1501,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             broken, OpenFolderCommand launch + failure alert, the
                                             disabled policy + empty update-action cell for linked
                                             rows, IsExternalBroken on Reload);
-                                            + the mod-list manager banner
-                                            (ModListModManagerBannerTests: IsModManagerActive +
-                                            ModManagerBannerText follow the GetActiveModManager
-                                            result at every Reload, flipping off when the result
-                                            clears, the row/repo/"base" name fallback chain);
+                                             + the mod-list manager banner
+                                             (ModListModManagerBannerTests: IsModManagerActive +
+                                             ModManagerBannerText follow the GetActiveModManager
+                                             result at every Reload + on the enable-toggle path,
+                                             flipping off when the result clears, the row/repo/
+                                             "base" name fallback chain);
                                             + the profile-scoped load-order lock + drag-reorder
                                             surface (the lock-aware FakeProfileService projection,
                                             OrderLocked carried on Reload + move/grip availability,

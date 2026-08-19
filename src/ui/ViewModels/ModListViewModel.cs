@@ -142,9 +142,10 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// The active profile's enabled alternate mod manager, from the same
     /// <see cref="IProfileService.GetActiveModManager"/> derivation the launch
-    /// path hands to Relay (set by <see cref="Reload"/>; null with no active
-    /// profile or no manager mod). Drives the caution banner: while a manager
-    /// mod is enabled, it (not Curator's order) controls in-game load order.
+    /// path hands to Relay (set by <see cref="Reload"/> and the enable-toggle
+    /// path; null with no active profile or no manager mod). Drives the
+    /// caution banner: while a manager mod is enabled, it (not Curator's
+    /// order) controls in-game load order.
     /// </summary>
     private ActiveModManager? _activeModManager;
 
@@ -1031,7 +1032,10 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// Applies a row's enabled toggle through <see cref="IProfileService.SetModEnabled"/>.
     /// The row's <see cref="ModItemViewModel.Enabled"/> is already two-way bound
-    /// (the CheckBox flipped it); this persists it, then rebuilds the visible
+    /// (the CheckBox flipped it); this persists it, re-derives the manager banner
+    /// (the same <see cref="IProfileService.GetActiveModManager"/> read as
+    /// <see cref="Reload"/> and the launch path, so toggling the manager mod
+    /// updates the banner without a row rebuild), then rebuilds the visible
     /// projection so a row disabled under an active hide-filter leaves the
     /// visible set (expected: the filter hides what the user just disabled).
     /// Defense: no-op with no active profile.
@@ -1046,6 +1050,13 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
 
         _profiles.SetModEnabled(id, row.ContainerId, row.Enabled);
         _session.HasPendingChanges = true;
+        // The manager banner must follow an enable toggle immediately: the
+        // in-place path deliberately skips the row rebuild, so the derivation
+        // runs here too (both notifications fire unconditionally, matching
+        // Reload; the text notify also covers a manager name change).
+        _activeModManager = _profiles.GetActiveModManager(id);
+        OnPropertyChanged(nameof(IsModManagerActive));
+        OnPropertyChanged(nameof(ModManagerBannerText));
         RebuildVisibleMods();
         _logger.LogDebug("Toggled {Container} enabled={Enabled}", row.ContainerId, row.Enabled);
     }
