@@ -138,8 +138,65 @@ internal sealed class RelayFixture : IDisposable
     {
         if (Directory.Exists(TempRoot))
         {
-            try { Directory.Delete(TempRoot, recursive: true); }
+            // The real-host end-to-end test leaves a <game>/mods junction under
+            // TempRoot (the game-dir hosting link); a naive
+            // Directory.Delete(root, recursive: true) throws
+            // UnauthorizedAccessException when it reaches a directory junction
+            // on Windows, so teardown walks the tree entry-by-entry and removes
+            // reparse points as LINKS (never following them into the staged
+            // tree). Mirrors ProfileServiceFixture.DeleteTree/DeleteEntry +
+            // ProfileService's staged-entry delete. Cross-platform by
+            // construction: the same attribute check handles Linux symlinks.
+            try { DeleteTree(TempRoot); }
             catch (IOException) { /* best-effort: temp dirs are harmless if left */ }
+            catch (UnauthorizedAccessException) { /* best-effort: temp dirs are harmless if left */ }
+        }
+    }
+
+    private static void DeleteTree(string root)
+    {
+        if (!Directory.Exists(root))
+        {
+            return;
+        }
+
+        foreach (var entry in Directory.EnumerateFileSystemEntries(root))
+        {
+            DeleteEntry(entry);
+        }
+
+        Directory.Delete(root); // empty (links + children removed above)
+    }
+
+    private static void DeleteEntry(string entry)
+    {
+        FileAttributes attrs;
+        try
+        {
+            attrs = File.GetAttributes(entry);
+        }
+        catch (FileNotFoundException) { return; } // raced away
+        catch (DirectoryNotFoundException) { return; }
+
+        if ((attrs & FileAttributes.ReparsePoint) != 0)
+        {
+            // Junction/symlink: remove the link only, never follow into its target.
+            if ((attrs & FileAttributes.Directory) != 0)
+            {
+                Directory.Delete(entry);
+            }
+            else
+            {
+                File.Delete(entry);
+            }
+        }
+        else if ((attrs & FileAttributes.Directory) != 0)
+        {
+            DeleteTree(entry);
+        }
+        else
+        {
+            File.Delete(entry);
         }
     }
 }
