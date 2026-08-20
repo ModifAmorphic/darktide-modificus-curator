@@ -72,8 +72,9 @@ internal sealed class WindowsLaunchStrategy : IPlatformLaunchStrategy
     /// <c>mod_relay.exe</c>). Paths pass through verbatim -- Windows needs no
     /// <c>Z:\</c> translation. When <paramref name="modManagerFile"/> is
     /// non-null, the pair <c>--mod-manager</c> + value lands immediately after
-    /// the <c>--mod-path</c> value pair (an absolute staged path, verbatim;
-    /// null means Relay's built-in manager and emits no flag). A bare
+    /// the <c>--mod-path</c> value pair (an absolute path projected onto the
+    /// same mod root, verbatim; null means Relay's built-in manager and emits
+    /// no flag). A bare
     /// <c>--log-append</c> is emitted unconditionally right after
     /// <c>--log-file</c> (Relay writes a per-day file shared across
     /// launches, so it must append rather than overwrite on each launch). When

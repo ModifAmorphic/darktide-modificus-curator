@@ -137,8 +137,9 @@ internal sealed class LinuxLaunchStrategy : IPlatformLaunchStrategy
     /// <paramref name="modManagerFile"/> is non-null, the pair
     /// <c>--mod-manager</c> + value lands immediately after the
     /// <c>--mod-path</c> value pair, <c>Z:\</c>-translated like every
-    /// path-valued flag (an absolute staged path; null means Relay's built-in
-    /// manager and emits no flag). A bare <c>--log-append</c> is emitted
+    /// path-valued flag (an absolute path projected onto the same mod root;
+    /// null means Relay's built-in manager and emits no flag). A bare
+    /// <c>--log-append</c> is emitted
     /// unconditionally right after <c>--log-file</c>'s value (Relay writes a
     /// per-day file shared across launches, so it must append rather than
     /// overwrite on each launch); it is a bare flag, NOT path-valued, so it is
