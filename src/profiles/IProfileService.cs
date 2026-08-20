@@ -245,6 +245,24 @@ public interface IProfileService
     LaunchSettings GetLaunchSettings(Guid id);
 
     /// <summary>
+    /// The profile's enabled alternate mod manager, when one exists: the enabled
+    /// mod whose resolved staging target is a <c>base</c> folder containing
+    /// <c>mod_manager.lua</c>, with the staged path of that manager file.
+    /// </summary>
+    /// <remarks>
+    /// Derivation shares the staging resolver, so the answer matches what
+    /// <see cref="PrepareModRoot"/> stages. Detection is content-based and
+    /// manager-agnostic (the Darktide Mod Loader family convention); a manager
+    /// whose <c>mod_manager.lua</c> is absent from the resolved target yields
+    /// <c>null</c>, not a path. <c>ManagerPath</c> points inside the
+    /// staged tree, which exists once <see cref="PrepareModRoot"/> has run (the
+    /// launch path's calling order). The mod-list UI reads the same result for
+    /// its manager banner so the two can never disagree.
+    /// </remarks>
+    /// <exception cref="KeyNotFoundException"><paramref name="id"/> is unknown.</exception>
+    ActiveModManager? GetActiveModManager(Guid id);
+
+    /// <summary>
     /// Regenerates the profile's staged mod root (the <c>--mod-path</c>) from the
     /// current per-mod version resolution, and writes <c>mods.lst</c> from the
     /// successfully-staged enabled mods in <see cref="ModListEntry.Order"/>.

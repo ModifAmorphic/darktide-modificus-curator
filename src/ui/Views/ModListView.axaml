@@ -553,7 +553,7 @@
     built-in theme chrome, not an authored glyph.
   -->
 
-  <Grid RowDefinitions="Auto,Auto,*">
+  <Grid RowDefinitions="Auto,Auto,Auto,*">
 
     <!-- Header: check-now refresh + rate-limit notice + search box +
          Compact/Detailed density selector with the hide-disabled filter +
@@ -827,6 +827,36 @@
     </Panel>
 
     <!--
+      Alternate mod-manager banner: shown exactly while the active profile has
+      an enabled manager mod (the same derivation the launch path hands to
+      Relay as its mod-manager flag). Caution language like the rate-limit
+      pill, because the manager, not Curator, owns in-game load order while
+      active. Not dismissible: it is live state (disable or remove the manager
+      mod to clear it), not a notification.
+    -->
+    <Border Grid.Row="2"
+            IsVisible="{Binding IsModManagerActive}"
+            Background="{DynamicResource CuratorCautionBackgroundBrush}"
+            CornerRadius="8"
+            Padding="8,6"
+            Margin="20,0,20,4">
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+        <!-- Material "swap_vert" (24x24 source): drawn geometry, themed via
+             the caution foreground. -->
+        <Path Grid.Column="0"
+              Width="16" Height="16" Stretch="Uniform"
+              VerticalAlignment="Center"
+              Fill="{DynamicResource CuratorCautionBrush}"
+              Data="M16 17.01V10h-2v7.01h-3L15 21l4-3.99h-3zM9 3L5 6.99h3v7.01h2V6.99h3L9 3z" />
+        <TextBlock Grid.Column="1"
+                   Text="{Binding ModManagerBannerText}"
+                   FontSize="12"
+                   VerticalAlignment="Center"
+                   TextWrapping="Wrap" />
+      </Grid>
+    </Border>
+
+    <!--
       Content area: the drag-and-drop target (AllowDrop/Drop/DragOver stay here
       so drag-and-drop behavior is unchanged). Background="Transparent" is set
       explicitly so the empty area is hit-testable for drops (a Panel/Grid with
@@ -842,7 +872,7 @@
       left + right margins inside the ItemsControl so the action controls have
       a clear right inset without moving the scrollbar off the edge.
     -->
-    <Grid Grid.Row="2"
+    <Grid Grid.Row="3"
           Background="Transparent"
           DragDrop.AllowDrop="True"
           DragDrop.Drop="OnDrop"

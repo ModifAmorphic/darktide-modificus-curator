@@ -948,6 +948,22 @@ internal sealed class FakeProfileService : IProfileService
     public string PrepareModRoot(Guid id) => throw new NotImplementedException();
 
     /// <summary>
+    /// The <see cref="ActiveModManager"/> returned by
+    /// <see cref="GetActiveModManager"/> (default <c>null</c> = no manager
+    /// mod). The banner tests set this to simulate the derivation.
+    /// </summary>
+    public ActiveModManager? ActiveModManagerResult { get; set; }
+
+    /// <summary>Records each read so tests can assert the reload drove it.</summary>
+    public int GetActiveModManagerCalls { get; private set; }
+
+    public ActiveModManager? GetActiveModManager(Guid id)
+    {
+        GetActiveModManagerCalls++;
+        return ActiveModManagerResult;
+    }
+
+    /// <summary>
     /// The profiles root, unused by the shell/VM surface (the game-dir consent
     /// flow goes through the injected host fake). Present to satisfy the
     /// interface; a path that matches nothing.

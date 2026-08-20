@@ -183,6 +183,21 @@ public sealed class LaunchSettingsEditorViewModelTests
     }
 
     [Fact]
+    public void Relay_mod_manager_name_shows_a_localized_error()
+    {
+        // RELAY_MOD_MANAGER is owned by the manager-mod derivation behind
+        // Relay's --mod-manager flag; the editor must reject a profile value
+        // pointing Relay at a different manager than the staged one.
+        var editor = NewEditor();
+        editor.Load(new LaunchSettings());
+        editor.AddEnvVarCommand.Execute(null);
+        editor.EnvironmentVariables[0].Name = "RELAY_MOD_MANAGER";
+
+        Assert.Contains("RELAY_MOD_MANAGER", editor.EnvironmentVariables[0].ErrorMessage);
+        Assert.False(editor.IsValid);
+    }
+
+    [Fact]
     public void Duplicate_name_flags_both_rows()
     {
         var editor = NewEditor();

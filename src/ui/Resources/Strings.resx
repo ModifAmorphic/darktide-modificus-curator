@@ -444,6 +444,10 @@
     <value>No mods match the current search or filter.</value>
     <comment>Inline message shown when the active profile has mods but the search box or hide-disabled filter excludes every row.</comment>
   </data>
+  <data name="ModList_ModManagerBanner" xml:space="preserve">
+    <value>{0} is managing ordering of mods. Changes to mod order in Curator will not be reflected in game.</value>
+    <comment>Full-width caution banner above the row list, shown while the active profile has an enabled alternate mod manager mod (e.g. AML). {0} is the manager mod's display name.</comment>
+  </data>
 
   <data name="ModRow_Enabled" xml:space="preserve">
     <value>Enabled</value>

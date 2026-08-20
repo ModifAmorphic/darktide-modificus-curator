@@ -26,7 +26,7 @@ public sealed class GameArgumentsTests
     [Fact]
     public void Linux_empty_game_args_emit_no_separator()
     {
-        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings());
+        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings());
 
         AssertSeparator(args, present: false);
     }
@@ -34,7 +34,7 @@ public sealed class GameArgumentsTests
     [Fact]
     public void Windows_empty_game_args_emit_no_separator()
     {
-        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings());
+        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings());
 
         AssertSeparator(args, present: false);
     }
@@ -44,7 +44,7 @@ public sealed class GameArgumentsTests
     {
         // Defense: a null list (LaunchSettings stores non-null, but the seam is
         // robust) is treated as empty.
-        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings { GameArguments = null! });
+        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings { GameArguments = null! });
 
         AssertSeparator(args, present: false);
     }
@@ -56,7 +56,7 @@ public sealed class GameArgumentsTests
     {
         var gameArgs = new[] { "-windowed", "-borderless", "-width" };
 
-        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings { GameArguments = gameArgs });
+        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings { GameArguments = gameArgs });
 
         AssertSeparator(args, present: true);
         AssertGameArgsAfterSeparator(args, gameArgs);
@@ -67,7 +67,7 @@ public sealed class GameArgumentsTests
     {
         var gameArgs = new[] { "-one", "-two", "-three" };
 
-        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings { GameArguments = gameArgs });
+        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings { GameArguments = gameArgs });
 
         AssertSeparator(args, present: true);
         AssertGameArgsAfterSeparator(args, gameArgs);
@@ -76,7 +76,7 @@ public sealed class GameArgumentsTests
     [Fact]
     public void A_single_arg_emits_one_separator_then_the_arg()
     {
-        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings { GameArguments = new[] { "-solo" } });
+        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings { GameArguments = new[] { "-solo" } });
 
         AssertSeparator(args, present: true);
         AssertGameArgsAfterSeparator(args, new[] { "-solo" });
@@ -88,7 +88,7 @@ public sealed class GameArgumentsTests
     public void Duplicate_game_args_are_each_emitted_as_their_own_element()
     {
         // Each entry is a distinct argv value; duplicates are not collapsed.
-        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings { GameArguments = new[] { "-x", "-x", "-y" } });
+        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings { GameArguments = new[] { "-x", "-x", "-y" } });
 
         AssertGameArgsAfterSeparator(args, new[] { "-x", "-x", "-y" });
     }
@@ -101,7 +101,7 @@ public sealed class GameArgumentsTests
         // Relay owns the final CreateProcess quoting. Curator adds each arg
         // verbatim to ArgumentList; a value with spaces survives as a single
         // argv entry (no prequoting / joining on Curator's side).
-        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile,
+        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile,
             new LaunchSettings { GameArguments = new[] { "an arg with spaces", "-plain" } });
 
         AssertGameArgsAfterSeparator(args, new[] { "an arg with spaces", "-plain" });
@@ -110,7 +110,7 @@ public sealed class GameArgumentsTests
     [Fact]
     public void Values_with_quotes_stay_one_element()
     {
-        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile,
+        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile,
             new LaunchSettings { GameArguments = new[] { """a "quoted" arg""", "-plain" } });
 
         AssertGameArgsAfterSeparator(args, new[] { """a "quoted" arg""", "-plain" });
@@ -120,7 +120,7 @@ public sealed class GameArgumentsTests
     public void An_empty_string_arg_is_emitted_as_an_empty_element()
     {
         // An empty game arg is a distinct (empty) argv entry, not dropped.
-        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile,
+        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile,
             new LaunchSettings { GameArguments = new[] { "-a", "", "-b" } });
 
         AssertGameArgsAfterSeparator(args, new[] { "-a", "", "-b" });
@@ -134,7 +134,7 @@ public sealed class GameArgumentsTests
         // The launcher's own value-taking flags precede the -- separator; their
         // values are Z:\-translated (the launcher runs under Wine). Relay flags
         // precede --, game args follow.
-        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings { GameArguments = new[] { "-g" } });
+        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings { GameArguments = new[] { "-g" } });
 
         AssertFlagFollowedByValue(args, "--game-binary", WinePath.ToWine(GameBinary));
         AssertFlagFollowedByValue(args, "--mod-path", WinePath.ToWine(ModPath));
@@ -148,7 +148,7 @@ public sealed class GameArgumentsTests
     [Fact]
     public void Launcher_flags_precede_the_separator_on_windows()
     {
-        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings { GameArguments = new[] { "-g" } });
+        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings { GameArguments = new[] { "-g" } });
 
         AssertFlagFollowedByValue(args, "--game-binary", GameBinary);
         AssertFlagFollowedByValue(args, "--mod-path", ModPath);
@@ -167,7 +167,7 @@ public sealed class GameArgumentsTests
         // --log-append is unconditional (Relay's per-day file is shared across
         // launches, so it appends). It sits right after --log-file's value and
         // is a bare flag (no value).
-        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings());
+        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings());
 
         var i = IndexOf(args, "--log-file");
         Assert.True(i >= 0, "expected --log-file to be present");
@@ -182,7 +182,7 @@ public sealed class GameArgumentsTests
     {
         // Same contract on Linux, plus the bare flag is NOT Z:\-translated (only
         // the path-valued flags --game-binary, --mod-path, --log-file are).
-        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings());
+        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings());
 
         var i = IndexOf(args, "--log-file");
         Assert.True(i >= 0, "expected --log-file to be present");
@@ -198,7 +198,7 @@ public sealed class GameArgumentsTests
     [Fact]
     public void Windows_enable_lua_logs_emits_the_bare_flag()
     {
-        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings { EnableLuaLogs = true });
+        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings { EnableLuaLogs = true });
 
         AssertBareFlag(args, "--log-lua", present: true);
         AssertSeparator(args, present: false);
@@ -207,7 +207,7 @@ public sealed class GameArgumentsTests
     [Fact]
     public void Linux_enable_lua_logs_emits_the_bare_flag()
     {
-        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings { EnableLuaLogs = true });
+        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings { EnableLuaLogs = true });
 
         AssertBareFlag(args, "--log-lua", present: true);
         AssertSeparator(args, present: false);
@@ -224,8 +224,8 @@ public sealed class GameArgumentsTests
         // precedes the -- separator, and the game arg follows --. Covers both
         // Windows and Linux.
         var settings = new LaunchSettings { EnableLuaLogs = true, GameArguments = new[] { "-g" } };
-        var win = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, settings);
-        var lin = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, settings);
+        var win = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, settings);
+        var lin = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, settings);
 
         AssertBareFlag(win, "--log-lua", present: true);
         AssertPrecedesSeparator(win, "--log-lua");
@@ -241,7 +241,7 @@ public sealed class GameArgumentsTests
     {
         // Explicit false: --log-lua is absent (one platform is enough; the
         // signature is shared).
-        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings());
+        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings());
 
         AssertBareFlag(args, "--log-lua", present: false);
     }
@@ -251,7 +251,7 @@ public sealed class GameArgumentsTests
     [Fact]
     public void Windows_skip_splash_emits_the_bare_flag()
     {
-        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings { SkipSplash = true });
+        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings { SkipSplash = true });
 
         AssertBareFlag(args, "--skip-splash", present: true);
         AssertSeparator(args, present: false);
@@ -260,7 +260,7 @@ public sealed class GameArgumentsTests
     [Fact]
     public void Linux_skip_splash_emits_the_bare_flag()
     {
-        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings { SkipSplash = true });
+        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings { SkipSplash = true });
 
         AssertBareFlag(args, "--skip-splash", present: true);
         AssertSeparator(args, present: false);
@@ -277,8 +277,8 @@ public sealed class GameArgumentsTests
         // flag precedes the -- separator, and the game arg follows --. Covers
         // both Windows and Linux.
         var settings = new LaunchSettings { SkipSplash = true, GameArguments = new[] { "-g" } };
-        var win = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, settings);
-        var lin = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, settings);
+        var win = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, settings);
+        var lin = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, settings);
 
         AssertBareFlag(win, "--skip-splash", present: true);
         AssertPrecedesSeparator(win, "--skip-splash");
@@ -294,7 +294,7 @@ public sealed class GameArgumentsTests
     {
         // Explicit false (default): --skip-splash is absent (one platform is
         // enough; the signature is shared).
-        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, new LaunchSettings());
+        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings());
 
         AssertBareFlag(args, "--skip-splash", present: false);
     }
@@ -309,8 +309,8 @@ public sealed class GameArgumentsTests
         // flags is not a Relay contract, so it is not asserted. Covers both
         // Windows and Linux.
         var settings = new LaunchSettings { EnableLuaLogs = true, SkipSplash = true, GameArguments = new[] { "-g" } };
-        var win = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, settings);
-        var lin = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, LogFile, settings);
+        var win = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, settings);
+        var lin = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, settings);
 
         AssertBareFlag(win, "--log-lua", present: true);
         AssertPrecedesSeparator(win, "--log-lua");
@@ -328,6 +328,54 @@ public sealed class GameArgumentsTests
         AssertFlagFollowedByValue(lin, "--log-file", WinePath.ToWine(LogFile));
         Assert.DoesNotContain("Z:", lin[IndexOf(lin, "--log-lua")]);
         Assert.DoesNotContain("Z:", lin[IndexOf(lin, "--skip-splash")]);
+    }
+
+    // ---- --mod-manager: staged alternate-manager file after --mod-path -----
+
+    [Fact]
+    public void Windows_null_manager_file_emits_no_mod_manager_flag()
+    {
+        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings());
+
+        Assert.DoesNotContain("--mod-manager", args);
+    }
+
+    [Fact]
+    public void Windows_manager_file_lands_immediately_after_the_mod_path_pair()
+    {
+        // Relay v1.1.0's --mod-manager: a value-taking flag whose pair sits
+        // immediately after the --mod-path pair (the fixed prefix puts it at
+        // argv indices 4-5) and before --log-file. Verbatim: no translation on
+        // Windows.
+        const string Manager = @"C:\curator\profiles\abc\staged\mods\base\mod_manager.lua";
+        var args = WindowsLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, Manager, LogFile, new LaunchSettings());
+
+        AssertFlagFollowedByValue(args, "--mod-manager", Manager);
+        Assert.Equal(IndexOf(args, "--mod-path") + 2, IndexOf(args, "--mod-manager"));
+        Assert.True(IndexOf(args, "--mod-manager") < IndexOf(args, "--log-file"));
+        Assert.DoesNotContain("Z:", args[IndexOf(args, "--mod-manager") + 1]);
+    }
+
+    [Fact]
+    public void Linux_manager_file_is_z_translated_like_the_other_path_flags()
+    {
+        // The launcher runs under Wine and opens the file itself, so the value
+        // is a Wine Z:\ path exactly like --mod-path / --game-binary /
+        // --log-file.
+        const string Manager = "/home/u/staged/mods/base/mod_manager.lua";
+        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, Manager, LogFile, new LaunchSettings());
+
+        AssertFlagFollowedByValue(args, "--mod-manager", WinePath.ToWine(Manager));
+        Assert.Equal("Z:\\home\\u\\staged\\mods\\base\\mod_manager.lua", args[IndexOf(args, "--mod-manager") + 1]);
+        Assert.Equal(IndexOf(args, "--mod-path") + 2, IndexOf(args, "--mod-manager"));
+    }
+
+    [Fact]
+    public void Linux_null_manager_file_emits_no_mod_manager_flag()
+    {
+        var args = LinuxLaunchStrategy.BuildLauncherArgs(GameBinary, ModPath, null, LogFile, new LaunchSettings());
+
+        Assert.DoesNotContain("--mod-manager", args);
     }
 
     // ---- relational contract helpers ---------------------------------------

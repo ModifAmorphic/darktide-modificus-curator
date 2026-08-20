@@ -48,6 +48,7 @@ public interface IProfileService
     ModListEntry? GetBaseNameCollision(Guid id, string baseName, Guid? excludeContainerId);  // import-time hard-block
 
     LaunchSettings GetLaunchSettings(Guid id);                  // focused read (launch path)
+    ActiveModManager? GetActiveModManager(Guid id);             // focused read: the enabled alternate mod manager
 
     string PrepareModRoot(Guid id);
 }
@@ -171,6 +172,24 @@ Method behavior:
   edits launch settings through `UpdateProfile`; the launch path applies the
   settings next launch, and editing is unlocked while Darktide runs (a
   `profile.json` write that does not touch the running process).
+- `GetActiveModManager(id)` -- a focused read deriving the profile's enabled
+  alternate mod manager, when one exists: the enabled mod (first in `Order`)
+  whose resolved staging target is a `base` folder containing
+  `mod_manager.lua` (the Darktide Mod Loader family convention; AML, Nexus mod
+  246, is the known occupant). Returns an `ActiveModManager`
+  (container id + the staged manager file path
+  `<staged>/mods/base/mod_manager.lua`), or `null` when there is none. The
+  derivation shares the staging resolver, so the answer matches what
+  `PrepareModRoot` stages; detection is content-based + manager-agnostic (no
+  Nexus id is consulted, and the `base.mod` import descriptor plays no part),
+  and a manager whose `mod_manager.lua` is absent from the resolved target
+  yields `null`, never a path to a missing file (Relay hard-refuses a
+  configured-but-missing manager). The path points inside the staged tree,
+  which exists once `PrepareModRoot` has run (the launch path's calling
+  order). The mod-list UI reads the same result for its manager banner, so
+  the banner and the flag can never disagree. Throws
+  `KeyNotFoundException` for an unknown profile. The manager mod itself
+  stages + lists like any ordinary mod (no special staging).
 
 ### Key types
 
@@ -199,6 +218,11 @@ Method behavior:
   at the service boundary.
 - `ProfileSummary(Guid Id, string Name, string Description)` -- a lightweight
   projection for profile pickers (no mod list loaded).
+- `ActiveModManager(Guid ContainerId, string ManagerPath)` -- the enabled
+  mod-manager mod derived from profile state: the manager-occupied container +
+  the staged manager file path (the launch path projects it onto the effective
+  mod root before handing it to Relay). One derivation shared by the launch
+  path (Relay's `--mod-manager`) and the mod-list banner.
 - `StagingLinkCreator` -- a `delegate` that creates a directory staging link.
   The default (registered by `AddProfiles`) is platform-selective: an NTFS
   junction on Windows (privilege-free; no Developer Mode / admin required) and a
@@ -230,7 +254,7 @@ public sealed record EnvVar(string Name, string Value);
 
 public sealed record LaunchSettings
 {
-    public static readonly IReadOnlyCollection<string> ReservedEnvironmentNames;  // 14, case-insensitive
+    public static readonly IReadOnlyCollection<string> ReservedEnvironmentNames;  // 15, case-insensitive
     public IReadOnlyList<EnvVar> EnvironmentVariables { get; init; }  // ordered, default empty
     public IReadOnlyList<string> GameArguments { get; init; }        // ordered, default empty
     public bool EnableLuaLogs { get; init; }                         // emits Relay's --log-lua when true
@@ -245,19 +269,22 @@ public sealed record LaunchSettings
 - Backward compatible: an existing `profile.json` without `LaunchSettings`, and
   an explicit JSON `null`, both deserialize to an empty (non-null) instance
   (`ReadProfileFile` coerces `null` to `new()`, mirroring `Mods ??= Empty`).
-- `ReservedEnvironmentNames` (case-insensitive, 14 names) is the central
+- `ReservedEnvironmentNames` (case-insensitive, 15 names) is the central
   reserved-name policy consumed by the shared `LaunchSettingsValidator` (below)
   so the launch-settings UI pre-validates inline from the same source of truth.
   Two groups: Curator-owned OS/launch env (7: the two `STEAM_COMPAT_*`,
   `APPDIR`, `APPIMAGE`, `ARGV0`, `OWD`, `BAMF_DESKTOP_FILE_HINT` -- a profile
   value would fight Curator or break the AppImage-identity invariant) and Relay
-  config env (7: `MODIFICUS_GAME_BINARY`, `MODIFICUS_MOD_PATH`,
+  config env (8: `MODIFICUS_GAME_BINARY`, `MODIFICUS_MOD_PATH`,
   `RELAY_LOG_FILE`, `RELAY_LOG_LEVEL`, `MODIFICUS_STEAM_APP_ID` -- Curator
   supplies these as flags so the env fallback is inert; blocked to avoid a
   silently-ignored value -- plus `RELAY_LUA_LOGS`, owned by the per-profile
   `EnableLuaLogs` toggle and reserved so a profile env can't double-control or
-  silently bypass that toggle, and `RELAY_SKIP_SPLASH`, owned by the per-profile
-  `SkipSplash` toggle and reserved for the same reason).
+  silently bypass that toggle, `RELAY_SKIP_SPLASH`, owned by the per-profile
+  `SkipSplash` toggle and reserved for the same reason, and
+  `RELAY_MOD_MANAGER`, owned by the manager-mod detection behind Relay's
+  `--mod-manager` flag and reserved so a profile value can't point Relay at a
+  different manager than the staged one).
 
 ### Launch-settings validation (`LaunchSettingsValidator`)
 
@@ -477,7 +504,13 @@ atomicity, and `ListProfiles`/`ProfileCreated` projecting description), mod
   folder, non-matching descriptor, other Nexus ids), the unknown-container-id
   append allowance, idempotent re-add after the user unlocks/reorders/disables,
   remove-then-re-add reapplying first + locked, and the prepend lock's
-  interplay with later reorders + unlocking), the
+  interplay with later reorders + unlocking), the alternate mod-manager
+  derivation (`ModManagerDetectionTests`: recognition of an enabled
+  `base`/`mod_manager.lua` mod for untracked, Nexus-sourced, + linked
+  containers with the exact staged manager path, ordinary staging +
+  `mods.lst` behavior for the manager mod, null for disabled / unresolvable /
+  missing-manager-file / capitalized-`Base` shapes, the unknown-profile
+  throw, and first-in-order-wins over a hand-shaped two-base profile), the
 launch-settings model + service (`LaunchSettingsTests`: round-trip across a
 fresh instance, old-JSON-loads-empty + explicit-null normalization, order +
 duplicate preservation, the full validation surface -- empty / `=` / NUL name,

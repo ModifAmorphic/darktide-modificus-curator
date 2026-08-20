@@ -458,6 +458,31 @@ public sealed class ModImportServiceTests
     }
 
     [Fact]
+    public void Import_zip_with_the_manager_shape_and_an_empty_descriptor_validates_with_base_name_base()
+    {
+        // The alternate mod-manager archive shape (AML, Nexus mod 246): a
+        // base/ folder holding mod_manager.lua + an EMPTY base.mod descriptor.
+        // The validator requires exactly one base folder with a matching
+        // <base>.mod; empty descriptor content is fine, so the real artifact
+        // imports under the base name unchanged.
+        using var fx = new ImportFixture();
+        var zipPath = Path.Combine(fx.TempRoot, "manager.zip");
+        MakeZip(zipPath,
+            ("base/mod_manager.lua", "-- alternate manager"),
+            ("base/base.mod", ""));
+
+        Assert.Equal("base", fx.Service.GetBaseName(zipPath));
+
+        var (containerId, _) = fx.Service.Import(zipPath, "AML", new UntrackedSource(), "1.0");
+        var versionPath = fx.Repo.GetVersionFolderPath(containerId,
+            fx.Repo.Get(containerId)!.Versions[0].Folder);
+        Assert.True(File.Exists(Path.Combine(versionPath, "base", "mod_manager.lua")));
+        var descriptor = new FileInfo(Path.Combine(versionPath, "base", "base.mod"));
+        Assert.True(descriptor.Exists);
+        Assert.Equal(0, descriptor.Length);
+    }
+
+    [Fact]
     public void Import_zip_with_multiple_top_level_folders_is_rejected_and_extracts_nothing()
     {
         using var fx = new ImportFixture();

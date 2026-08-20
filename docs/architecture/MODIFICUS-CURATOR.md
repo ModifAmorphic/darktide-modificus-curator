@@ -159,7 +159,10 @@ Stable surface (Relay is built; this is the boundary Curator builds against):
 - **Flags:** `--game-binary <path>` (required) · `--mod-path <path>` (the mod
   root: the parent of the `mods/` folder Relay consumes -- the game dir when
   game-dir hosting is active, the staged root under the external preference) ·
-  `--log-file <path>` · `--log-append` (a bare flag Curator always emits
+  `--mod-manager <path>` (Relay v1.1.0: the alternate mod manager's Lua file,
+  replacing Relay's built-in manager; Curator emits it only when the profile
+  has an enabled manager mod, as an absolute path projected onto the effective
+  mod root -- the same root as `--mod-path` -- used verbatim by Relay) · `--log-file <path>` · `--log-append` (a bare flag Curator always emits
   right after `--log-file`: Relay writes a per-day `relay-<yyyyMMdd>.log` shared
   across launches, so it appends rather than overwrites) · `--log-level <level>`
   · `--steam-app-id <id>`
@@ -216,6 +219,20 @@ for the full contract (env-var table, logging, the hook-ready handshake).
   game dir under the default game-dir hosting -- its `mods` link points at the
   staged tree -- or the staged root itself under the external preference);
   Curator writes `mods.lst` into the staged `mods/` on each launch.
+- **Alternate mod manager:** a profile may carry a manager mod (an enabled mod
+  whose resolved staging target is a `base` folder containing
+  `mod_manager.lua`; AML, Nexus mod 246, is the known occupant, and the
+  Darktide Mod Loader family shares the convention). Detection is
+  content-based + manager-agnostic (no Nexus id, no `base.mod` involvement,
+  no special `AddMod` behavior), derived by one focused read
+  (`IProfileService.GetActiveModManager`) that shares the staging resolver so
+  the answer matches what `PrepareModRoot` stages; the launch path and the
+  mod-list banner consume the same result, so the `--mod-manager` flag and the
+  banner can never disagree. The manager mod itself stages + lists like any
+  ordinary mod (zero staging changes), and a manager whose `mod_manager.lua`
+  is absent from the resolved target yields `null` (never a path to a missing
+  file; Relay hard-refuses one). Its Relay env form `RELAY_MOD_MANAGER` is
+  reserved so the detection is the single source of truth.
 - **DMF on profile creation:** the new-profile flow surfaces a Yes/No confirm
   offering to add DMF (most mods depend on it, so this is the common case; DMF
   isn't mandatory, so the prompt is an offer, not a requirement; decline is
@@ -570,6 +587,13 @@ is in [UI reference](../reference/ui.md).
 - A freshly added DMF lands first and order-locked (the profile add
   boundary's placement default; updateable). The lock is a default the user
   can clear, not a protected state.
+- **Manager banner.** While the active profile has an enabled alternate mod
+  manager mod, the list shows a full-width caution banner (a drawn swap-vert
+  icon + the manager mod's display name) explaining that the manager, not
+  Curator, controls in-game load ordering. It is live state, not a
+  notification: it is not dismissible, shows exactly while the manager is
+  active, and gates nothing (reorder/lock controls stay fully functional;
+  Curator's order still rules the staging + `mods.lst` projection).
 - **Row density.** The list has a persisted Compact/Detailed density: Detailed
   is the default (the multi-line row with summary + thumbnail), and an absent
   or unknown value normalizes to it; Compact is the dense one-line variant,
@@ -609,11 +633,19 @@ is in [UI reference](../reference/ui.md).
 
 The launch path **diverges by OS**. In both cases Curator resolves the profile,
 writes `mods.lst` + the staging ownership marker into the profile's staged
-`mods/`, reads the profile's launch
+`mods/`, derives the profile's enabled alternate mod manager (if any),
+reads the profile's launch
 settings (environment variables + Darktide command-line arguments + the
 skip-splash and Lua-logging toggles), hosts the staged tree in the game
 directory (below), then invokes the Relay launcher with
-`--game-binary`, `--mod-path`, `--log-file`, then an unconditional bare
+`--game-binary`, `--mod-path`, then (when a manager mod is active) the
+`--mod-manager <absolute path>` pair -- Relay v1.1.0's manager slot,
+projected onto the effective mod root (the same root as `--mod-path`: the
+game dir under default hosting, whose mods link resolves to the staged tree;
+the staged root under the external preference), never emitted when the
+manager file is missing from the resolved target (the launcher hard-refuses a
+configured-but-missing manager with exit 2) -- then `--log-file`, then an
+unconditional bare
 `--log-append` (Relay writes its own per-day `relay-<yyyyMMdd>.log` shared
 across launches, so it appends). When the profile's `EnableLuaLogs`
 toggle is on, Curator appends the bare `--log-lua` flag (a tee of Lua print
@@ -624,7 +656,9 @@ flags (no value); Relay requires only that its own flags precede the `--`
 separator and that a value-taking flag be immediately followed by its value.
 (Curator does not emit `--log-level`; the Relay shell's level
 vocabulary differs from Curator's Serilog level, so the shell's `info` default
-is used.)
+is used. No Relay version preflight is performed for the manager flag either:
+Curator pairs with Relay v1.1.0+, the same posture as the `--` game-arg
+forwarding.)
 
 A profile's launch settings apply at launch: environment variables reach Proton
 before it starts on Linux (inherited by Proton/Relay/Darktide) and the Relay
