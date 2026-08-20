@@ -128,8 +128,9 @@ internal sealed class RelayLaunchService : IRelayLaunchService
             // matches what the pass above staged; the just-created staging link
             // means the manager file exists at the derived path. Null = no
             // --mod-manager flag (Relay's built-in manager loads mods.lst). The
-            // staged path is passed in BOTH hosting modes: the staged tree is
-            // the authoritative location and Relay opens the path verbatim.
+            // derivation verifies + locates the manager in the staged tree; the
+            // flag value is projected onto the effective mod root at the hosting
+            // point (the same root as --mod-path).
             var modManager = _profiles.GetActiveModManager(profileId);
 
             var launcherPath = ResolveLauncherPath(
@@ -210,6 +211,16 @@ internal sealed class RelayLaunchService : IRelayLaunchService
                 modPath = gameDir;
             }
 
+            // Project the manager file onto the same effective mod root as --mod-path:
+            // under default hosting that is the game dir (whose mods link resolves to
+            // the staged tree), under the external preference the staged root itself.
+            // GetRelativePath is safe by construction: ProfileService composes
+            // ManagerPath under the staged root, so the relative portion is always the
+            // in-tree location (mods\<base>\mod_manager.lua), never a ".." climb.
+            string? modManagerFile = modManager is null
+                ? null
+                : Path.Combine(modPath, Path.GetRelativePath(stagedRoot, modManager.ManagerPath));
+
             // Relay writes its own per-day log: its mod_loader opens --log-file
             // directly (an external process, not Serilog). Resolve today's path
             // from the configured RelayLogFile stem (relay-client inserts the
@@ -245,7 +256,7 @@ internal sealed class RelayLaunchService : IRelayLaunchService
             // console appears regardless, so the flag is a harmless no-op there.
             var createNoWindow = !config.Preferences.ShowRelayConsole;
 
-            var spawned = _strategy.Start(launcherPath, discovery, gameBinary, modPath, modManager?.ManagerPath, logFile, launchSettings, createNoWindow);
+            var spawned = _strategy.Start(launcherPath, discovery, gameBinary, modPath, modManagerFile, logFile, launchSettings, createNoWindow);
 
             if (spawned is null)
             {

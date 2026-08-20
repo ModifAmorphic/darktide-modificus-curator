@@ -44,9 +44,11 @@ expected conditions:
   The derivation shares the staging resolver, so the answer matches what the
   pass above staged; a non-null result becomes the `--mod-manager` value
   (below), and `null` means Relay's built-in mod manager (no flag). The
-  staged manager path is passed in BOTH hosting modes: the staged tree is the
-  authoritative location, Relay opens the path verbatim, and the game-dir
-  hosting link resolves to the same file.
+  derivation locates + verifies the manager in the staged tree; the launch
+  path projects the flag value onto the effective mod root at the hosting
+  point (the same root as `--mod-path`: the game dir under default hosting,
+  whose mods link resolves to the staged tree, and the staged root itself
+  under the external preference).
 - Hosts the staged tree in the game dir (the default) or applies the external
   opt-out, both read live from the launch's config snapshot:
   - **Game-dir hosting (the default):** derives `GAME_DIR` from the discovered
@@ -285,8 +287,8 @@ native Windows paths. Args: `--game-binary`, `--mod-path`, `--log-file`
 `relay-<yyyyMMdd>.log` resolved at launch by `RelayLog` from the configured
 `Logging.RelayLogFile` stem); an optional `--mod-manager` pair immediately
 after the `--mod-path` value pair when the profile has an enabled alternate
-mod manager (the absolute staged manager path, verbatim; absent when there is
-none -- see the "Alternate mod manager" note under the launch-settings merge); then an
+mod manager (the absolute projected manager path, verbatim; absent when
+there is none -- see the "Alternate mod manager" note under the launch-settings merge); then an
 unconditional bare `--log-append` flag
 (Relay writes a per-day file shared across launches, so it must append rather
 than overwrite each launch; no value, appended right after `--log-file`); then,
@@ -322,7 +324,7 @@ Command: `<proton> run <launcher.exe> <args>`, where:
   (resolved at launch by `RelayLog` from the configured
   `Logging.RelayLogFile` stem, then `Z:\`-translated). The optional
   `--mod-manager` pair sits immediately after the `--mod-path` value pair when
-  the profile has an enabled alternate mod manager (its staged path,
+  the profile has an enabled alternate mod manager (its projected path,
   `Z:\`-translated like every path-valued flag). After
   `--log-file`'s value comes an unconditional bare `--log-append` flag (Relay
   writes a per-day file shared across launches, so it must append; a bare flag,
@@ -389,12 +391,14 @@ reserved so the toggle is the single source of truth.
 **Alternate mod manager:** when the profile has an enabled alternate mod-manager
 mod (an enabled mod whose resolved staging target is a `base` folder containing
 `mod_manager.lua`, per Relay v1.1.0's manager slot), Curator passes
-`--mod-manager <absolute staged path>` immediately after the `--mod-path` value
-pair, in BOTH hosting modes (game-dir hosting and external staging alike): the
-staged tree is the authoritative location, Relay uses the path verbatim with no
-canonicalization (a relative path would resolve against the game's `binaries/`
-CWD, so Curator always passes an absolute one), and the game-dir hosting link
-resolves to the same file. When no manager is active -- none enabled, the mod
+`--mod-manager <absolute path>` immediately after the `--mod-path` value pair.
+The derivation locates + verifies the manager in the staged tree; the launch
+path projects the flag value onto the effective mod root, formulated where
+`--mod-path` is (the game dir under default hosting, whose mods link resolves
+to the staged tree so it is the same file; the staged root under the external
+preference). Relay uses the path verbatim with no canonicalization (a relative
+path would resolve against the game's `binaries/` CWD, so Curator always
+passes an absolute one). When no manager is active -- none enabled, the mod
 unresolvable, or `mod_manager.lua` missing from the resolved target -- no flag
 is emitted (Relay's built-in manager loads `mods.lst` as before), never a path
 to a missing file: the launcher hard-refuses (exit 2) a configured-but-missing
@@ -519,10 +523,12 @@ and back to the staged root under the external preference read live per launch,
 the owned-link removal call, the `GameDirConflict` result shape, the link-failure
 + underivable-game-dir `Error` mappings, the Linux `Z:\` translation of
 `GAME_DIR`, and a real-host end-to-end launch from the temp game dir, plus the
-alternate-manager handoff: the `--mod-manager` pair carries the exact staged
-path in both hosting modes (game-dir default + external preference), no flag +
-one derivation call per launch reaching staging, and zero derivation calls on a
-launch that stops at discovery),
+alternate-manager handoff: the `--mod-manager` pair carries the manager file
+projected onto the effective mod root (the game-dir mods link path under
+default hosting on both strategies, `Z:\`-translated on Linux; the staged
+path under the external preference), no flag + one derivation call per launch
+reaching staging, and zero derivation calls on a launch that stops at
+discovery),
 `GameArgumentsTests` (the bare-`--` contract via the pure
 `BuildLauncherArgs(gameBinary, modPath, modManagerFile, logFile, LaunchSettings)` seam: empty
 emits no `--`, multiple emit one `--` then each arg as its own element in order,

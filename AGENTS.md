@@ -1210,12 +1210,15 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         (skips Darktide's intro splash state, no value, not
                         Z:\-translated on Linux); when the profile has an
                         enabled alternate mod manager (derived right after the
-                        staging pass via GetActiveModManager), the pair
-                        --mod-manager + the ABSOLUTE staged manager file lands
+                        staging pass via GetActiveModManager, which locates +
+                        verifies the manager in the staged tree), the pair
+                        --mod-manager + the ABSOLUTE projected manager file lands
                         immediately after the --mod-path value pair (verbatim
-                        on Windows, Z:\-translated on Linux; the STAGED path in
-                        both hosting modes -- game-dir hosting's link resolves
-                        to the same file; null means Relay's built-in manager
+                        on Windows, Z:\-translated on Linux; the launch path
+                        projects the flag value onto the effective mod root --
+                        the game dir under default hosting, the staged root
+                        under the external preference -- formulated where
+                        --mod-path is; null means Relay's built-in manager
                         and no flag, and a manager file missing from the
                         resolved target never gets one); game args append one bare -- then
                         each arg as its own ArgumentList entry (Relay's --
@@ -1386,9 +1389,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             translation of GAME_DIR, + a real-host end-to-end
                                             launch from the temp game dir
                                             + the --mod-manager handoff: the flag pair carries
-                                            the exact staged path in BOTH hosting modes, no
-                                            flag + one derivation call per launch reaching
-                                            staging, zero calls on a discovery-incomplete launch
+                                            the manager file projected onto the effective mod
+                                            root (the game-dir mods link path under default
+                                            hosting on both strategies, Z:\-translated on
+                                            Linux; the staged path under the external
+                                            preference), no flag + one derivation call per
+                                            launch reaching staging, zero calls on a
+                                            discovery-incomplete launch
                                             + the RelayExited exit tracking over the
                                             fake ISpawnedProcess: completes when the fake exits,
                                             completes + disposes when exit observation throws,

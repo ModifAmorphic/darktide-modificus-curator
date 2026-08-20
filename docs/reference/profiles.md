@@ -220,8 +220,9 @@ Method behavior:
   projection for profile pickers (no mod list loaded).
 - `ActiveModManager(Guid ContainerId, string ManagerPath)` -- the enabled
   mod-manager mod derived from profile state: the manager-occupied container +
-  the staged manager file path. One derivation shared by the launch path
-  (Relay's `--mod-manager`) and the mod-list banner.
+  the staged manager file path (the launch path projects it onto the effective
+  mod root before handing it to Relay). One derivation shared by the launch
+  path (Relay's `--mod-manager`) and the mod-list banner.
 - `StagingLinkCreator` -- a `delegate` that creates a directory staging link.
   The default (registered by `AddProfiles`) is platform-selective: an NTFS
   junction on Windows (privilege-free; no Developer Mode / admin required) and a

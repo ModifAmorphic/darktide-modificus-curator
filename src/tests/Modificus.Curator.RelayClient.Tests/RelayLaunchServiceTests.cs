@@ -1133,27 +1133,32 @@ public sealed class RelayLaunchServiceTests
     // ---- alternate mod manager (--mod-manager) -------------------------------
 
     [Fact]
-    public void Active_manager_emits_the_flag_with_the_staged_path_in_game_dir_hosting_mode()
+    public void Active_manager_projects_the_flag_into_the_game_dir_mods_link_path()
     {
         // Game-dir hosting is the default: --mod-path points at the game dir,
-        // but the manager flag carries the STAGED manager file (the staged
-        // tree is the authoritative location; Relay opens the path verbatim,
-        // and the hosted link resolves to the same file).
+        // and the manager flag value is projected onto that same root
+        // (<game>/mods/base/mod_manager.lua; the game-dir mods link resolves
+        // to the staged tree, so it is the same file the derivation located).
+        // The staged root + manager file are real fixture paths: the launch
+        // path takes their relative portion, which must be a true in-tree
+        // relationship on the test OS.
         using var fx = new RelayFixture();
         fx.Steam.Result = fx.CompleteWindows;
-        const string StagedRoot = @"C:\curator\profiles\abc\staged";
-        const string ManagerFile = @"C:\curator\profiles\abc\staged\mods\base\mod_manager.lua";
-        fx.Profiles.PrepareModRootResult = StagedRoot;
-        fx.Profiles.GetActiveModManagerResult = new ActiveModManager(Guid.NewGuid(), ManagerFile);
+        var stagedRoot = Path.Combine(fx.TempRoot, "profiles", "abc", "staged");
+        var managerFile = Path.Combine(stagedRoot, "mods", "base", "mod_manager.lua");
+        fx.Profiles.PrepareModRootResult = stagedRoot;
+        fx.Profiles.GetActiveModManagerResult = new ActiveModManager(Guid.NewGuid(), managerFile);
         var svc = fx.BuildWindowsService();
 
         var result = svc.Launch(Guid.NewGuid());
 
         Assert.Equal(LaunchStatus.Launched, result.Status);
         var args = fx.Launcher.Arguments!;
-        Assert.Equal(ManagerFile, args[IndexOf(args, "--mod-manager") + 1]);
+        Assert.Equal(fx.GameDir, args[IndexOf(args, "--mod-path") + 1]);
+        Assert.Equal(
+            Path.Combine(fx.GameDir, "mods", "base", "mod_manager.lua"),
+            args[IndexOf(args, "--mod-manager") + 1]);
         Assert.Equal(IndexOf(args, "--mod-path") + 2, IndexOf(args, "--mod-manager"));
-        Assert.NotEqual(args[IndexOf(args, "--mod-path") + 1], args[IndexOf(args, "--mod-manager") + 1]);
         Assert.Equal(1, fx.Profiles.GetActiveModManagerCalls);
     }
 
@@ -1161,14 +1166,14 @@ public sealed class RelayLaunchServiceTests
     public void Active_manager_emits_the_flag_with_the_staged_path_in_external_hosting_mode()
     {
         // The external-hosting opt-out hands Relay the staged root as
-        // --mod-path; the manager flag carries the same staged manager file
-        // either way.
+        // --mod-path; the projection onto that same root reproduces the
+        // staged manager file path unchanged.
         using var fx = new RelayFixture();
         fx.Steam.Result = fx.CompleteWindows;
-        const string StagedRoot = @"C:\curator\profiles\abc\staged";
-        const string ManagerFile = @"C:\curator\profiles\abc\staged\mods\base\mod_manager.lua";
-        fx.Profiles.PrepareModRootResult = StagedRoot;
-        fx.Profiles.GetActiveModManagerResult = new ActiveModManager(Guid.NewGuid(), ManagerFile);
+        var stagedRoot = Path.Combine(fx.TempRoot, "profiles", "abc", "staged");
+        var managerFile = Path.Combine(stagedRoot, "mods", "base", "mod_manager.lua");
+        fx.Profiles.PrepareModRootResult = stagedRoot;
+        fx.Profiles.GetActiveModManagerResult = new ActiveModManager(Guid.NewGuid(), managerFile);
         fx.Config.Preferences.ExternalModHosting = true;
         var svc = fx.BuildWindowsService();
 
@@ -1176,8 +1181,33 @@ public sealed class RelayLaunchServiceTests
 
         Assert.Equal(LaunchStatus.Launched, result.Status);
         var args = fx.Launcher.Arguments!;
-        Assert.Equal(ManagerFile, args[IndexOf(args, "--mod-manager") + 1]);
-        Assert.Equal(StagedRoot, args[IndexOf(args, "--mod-path") + 1]);
+        Assert.Equal(managerFile, args[IndexOf(args, "--mod-manager") + 1]);
+        Assert.Equal(stagedRoot, args[IndexOf(args, "--mod-path") + 1]);
+    }
+
+    [Fact]
+    public void Linux_active_manager_flag_is_the_projected_game_dir_path_z_translated()
+    {
+        // Linux + game-dir hosting (the default): the projected flag value is
+        // the game-dir manager path, Z:\-translated exactly like --mod-path
+        // when it reaches the launcher args (after "run" + launcherPath).
+        using var fx = new RelayFixture();
+        fx.Steam.Result = fx.CompleteLinux;
+        var stagedRoot = Path.Combine(fx.TempRoot, "profiles", "abc", "staged");
+        var managerFile = Path.Combine(stagedRoot, "mods", "base", "mod_manager.lua");
+        fx.Profiles.PrepareModRootResult = stagedRoot;
+        fx.Profiles.GetActiveModManagerResult = new ActiveModManager(Guid.NewGuid(), managerFile);
+        var svc = fx.BuildLinuxService();
+
+        var result = svc.Launch(Guid.NewGuid());
+
+        Assert.Equal(LaunchStatus.Launched, result.Status);
+        var launcherFlags = fx.Launcher.Arguments!.Skip(2).ToList();
+        Assert.Equal(
+            WinePath.ToWine(Path.Combine(fx.GameDir, "mods", "base", "mod_manager.lua")),
+            launcherFlags[IndexOf(launcherFlags, "--mod-manager") + 1]);
+        Assert.Equal(WinePath.ToWine(fx.GameDir), launcherFlags[IndexOf(launcherFlags, "--mod-path") + 1]);
+        Assert.Equal(IndexOf(launcherFlags, "--mod-path") + 2, IndexOf(launcherFlags, "--mod-manager"));
     }
 
     [Fact]

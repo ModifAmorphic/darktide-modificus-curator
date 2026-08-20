@@ -161,8 +161,8 @@ Stable surface (Relay is built; this is the boundary Curator builds against):
   game-dir hosting is active, the staged root under the external preference) ·
   `--mod-manager <path>` (Relay v1.1.0: the alternate mod manager's Lua file,
   replacing Relay's built-in manager; Curator emits it only when the profile
-  has an enabled manager mod, always as an absolute staged path, used verbatim
-  by Relay) · `--log-file <path>` · `--log-append` (a bare flag Curator always emits
+  has an enabled manager mod, as an absolute path projected onto the effective
+  mod root -- the same root as `--mod-path` -- used verbatim by Relay) · `--log-file <path>` · `--log-append` (a bare flag Curator always emits
   right after `--log-file`: Relay writes a per-day `relay-<yyyyMMdd>.log` shared
   across launches, so it appends rather than overwrites) · `--log-level <level>`
   · `--steam-app-id <id>`
@@ -639,10 +639,11 @@ settings (environment variables + Darktide command-line arguments + the
 skip-splash and Lua-logging toggles), hosts the staged tree in the game
 directory (below), then invokes the Relay launcher with
 `--game-binary`, `--mod-path`, then (when a manager mod is active) the
-`--mod-manager <absolute staged path>` pair -- Relay v1.1.0's manager slot,
-emitted in both hosting modes (the staged tree is authoritative; the game-dir
-link resolves to the same file), never emitted when the manager file is
-missing from the resolved target (the launcher hard-refuses a
+`--mod-manager <absolute path>` pair -- Relay v1.1.0's manager slot,
+projected onto the effective mod root (the same root as `--mod-path`: the
+game dir under default hosting, whose mods link resolves to the staged tree;
+the staged root under the external preference), never emitted when the
+manager file is missing from the resolved target (the launcher hard-refuses a
 configured-but-missing manager with exit 2) -- then `--log-file`, then an
 unconditional bare
 `--log-append` (Relay writes its own per-day `relay-<yyyyMMdd>.log` shared
