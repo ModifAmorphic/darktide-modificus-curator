@@ -231,7 +231,7 @@ public sealed class ModAcquisitionServiceTests
         Assert.False(File.Exists(single.SourcePath));
     }
 
-    // ---- publish-date capture (forwarded to Import as RemoteUploadedAt) ----
+    // ---- publish-date + file-id capture (forwarded to Import) -------------
 
     [Fact]
     public async Task AcquireFromNexusAsync_records_matched_file_UploadedTimestamp_as_RemoteUploadedAt()
@@ -274,6 +274,40 @@ public sealed class ModAcquisitionServiceTests
     }
 
     [Fact]
+    public async Task AcquireFromNexusAsync_forwards_the_requested_file_id_to_import()
+    {
+        // The imported version's FileId records which remote file it came
+        // from (an exact identity, independent of the version tag). The
+        // acquisition must pass the requested file id through untouched; a
+        // decoy file with a different id is listed first to prove the id is
+        // not re-derived from the files list.
+        var nexus = new FakeNexusClient
+        {
+            DownloadLinks = ParseLinks(DownloadLinksJson),
+            ModInfoResponse = () => Ok(ParseInfo(ModInfoJson)),
+            ModFilesResponse = new[]
+            {
+                FileEntry(id: 100, category: 1, uploaded: 5_000),
+                FileEntry(id: FileId, category: 1, uploaded: 4_000),
+            },
+        };
+        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(new byte[] { 0xAA }),
+        });
+        var http = new HttpClient(handler);
+        var import = new RecordingImportService();
+        var service = new ModAcquisitionService(
+            nexus, import, new SingleClientFactory(http),
+            NullLogger<ModAcquisitionService>.Instance);
+
+        await service.AcquireFromNexusAsync(GameDomain, ModId, FileId);
+
+        var single = Assert.Single(import.Calls);
+        Assert.Equal(FileId, single.RemoteFileId);
+    }
+
+    [Fact]
     public async Task AcquireFromNexusAsync_passes_null_RemoteUploadedAt_when_timestamp_is_zero()
     {
         // A wire default of 0 (the field is absent on a stub/partial payload)
@@ -312,7 +346,8 @@ public sealed class ModAcquisitionServiceTests
         // both record the publish date. This pins the per-mod update path
         // (AcquireLatestNexusAsync): after a one-click update, the new
         // version's RemoteUploadedAt equals the latest file's publish date, so
-        // the next check does not re-flag it.
+        // the next check does not re-flag it. The resolved file's id is
+        // forwarded as RemoteFileId alongside it.
         var newestMainId = 5820;
         var newestUploadedUnix = new DateTimeOffset(2024, 5, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
         var nexus = new FakeNexusClient
@@ -340,6 +375,7 @@ public sealed class ModAcquisitionServiceTests
         Assert.Equal(
             DateTimeOffset.FromUnixTimeSeconds(newestUploadedUnix).UtcDateTime,
             single.RemoteUploadedAt!.Value.UtcDateTime);
+        Assert.Equal(newestMainId, single.RemoteFileId);
     }
 
     // ---- display-metadata capture (no extra Nexus call) -------------------
@@ -885,22 +921,22 @@ public sealed class ModAcquisitionServiceTests
 
     /// <summary>
     /// A recording <see cref="IModImportService"/>. Each Import call captures
-    /// the args (including the optional remote-publish timestamp + the optional
-    /// display metadata); an optional <see cref="Throw"/> simulates a failed
-    /// import.
+    /// the args (including the optional remote-publish timestamp + file id +
+    /// the optional display metadata); an optional <see cref="Throw"/>
+    /// simulates a failed import.
     /// </summary>
     private sealed class RecordingImportService : IModImportService
     {
         public (Guid ContainerId, string VersionId) NextResult { get; set; } =
             (Guid.NewGuid(), Guid.NewGuid().ToString("N"));
         public Exception? Throw { get; set; }
-        public List<(string SourcePath, string ModName, ModSource Source, string Version, DateTimeOffset? RemoteUploadedAt, ModDisplayMetadata? DisplayMetadata)> Calls { get; } = new();
+        public List<(string SourcePath, string ModName, ModSource Source, string Version, DateTimeOffset? RemoteUploadedAt, int? RemoteFileId, ModDisplayMetadata? DisplayMetadata)> Calls { get; } = new();
 
         public (Guid ContainerId, string VersionId) Import(
             string sourcePath, string modName, ModSource source, string version,
-            DateTimeOffset? remoteUploadedAt = null, ModDisplayMetadata? displayMetadata = null)
+            DateTimeOffset? remoteUploadedAt = null, int? remoteFileId = null, ModDisplayMetadata? displayMetadata = null)
         {
-            Calls.Add((sourcePath, modName, source, version, remoteUploadedAt, displayMetadata));
+            Calls.Add((sourcePath, modName, source, version, remoteUploadedAt, remoteFileId, displayMetadata));
             if (Throw is not null)
             {
                 throw Throw;

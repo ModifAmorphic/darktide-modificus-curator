@@ -149,8 +149,11 @@ public sealed class ModRepositoryTests
     }
 
     [Fact]
-    public void AddVersion_flips_isLatest_to_the_newest_by_importedAt()
+    public void AddVersion_flips_isLatest_to_the_newest_by_effective_timestamp()
     {
+        // All-null RemoteUploadedAt (manual imports) degenerates the
+        // effective-timestamp key to a plain ImportedAt argmax: the newest
+        // import carries isLatest, exactly the pre-existing behavior.
         using var fx = new RepoFixture();
         var container = fx.Repo.CreateContainer(new UntrackedSource(), "DMF");
 
@@ -471,6 +474,223 @@ public sealed class ModRepositoryTests
         Assert.Equal(publishedAt, version.RemoteUploadedAt);
     }
 
+    // ---- AddVersion + IsLatest by remote availability ----------------------
+
+    [Fact]
+    public void AddVersion_older_remote_file_does_not_flip_isLatest()
+    {
+        // The heart of the fix: the container holds v1.4 (remote-published
+        // June); an import of v1.0 (remote-published March, a new
+        // VersionString) must NOT steal isLatest even though it is the most
+        // recently imported. Latest tracks the newest file the remote source
+        // offers among the container's versions, not import recency.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+        var june = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        var march = new DateTimeOffset(2024, 3, 1, 0, 0, 0, TimeSpan.Zero);
+
+        fx.Repo.AddVersion(container.Id, "1.4", EmptyPopulate, june);
+        var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, march);
+
+        Assert.True(updated.Versions.Single(v => v.VersionString == "1.4").IsLatest);
+        Assert.False(updated.Versions.Single(v => v.VersionString == "1.0").IsLatest);
+    }
+
+    [Fact]
+    public void AddVersion_newer_remote_file_flips_isLatest()
+    {
+        // Regression guard for the other direction: a genuinely newer remote
+        // file takes the flag from an older remote-published entry.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+        var march = new DateTimeOffset(2024, 3, 1, 0, 0, 0, TimeSpan.Zero);
+        var june = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, march);
+        var updated = fx.Repo.AddVersion(container.Id, "1.4", EmptyPopulate, june);
+
+        Assert.True(updated.Versions.Single(v => v.VersionString == "1.4").IsLatest);
+        Assert.False(updated.Versions.Single(v => v.VersionString == "1.0").IsLatest);
+    }
+
+    [Fact]
+    public void AddVersion_mixed_manifests_coalesce_per_entry()
+    {
+        // Mixed null/non-null (a legacy entry next to a fresh acquisition):
+        // the key coalesces per-entry. The later import ("2.0") carries a
+        // known remote date older than "1.0"'s import date, so "1.0"'s
+        // effective timestamp is newer and it keeps the flag.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+
+        var first = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate); // null remote
+        var firstImportedAt = first.Versions.Single(v => v.VersionString == "1.0").ImportedAt;
+        var olderRemote = firstImportedAt.AddDays(-30);
+
+        var updated = fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, olderRemote);
+
+        Assert.True(updated.Versions.Single(v => v.VersionString == "1.0").IsLatest);
+        Assert.False(updated.Versions.Single(v => v.VersionString == "2.0").IsLatest);
+    }
+
+    [Fact]
+    public void AddVersion_dedup_promotes_the_reused_entry_when_refreshed_remote_timestamp_is_newest()
+    {
+        // An author replacing file content under the same version tag can
+        // make the reused entry newly newest: "1.0"'s refreshed publish date
+        // (June) overtakes "2.0"'s (March), so the flag moves to "1.0". The
+        // dedup branch re-evaluates latest after refreshing RemoteUploadedAt.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+        var jan = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var mar = new DateTimeOffset(2024, 3, 1, 0, 0, 0, TimeSpan.Zero);
+        var jun = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, jan);
+        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, mar);
+        var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, jun);
+
+        Assert.Equal(jun, updated.Versions.Single(v => v.VersionString == "1.0").RemoteUploadedAt);
+        Assert.True(updated.Versions.Single(v => v.VersionString == "1.0").IsLatest);
+        Assert.False(updated.Versions.Single(v => v.VersionString == "2.0").IsLatest);
+    }
+
+    [Fact]
+    public void AddVersion_dedup_with_equal_remote_timestamp_keeps_the_later_imported_entry_latest()
+    {
+        // Tie-break: after the refresh both entries carry March; the
+        // ImportedAt tie-break keeps the flag on "2.0" (imported after
+        // "1.0"). An equal-timestamp re-import must not flip latest by
+        // re-import alone.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+        var jan = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var mar = new DateTimeOffset(2024, 3, 1, 0, 0, 0, TimeSpan.Zero);
+
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, jan);
+        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, mar);
+        var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, mar);
+
+        Assert.False(updated.Versions.Single(v => v.VersionString == "1.0").IsLatest);
+        Assert.True(updated.Versions.Single(v => v.VersionString == "2.0").IsLatest);
+    }
+
+    [Fact]
+    public void AddVersion_dedup_with_older_remote_timestamp_keeps_the_current_latest()
+    {
+        // The dedup branch re-evaluates but does not blindly promote: a
+        // refresh older than the current latest's remote date changes
+        // nothing.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+        var jan = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var feb = new DateTimeOffset(2024, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var mar = new DateTimeOffset(2024, 3, 1, 0, 0, 0, TimeSpan.Zero);
+
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, jan);
+        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, mar);
+        var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, feb);
+
+        Assert.False(updated.Versions.Single(v => v.VersionString == "1.0").IsLatest);
+        Assert.True(updated.Versions.Single(v => v.VersionString == "2.0").IsLatest);
+    }
+
+    // ---- AddVersion + remoteFileId (exact remote-file identity) ------------
+
+    [Fact]
+    public void AddVersion_records_remoteFileId_on_a_new_version()
+    {
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+
+        var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, null, 5820);
+
+        var version = Assert.Single(updated.Versions);
+        Assert.Equal(5820, version.FileId);
+    }
+
+    [Fact]
+    public void AddVersion_default_remoteFileId_is_null()
+    {
+        // Existing callers (manual imports, profile fixture helpers) omit the
+        // param; the entry's FileId is null.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new UntrackedSource(), "Mod");
+
+        var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate);
+
+        var version = Assert.Single(updated.Versions);
+        Assert.Null(version.FileId);
+    }
+
+    [Fact]
+    public void AddVersion_dedup_overwrites_remoteFileId_on_re_import()
+    {
+        // Mirroring RemoteUploadedAt semantics: the dedup branch overwrites
+        // the reused entry's FileId, so the first re-acquisition backfills a
+        // legacy entry (self-heal by attrition), and a manual re-import
+        // (null) clears it.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, null, 100);
+        var refreshed = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, null, 200);
+        Assert.Equal(200, Assert.Single(refreshed.Versions).FileId);
+
+        var cleared = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate);
+        Assert.Null(Assert.Single(cleared.Versions).FileId);
+    }
+
+    [Fact]
+    public void AddVersion_persists_remoteFileId_through_a_new_repository_instance()
+    {
+        // The field round-trips through container.json (no migration; STJ
+        // default for a missing nullable is null).
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, null, 5820);
+
+        var reloaded = fx.Reload();
+        var version = Assert.Single(reloaded.Get(container.Id)!.Versions);
+        Assert.Equal(5820, version.FileId);
+    }
+
+    [Fact]
+    public void Old_manifest_without_FileId_deserializes_null()
+    {
+        // Backward compatibility: a manifest written before the field existed
+        // has no FileId (and no RemoteUploadedAt) on its version entries.
+        // Both load as null without any migration pass.
+        using var fx = new RepoFixture();
+        var id = Guid.NewGuid();
+        var folder = Guid.NewGuid().ToString("N");
+        var dir = Path.Combine(fx.Folder, id.ToString());
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(
+            fx.ManifestPath(id),
+            $$"""
+            {
+              "Id": "{{id}}",
+              "Source": { "$kind": "nexus", "ModId": 4242 },
+              "Name": "Legacy",
+              "Versions": [
+                {
+                  "Folder": "{{folder}}",
+                  "VersionString": "1.0",
+                  "IsLatest": true,
+                  "ImportedAt": "2024-01-01T00:00:00+00:00"
+                }
+              ]
+            }
+            """);
+
+        var reloaded = fx.Reload();
+
+        var version = Assert.Single(reloaded.Get(id)!.Versions);
+        Assert.Null(version.FileId);
+        Assert.Null(version.RemoteUploadedAt);
+    }
+
     // ---- RemoveVersion -----------------------------------------------------
 
     [Fact]
@@ -503,6 +723,33 @@ public sealed class ModRepositoryTests
         var promoted = Assert.Single(reloaded!.Versions);
         Assert.Equal("1.0", promoted.VersionString);
         Assert.True(promoted.IsLatest);
+    }
+
+    [Fact]
+    public void RemoveVersion_promotes_by_effective_timestamp_over_import_recency()
+    {
+        // Remove the newest remote-published entry ("3.0", September). Among
+        // the survivors, "1.0" carries the second-newest remote date (June)
+        // but was imported FIRST; "2.0" was imported later with an older
+        // remote date (March). Promotion keys on the effective timestamp, so
+        // "1.0" wins; the old ImportedAt argmax would have picked "2.0".
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+        var mar = new DateTimeOffset(2024, 3, 1, 0, 0, 0, TimeSpan.Zero);
+        var jun = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        var sep = new DateTimeOffset(2024, 9, 1, 0, 0, 0, TimeSpan.Zero);
+
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, jun);
+        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, mar);
+        var latest = fx.Repo.AddVersion(container.Id, "3.0", EmptyPopulate, sep);
+        Assert.Equal("3.0", latest.Versions.Single(v => v.IsLatest).VersionString);
+        var latestFolder = latest.Versions.Single(v => v.IsLatest).Folder;
+
+        fx.Repo.RemoveVersion(container.Id, latestFolder);
+
+        var reloaded = fx.Repo.Get(container.Id);
+        Assert.True(reloaded!.Versions.Single(v => v.VersionString == "1.0").IsLatest);
+        Assert.False(reloaded.Versions.Single(v => v.VersionString == "2.0").IsLatest);
     }
 
     [Fact]
@@ -863,7 +1110,7 @@ public sealed class ModRepositoryTests
             ThumbnailUrl = "https://example.com/thumb.png",
         };
 
-        var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, null, metadata);
+        var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, null, null, metadata);
 
         Assert.Equal(metadata, updated.DisplayMetadata);
         Assert.Equal(metadata, fx.Reload().Get(container.Id)!.DisplayMetadata);
@@ -880,7 +1127,7 @@ public sealed class ModRepositoryTests
         fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate);
         var metadata = new ModDisplayMetadata { Summary = "fresh" };
 
-        var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, null, metadata);
+        var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, null, null, metadata);
 
         Assert.Equal(metadata, updated.DisplayMetadata);
         Assert.Equal(metadata, fx.Reload().Get(container.Id)!.DisplayMetadata);
@@ -896,7 +1143,7 @@ public sealed class ModRepositoryTests
         using var fx = new RepoFixture();
         var container = fx.Repo.CreateContainer(new NexusSource { ModId = 4242 }, "WT");
         var metadata = new ModDisplayMetadata { Summary = "captured once" };
-        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, null, metadata);
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, null, null, metadata);
 
         // Manual re-import (no metadata argument): prior metadata survives.
         var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate);
@@ -933,7 +1180,7 @@ public sealed class ModRepositoryTests
         {
             Directory.CreateDirectory(dir);
             File.WriteAllText(Path.Combine(dir, "a.txt"), "original");
-        }, null, metadata);
+        }, null, null, metadata);
         var originalFolder = first.Versions.Single(v => v.VersionString == "1.0").Folder;
         var versionPath = fx.Repo.GetVersionFolderPath(container.Id, originalFolder);
 

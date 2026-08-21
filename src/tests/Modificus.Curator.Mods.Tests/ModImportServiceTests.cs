@@ -225,6 +225,62 @@ public sealed class ModImportServiceTests
         Assert.Null(version.RemoteUploadedAt);
     }
 
+    // ---- remote file-id propagation (exact remote-file identity) -----------
+
+    [Fact]
+    public void Import_forwards_remoteFileId_on_a_new_version()
+    {
+        // The acquisition layer captures the remote file id and forwards it
+        // through Import; Import forwards it to AddVersion; AddVersion stamps
+        // it on the new ModVersion entry. This test pins the new-version path.
+        using var fx = new ImportFixture();
+        var dir = fx.MakeSourceModFolder("Src");
+        var nexus = new NexusSource { ModId = 4242 };
+
+        var (containerId, _) = fx.Service.Import(dir, "WT", nexus, "1.0", null, 5820);
+
+        var version = Assert.Single(fx.Repo.Get(containerId)!.Versions);
+        Assert.Equal(5820, version.FileId);
+    }
+
+    [Fact]
+    public void Import_dedup_overwrites_remoteFileId_on_re_import()
+    {
+        // Mirroring how dedup refreshes RemoteUploadedAt: re-importing the
+        // same VersionString overwrites the reused entry's FileId with the
+        // call's value, so a re-acquisition backfills the exact identity.
+        using var fx = new ImportFixture();
+        var dir = fx.MakeSourceModFolder("Src");
+        var nexus = new NexusSource { ModId = 4242 };
+
+        fx.Service.Import(dir, "WT", nexus, "1.0", null, 100);
+        var (containerId, _) = fx.Service.Import(dir, "WT", nexus, "1.0", null, 200);
+
+        var version = Assert.Single(fx.Repo.Get(containerId)!.Versions);
+        Assert.Equal(200, version.FileId);
+    }
+
+    [Fact]
+    public void Import_of_an_older_remote_file_does_not_flip_isLatest()
+    {
+        // The nxm-shaped flow end to end: the container already holds v1.4
+        // (remote-published June); importing v1.0 (an older remote date, a
+        // new version tag) lands the entry without stealing isLatest, so a
+        // LatestPolicy profile keeps resolving to v1.4.
+        using var fx = new ImportFixture();
+        var dir = fx.MakeSourceModFolder("Src");
+        var nexus = new NexusSource { ModId = 4242 };
+        var june = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        var march = new DateTimeOffset(2024, 3, 1, 0, 0, 0, TimeSpan.Zero);
+
+        fx.Service.Import(dir, "WT", nexus, "1.4", june, 5820);
+        var (containerId, _) = fx.Service.Import(dir, "WT", nexus, "1.0", march, 4100);
+
+        var container = fx.Repo.Get(containerId);
+        Assert.True(container!.Versions.Single(v => v.VersionString == "1.4").IsLatest);
+        Assert.False(container.Versions.Single(v => v.VersionString == "1.0").IsLatest);
+    }
+
     // ---- display metadata pass-through (Nexus acquisition basis) ----------
 
     [Fact]
@@ -245,7 +301,7 @@ public sealed class ModImportServiceTests
             IsAdultContent = true,
         };
 
-        var (containerId, _) = fx.Service.Import(dir, "WT", nexus, "1.0", null, metadata);
+        var (containerId, _) = fx.Service.Import(dir, "WT", nexus, "1.0", null, null, metadata);
 
         var container = fx.Repo.Get(containerId);
         Assert.Equal(metadata, container!.DisplayMetadata);
@@ -263,8 +319,8 @@ public sealed class ModImportServiceTests
         var first = new ModDisplayMetadata { Summary = "first" };
         var second = new ModDisplayMetadata { Summary = "second" };
 
-        fx.Service.Import(dir, "WT", nexus, "1.0", null, first);
-        var (containerId, _) = fx.Service.Import(dir, "WT", nexus, "1.0", null, second);
+        fx.Service.Import(dir, "WT", nexus, "1.0", null, null, first);
+        var (containerId, _) = fx.Service.Import(dir, "WT", nexus, "1.0", null, null, second);
 
         var container = fx.Repo.Get(containerId);
         Assert.Equal(second, container!.DisplayMetadata);
@@ -280,7 +336,7 @@ public sealed class ModImportServiceTests
         var dir = fx.MakeSourceModFolder("Src");
         var nexus = new NexusSource { ModId = 4242 };
         var metadata = new ModDisplayMetadata { Summary = "captured once" };
-        fx.Service.Import(dir, "WT", nexus, "1.0", null, metadata);
+        fx.Service.Import(dir, "WT", nexus, "1.0", null, null, metadata);
 
         var (containerId, _) = fx.Service.Import(dir, "WT", nexus, "1.0"); // no metadata arg
 
@@ -303,7 +359,7 @@ public sealed class ModImportServiceTests
             ThumbnailUrl = "https://example.com/thumb.png",
         };
 
-        var (containerId, _) = fx.Service.Import(dir, "WT", nexus, "1.0", null, metadata);
+        var (containerId, _) = fx.Service.Import(dir, "WT", nexus, "1.0", null, null, metadata);
 
         var reloaded = fx.ReloadRepo();
         Assert.Equal(metadata, reloaded.Get(containerId)!.DisplayMetadata);
@@ -320,7 +376,7 @@ public sealed class ModImportServiceTests
         var metadata = new ModDisplayMetadata { Summary = "ignored" };
 
         Assert.Throws<InvalidOperationException>(() =>
-            fx.Service.Import(sourceDir, "NoDescriptor", new UntrackedSource(), "1.0", null, metadata));
+            fx.Service.Import(sourceDir, "NoDescriptor", new UntrackedSource(), "1.0", null, null, metadata));
         Assert.Empty(fx.Repo.List());
     }
 

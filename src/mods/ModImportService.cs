@@ -20,11 +20,12 @@ namespace Modificus.Curator.Mods;
 /// A re-import of the same identity resolves to the existing container instead
 /// of creating a new one, so the container is the dedup unit across imports.</para>
 /// <para>
-/// <b>Version resolution:</b> re-importing the same <paramref name="version"/>
-/// dedups: <see cref="IModRepository.AddVersion"/> reuses the existing version
-/// folder + refreshes its files; a new <paramref name="version"/> creates a new
-/// opaque version folder and flips <see cref="ModVersion.IsLatest"/> to it (it
-/// is the newest by <see cref="ModVersion.ImportedAt"/>).</para>
+/// <b>Version resolution:</b> re-importing the same version dedups:
+/// <see cref="IModRepository.AddVersion"/> reuses the existing version
+/// folder + refreshes its files; a new version creates a new opaque version
+/// folder. <see cref="ModVersion.IsLatest"/> follows the repository's
+/// effective-timestamp key (see <see cref="IModRepository.AddVersion"/>), not
+/// import recency.</para>
 /// <para>
 /// <b>Archive support:</b> files are detected by content
 /// (<see cref="ArchiveFactory.IsArchive(string, out ArchiveType?)"/>), not by
@@ -68,6 +69,7 @@ internal sealed class ModImportService : IModImportService
         ModSource source,
         string version,
         DateTimeOffset? remoteUploadedAt = null,
+        int? remoteFileId = null,
         ModDisplayMetadata? displayMetadata = null)
     {
         ArgumentNullException.ThrowIfNull(sourcePath);
@@ -173,7 +175,7 @@ internal sealed class ModImportService : IModImportService
             }
         }
 
-        var updated = _repo.AddVersion(container.Id, version, Populate, remoteUploadedAt, displayMetadata);
+        var updated = _repo.AddVersion(container.Id, version, Populate, remoteUploadedAt, remoteFileId, displayMetadata);
 
         // Resolve the just-imported version's opaque folder id so the caller can
         // pin to it. AddVersion is an upsert by VersionString: a new tag creates

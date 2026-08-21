@@ -320,7 +320,7 @@ public sealed class ModUpdateInstallerTests
         public ModContainer CreateContainer(ModSource source, string name) => throw new NotImplementedException();
         public ModContainer AddVersion(
             Guid containerId, string versionString, Action<string> populateFolder,
-            DateTimeOffset? remoteUploadedAt = null, ModDisplayMetadata? displayMetadata = null)
+            DateTimeOffset? remoteUploadedAt = null, int? remoteFileId = null, ModDisplayMetadata? displayMetadata = null)
             => throw new NotImplementedException();
         public bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata)
             => throw new NotImplementedException();

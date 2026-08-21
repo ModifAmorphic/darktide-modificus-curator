@@ -1747,7 +1747,7 @@ internal class FakeModRepository : IModRepository
 
     public ModContainer AddVersion(
         Guid containerId, string versionString, Action<string> populateFolder,
-        DateTimeOffset? remoteUploadedAt = null, ModDisplayMetadata? displayMetadata = null)
+        DateTimeOffset? remoteUploadedAt = null, int? remoteFileId = null, ModDisplayMetadata? displayMetadata = null)
     {
         if (!_byId.TryGetValue(containerId, out var container))
         {
@@ -1758,8 +1758,8 @@ internal class FakeModRepository : IModRepository
         List<ModVersion> versions;
         if (existing is not null)
         {
-            // Mirror the production repo: dedup refreshes RemoteUploadedAt.
-            var refreshed = existing with { RemoteUploadedAt = remoteUploadedAt };
+            // Mirror the production repo: dedup refreshes RemoteUploadedAt + FileId.
+            var refreshed = existing with { RemoteUploadedAt = remoteUploadedAt, FileId = remoteFileId };
             versions = container.Versions.Select(v => ReferenceEquals(v, existing) ? refreshed : v).ToList();
         }
         else
@@ -1768,15 +1768,16 @@ internal class FakeModRepository : IModRepository
             {
                 Folder = Guid.NewGuid().ToString("N"),
                 VersionString = versionString,
-                IsLatest = true,
                 ImportedAt = DateTimeOffset.UtcNow,
                 RemoteUploadedAt = remoteUploadedAt,
+                FileId = remoteFileId,
             };
-            versions = container.Versions
-                .Select(v => v with { IsLatest = false })
-                .Append(entry)
-                .ToList();
+            versions = container.Versions.Append(entry).ToList();
         }
+        // Mirror production: latest = argmax of (RemoteUploadedAt ?? ImportedAt,
+        // ImportedAt), recomputed after either branch.
+        var newest = versions.MaxBy(v => (v.RemoteUploadedAt ?? v.ImportedAt, v.ImportedAt))!;
+        versions = versions.Select(v => v with { IsLatest = ReferenceEquals(v, newest) }).ToList();
         // Mirror production: a non-null displayMetadata replaces the container
         // value in the same update; null preserves any prior value.
         var updated = displayMetadata is null
@@ -1920,7 +1921,7 @@ internal sealed class FakeModImportService : IModImportService
 
     public (Guid ContainerId, string VersionId) Import(
         string sourcePath, string modName, ModSource source, string version,
-        DateTimeOffset? remoteUploadedAt = null, ModDisplayMetadata? displayMetadata = null)
+        DateTimeOffset? remoteUploadedAt = null, int? remoteFileId = null, ModDisplayMetadata? displayMetadata = null)
     {
         // Gate first, before recording, so a test can observe IsProcessing
         // while the worker is still blocked inside Import. Safe: Import runs on
@@ -1961,7 +1962,7 @@ internal sealed class FakeModImportService : IModImportService
         {
             container = _repo.FindBySource(source) ?? _repo.CreateContainer(source, modName);
         }
-        var updated = _repo.AddVersion(container.Id, version, _ => { }, remoteUploadedAt, displayMetadata);
+        var updated = _repo.AddVersion(container.Id, version, _ => { }, remoteUploadedAt, remoteFileId, displayMetadata);
         var versionId = updated.Versions.First(v => v.VersionString == version).Folder;
         return (container.Id, versionId);
     }

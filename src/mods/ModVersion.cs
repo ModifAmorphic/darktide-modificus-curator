@@ -20,10 +20,14 @@ namespace Modificus.Curator.Mods;
 /// one-field manifest edit; profiles resolve dynamically at stage time, so
 /// <c>isLatest</c> changing never requires a profile-entry update.</para>
 /// <para>
-/// <see cref="ImportedAt"/> orders the versions (newest = the most recently
-/// imported). <see cref="IModRepository.AddVersion"/> stamps it on insert;
-/// re-importing the same <see cref="VersionString"/> reuses the existing entry
-/// unchanged (no reordering).</para>
+/// Versions order by the <b>effective timestamp</b>: <see cref="RemoteUploadedAt"/>
+/// when the remote source published the file, else <see cref="ImportedAt"/>,
+/// with <see cref="ImportedAt"/> breaking exact ties. The repository
+/// re-evaluates the flag with that key on every add/remove, so importing an
+/// older file never flips latest. <see cref="IModRepository.AddVersion"/>
+/// stamps <see cref="ImportedAt"/> on insert and never changes it;
+/// re-importing the same <see cref="VersionString"/> reuses the existing
+/// entry (refreshed files + remote facts, unchanged import stamp).</para>
 /// </remarks>
 public sealed record ModVersion
 {
@@ -45,14 +49,19 @@ public sealed record ModVersion
     /// <summary>
     /// Whether this is the container's current "latest" version (the one a
     /// <see cref="LatestPolicy"/> profile resolves to). Exactly one version per
-    /// container carries this flag (the newest by <see cref="ImportedAt"/>);
-    /// the repository flips it on add/remove.
+    /// container carries this flag: the newest by effective timestamp
+    /// (<see cref="RemoteUploadedAt"/> when present, else
+    /// <see cref="ImportedAt"/>; exact ties fall to the newer
+    /// <see cref="ImportedAt"/>). The repository re-evaluates it on every
+    /// add/remove.
     /// </summary>
     public bool IsLatest { get; init; }
 
     /// <summary>
-    /// When this version was first imported (UTC). Orders the versions; the
-    /// newest <see cref="ImportedAt"/> carries <see cref="IsLatest"/>.
+    /// When this version was first imported (UTC). The fallback ordering key
+    /// when <see cref="RemoteUploadedAt"/> is unknown (manual imports, legacy
+    /// manifests) and the tie-break for equal remote timestamps. Never changes
+    /// on a re-import.
     /// </summary>
     public DateTimeOffset ImportedAt { get; init; }
 
@@ -76,4 +85,22 @@ public sealed record ModVersion
     /// non-Nexus).
     /// </remarks>
     public DateTimeOffset? RemoteUploadedAt { get; init; }
+
+    /// <summary>
+    /// The remote source's file id this version was acquired from (the Nexus
+    /// file id): the exact identity that distinguishes two versions of the
+    /// same mod beyond their display tags. <c>null</c> for manual imports
+    /// (folder/archive via the picker or drag-and-drop) and legacy manifests;
+    /// a re-acquisition overwrites the reused entry's value, so legacy
+    /// entries self-heal by attrition.
+    /// </summary>
+    /// <remarks>
+    /// Backward-compatible on disk: a <c>container.json</c> from before this
+    /// field existed deserializes it to <c>null</c>. No migration. Owned by
+    /// the acquisition layer (Integrations), which passes it through
+    /// <see cref="IModImportService.Import"/> / <see cref="IModRepository.AddVersion"/>;
+    /// those seams stay source-agnostic (the param is nullable + unused for
+    /// non-Nexus).
+    /// </remarks>
+    public int? FileId { get; init; }
 }

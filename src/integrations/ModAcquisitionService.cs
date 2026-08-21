@@ -105,7 +105,7 @@ internal sealed class ModAcquisitionService : IModAcquisitionService
 
             return _import.Import(
                 tempPath, modName, new NexusSource { ModId = modId }, version,
-                remoteUploadedAt, displayMetadata);
+                remoteUploadedAt, fileId, displayMetadata);
         }
         finally
         {
