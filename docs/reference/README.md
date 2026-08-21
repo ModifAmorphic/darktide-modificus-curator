@@ -29,8 +29,9 @@ Per-library API reference for the Modificus Curator backend libraries + the UI
   the single-instance guard + IPC server, the router + mod-download seam, the
   OS scheme-handler registration, and the relay helper.
 - [ui](ui.md): the Avalonia 12 front end, the shell, profile management, the
-  mod list, every dialog, global preferences + i18n, the DMF prompt
-  coordinator, the update-check runner, and the app self-update service.
+  mod list + its download rows, every dialog, global preferences + i18n, the
+  serial download queue, the DMF prompt coordinator, the update-check runner,
+  and the app self-update service.
 
 ## Strategy & release
 

@@ -631,9 +631,10 @@ public partial class ModItemViewModel : ObservableObject
 
     /// <summary>
     /// The Nexus mod id when the row's source is <see cref="NexusSource"/>, else
-    /// <c>null</c>. The parent's update command reads this to call
-    /// <c>IModAcquisitionService.AcquireLatestNexusAsync</c> (which takes the mod
-    /// id, not the file id). Null for Untracked / not-found rows.
+    /// <c>null</c>. The parent's update command reads this to resolve the mod's
+    /// head file + enqueue the update install (through
+    /// <c>ModUpdateEnqueuer.EnqueueLatestAsync</c>, which takes the mod id, not
+    /// the file id). Null for Untracked / not-found rows.
     /// </summary>
     public int? NexusModId => Source is NexusSource n ? n.ModId : null;
 

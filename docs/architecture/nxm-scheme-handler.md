@@ -140,8 +140,11 @@ secondary launch quiet.
 closed): the advisory process check means the first handler to detect no
 Curator launches it, and the rest see that Curator coming up, skip their own
 launches, and go straight to the retry loop. A race that slips past the check
-(Curator exits between check and connect, or the check under-detects; the
-Linux kernel truncates process names to 15 characters) still self-resolves:
+(Curator exits between check and connect, or the check under-detects: on
+Linux `GetProcessesByName` compares the exact full executable name recovered
+from `/proc` cmdline when available, so it is effective in the normal case and
+under-detects only in degraded shapes such as a zombie's empty cmdline, an
+unreadable cmdline, or an argv0-rewriting launcher) still self-resolves:
 single-instance enforcement means only the first Curator becomes primary,
 subsequent Curator instances exit, and each handler's retry loop eventually
 connects to whichever Curator won the bind.

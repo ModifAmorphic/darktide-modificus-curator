@@ -292,8 +292,9 @@ the notice flow:
 
 1. `ConfirmAsync` asks "vX is available, download and restart?".
 2. On confirm, `ShowProgressAsync` runs `DownloadUpdatesAsync` under a
-   buttonless, non-closeable modal spinner (the same `ProgressDialog` the DMF
-   download uses).
+   buttonless, non-closeable modal spinner (`ProgressDialog`; mod downloads do
+   not use it, they render as rows on the mod list through the download
+   queue).
 3. On success, `ApplyUpdatesAndRestart` exits the process and Velopack
    relaunches under the new version.
 4. On a download failure, an alert surfaces the error and the apply step is

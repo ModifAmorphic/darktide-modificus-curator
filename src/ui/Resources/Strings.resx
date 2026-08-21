@@ -1155,11 +1155,7 @@
   </data>
   <data name="Dmf_Downloading" xml:space="preserve">
     <value>Downloading DMF…</value>
-    <comment>Title of the alert shown while the DMF download is in flight (a modal spinner). No em-dash.</comment>
-  </data>
-  <data name="Dmf_DownloadingMessage" xml:space="preserve">
-    <value>Downloading DMF from Nexus Mods. This takes a few seconds.</value>
-    <comment>Body of the in-flight DMF download alert.</comment>
+    <comment>Window title of the generic modal progress dialog (the key predates its generalization; currently shown for the app self-update download). No em-dash.</comment>
   </data>
   <data name="Dmf_DownloadFailedTitle" xml:space="preserve">
     <value>Could not download DMF</value>

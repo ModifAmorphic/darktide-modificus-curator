@@ -37,10 +37,13 @@ namespace Modificus.Curator.Nxm;
 /// runs only after a refused connect and only to avoid a duplicate launch; it
 /// adds no synchronization, and any race (Curator exiting between the check
 /// and the connect, or the check under-detecting) falls through to the
-/// existing retry/timeout semantics. The Linux kernel truncates process names
-/// to 15 characters, so the full-name check may under-detect there; a
-/// missed detection means one extra launch attempt, which the single-instance
-/// guard already handles.
+/// existing retry/timeout semantics. On Linux, <see cref="Process.GetProcessesByName"/>
+/// compares the exact full executable name recovered from /proc cmdline when
+/// available (the kernel's 15-character comm field is only the fallback), so
+/// the check is effective there in the normal case; under-detection is
+/// confined to degraded shapes (a zombie's empty cmdline, an unreadable
+/// cmdline, or an argv0-rewriting launcher). A missed detection means one
+/// extra launch attempt, which the single-instance guard already handles.
 /// </para>
 /// <para>
 /// <b>AOT-safe.</b> No DI, no Avalonia, no JSON, no reflection. Only raw byte /

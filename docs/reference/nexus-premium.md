@@ -23,7 +23,8 @@ Curator has three Premium-gated capabilities:
    accounts see the checkbox but cannot enable it.
 3. **Direct DMF download from the install prompt.** When Darktide Mod Framework
    (DMF) is absent from both the active profile and the local repository, a
-   Premium user can download it directly under Curator's progress dialog. A
+   Premium user can download it directly in-app (it renders as a download row
+   on the mod list, and the completion adds it to the profile). A
    regular user is directed through the Nexus website and the standard
    `nxm://` download flow, when Curator owns that handler.
 
@@ -124,17 +125,18 @@ stays fixed-width.
 
 ### Click behavior by account tier
 
-- **Premium click:** the command hands the install to
-  `IModUpdateInstaller.TryInstallLatestAsync` (Integrations; the single install
-  path shared with the automatic batch). The installer acquires the global
-  `UpdateCoordinator` (one install at a time), revalidates eligibility inside
-  the gate, re-downloads the mod's latest MAIN release via
-  `IModAcquisitionService.AcquireLatestNexusAsync` (the auth-only / premium
-  path), acknowledges the install on success (clearing the persisted
-  known-update entry immediately, with no extra API check), and raises the
-  per-row progress that drives the spinner. The VM reloads on Installed,
-  surfaces the localized alert with the exception's message on Failed, and
-  treats Busy / NotEligible as silent no-ops.
+- **Premium click:** the command resolves the mod's latest MAIN release and
+  enqueues one in-app update install through `ModUpdateEnqueuer.EnqueueLatestAsync`
+  (the shared enqueue front over `IModAcquisitionService.ResolveLatestNexusAsync`
+  + the download queue). The queue's serial worker is the single
+  one-download-at-a-time gate (shared with the automatic batch and nxm
+  clicks); it revalidates eligibility at dequeue, acquires the resolved head
+  file (the auth-only / premium path), acknowledges the install on success
+  (clearing the persisted known-update entry immediately, with no extra API
+  check), and raises the applied event that reloads the list. The row morphs
+  into a download row while the item is live (progress renders on the row), a
+  resolve failure before any item exists surfaces the localized alert with
+  the exception's message, and a stale flag is a silent no-op.
 - **Regular or unknown click:** the command opens the mod's Nexus files page in
   the user's browser via a testable external-launcher seam. The user picks a
   file on Nexus and the registered `nxm://` handler acquires it through the
@@ -149,10 +151,10 @@ The Premium in-app install runs only when all of these conditions hold:
 - the row represents a Nexus-sourced mod;
 - the row uses `LatestPolicy`, not a pinned version;
 - the profile-scoped known-update state flags the row as having an update;
-- the row is not already updating;
-- the shared install gate is free (no other install in flight; a busy gate is
-  a silent no-op) and the installer's in-gate eligibility revalidation still
-  passes (membership / policy / source / version unchanged since the flag was
+- the row's version is resolved (it carries the eligibility version rule's
+  input);
+- the download queue's dequeue-time eligibility revalidation still passes
+  (membership / policy / source / version unchanged since the flag was
   recorded).
 
 `ModListViewModel.Update` repeats the important conditions as command-level
@@ -165,8 +167,9 @@ Relevant implementation:
 - `src/ui/ViewModels/ModListViewModel.cs`, `IsPremiumUser`, `Update`,
   `UpdatePremiumAsync`, and `OpenFilesPage`
 - `src/ui/Views/ModListView.axaml`, the per-row update-action cell
-- `src/integrations/IModUpdateInstaller.cs` + `ModUpdateInstaller.cs` +
-  `UpdateCoordinator.cs` (the single install path + the shared gate)
+- `src/ui/Session/ModUpdateEnqueuer.cs` (the enqueue front) +
+  `src/ui/Session/ModDownloadQueue.cs` (the worker: the gate, the
+  revalidation, the acquisition, the acknowledge, the applied event)
 
 ### Regular-user discovery
 
@@ -216,15 +219,16 @@ after a check completes (the runner captures the exact result). It runs only
 when all of these hold: the result's outcome is authoritative `Success` with
 updates, `AutomaticUpdatesEnabled` is on, the active profile still matches, and
 a fresh `GetCurrentStateAsync` returns `IsPremium == true` (the Premium request
-fires ONLY when the gates pass). Then it installs sequentially through the
-shared `IModUpdateInstaller`, one at a time under the global `UpdateCoordinator`
-(the awaiting install semantics: each batch entry waits its turn behind a
-manual install). The installer's in-gate revalidation gates each entry
-(membership / policy / source / version still match) + acknowledges on success;
-a profile switch stops the whole batch; per-mod failures are isolated and
-aggregated into one summary alert; a fully successful batch is silent.
-`ModListViewModel` reloads after the batch via the service's `UpdatesApplied`
-event, and the per-row spinners come from the installer's progress events.
+fires ONLY when the gates pass). Then it runs the enqueue batch sequentially
+through `ModUpdateEnqueuer`: each iteration re-checks the active profile (a
+switch stops scheduling further entries and cancels the still-queued items
+admitted for the left profile), resolves the head file, and admits one
+UpdateInstall item onto the shared download queue. The queue's serial worker
+owns everything downstream (the dequeue-time eligibility revalidation, the
+acquisition, the acknowledge-on-success, the per-row morph); the queue's
+`UpdatesApplied` event reloads the mod list. Per-mod resolve failures (the one
+step with no row to host them) are isolated and aggregated into one summary
+alert; a fully successful batch is silent beyond the download rows.
 
 This is independent of `AutoUpdateCheckEnabled`: periodic checking being off
 never disables automatic installation (startup + switch + manual checks still
@@ -233,8 +237,8 @@ drive it).
 Relevant implementation:
 
 - `src/ui/Session/IAutomaticUpdateService.cs` + `AutomaticUpdateService.cs`
-- `src/integrations/IModUpdateInstaller.cs` + `ModUpdateInstaller.cs` +
-  `UpdateCoordinator.cs` (the single install path + the shared gate)
+- `src/ui/Session/ModUpdateEnqueuer.cs` (the enqueue front) +
+  `src/ui/Session/ModDownloadQueue.cs` (the serial worker + the applied event)
 - `src/ui/Session/UpdateCheckRunner.cs` (the chaining)
 - `src/config/NexusConfig.cs`, `AutomaticUpdatesEnabled`
 
@@ -254,8 +258,11 @@ After the user confirms the download offer, `DmfPromptService` gets the current
 auth state. Unlike the mod-list gate, this is a fresh membership lookup each
 time the prompt reaches this branch.
 
-- **Premium:** Curator calls `AcquireLatestNexusAsync` under a modal progress
-  dialog and then adds the returned container to the profile.
+- **Premium:** Curator resolves DMF's head file and enqueues the download onto
+  the shared download queue; the download row owns progress (cancel, retry,
+  failure state) and the queue's completion owns the profile add + the reload.
+  A resolve failure (the API call before any queue item exists) surfaces the
+  localized alert and enqueues nothing.
 - **Regular, unknown, or no auth:** Curator opens DMF's Nexus files page in the
   default browser regardless of whether it owns the `nxm://` handler. If Curator
   owns the handler, the user clicks Download on Nexus, Nexus emits an `nxm://`
@@ -270,8 +277,8 @@ DMF's files page is
 
 Relevant implementation:
 
-- `src/ui/Session/DmfPromptService.cs`, `ProcessPendingAsync`,
-  `OpenDmfFilesPageInBrowser`, and `DownloadAndAddAsync`
+- `src/ui/Session/DmfPromptService.cs`, `PromptIfMissingAsync`,
+  `OpenDmfFilesPageInBrowser`, and `EnqueueLatestDmfAsync`
 - `src/ui/Nxm/NxmModDownloadHandler.cs`
 
 ## Download-link mechanics
@@ -282,7 +289,7 @@ download-link request solely from its arguments:
 | Inputs to `AcquireFromNexusAsync` | Client call | Normal caller |
 |---|---|---|
 | Both `nxmKey` and `nxmExpires` present | `DownloadLinksAsync` with `key` and `expires` query parameters | Standard `nxm://` handler, including regular users |
-| Either value absent | Auth-only `DownloadLinksAsync` | `AcquireLatestNexusAsync`, used by Premium-gated UI flows |
+| Either value absent | Auth-only `DownloadLinksAsync` | Premium-gated flows through the download queue (a resolved update install, the DMF head file, `AcquireLatestNexusAsync`) |
 
 Both client overloads call
 `GET /v1/games/{domain}/mods/{modId}/files/{fileId}/download_link.json`.
@@ -379,8 +386,12 @@ The behavior is covered primarily by these suites:
 - `Modificus.Curator.Integrations.Tests/ModAcquisitionServiceTests.cs`: argument-
   driven selection between auth-only and token-bearing download paths, including
   `AcquireLatestNexusAsync`.
-- `Modificus.Curator.UI.Tests/ModListViewModelTests.cs`: one-click update flow,
-  one-at-a-time behavior, and the non-Premium command defense.
+- `Modificus.Curator.UI.Tests/ModListViewModelTests.cs`: one-click update flow
+  (the resolve + enqueue branch) and the non-Premium command defense.
+- `Modificus.Curator.UI.Tests/ModDownloadQueueTests.cs`: the serial
+  one-download-at-a-time worker, the eligibility revalidation, the
+  acknowledge-on-success, and the per-purpose completions behind the Premium
+  install path.
 - `Modificus.Curator.UI.Tests/IntegrationsViewModelTests.cs`: Premium, regular,
   and unverified status text.
 - `Modificus.Curator.UI.Tests/DmfPromptServiceTests.cs`: Premium direct download,

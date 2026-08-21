@@ -308,8 +308,11 @@ failure). Behavior:
 4. On timeout: log "Curator did not start within Ns" to stderr and return `3`.
 
 The pre-launch check is advisory with no synchronization: races (Curator
-exiting between the check and the connect, or the check under-detecting; the
-Linux kernel truncates process names to 15 characters) fall through to the
+exiting between the check and the connect, or the check under-detecting; on
+Linux `GetProcessesByName` compares the exact full executable name recovered
+from `/proc` cmdline when available, so it is effective in the normal case and
+under-detects only in degraded shapes such as a zombie's empty cmdline, an
+unreadable cmdline, or an argv0-rewriting launcher) fall through to the
 existing retry/timeout semantics, and a missed detection means one extra
 launch attempt that the single-instance guard already handles. The default
 check reuses `SingleInstanceGuard.IsAnotherInstanceRunning` over the Curator

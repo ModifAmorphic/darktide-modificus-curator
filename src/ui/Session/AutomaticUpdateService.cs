@@ -121,7 +121,12 @@ internal sealed class AutomaticUpdateService : IAutomaticUpdateService
     /// Cancels <paramref name="item"/> when it is still waiting for the worker
     /// (queued cancel semantics) + its target is no longer the active profile.
     /// An item already started by the worker is left to complete under the
-    /// queue's own rules.
+    /// queue's own rules. The still-Queued test reads the marshaled
+    /// presentation phase, so a just-started item whose Downloading write has
+    /// not landed can be caught here too; that benign race resolves safely
+    /// through the queue's token-authoritative cancel (the worker lands the
+    /// item Canceled with no completion side effects), preserving the policy
+    /// intent.
     /// </summary>
     private void CancelIfStillQueued(DownloadItem item, Guid? activeProfileId)
     {
