@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Modificus.Curator.Config;
 using Modificus.Curator.RelayClient;
@@ -150,7 +151,8 @@ internal static class TestDoubles
         FakeExternalLauncher? launcher = null,
         FakeNxmRegistrationState? nxmRegistration = null,
         IGamingModeState? gamingMode = null,
-        UpdateCheckRunner? runner = null)
+        UpdateCheckRunner? runner = null,
+        FakeModDownloadQueue? downloadQueue = null)
     {
         profiles ??= Profiles();
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
@@ -202,6 +204,10 @@ internal static class TestDoubles
         // Gaming Mode default: not gaming (the ordinary desktop session the
         // existing tests assume); gaming-gating tests pass a gaming state.
         gamingMode ??= new GamingModeState(false);
+        // The download-queue fake: empty by default so existing tests see no
+        // download rows; the download-row tests drive its collection + events
+        // directly (no worker, no real pipeline).
+        downloadQueue ??= new FakeModDownloadQueue();
 
         // The link-external-folder child: constructed over the SAME
         // profile/session/repo/import/dialog fakes (after the launcher +
@@ -279,6 +285,7 @@ internal static class TestDoubles
             linkedMods,
             launcher,
             nxmRegistration,
+            downloadQueue,
             NullLogger<ModListViewModel>.Instance);
     }
 
@@ -2176,6 +2183,74 @@ internal sealed class RefreshRecorder : IModListRefresh
         Reloads++;
         _onReload?.Invoke();
     }
+}
+
+/// <summary>
+/// In-memory <see cref="IModDownloadQueue"/> for the download-row tests: the
+/// item collection is driven DIRECTLY (no worker, no pipeline), so a test
+/// controls exactly what the row UI observes. Admitting an item through
+/// <see cref="Add"/> mirrors the real coordinator's posted pair (the
+/// collection add + the ItemChanged admission announcement); mutating an
+/// item's state in place and calling <see cref="Publish"/> mirrors a resolve
+/// or terminal announcement. Cancel / Dismiss / Retry are recorded (the row
+/// commands route through them); Enqueue is deliberately unsupported (the
+/// admission path belongs to the real queue's own tests).
+/// </summary>
+internal sealed class FakeModDownloadQueue : IModDownloadQueue
+{
+    public ObservableCollection<DownloadItem> Items { get; } = new();
+
+    public event Action<DownloadItem>? ItemChanged;
+    public event EventHandler? UpdatesApplied;
+
+    /// <summary>The items passed to Cancel, in order.</summary>
+    public List<DownloadItem> CancelCalls { get; } = new();
+
+    /// <summary>The items passed to Dismiss, in order.</summary>
+    public List<DownloadItem> DismissCalls { get; } = new();
+
+    /// <summary>The items passed to Retry, in order.</summary>
+    public List<DownloadItem> RetryCalls { get; } = new();
+
+    public DownloadItem Enqueue(ModDownloadRequest request) =>
+        throw new NotSupportedException("The row-UI tests drive the collection directly.");
+
+    public void Cancel(DownloadItem item) => CancelCalls.Add(item);
+
+    public void Dismiss(DownloadItem item) => DismissCalls.Add(item);
+
+    public DownloadItem Retry(DownloadItem item)
+    {
+        RetryCalls.Add(item);
+        return item;
+    }
+
+    /// <summary>
+    /// Test helper: admits an item (collection add + the admission
+    /// ItemChanged announcement), mirroring the real coordinator's posted
+    /// order.
+    /// </summary>
+    public DownloadItem Add(DownloadItem item)
+    {
+        Items.Add(item);
+        ItemChanged?.Invoke(item);
+        return item;
+    }
+
+    /// <summary>Test helper: removes an item from the collection.</summary>
+    public void Remove(DownloadItem item) => Items.Remove(item);
+
+    /// <summary>
+    /// Test helper: announces an item (a resolve or a terminal transition)
+    /// through ItemChanged without touching the collection.
+    /// </summary>
+    public void Publish(DownloadItem item) => ItemChanged?.Invoke(item);
+
+    /// <summary>
+    /// Test helper: raises UpdatesApplied (the update-family completion
+    /// signal; also keeps the event field used).
+    /// </summary>
+    public void RaiseUpdatesApplied() => UpdatesApplied?.Invoke(this, EventArgs.Empty);
 }
 
 /// <summary>

@@ -87,8 +87,13 @@ public static class CuratorComposition
         // after AddNxm() and before the INxmModDownloadHandler override below
         // (the handler takes it); like the handler, its factories resolve
         // dependencies lazily at first use, so registrations that appear later
-        // in the collection (the Action<Action> marshal seam, IModListRefresh)
-        // are available by the time anything resolves.
+        // in the collection (the Action<Action> marshal seam) are available by
+        // the time anything resolves. The mod-list refresh is a Func so the
+        // queue can be constructed BEFORE the list VM singleton it forwards to
+        // (the list VM itself consumes the queue for its download rows; an
+        // eager refresh dependency here would make that pair a construction
+        // cycle). The Func resolves on the first completed download, long
+        // after both singletons exist.
         services.AddSingleton<IModDownloadQueue>(sp => new ModDownloadQueue(
             sp.GetRequiredService<IModAcquisitionService>(),
             sp.GetRequiredService<IModRepository>(),
@@ -96,7 +101,7 @@ public static class CuratorComposition
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IUpdateStateStore>(),
             sp.GetRequiredService<IConfigLoader>(),
-            sp.GetRequiredService<IModListRefresh>(),
+            () => sp.GetRequiredService<IModListRefresh>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<ModDownloadQueue>>()));
@@ -280,6 +285,10 @@ public static class CuratorComposition
             // The shared last-known nxm registration state feeds the
             // empty-state Nexus hint; the mod list never probes the OS.
             sp.GetRequiredService<INxmRegistrationState>(),
+            // The download queue feeds the mod list's download rows (the
+            // in-place morphs + the appended section). Constructing the
+            // queue here is safe: its refresh dependency is lazy.
+            sp.GetRequiredService<IModDownloadQueue>(),
             sp.GetRequiredService<ILogger<ModListViewModel>>()));
 
         // The hosted destination view models: singletons (one instance per page,

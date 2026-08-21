@@ -55,6 +55,7 @@ public sealed class ModRowContextTests
             profiles, session, repo, new FakeDialogService(), localization,
             updateState, runner, context, importWorkflow, detailedRows, linkedMods,
             new FakeExternalLauncher(), new FakeNxmRegistrationState(),
+            new FakeModDownloadQueue(),
             NullLogger<ModListViewModel>.Instance);
     }
 

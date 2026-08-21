@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -129,6 +130,18 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     private readonly ILogger<ModListViewModel> _logger;
     private readonly IExternalLauncher _externalLauncher;
     private readonly INxmRegistrationState _nxmRegistration;
+    private readonly IModDownloadQueue _downloadQueue;
+
+    /// <summary>
+    /// The live download-row wrappers, keyed by their coordinator item
+    /// (reference identity: an item is one in-flight download). Created on
+    /// first sight of an item in <see cref="IModDownloadQueue.Items"/> and
+    /// pruned when it leaves, so a wrapper lives exactly as long as its
+    /// item; the hosting projection reassigns the same wrapper instance
+    /// across rebuilds (morph assignments compare by reference, so an
+    /// unchanged host never re-fires).
+    /// </summary>
+    private readonly Dictionary<DownloadItem, DownloadRowViewModel> _downloadRows = new();
 
     /// <summary>
     /// The profile entries the last <see cref="Reload"/> loaded (the raw
@@ -173,6 +186,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         LinkedModsViewModel linkedMods,
         IExternalLauncher externalLauncher,
         INxmRegistrationState nxmRegistration,
+        IModDownloadQueue downloadQueue,
         ILogger<ModListViewModel> logger)
         : base(localization)
     {
@@ -189,6 +203,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _externalLauncher = externalLauncher ?? throw new ArgumentNullException(nameof(externalLauncher));
         _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
+        _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
 
         _session.PropertyChanged += OnSessionPropertyChanged;
         // The runner surfaces both update-family completions on the UI thread
@@ -219,6 +234,15 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         // registration state; no OS probe happens here or in Reload.
         IsNxmRegistered = _nxmRegistration.IsRegistered;
         _nxmRegistration.Changed += OnNxmRegistrationChanged;
+
+        // The download fan-in: ONE pair of subscriptions on this VM (both
+        // already marshaled to the UI thread by the queue) drives every
+        // download rendering decision: the per-row morph assignments, the
+        // appended DownloadRows projection, and the empty-state suppression.
+        // Rows + wrappers never subscribe to the queue themselves, so rows
+        // dropped by a reload cannot leak against it.
+        _downloadQueue.Items.CollectionChanged += OnDownloadItemsChanged;
+        _downloadQueue.ItemChanged += OnDownloadItemChanged;
 
         Reload();
     }
@@ -292,6 +316,43 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// </summary>
     [ObservableProperty]
     private bool _hasVisibleMods;
+
+    /// <summary>
+    /// The appended download rows: the queue items with no in-place host
+    /// (fresh mods, cross-profile targets, filtered-hidden targets, null
+    /// container ids), in admission order. Rendered by the dedicated
+    /// ItemsControl below the profile rows inside the same scroll region.
+    /// Never intersects <see cref="VisibleMods"/> or <see cref="Mods"/> (the
+    /// items are <see cref="DownloadRowViewModel"/>s, not profile rows), so
+    /// download rows can never enter the reorder planner's inputs, the drag
+    /// gesture's container math, or the move commands. Rebuilt by
+    /// <see cref="RebuildDownloadRows"/>.
+    /// </summary>
+    public ObservableCollection<DownloadRowViewModel> DownloadRows { get; } = new();
+
+    /// <summary>
+    /// Whether any appended download row exists (drives the appended
+    /// ItemsControl's visibility + <see cref="HasListContent"/>).
+    /// </summary>
+    [ObservableProperty]
+    private bool _hasDownloadRows;
+
+    /// <summary>
+    /// Whether any non-terminal download item exists in the coordinator
+    /// (queued, downloading, or importing; Failed corpses do not count).
+    /// Suppresses the no-mods/add-hints empty state: an active download
+    /// above "no mods yet" reads as a contradiction.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowAddModsHint))]
+    private bool _hasActiveDownloads;
+
+    /// <summary>
+    /// Whether the scroll region has any content to show: visible profile
+    /// rows OR appended download rows (an empty profile with a live download
+    /// still shows the scroll region, hosting the appended rows).
+    /// </summary>
+    public bool HasListContent => HasVisibleMods || HasDownloadRows;
 
     /// <summary>
     /// Whether disabled mods are hidden from the row list (the toolbar's
@@ -516,13 +577,17 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// Whether the no-mods / DMF-only "add a mod" hint should show: an active
     /// profile with zero or one mod (so a freshly-onboarded DMF-only profile
-    /// still invites the user to add their own mods alongside the framework)
-    /// and NO active filter/search (an empty visible set under an active
+    /// still invites the user to add their own mods alongside the framework),
+    /// NO active filter/search (an empty visible set under an active
     /// filter/search is the no-matches state, not the add-a-mod state; the two
-    /// are mutually exclusive). A dedicated derived property because the view
-    /// cannot express the conjunction in a single Avalonia compiled binding.
+    /// are mutually exclusive), and NO active download (a queued or in-flight
+    /// download renders as a row, and an active download above "no mods yet"
+    /// reads as a contradiction; terminal Failed corpses do not suppress).
+    /// A dedicated derived property because the view cannot express the
+    /// conjunction in a single Avalonia compiled binding.
     /// </summary>
-    public bool ShowAddModsHint => HasActiveProfile && ModCount <= 1 && !IsFilterOrSearchActive;
+    public bool ShowAddModsHint =>
+        HasActiveProfile && ModCount <= 1 && !IsFilterOrSearchActive && !HasActiveDownloads;
 
     /// <summary>
     /// The Add split button's current mode (which action the primary click runs).
@@ -776,7 +841,8 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// The non-list culture work: re-resolve the localized refresh-gate
     /// renderings so the rate-limit + throttle tooltips pick up the new
     /// culture immediately (the gate's own state is unchanged; the raw values
-    /// are re-read), + refresh each row's localized text.
+    /// are re-read), refresh each row's localized text, and refresh each
+    /// live download wrapper's localized status/label/tooltip strings.
     /// </summary>
     protected override void OnCultureChanged()
     {
@@ -784,6 +850,11 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         foreach (var row in Mods)
         {
             row.Refresh();
+        }
+
+        foreach (var wrapper in _downloadRows.Values)
+        {
+            wrapper.Refresh();
         }
     }
 
@@ -1106,6 +1177,130 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         HasVisibleMods = VisibleMods.Count > 0;
         ApplyMoveAvailability();
         OnPropertyChanged(nameof(ShowNoMatchesMessage));
+        OnPropertyChanged(nameof(HasListContent));
+        // A row entering or leaving the visible set can move a download
+        // between its two hosts (in-place morph vs. appended); the hosting
+        // projection is defined over the current visible set, so it is
+        // recomputed on every projection change too.
+        RebuildDownloadRows();
+    }
+
+    // ---- download rows (the hosting projection) ----------------------------
+
+    /// <summary>
+    /// The coordinator's collection changed (an item admitted or removed;
+    /// already on the UI thread). Enqueue returns before its add post
+    /// executes, so this, not the enqueue caller, is the first place a new
+    /// item is ever observed. Rebuilds the wrapper cache + the projection.
+    /// </summary>
+    private void OnDownloadItemsChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+        RebuildDownloadRows();
+
+    /// <summary>
+    /// The coordinator announced an item (admission, resolve, or terminal;
+    /// already on the UI thread). A resolve (a container id landing on a
+    /// previously unknown item) or a terminal transition can move the item
+    /// between hosts, so the projection is recomputed. Byte and phase
+    /// progress does not raise this (only the item's own property
+    /// notifications, which the wrapper renders directly), so this rebuild
+    /// never runs per progress tick.
+    /// </summary>
+    private void OnDownloadItemChanged(DownloadItem item) => RebuildDownloadRows();
+
+    /// <summary>
+    /// Recomputes the download hosting projection: one pass over the
+    /// coordinator's items (admission order) assigning each item exactly one
+    /// render slot. An item whose <see cref="DownloadItem.ContainerId"/> is
+    /// referenced by the active profile's CURRENT row set AND realized in
+    /// <see cref="VisibleMods"/> morphs that row in place (first matching
+    /// item in admission order wins the row; a second item with the same
+    /// container renders appended, which is how a Failed corpse and a fresh
+    /// live attempt for the same mod coexist as two rows). Every other item
+    /// appends to <see cref="DownloadRows"/>. No placement state is stored:
+    /// the assignment is re-derived from the item's container id against the
+    /// current rows on every coordinator collection/state change, every
+    /// Reload, every filter/search change, and every profile switch (the
+    /// switch reloads + clears filters, both of which land here).
+    /// </summary>
+    /// <remarks>
+    /// The morph assignment compares by reference before writing, so an
+    /// unchanged host never re-fires (a filter keystroke or unrelated item
+    /// change cannot churn a morphed row's content). Download rows ignore
+    /// search and hide-disabled entirely: that is exactly what the appended
+    /// fallback expresses (a filtered-out target is appended, not hidden).
+    /// </remarks>
+    private void RebuildDownloadRows()
+    {
+        var items = _downloadQueue.Items;
+
+        // Sync the wrapper cache with the collection: prune wrappers whose
+        // item left, create wrappers for new items.
+        if (_downloadRows.Count > 0)
+        {
+            var live = new HashSet<DownloadItem>(items);
+            foreach (var stale in _downloadRows.Keys.Where(k => !live.Contains(k)).ToArray())
+            {
+                _downloadRows.Remove(stale);
+            }
+        }
+
+        foreach (var item in items)
+        {
+            if (!_downloadRows.TryGetValue(item, out var wrapper))
+            {
+                wrapper = new DownloadRowViewModel(_localization, _downloadQueue, item);
+                _downloadRows[item] = wrapper;
+            }
+        }
+
+        // Resolve the in-place hosts first: the FIRST item per container id
+        // that finds a visible row wins the morph; later items with the same
+        // container append. The morph winner is tracked per ITEM (not per
+        // container) so a non-winner sharing the container still appends.
+        var morphByContainer = new Dictionary<Guid, DownloadRowViewModel>();
+        var morphedItems = new HashSet<DownloadItem>();
+        foreach (var item in items)
+        {
+            if (item.ContainerId is not { } containerId || morphByContainer.ContainsKey(containerId))
+            {
+                continue;
+            }
+
+            if (VisibleMods.FirstOrDefault(row => row.ContainerId == containerId) is { } host)
+            {
+                morphByContainer[containerId] = _downloadRows[item];
+                morphedItems.Add(item);
+            }
+        }
+
+        // Apply the morph to the live rows (reference-guarded: an unchanged
+        // assignment, including the null-to-null steady state, never fires).
+        foreach (var row in Mods)
+        {
+            var target = morphByContainer.TryGetValue(row.ContainerId, out var wrapper) ? wrapper : null;
+            if (!ReferenceEquals(row.ActiveDownload, target))
+            {
+                row.ActiveDownload = target;
+            }
+        }
+
+        // Everything not hosted in place appends, in admission order. The
+        // membership test is per item (the morph winner), so a second item
+        // sharing a morphed container still renders.
+        DownloadRows.Clear();
+        foreach (var item in items)
+        {
+            if (morphedItems.Contains(item))
+            {
+                continue;
+            }
+
+            DownloadRows.Add(_downloadRows[item]);
+        }
+
+        HasDownloadRows = DownloadRows.Count > 0;
+        HasActiveDownloads = items.Any(item => !item.IsTerminal);
+        OnPropertyChanged(nameof(HasListContent));
     }
 
     // ---- reorder (up / down / drag) ----------------------------------------

@@ -771,7 +771,8 @@ public sealed class ModDownloadQueueTests
             };
             Acquisition = new ScriptedAcquisitionService(Repo);
             Queue = new ModDownloadQueue(
-                Acquisition, Repo, Profiles, Session, UpdateState, Loader, Refresh,
+                Acquisition, Repo, Profiles, Session, UpdateState, Loader,
+                () => Refresh,
                 Localization, Marshal.Invoke, NullLogger<ModDownloadQueue>.Instance);
         }
 

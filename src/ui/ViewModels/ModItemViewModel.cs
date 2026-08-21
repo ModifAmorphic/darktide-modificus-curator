@@ -98,6 +98,47 @@ public partial class ModItemViewModel : ObservableObject
     private bool _enabled;
 
     /// <summary>
+    /// The active download morphing this row in place: the row-facing
+    /// projection of the queue item whose container is this row's
+    /// <see cref="ContainerId"/> while that item targets it AND the row is
+    /// realized in <see cref="ModListViewModel.VisibleMods"/>. Assigned
+    /// exclusively by the parent's hosting projection (never the row, never
+    /// the coordinator); null when the row is an ordinary mod row. While
+    /// set, the summary/metadata area and the action strip swap to the
+    /// download content, the policy editor and the update-action cell
+    /// suppress, and the structural controls (grip, lock, move, remove,
+    /// enabled) stay functional: position and membership are profile
+    /// metadata staged at launch, so reordering or toggling mid-download is
+    /// harmless.
+    /// </summary>
+    /// <remarks>
+    /// The wrapper, not the row, holds the download state (phase, bytes,
+    /// failure); the row exposes only the morph decision members
+    /// (<see cref="IsDownloadMorphed"/>, <see cref="ShowUpdateSpinner"/>, the
+    /// widened <see cref="IsPolicyEditable"/>) the templates bind against.
+    /// </remarks>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsDownloadMorphed))]
+    [NotifyPropertyChangedFor(nameof(IsPolicyEditable))]
+    [NotifyPropertyChangedFor(nameof(ShowUpdateSpinner))]
+    private DownloadRowViewModel? _activeDownload;
+
+    /// <summary>
+    /// Whether an active download is morphing this row in place (the
+    /// content-swap gate for the summary area, the update-action cell, and
+    /// the action strip's Cancel affordance).
+    /// </summary>
+    public bool IsDownloadMorphed => ActiveDownload is not null;
+
+    /// <summary>
+    /// Whether the per-row update spinner in the badge area should render:
+    /// an install in flight AND not morphed (a download morph suppresses the
+    /// update affordances entirely; the download's own progress owns the
+    /// row's progress surface).
+    /// </summary>
+    public bool ShowUpdateSpinner => IsUpdating && !IsDownloadMorphed;
+
+    /// <summary>
     /// Position within the load order (lower loads first). Drives the display sort
     /// and the up/down move commands (the parent re-persists the order).
     /// </summary>
@@ -213,6 +254,7 @@ public partial class ModItemViewModel : ObservableObject
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(UpdateActionEnabled))]
+    [NotifyPropertyChangedFor(nameof(ShowUpdateSpinner))]
     private bool _isUpdating;
 
     /// <summary>
@@ -616,9 +658,11 @@ public partial class ModItemViewModel : ObservableObject
     /// Whether the policy ComboBox is editable for this row. Linked rows hold a
     /// single implicit version (the external folder) with no version management,
     /// so the policy editor is disabled for them (the Latest label shows, inert).
-    /// All other rows edit freely.
+    /// A download morph also disables it: the morphing download is about to
+    /// write the policy itself (head file Latest, non-head pinned), so a manual
+    /// edit mid-download would race the completion. All other rows edit freely.
     /// </summary>
-    public bool IsPolicyEditable => !IsLinked;
+    public bool IsPolicyEditable => !IsLinked && !IsDownloadMorphed;
 
     /// <summary>
     /// The external folder path for a linked row (the <c>LinkedSource.ExternalPath</c>),

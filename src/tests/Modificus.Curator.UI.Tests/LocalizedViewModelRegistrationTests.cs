@@ -39,6 +39,7 @@ public sealed class LocalizedViewModelRegistrationTests
         "ThemeOption",
         "LanguageOption",
         "ModItemViewModel",
+        "DownloadRowViewModel",
     };
 
     [Fact]

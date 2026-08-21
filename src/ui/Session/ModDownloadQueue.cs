@@ -271,7 +271,7 @@ internal sealed class ModDownloadQueue : IModDownloadQueue
     private readonly IProfileSession _session;
     private readonly IUpdateStateStore _updateState;
     private readonly IConfigLoader _configLoader;
-    private readonly IModListRefresh _modListRefresh;
+    private readonly Func<IModListRefresh> _modListRefresh;
     private readonly LocalizationService _localization;
     private readonly Action<Action> _invokeOnUi;
     private readonly ILogger<ModDownloadQueue> _logger;
@@ -293,7 +293,7 @@ internal sealed class ModDownloadQueue : IModDownloadQueue
         IProfileSession session,
         IUpdateStateStore updateState,
         IConfigLoader configLoader,
-        IModListRefresh modListRefresh,
+        Func<IModListRefresh> modListRefresh,
         LocalizationService localization,
         Action<Action> invokeOnUi,
         ILogger<ModDownloadQueue> logger)
@@ -718,9 +718,11 @@ internal sealed class ModDownloadQueue : IModDownloadQueue
 
         // Reload only when the target is still the active profile: a completed
         // registration for a background profile has nothing to show here.
+        // The refresh seam resolves lazily (first completion), so the queue
+        // can be constructed before the list VM singleton it forwards to.
         if (_session.ActiveProfileId == item.TargetProfileId)
         {
-            _invokeOnUi(() => _modListRefresh.Reload());
+            _invokeOnUi(() => _modListRefresh().Reload());
         }
         return true;
     }

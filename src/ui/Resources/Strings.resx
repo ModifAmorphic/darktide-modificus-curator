@@ -1233,6 +1233,53 @@
   </data>
 
   <!-- ============================================================ -->
+  <!-- Download rows (ModListView / DownloadRowViewModel)           -->
+  <!-- (the row UI rendering one queued download: the in-place      -->
+  <!--  morph on a mod row + the appended row below the list)      -->
+  <!-- ============================================================ -->
+
+  <data name="ModRow_DownloadQueued" xml:space="preserve">
+    <value>Queued</value>
+    <comment>Status word on a download row: waiting for the serial download worker.</comment>
+  </data>
+  <data name="ModRow_DownloadDownloading" xml:space="preserve">
+    <value>Downloading</value>
+    <comment>Status word on a download row: the archive download is in flight.</comment>
+  </data>
+  <data name="ModRow_DownloadImporting" xml:space="preserve">
+    <value>Importing</value>
+    <comment>Status word on a download row: the bytes are in and the mod is being imported.</comment>
+  </data>
+  <data name="ModRow_DownloadFailed" xml:space="preserve">
+    <value>Failed</value>
+    <comment>Status word on a download row: the download failed; the message, Retry, and dismiss follow it.</comment>
+  </data>
+  <data name="ModRow_DownloadForProfile" xml:space="preserve">
+    <value>for profile {0}</value>
+    <comment>The always-shown target-profile label on an appended download row. {0} is the target profile's name captured at enqueue.</comment>
+  </data>
+  <data name="ModRow_DownloadCancelTooltip" xml:space="preserve">
+    <value>Cancel download</value>
+    <comment>Tooltip and automation name for a download row's Cancel button.</comment>
+  </data>
+  <data name="ModRow_DownloadRetryTooltip" xml:space="preserve">
+    <value>Retry download</value>
+    <comment>Tooltip and automation name for a failed download row's Retry button.</comment>
+  </data>
+  <data name="ModRow_DownloadDismissTooltip" xml:space="preserve">
+    <value>Dismiss</value>
+    <comment>Tooltip and automation name for a failed download row's dismiss button.</comment>
+  </data>
+  <data name="ModRow_DownloadRowAutomation" xml:space="preserve">
+    <value>{0}: {1}</value>
+    <comment>Automation name for a download row without a progress detail (queued, importing, or failed). {0} is the mod name, {1} the status word.</comment>
+  </data>
+  <data name="ModRow_DownloadRowProgressAutomation" xml:space="preserve">
+    <value>{0}: {1}, {2}</value>
+    <comment>Automation name for a downloading row. {0} is the mod name, {1} the status word, {2} the percent (or received bytes when the total is unknown).</comment>
+  </data>
+
+  <!-- ============================================================ -->
   <!-- First-run Welcome onboarding                                 -->
   <!-- (OnboardingService + WelcomeWindow: shown once on first      -->
   <!--  startup, introduces Curator and offers Nexus setup)         -->
