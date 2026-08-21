@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.1.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v1.0.0...v1.1.0) (2026-08-21)
+
+
+### Features
+
+* **modlist:** add hide-disabled filter and name search with reorder-through-filter ([9b4a367](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/9b4a36745eb515f4cf6203f218a571f95b7b887d))
+* **modlist:** add updates-only filter to the mod list ([#234](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/234)) ([bc351cd](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/bc351cd7cbec4535f031e8ead7d697087f823a75))
+* **profiles:** detect an alternate mod manager mod and hand it to Relay at launch ([#231](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/231)) ([cb2fb9b](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/cb2fb9b4ac38abebedbf397dbacd7371884dc9ef))
+* **relay-client:** host the staged mods tree in the Darktide game directory ([#229](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/229)) ([b7b6d7f](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/b7b6d7fe54bc7aa49c969f6bc7d4f0d16d02064b))
+* **ui:** one serial download queue for all Nexus downloads ([#233](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/233)) ([2ea43b2](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/2ea43b29b3790d7b290777d81921ce39bfef1894))
+
+
+### Bug Fixes
+
+* **appupdate:** exclude pre-releases from the update feed and allow downgrade to latest stable ([ef0ab13](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/ef0ab13f0d92b3a0e696f0c840c424221a413dae)), closes [#226](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/226)
+
 ## [1.0.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v0.30.3...v1.0.0) (2026-08-17)
 
 
