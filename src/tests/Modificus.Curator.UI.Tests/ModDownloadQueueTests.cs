@@ -704,8 +704,10 @@ public sealed class ModDownloadQueueTests
         var item = harness.Queue.Enqueue(AddRequest(profile.Id, fileId: KnownHeadFileId));
 
         Assert.Equal(1, raised);
-        Assert.True(WaitUntil(() => item.IsTerminal));
-        Assert.Equal(3, raised);
+        // Wait for BOTH signals: IsTerminal flips inside the marshaled phase
+        // write while the terminal OnItemChanged is a separate marshaled post,
+        // so a poll can observe terminal while raised is still 2.
+        Assert.True(WaitUntil(() => raised == 3 && item.IsTerminal));
     }
 
     // ---- fixture + helpers ------------------------------------------------------
