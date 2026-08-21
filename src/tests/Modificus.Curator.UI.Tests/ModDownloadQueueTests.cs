@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.IO;
 using Modificus.Curator.Config;
 using Modificus.Curator.Integrations;
 using Modificus.Curator.Mods;
@@ -63,6 +64,38 @@ public sealed class ModDownloadQueueTests
             Assert.Equal(Environment.CurrentManagedThreadId, id));
         Assert.All(marshal.ExecutedOnThreadIds, id =>
             Assert.Equal(Environment.CurrentManagedThreadId, id));
+    }
+
+    [Fact]
+    public void Hit_path_item_observes_admission_events_before_the_terminal_removal()
+    {
+        // Pins the add-before-release ordering on the fast path: the item is
+        // admitted, posted to the collection, and announced through
+        // ItemChanged BEFORE the worker is released, so a hit-path item (no
+        // held acquisition, completes the moment the worker sees it) still
+        // shows add-then-terminal-removal in posted order. The deferred seam
+        // runs nothing until drained, so the posted order is fully
+        // serialized and observable; the thread-affinity test above holds
+        // the acquisition, which never exercises this race.
+        var marshal = new DeferredMarshal();
+        var harness = new QueueHarness(marshal);
+        var profile = harness.AddProfile();
+        var (container, _, _) = harness.SeedKnownMod();
+        var events = new ConcurrentQueue<string>();
+        harness.Queue.Items.CollectionChanged += (_, e) =>
+            events.Enqueue(e.Action == NotifyCollectionChangedAction.Add ? "add" : "remove");
+        harness.Queue.ItemChanged += _ => events.Enqueue("changed");
+
+        var item = harness.Queue.Enqueue(
+            AddRequest(profile.Id, fileId: KnownHeadFileId, containerId: container.Id));
+
+        marshal.DrainUntil(() =>
+            events.Count(e => e == "changed") == 2 && harness.Queue.Items.Count == 0);
+
+        Assert.Equal(new[] { "add", "changed", "remove", "changed" }, events);
+        Assert.Equal(DownloadPhase.Completed, item.Phase);
+        // The hit path really ran: no acquisition, no network.
+        Assert.Empty(harness.Acquisition.Calls);
     }
 
     // ---- dedupe ------------------------------------------------------------
@@ -355,6 +388,40 @@ public sealed class ModDownloadQueueTests
     }
 
     [Fact]
+    public void Completion_mod_removed_mid_flight_fails_with_the_removed_message()
+    {
+        // The removed-mod race: the membership read says in-profile, then
+        // SetModPolicy throws KeyNotFoundException (its contract covers BOTH
+        // an unknown profile and a container missing from the list). The
+        // profile was verified one call earlier, so the row must say the mod
+        // was removed, not that the profile is gone.
+        var harness = new QueueHarness();
+        var profile = harness.AddProfile();
+        var (container, folderOld, _) = harness.SeedKnownMod();
+        harness.Profiles.WithMods(profile.Id, new ModListEntry
+        {
+            ContainerId = container.Id,
+            Enabled = true,
+            Policy = new PinnedPolicy(folderOld),
+        });
+        harness.Profiles.SetModPolicyThrows =
+            new KeyNotFoundException("No container in profile");
+
+        var item = harness.Queue.Enqueue(
+            AddRequest(profile.Id, fileId: KnownHeadFileId, containerId: container.Id));
+
+        Assert.True(WaitUntil(() => item.Phase == DownloadPhase.Failed));
+        Assert.Equal(Localization["ModDownloadQueue_ModRemovedMessage"], item.ErrorMessage);
+        Assert.Contains(item, harness.Queue.Items);
+        // The removed race failed the membership rewrite only: no fresh
+        // registration, no acknowledge, no reload.
+        Assert.Empty(harness.Profiles.AddModCalls);
+        Assert.Empty(harness.UpdateState.AcknowledgeCalls);
+        Assert.Equal(0, harness.Refresh.Reloads);
+        Assert.Empty(harness.Acquisition.Calls);
+    }
+
+    [Fact]
     public void Completion_acknowledge_failure_is_logged_not_fatal()
     {
         var harness = new QueueHarness();
@@ -420,6 +487,30 @@ public sealed class ModDownloadQueueTests
         Assert.Empty(harness.Profiles.AddModCalls);
         Assert.Empty(harness.UpdateState.AcknowledgeCalls);
         Assert.Equal(0, harness.Refresh.Reloads);
+    }
+
+    [Fact]
+    public void Cancel_active_item_surfacing_as_ioexception_lands_canceled()
+    {
+        // Token-authoritative cancel: an interrupted native read surfaces as
+        // IOException rather than OCE once the token fires; the item must
+        // still land Canceled with no error row.
+        var harness = new QueueHarness();
+        var profile = harness.AddProfile();
+        harness.Acquisition.Steps.Enqueue(new ScriptedStep
+        {
+            ThrowOnCancel = new IOException("The read operation failed"),
+        });
+        var item = harness.Queue.Enqueue(AddRequest(profile.Id));
+        Assert.True(WaitUntil(() => harness.Acquisition.InFlight == 1));
+
+        harness.Queue.Cancel(item);
+        Assert.True(WaitUntil(() => item.IsTerminal));
+
+        Assert.Equal(DownloadPhase.Canceled, item.Phase);
+        Assert.Null(item.ErrorMessage);
+        Assert.Empty(harness.Queue.Items);
+        Assert.Empty(harness.Profiles.AddModCalls);
     }
 
     [Fact]
@@ -741,12 +832,19 @@ public sealed class ModDownloadQueueTests
     }
 
     /// <summary>One scripted acquisition call: progress to pump, a hold gate,
-    /// and a throw.</summary>
+    /// and throws (immediate, or cancel-wrapped).</summary>
     private sealed class ScriptedStep
     {
         public List<(long Received, long? Total)>? Progress { get; set; }
         public TaskCompletionSource? Hold { get; set; }
         public Exception? Throw { get; set; }
+
+        /// <summary>
+        /// When set, the call waits for the caller's cancel token and then
+        /// throws this exception: simulates a cancel surfacing as a wrapped
+        /// abort (an interrupted native read) rather than OCE.
+        /// </summary>
+        public Exception? ThrowOnCancel { get; set; }
     }
 
     /// <summary>
@@ -797,6 +895,16 @@ public sealed class ModDownloadQueueTests
                 if (step.Hold is { } hold)
                 {
                     await hold.Task.WaitAsync(ct);
+                }
+                if (step.ThrowOnCancel is { } wrapped)
+                {
+                    var cancelObserved = new TaskCompletionSource(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                    using (ct.Register(() => cancelObserved.TrySetResult()))
+                    {
+                        await cancelObserved.Task;
+                    }
+                    throw wrapped;
                 }
                 if (step.Throw is not null)
                 {

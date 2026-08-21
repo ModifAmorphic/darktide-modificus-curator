@@ -581,6 +581,15 @@ internal sealed class FakeProfileService : IProfileService
     /// </summary>
     public Exception? AddModThrows { get; set; }
 
+    /// <summary>
+    /// Optional exception thrown by <see cref="SetModPolicy"/> (after the call
+    /// is recorded). Default <c>null</c> = no throw. Used by the
+    /// download-queue test to simulate the mod being removed from the profile
+    /// between the completion's membership read and the policy write (the
+    /// production service's KeyNotFoundException for both cases).
+    /// </summary>
+    public Exception? SetModPolicyThrows { get; set; }
+
     public IReadOnlyList<(Guid Id, Guid ContainerId)> RemoveModCalls { get; } = new List<(Guid, Guid)>();
     /// <summary>Seeds a profile's mod list (replaces any prior). Test helper.</summary>
     public FakeProfileService WithMods(Guid id, params ModListEntry[] mods)
@@ -872,6 +881,11 @@ internal sealed class FakeProfileService : IProfileService
     public void SetModPolicy(Guid id, Guid containerId, ModVersionPolicy policy)
     {
         ((List<(Guid, Guid, ModVersionPolicy)>)SetModPolicyCalls).Add((id, containerId, policy));
+
+        if (SetModPolicyThrows is not null)
+        {
+            throw SetModPolicyThrows;
+        }
 
         var list = EnsureList(id);
         var idx = list.FindIndex(m => m.ContainerId == containerId);

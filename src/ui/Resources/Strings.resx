@@ -1227,6 +1227,10 @@
     <value>The profile this download was for no longer exists.</value>
     <comment>Inline failure on a download row: the target profile was deleted before the download completed.</comment>
   </data>
+  <data name="ModDownloadQueue_ModRemovedMessage" xml:space="preserve">
+    <value>This mod was removed from the profile while it was downloading.</value>
+    <comment>Inline failure on a download row: the mod was removed from the target profile before the download's registration ran.</comment>
+  </data>
 
   <!-- ============================================================ -->
   <!-- First-run Welcome onboarding                                 -->

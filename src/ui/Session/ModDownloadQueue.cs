@@ -173,12 +173,12 @@ public sealed partial class DownloadItem : ObservableObject
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Threading.</b> <see cref="Enqueue"/> is safe from any thread (the nxm IPC
-/// handler calls it from a background task); every other member expects the UI
-/// thread. All item state and collection mutations are published through the
-/// injected <see cref="Action{T}"/> marshal seam (the app-update pattern), so
-/// <see cref="IModDownloadQueue.Items"/>, <see cref="IModDownloadQueue.ItemChanged"/>,
-/// and the item property notifications are observed on the UI thread.</para>
+/// <b>Threading.</b> <see cref="Enqueue"/> is safe from any thread; every
+/// other member expects the UI thread. All item state and collection
+/// mutations are published through the injected <see cref="Action{T}"/>
+/// marshal seam, so <see cref="IModDownloadQueue.Items"/>,
+/// <see cref="IModDownloadQueue.ItemChanged"/>, and the item property
+/// notifications are observed on the UI thread.</para>
 /// <para>
 /// <b>Cancellation is token-authoritative.</b> <see cref="IModDownloadQueue.Cancel"/>
 /// cancels the item's token synchronously and marshals only the presentation.
@@ -257,9 +257,11 @@ internal sealed class ModDownloadQueue : IModDownloadQueue
 {
     /// <summary>
     /// How many downloads run at once. One worker loop consumes the queue, so
-    /// this constant is the single knob for parallelism later: raising it
-    /// starts more loops over the same FIFO gate, a tuning change rather than
-    /// a rewrite.
+    /// raising this constant starts more loops over the same FIFO gate; most
+    /// of the pipeline follows. The exception is cancel's active-vs-queued
+    /// detection, which consults the single <c>_activeItem</c> slot: it
+    /// assumes exactly one active item, so parallelism means reworking that
+    /// detection (a set of active items), not just raising this knob.
     /// </summary>
     private const int MaxConcurrent = 1;
 
@@ -371,12 +373,13 @@ internal sealed class ModDownloadQueue : IModDownloadQueue
         }
 
         var newItem = created!;
-        // Publish the row before releasing the worker: the marshal seam is FIFO
-        // (a dispatcher queue), so an item the worker finishes fast (the hit
-        // path) still observes its own add ahead of the removal.
+        // Publish the row + admission event before releasing the worker: the
+        // marshal seam is FIFO (a dispatcher queue), so an item the worker
+        // finishes fast (the hit path) still observes its own add + admission
+        // ItemChanged ahead of its terminal transition.
         _invokeOnUi(() => _items.Add(newItem));
-        _signal.Release();
         OnItemChanged(newItem);
+        _signal.Release();
         return newItem;
     }
 
@@ -628,6 +631,16 @@ internal sealed class ModDownloadQueue : IModDownloadQueue
             CancelTerminal(item);
             return null;
         }
+        catch (Exception ex) when (token.IsCancellationRequested)
+        {
+            // A live cancel can surface as a wrapped abort (e.g. IOException
+            // from an interrupted native read) rather than OCE; the token is
+            // authoritative, so it lands Canceled with no error row.
+            _logger.LogInformation(ex,
+                "Download of mod {Mod} file {File} was cancelled.", item.ModId, item.FileId);
+            CancelTerminal(item);
+            return null;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex,
@@ -659,7 +672,22 @@ internal sealed class ModDownloadQueue : IModDownloadQueue
             {
                 // AddMod no-ops on policy; the user's click must win, so an
                 // existing membership is rewritten through SetModPolicy.
-                _profiles.SetModPolicy(item.TargetProfileId, containerId, policy);
+                try
+                {
+                    _profiles.SetModPolicy(item.TargetProfileId, containerId, policy);
+                }
+                catch (KeyNotFoundException)
+                {
+                    // SetModPolicy throws KeyNotFoundException for an unknown
+                    // profile AND a container missing from the list; the
+                    // profile was verified one call earlier, so this is the
+                    // removed-mid-flight race, not a deleted profile.
+                    _logger.LogWarning(
+                        "Mod {Container} was removed from profile {Profile} before its download completed.",
+                        containerId, item.TargetProfileId);
+                    Fail(item, _localization["ModDownloadQueue_ModRemovedMessage"]);
+                    return false;
+                }
             }
             else
             {
