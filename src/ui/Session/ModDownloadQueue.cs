@@ -801,7 +801,8 @@ internal sealed class ModDownloadQueue : IModDownloadQueue
             }
         });
 
-    private void Resolve(DownloadItem item, Guid containerId, string version, string? displayName) =>
+    private void Resolve(DownloadItem item, Guid containerId, string version, string? displayName)
+    {
         _invokeOnUi(() =>
         {
             item.ContainerId = containerId;
@@ -811,6 +812,8 @@ internal sealed class ModDownloadQueue : IModDownloadQueue
                 item.DisplayName = displayName;
             }
         });
+        OnItemChanged(item);
+    }
 
     private void Fail(DownloadItem item, string message)
     {

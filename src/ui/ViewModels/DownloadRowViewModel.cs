@@ -242,9 +242,12 @@ public partial class DownloadRowViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Lights the flash and arms its decay. A newer pulse supersedes an
-    /// in-flight decay through the version counter, so repeated joins keep
-    /// the row lit for one window from the last join.
+    /// Lights the flash and arms its decay. The version counter makes the
+    /// newest join own the decay, so the class stays applied for one window
+    /// from the last join; the animation runs once per class application,
+    /// so a join while the flag is already set extends the window without
+    /// re-running the flash (a later join re-lights only after the flag has
+    /// decayed).
     /// </summary>
     private void BeginPulseFlash()
     {

@@ -73,7 +73,9 @@ public sealed class ModDownloadQueueTests
         // admitted, posted to the collection, and announced through
         // ItemChanged BEFORE the worker is released, so a hit-path item (no
         // held acquisition, completes the moment the worker sees it) still
-        // shows add-then-terminal-removal in posted order. The deferred seam
+        // shows add-then-terminal-removal in posted order, with the resolve
+        // announcement between them (the hit path resolves from the
+        // repository before completing). The deferred seam
         // runs nothing until drained, so the posted order is fully
         // serialized and observable; the thread-affinity test above holds
         // the acquisition, which never exercises this race.
@@ -90,9 +92,9 @@ public sealed class ModDownloadQueueTests
             AddRequest(profile.Id, fileId: KnownHeadFileId, containerId: container.Id));
 
         marshal.DrainUntil(() =>
-            events.Count(e => e == "changed") == 2 && harness.Queue.Items.Count == 0);
+            events.Count(e => e == "changed") == 3 && harness.Queue.Items.Count == 0);
 
-        Assert.Equal(new[] { "add", "changed", "remove", "changed" }, events);
+        Assert.Equal(new[] { "add", "changed", "changed", "remove", "changed" }, events);
         Assert.Equal(DownloadPhase.Completed, item.Phase);
         // The hit path really ran: no acquisition, no network.
         Assert.Empty(harness.Acquisition.Calls);
@@ -692,7 +694,7 @@ public sealed class ModDownloadQueueTests
     // ---- events ---------------------------------------------------------------
 
     [Fact]
-    public void ItemChanged_fires_on_admission_and_on_the_terminal_transition()
+    public void ItemChanged_fires_on_admission_resolve_and_the_terminal_transition()
     {
         var harness = new QueueHarness();
         var profile = harness.AddProfile();
@@ -703,7 +705,7 @@ public sealed class ModDownloadQueueTests
 
         Assert.Equal(1, raised);
         Assert.True(WaitUntil(() => item.IsTerminal));
-        Assert.Equal(2, raised);
+        Assert.Equal(3, raised);
     }
 
     // ---- fixture + helpers ------------------------------------------------------
