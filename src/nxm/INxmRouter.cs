@@ -13,7 +13,9 @@ public interface INxmRouter
     /// Parses <paramref name="rawUrl"/> and dispatches to the resolved mod-download
     /// handler. Collection URLs, OAuth-callback URLs (Curator OAuth uses loopback,
     /// so these are not routed to a handler), and unparseable URLs are logged and
-    /// dropped. Handler exceptions are caught and logged.
+    /// dropped. Handler exceptions are caught and logged. Must return promptly:
+    /// routing runs inline on the IPC accept loop, and request processing is the
+    /// routed handler's responsibility, not work to await inline.
     /// </summary>
     Task RouteAsync(string rawUrl, CancellationToken ct = default);
 }

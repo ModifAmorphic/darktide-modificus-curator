@@ -8,6 +8,11 @@ namespace Modificus.Curator.Nxm;
 /// </summary>
 public interface INxmModDownloadHandler
 {
-    /// <summary>Handles a parsed mod-download URL.</summary>
+    /// <summary>
+    /// Handles a parsed mod-download URL. Must return promptly, enqueueing the
+    /// download (or refusing it via its gate) rather than working inline: the
+    /// call runs inline on the IPC accept loop, so a slow return blocks every
+    /// later nxm delivery.
+    /// </summary>
     Task HandleAsync(NxmModDownloadUrl url, CancellationToken ct = default);
 }

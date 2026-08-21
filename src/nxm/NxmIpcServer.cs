@@ -34,8 +34,11 @@ namespace Modificus.Curator.Nxm;
 /// (keeps the server instance alive for the next client, unlike dispose +
 /// recreate which would have to rebind the pipe name), loop. Per-connection
 /// exceptions are logged and swallowed so a single bad client cannot kill the
-/// server. The loop processes one connection at a time (acceptable for v1;
-/// handler invocations are rare and short). Cancellation shuts the server down.
+/// server. The loop processes one connection at a time, which rests on an
+/// explicit invariant: <see cref="INxmRouter.RouteAsync"/> must return
+/// promptly. Request processing is the routed handler's responsibility and
+/// must not run inline on the accept loop (the handler enqueues or refuses;
+/// it does not work inline). Cancellation shuts the server down.
 /// </para>
 /// </remarks>
 public sealed class NxmIpcServer : IDisposable, IAsyncDisposable

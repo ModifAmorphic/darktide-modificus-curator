@@ -1273,11 +1273,17 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         NxmUrlParser (mod-download / oauth-callback /
                         collection URL types), NxmIpcFraming (length-prefixed UTF-8 frames),
                         SingleInstanceGuard (the process-enumeration single-instance check,
-                        with an injectable enumerator seam), NxmIpcServer (the named-pipe
+                        with an injectable enumerator seam + the non-throwing
+                         IsAnotherInstanceRunning query over the same enumeration, which
+                         the handler relay reuses for its cold-start pre-check), NxmIpcServer (the named-pipe
                         server; Bind runs two SEPARATE checks: SingleInstanceGuard first
                         (fatal NxmSingleInstanceException on collision), then the pipe bind
-                        which degrades gracefully on IOException; accept loop Disconnects
-                        between clients), INxmRouter + no-op INxmModDownloadHandler
+which degrades gracefully on IOException; accept loop Disconnects
+                         between clients, resting on the explicit invariant that
+                         INxmRouter.RouteAsync returns promptly: request processing is the
+                         routed handler's responsibility (enqueue-or-refuse), never inline
+                         on the accept loop; the RouteAsync + HandleAsync docs state the
+                         prompt-return contract), INxmRouter + no-op INxmModDownloadHandler
                         default (the real handler is registered via AddSingleton
                         last-wins, in CuratorComposition after AddNxm()), the OS
                         scheme-handler registrar
@@ -1296,8 +1302,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                          touches only Curator's own registration files (a no-op or a
                          removal of Curator's own files depending on platform state), so
                          callers never pre-check), + NxmHandlerRelay (the testable core the
-                        handler exe calls: hot-path IPC delivery + cold-start launch+retry,
-                        UseShellExecute=false on both OSes). AOT-friendly (IsAotCompatible;
+handler exe calls: hot-path IPC delivery + cold-start launch+retry with an
+                         advisory process pre-check (a detected Curator process skips the
+                         duplicate launch and goes straight to the retry loop, the burst
+                         case; distinct stderr lines per branch; the default reuses the
+                         SingleInstanceGuard enumeration; 1s default connect timeout),
+                         UseShellExecute=false on both OSes). AOT-friendly (IsAotCompatible;
                         only raw byte/UTF-8 IO in the handler path).
   nxm-handler/          Modificus.Curator.NxmHandler -- the OS-registered nxm:// scheme handler
                         (console exe, native AOT). Program.cs is one line: NxmHandlerRelay.RunAsync.

@@ -119,11 +119,15 @@ and the pipe is its own check that degrades on failure.
 
 ## Cold-start path
 
-When the handler is invoked and Curator is not running, the handler launches the
-sibling Curator exe (no args) and retries the pipe every 250 ms up to 30 s. Once
-Curator binds the pipe, the handler connects, delivers the URL, and exits. Curator
-has no `--nxm` arg and no cold-start branch; its startup is unaffected
-by the nxm plumbing, and the handler owns the entire cold-start orchestration.
+When the handler is invoked and Curator is not running, the handler first runs
+an advisory process check (the same enumeration the single-instance guard
+uses): a detected Curator process means another handler in a click burst
+already launched it, so the launch is skipped; otherwise the handler launches
+the sibling Curator exe (no args). Either way it retries the pipe every 250 ms
+up to 30 s. Once Curator binds the pipe, the handler connects, delivers the
+URL, and exits. Curator has no `--nxm` arg and no cold-start branch; its
+startup is unaffected by the nxm plumbing, and the handler owns the entire
+cold-start orchestration.
 
 If the sibling Curator exe is missing, the handler logs to stderr and exits
 non-zero without retrying: there is nothing to retry against, and a headless
@@ -132,10 +136,15 @@ OSes (the handler launches the exe directly); `Process.Start` without
 `WaitForExit` already detaches, and `CreateNoWindow=true` on Windows keeps the
 secondary launch quiet.
 
-**Concurrent cold-start clicks** (two handlers race while Curator is closed):
-both launch Curator; single-instance enforcement means only the first Curator
-becomes primary; subsequent Curator instances exit. Each handler's retry loop
-eventually connects to whichever Curator won the bind. Self-resolving.
+**Concurrent cold-start clicks** (several handlers race while Curator is
+closed): the advisory process check means the first handler to detect no
+Curator launches it, and the rest see that Curator coming up, skip their own
+launches, and go straight to the retry loop. A race that slips past the check
+(Curator exits between check and connect, or the check under-detects; the
+Linux kernel truncates process names to 15 characters) still self-resolves:
+single-instance enforcement means only the first Curator becomes primary,
+subsequent Curator instances exit, and each handler's retry loop eventually
+connects to whichever Curator won the bind.
 
 ## OS scheme-handler registration
 
