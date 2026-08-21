@@ -76,7 +76,10 @@ public sealed class ModAcquisitionServiceTests
         var result = await service.AcquireFromNexusAsync(
             GameDomain, ModId, FileId, progress: progress);
 
-        Assert.Equal(import.NextResult, result);
+        // The result carries the import's ids + the matched file's tag.
+        Assert.Equal(import.NextResult.ContainerId, result.ContainerId);
+        Assert.Equal(import.NextResult.VersionId, result.VersionId);
+        Assert.Equal("2.0", result.Version);
 
         // Import was called with the resolved name + version + NexusSource.
         var single = Assert.Single(import.Calls);
@@ -88,9 +91,10 @@ public sealed class ModAcquisitionServiceTests
         // The temp file is gone (cleaned up after Import).
         Assert.False(File.Exists(single.SourcePath));
 
-        // Progress was reported, ending at the payload length.
+        // Progress was reported, ending at the payload length with the
+        // Content-Length as the total (the stub sets it via ByteArrayContent).
         Assert.NotEmpty(progress.Reports);
-        Assert.Equal((long)payload.Length, progress.Reports[^1]);
+        Assert.Equal(((long)payload.Length, (long)payload.Length), progress.Reports[^1]);
 
         // Premium overload used: the free-user key/expires were NOT recorded.
         Assert.True(nexus.PremiumDownloadLinksCalled);
@@ -376,6 +380,166 @@ public sealed class ModAcquisitionServiceTests
             DateTimeOffset.FromUnixTimeSeconds(newestUploadedUnix).UtcDateTime,
             single.RemoteUploadedAt!.Value.UtcDateTime);
         Assert.Equal(newestMainId, single.RemoteFileId);
+    }
+
+    // ---- head flag + ResolveLatestNexusAsync (the queue-facing widen) -------
+
+    [Fact]
+    public async Task AcquireFromNexusAsync_head_flag_false_when_acquiring_an_older_main()
+    {
+        // Two MAIN files: the requested one is the older. IsHeadFile must be
+        // false (the caller pins the policy to this version), computed from
+        // the files listing the metadata pass already made.
+        var nexus = new FakeNexusClient
+        {
+            DownloadLinks = ParseLinks(DownloadLinksJson),
+            ModInfoResponse = () => Ok(ParseInfo(ModInfoJson)),
+            ModFilesResponse = new[]
+            {
+                FileEntry(id: 100, category: 1, uploaded: 9000, version: "1.0"),
+                FileEntry(id: 5820, category: 1, uploaded: 1000, version: "2.0"),
+            },
+        };
+        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(new byte[] { 0xAA }),
+        });
+        var service = new ModAcquisitionService(
+            nexus, new RecordingImportService(), new SingleClientFactory(new HttpClient(handler)),
+            NullLogger<ModAcquisitionService>.Instance);
+
+        var result = await service.AcquireFromNexusAsync(GameDomain, ModId, FileId);
+
+        Assert.False(result.IsHeadFile);
+        Assert.Equal("2.0", result.Version);
+        // No extra API call was spent on the head determination.
+        Assert.Equal(1, nexus.ListModFilesCallCount);
+    }
+
+    [Fact]
+    public async Task AcquireFromNexusAsync_head_flag_ignores_archived_and_optional_files()
+    {
+        // The head is the newest NON-ARCHIVED MAIN: an archived MAIN with a
+        // newer timestamp must not steal head-ness, and an optional file is
+        // never the head. Acquiring the newest non-archived MAIN reports true.
+        var nexus = new FakeNexusClient
+        {
+            DownloadLinks = ParseLinks(DownloadLinksJson),
+            ModInfoResponse = () => Ok(ParseInfo(ModInfoJson)),
+            ModFilesResponse = new[]
+            {
+                FileEntry(id: 5820, category: 1, uploaded: 1000, version: "2.0"),
+                FileEntry(id: 400, category: 1, uploaded: 9000, version: "9.0", archived: true),
+                FileEntry(id: 500, category: 2, uploaded: 9500, version: "9.5"),
+            },
+        };
+        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(new byte[] { 0xAA }),
+        });
+        var service = new ModAcquisitionService(
+            nexus, new RecordingImportService(), new SingleClientFactory(new HttpClient(handler)),
+            NullLogger<ModAcquisitionService>.Instance);
+
+        var result = await service.AcquireFromNexusAsync(GameDomain, ModId, FileId);
+
+        Assert.True(result.IsHeadFile);
+    }
+
+    [Fact]
+    public async Task ResolveLatestNexusAsync_returns_the_head_file_without_downloading()
+    {
+        // The resolve makes exactly one API call (the files listing): no mod
+        // info, no download links, no CDN fetch, no import. Returns the head
+        // file's id + version.
+        var nexus = new FakeNexusClient
+        {
+            ModFilesResponse = new[]
+            {
+                FileEntry(id: 100, category: 2, uploaded: 5000, version: "0.5"),  // optional
+                FileEntry(id: 200, category: 1, uploaded: 1000, version: "1.0"),  // older MAIN
+                FileEntry(id: 5820, category: 1, uploaded: 2000, version: "2.0"),  // head
+                FileEntry(id: 300, category: 1, uploaded: 9000, version: "9.0", archived: true),
+            },
+        };
+        var import = new RecordingImportService();
+        var service = new ModAcquisitionService(
+            nexus, import, new SingleClientFactory(new HttpClient(new StubHttpMessageHandler(
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound)))),
+            NullLogger<ModAcquisitionService>.Instance);
+
+        var (fileId, version) = await service.ResolveLatestNexusAsync(GameDomain, ModId);
+
+        Assert.Equal(5820, fileId);
+        Assert.Equal("2.0", version);
+        Assert.Equal(1, nexus.ListModFilesCallCount);
+        Assert.Equal(0, nexus.GetModInfoCallCount);
+        Assert.False(nexus.PremiumDownloadLinksCalled);
+        Assert.Null(nexus.FreeUserDownloadLinksKey);
+        Assert.Empty(import.Calls);
+    }
+
+    [Fact]
+    public async Task ResolveLatestNexusAsync_throws_when_no_main_exists()
+    {
+        var nexus = new FakeNexusClient
+        {
+            ModFilesResponse = new[]
+            {
+                FileEntry(id: 100, category: 2, uploaded: 1000, version: "1.0"),
+                FileEntry(id: 200, category: 1, uploaded: 2000, version: "2.0", archived: true),
+            },
+        };
+        var service = new ModAcquisitionService(
+            nexus, new RecordingImportService(), new SingleClientFactory(new HttpClient()),
+            NullLogger<ModAcquisitionService>.Instance);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.ResolveLatestNexusAsync(GameDomain, ModId));
+
+        Assert.Contains($"mod {ModId}", ex.Message);
+    }
+
+    [Fact]
+    public async Task ResolveLatestNexusAsync_null_game_domain_throws()
+    {
+        var service = new ModAcquisitionService(
+            new FakeNexusClient(), new RecordingImportService(),
+            new SingleClientFactory(new HttpClient()),
+            NullLogger<ModAcquisitionService>.Instance);
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => service.ResolveLatestNexusAsync("", ModId));
+    }
+
+    [Fact]
+    public async Task AcquireFromNexusAsync_progress_total_is_null_without_content_length()
+    {
+        // A response without Content-Length (chunked) reports a null total;
+        // the caller renders indeterminate progress. No HEAD call is made.
+        var nexus = new FakeNexusClient
+        {
+            DownloadLinks = ParseLinks(DownloadLinksJson),
+            ModInfoResponse = () => Ok(ParseInfo(ModInfoJson)),
+            ModFilesResponse = ParseFiles(ModFilesJson),
+        };
+        var payload = new byte[] { 1, 2, 3, 4 };
+        var handler = new StubHttpMessageHandler(_ =>
+        {
+            var content = new ByteArrayContent(payload);
+            content.Headers.ContentLength = null;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+        });
+        var service = new ModAcquisitionService(
+            nexus, new RecordingImportService(), new SingleClientFactory(new HttpClient(handler)),
+            NullLogger<ModAcquisitionService>.Instance);
+
+        var progress = new CapturingProgress();
+        await service.AcquireFromNexusAsync(GameDomain, ModId, FileId, progress: progress);
+
+        Assert.NotEmpty(progress.Reports);
+        Assert.All(progress.Reports, r => Assert.Null(r.Total));
+        Assert.Equal((long)payload.Length, progress.Reports[^1].Received);
     }
 
     // ---- display-metadata capture (no extra Nexus call) -------------------
@@ -736,7 +900,10 @@ public sealed class ModAcquisitionServiceTests
 
         var result = await service.AcquireLatestNexusAsync(GameDomain, ModId);
 
-        Assert.Equal(import.NextResult, result);
+        Assert.Equal(import.NextResult.ContainerId, result.ContainerId);
+        Assert.Equal(import.NextResult.VersionId, result.VersionId);
+        // The acquired file is the newest MAIN by construction.
+        Assert.True(result.IsHeadFile);
         // The premium overload was used (no nxm key/expires forwarded).
         Assert.True(nexus.PremiumDownloadLinksCalled);
         Assert.Null(nexus.FreeUserDownloadLinksKey);
@@ -959,12 +1126,12 @@ public sealed class ModAcquisitionServiceTests
 
     /// <summary>
     /// An <see cref="IProgress{T}"/> that captures reports synchronously for
-    /// deterministic assertions.
+    /// deterministic assertions (cumulative bytes + the response total).
     /// </summary>
-    private sealed class CapturingProgress : IProgress<long>
+    private sealed class CapturingProgress : IProgress<(long Received, long? Total)>
     {
-        public List<long> Reports { get; } = new();
-        public void Report(long value) => Reports.Add(value);
+        public List<(long Received, long? Total)> Reports { get; } = new();
+        public void Report((long Received, long? Total) value) => Reports.Add(value);
     }
 
     /// <summary>

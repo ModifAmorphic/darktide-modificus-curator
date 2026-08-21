@@ -1083,6 +1083,13 @@ internal sealed class FakeUpdateStateStore : IUpdateStateStore
     /// <summary>The per-container acknowledge calls (profileId, containerId).</summary>
     public IReadOnlyList<(Guid ProfileId, Guid ContainerId)> AcknowledgeCalls { get; } = new List<(Guid, Guid)>();
 
+    /// <summary>
+    /// When set, <see cref="AcknowledgeInstall"/> throws this exception after
+    /// recording the call, simulating a persistence failure (the acknowledging
+    /// caller must log + continue, never block the completion).
+    /// </summary>
+    public Exception? AcknowledgeThrows { get; set; }
+
     public void RecordResult(Guid profileId, UpdateCheckResult result)
     {
         ((List<(Guid, UpdateCheckResult)>)RecordCalls).Add((profileId, result));
@@ -1100,6 +1107,10 @@ internal sealed class FakeUpdateStateStore : IUpdateStateStore
     public void AcknowledgeInstall(Guid profileId, Guid containerId)
     {
         ((List<(Guid, Guid)>)AcknowledgeCalls).Add((profileId, containerId));
+        if (AcknowledgeThrows is not null)
+        {
+            throw AcknowledgeThrows;
+        }
         if (_flagged.TryGetValue(profileId, out var set))
         {
             set.Remove(containerId);
@@ -2135,6 +2146,25 @@ internal sealed class FakeConfigLoader : IConfigLoader
 }
 
 /// <summary>
+/// A counting <see cref="IModListRefresh"/> double: records Reload calls via
+/// the optional callback so a test can assert a writer reloaded the list.
+/// </summary>
+internal sealed class RefreshRecorder : IModListRefresh
+{
+    private readonly Action? _onReload;
+
+    public RefreshRecorder(Action? onReload = null) => _onReload = onReload;
+
+    public int Reloads { get; private set; }
+
+    public void Reload()
+    {
+        Reloads++;
+        _onReload?.Invoke();
+    }
+}
+
+/// <summary>
 /// Configurable <see cref="IUpdateCheckService"/> shared by the runner tests
 /// (call recording) + the mod-list VM tests (settable LastResult +
 /// <see cref="RaiseCheckCompleted"/>). <see cref="CheckAsync"/> records the
@@ -2291,34 +2321,39 @@ internal sealed class FakeUpdateCheckService : IUpdateCheckService
 
 /// <summary>
 /// Recording <see cref="IModAcquisitionService"/> for the mod-list VM tests.
-/// Captures each <see cref="AcquireLatestNexusAsync"/> call + optionally throws
-/// to simulate a failed update. The base <see cref="AcquireFromNexusAsync"/> is
-/// wired to the same recorder (tests assert on the unified call list).
+/// Captures each <see cref="IModAcquisitionService.AcquireLatestNexusAsync"/>
+/// call + optionally throws to simulate a failed update. The base
+/// <see cref="IModAcquisitionService.AcquireFromNexusAsync"/> is wired to the
+/// same recorder (tests assert on the unified call list).
 /// </summary>
 internal sealed class FakeModAcquisitionService : IModAcquisitionService
 {
     public List<(string GameDomain, int ModId)> LatestNexusCalls { get; } = new();
-    public (Guid ContainerId, string VersionId) NextResult { get; set; } =
-        (Guid.NewGuid(), Guid.NewGuid().ToString("N"));
+    public NexusAcquisitionResult NextResult { get; set; } =
+        new(Guid.NewGuid(), Guid.NewGuid().ToString("N"), "1.0", IsHeadFile: true);
     public Exception? ThrowNext { get; set; }
 
-    public Task<(Guid ContainerId, string VersionId)> AcquireFromNexusAsync(
+    public Task<NexusAcquisitionResult> AcquireFromNexusAsync(
         string gameDomain, int modId, int fileId,
         string? nxmKey = null, long? nxmExpires = null,
-        IProgress<long>? progress = null, CancellationToken ct = default) =>
+        IProgress<(long Received, long? Total)>? progress = null, CancellationToken ct = default) =>
         throw new NotImplementedException("AcquireFromNexusAsync is not exercised by the mod-list VM tests");
 
-    public Task<(Guid ContainerId, string VersionId)> AcquireLatestNexusAsync(
+    public Task<NexusAcquisitionResult> AcquireLatestNexusAsync(
         string gameDomain, int modId,
-        IProgress<long>? progress = null, CancellationToken ct = default)
+        IProgress<(long Received, long? Total)>? progress = null, CancellationToken ct = default)
     {
         LatestNexusCalls.Add((gameDomain, modId));
         if (ThrowNext is not null)
         {
-            return Task.FromException<(Guid, string)>(ThrowNext);
+            return Task.FromException<NexusAcquisitionResult>(ThrowNext);
         }
         return Task.FromResult(NextResult);
     }
+
+    public Task<(int FileId, string Version)> ResolveLatestNexusAsync(
+        string gameDomain, int modId, CancellationToken ct = default) =>
+        throw new NotImplementedException();
 }
 
 /// <summary>

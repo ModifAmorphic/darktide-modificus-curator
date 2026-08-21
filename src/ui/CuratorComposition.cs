@@ -79,27 +79,46 @@ public static class CuratorComposition
         // StartNxmServer).
         services.AddNxm();
 
+        // The serial Nexus download queue: one download at a time, FIFO, deduped
+        // by (game domain, mod id, file id). Application-lifetime singleton
+        // owning the per-item pipeline (dequeue-time auth re-check, repository
+        // hit check, acquisition with progress, per-purpose completion) and the
+        // observable item collection the download rows render from. Registered
+        // after AddNxm() and before the INxmModDownloadHandler override below
+        // (the handler takes it); like the handler, its factories resolve
+        // dependencies lazily at first use, so registrations that appear later
+        // in the collection (the Action<Action> marshal seam, IModListRefresh)
+        // are available by the time anything resolves.
+        services.AddSingleton<IModDownloadQueue>(sp => new ModDownloadQueue(
+            sp.GetRequiredService<IModAcquisitionService>(),
+            sp.GetRequiredService<IModRepository>(),
+            sp.GetRequiredService<IProfileService>(),
+            sp.GetRequiredService<IProfileSession>(),
+            sp.GetRequiredService<IUpdateStateStore>(),
+            sp.GetRequiredService<IConfigLoader>(),
+            sp.GetRequiredService<IModListRefresh>(),
+            sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<Action<Action>>(),
+            sp.GetRequiredService<ILogger<ModDownloadQueue>>()));
+
         // Replace the no-op INxmModDownloadHandler (registered inside AddNxm)
-        // with the real acquisition handler. MS DI resolves the LAST registration
-        // for an interface, so this AddSingleton supersedes the no-op. Registered
-        // with a factory that resolves its dependencies lazily at first use (the
-        // factory delegate is deferred until the handler is first resolved by the
-        // IPC router, by which point all dependencies including IProfileSession,
-        // IDialogService, and MainWindow are registered). It coordinates the
-        // acquisition service (Integrations) with the active-profile session,
-        // the profile service, and the UI-thread alert dialog, acknowledges the
-        // install through the update-state store, and reloads the list through
-        // the narrow IModListRefresh seam. Registered with a factory so the
-        // UI-thread marshaling seam (Dispatcher.UIThread.InvokeAsync) is wired
-        // explicitly.
+        // with the real enqueue adapter. MS DI resolves the LAST registration
+        // for an interface, so this AddSingleton supersedes the no-op. The
+        // handler gates each clicked nxm:// link (game domain, auth via live
+        // config, active profile; failures keep the modal-alert path since
+        // there is no row to host them), peeks the repository for a row name,
+        // enqueues onto the queue above, and returns within milliseconds; the
+        // queue owns the acquisition, the profile registration, the
+        // acknowledge, and the reload. Registered with a factory that wires the
+        // UI-thread marshaling seam (Dispatcher.UIThread.InvokeAsync)
+        // explicitly for the gate alerts.
         services.AddSingleton<INxmModDownloadHandler>(sp => new NxmModDownloadHandler(
             invokeOnUi: action => Dispatcher.UIThread.InvokeAsync(action),
-            sp.GetRequiredService<IModAcquisitionService>(),
+            sp.GetRequiredService<IModDownloadQueue>(),
+            sp.GetRequiredService<IModRepository>(),
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IConfigLoader>(),
-            sp.GetRequiredService<IUpdateStateStore>(),
-            sp.GetRequiredService<IModListRefresh>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<ILogger<NxmModDownloadHandler>>()));

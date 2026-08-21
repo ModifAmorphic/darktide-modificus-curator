@@ -342,11 +342,11 @@ public sealed class DmfPromptService
         Guid containerId;
         try
         {
-            var (id, _) = await _dialogs.ShowProgressAsync(
+            var result = await _dialogs.ShowProgressAsync(
                 _localization["Dmf_Downloading"],
                 _localization["Dmf_DownloadingMessage"],
                 () => _acquisition.AcquireLatestNexusAsync(NexusGameIdentity.DarktideDomain, DmfModId));
-            containerId = id;
+            containerId = result.ContainerId;
         }
         catch (Exception ex)
         {

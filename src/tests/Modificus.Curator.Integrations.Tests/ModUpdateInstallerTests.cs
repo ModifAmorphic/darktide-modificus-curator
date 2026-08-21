@@ -263,23 +263,27 @@ public sealed class ModUpdateInstallerTests
         public List<(string GameDomain, int ModId)> LatestCalls { get; } = new();
         public Exception? ThrowNext { get; set; }
 
-        public Task<(Guid ContainerId, string VersionId)> AcquireFromNexusAsync(
+        public Task<NexusAcquisitionResult> AcquireFromNexusAsync(
             string gameDomain, int modId, int fileId,
             string? nxmKey = null, long? nxmExpires = null,
-            IProgress<long>? progress = null, CancellationToken ct = default) =>
+            IProgress<(long Received, long? Total)>? progress = null, CancellationToken ct = default) =>
             throw new NotImplementedException();
 
-        public Task<(Guid ContainerId, string VersionId)> AcquireLatestNexusAsync(
+        public Task<NexusAcquisitionResult> AcquireLatestNexusAsync(
             string gameDomain, int modId,
-            IProgress<long>? progress = null, CancellationToken ct = default)
+            IProgress<(long Received, long? Total)>? progress = null, CancellationToken ct = default)
         {
             LatestCalls.Add((gameDomain, modId));
             if (ThrowNext is not null)
             {
-                return Task.FromException<(Guid, string)>(ThrowNext);
+                return Task.FromException<NexusAcquisitionResult>(ThrowNext);
             }
-            return Task.FromResult((Guid.NewGuid(), "v"));
+            return Task.FromResult(new NexusAcquisitionResult(Guid.NewGuid(), "v", "1.0", IsHeadFile: true));
         }
+
+        public Task<(int FileId, string Version)> ResolveLatestNexusAsync(
+            string gameDomain, int modId, CancellationToken ct = default) =>
+            throw new NotImplementedException();
     }
 
     /// <summary>

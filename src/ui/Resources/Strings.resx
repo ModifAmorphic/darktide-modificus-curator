@@ -1208,6 +1208,25 @@
     <value>Download failed</value>
     <comment>Title of the alert shown when an nxm:// download or its profile registration fails.</comment>
   </data>
+  <data name="Nxm_ModNameFallback" xml:space="preserve">
+    <value>Nexus mod #{0}</value>
+    <comment>The display name for an nxm download whose mod is not yet in the repository. {0} is the Nexus mod id.</comment>
+  </data>
+
+  <!-- ============================================================ -->
+  <!-- NXM download queue (ModDownloadQueue)                         -->
+  <!-- (the serial download coordinator; inline failure messages     -->
+  <!--  rendered on the download row)                                -->
+  <!-- ============================================================ -->
+
+  <data name="ModDownloadQueue_SignedOutMessage" xml:space="preserve">
+    <value>Nexus sign-in was cleared before this download started.</value>
+    <comment>Inline failure on a download row: the user signed out of Nexus between the click and the download's turn.</comment>
+  </data>
+  <data name="ModDownloadQueue_ProfileDeletedMessage" xml:space="preserve">
+    <value>The profile this download was for no longer exists.</value>
+    <comment>Inline failure on a download row: the target profile was deleted before the download completed.</comment>
+  </data>
 
   <!-- ============================================================ -->
   <!-- First-run Welcome onboarding                                 -->
