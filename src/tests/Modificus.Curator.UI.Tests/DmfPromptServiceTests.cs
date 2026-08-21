@@ -12,17 +12,18 @@ namespace Modificus.Curator.UI.Tests;
 
 /// <summary>
 /// Behaviors of the <see cref="DmfPromptService"/>: the two DMF cases (add
-/// existing / download + add or browser-open), the new-profile trigger, the
-/// decline path, the deferred-prompt guarantee (the prompt does not fire from
-/// inside the event handler; it waits for the shell's modal queue to drain on
-/// the next real navigation into Mods), and the drained entry's post-prompt
-/// mod-list reload.
+/// existing / enqueued premium download or browser-open), the new-profile
+/// trigger, the decline path, the deferred-prompt guarantee (the prompt does
+/// not fire from inside the event handler; it waits for the shell's modal
+/// queue to drain on the next real navigation into Mods), and the drained
+/// entry's post-prompt mod-list reload.
 /// </summary>
 /// <remarks>
 /// All against the hand-rolled fakes in <see cref="TestDoubles"/>: the
 /// <c>FakeProfileService</c> raises <c>ProfileCreated</c> from
-/// <c>CreateProfile</c>; the <c>FakeDialogService</c> records every call +
-/// drives the <c>ShowProgressAsync</c> work to completion.
+/// <c>CreateProfile</c>; the <c>FakeDialogService</c> records every call. The
+/// premium branch's downstream surface (the enqueue) is asserted through the
+/// <see cref="RecordingDownloadQueue"/> double.
 /// </remarks>
 public sealed class DmfPromptServiceTests
 {
@@ -44,8 +45,8 @@ public sealed class DmfPromptServiceTests
     /// non-gaming session (the ordinary desktop flow).</param>
     private static (DmfPromptService Service, ShellModalQueue Queue, RefreshRecorder Refresh,
         FakeProfileService Profiles, FakeProfileSession Session,
-        FakeModRepository Repo, FakeModAcquisitionService Acquisition, FakeNexusAuthService Auth,
-        FakeDialogService Dialogs) Build(
+        FakeModRepository Repo, FakeModAcquisitionService Acquisition, RecordingDownloadQueue Downloads,
+        FakeNexusAuthService Auth, FakeDialogService Dialogs) Build(
             FakeProfileService? profiles = null,
             FakeProfileSession? session = null,
             FakeModRepository? repo = null,
@@ -70,14 +71,15 @@ public sealed class DmfPromptServiceTests
         launcher ??= new FakeExternalLauncher();
         var queue = new ShellModalQueue();
         var refresh = new RefreshRecorder();
+        var downloads = new RecordingDownloadQueue();
         var service = new DmfPromptService(
-            profiles, session, repo, acquisition, auth, dialogs,
+            profiles, session, repo, acquisition, downloads, auth, dialogs,
             Localization, NullLogger<DmfPromptService>.Instance, nxmRegistration,
             gamingMode,
             launcher,
             queue,
             refresh);
-        return (service, queue, refresh, profiles, session, repo, acquisition, auth, dialogs);
+        return (service, queue, refresh, profiles, session, repo, acquisition, downloads, auth, dialogs);
     }
 
     /// <summary>
@@ -101,7 +103,7 @@ public sealed class DmfPromptServiceTests
 
         // Build the coordinator FIRST so its ProfileCreated subscription is in
         // place, then drive the create (which fires the signal), then process.
-        var (service, queue, _, _, _, _, _, _, _) =
+        var (service, queue, _, _, _, _, _, _, _, _) =
             Build(profiles, session, repo, dialogs: dialogs);
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
@@ -125,7 +127,7 @@ public sealed class DmfPromptServiceTests
         repo.Seed(new NexusSource { ModId = DmfPromptService.DmfModId }, "DMF", "1.0");
         var dialogs = new FakeDialogService { ConfirmResult = false }; // user says No
 
-        var (service, queue, _, _, _, _, _, _, _) = Build(profiles, session, repo, dialogs: dialogs);
+        var (service, queue, _, _, _, _, _, _, _, _) = Build(profiles, session, repo, dialogs: dialogs);
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
         session.ActiveProfileId = created.Id;
@@ -136,16 +138,19 @@ public sealed class DmfPromptServiceTests
         Assert.Empty(profiles.AddModCalls); // nothing added
     }
 
-    // ---- case 2: DMF not in repo, premium -> in-app download + add ---------
+    // ---- case 2: DMF not in repo, premium -> enqueued download -------------
 
     [Fact]
-    public async Task NewProfile_case2_premium_user_uses_in_app_download()
+    public async Task NewProfile_case2_premium_user_enqueues_the_download()
     {
-        // Premium users get the in-app API download (not the browser-open path).
+        // Premium users get the download enqueued onto the shared queue (not
+        // the browser-open path, not a modal spinner): the head file is
+        // resolved first, then exactly one ProfileAdd item targets the new
+        // profile; the queue's completion owns the add + reload.
         var profiles = TestDoubles.Profiles();
         var session = new FakeProfileSession(() => profiles.ListProfiles());
         var repo = new FakeModRepository(); // no DMF
-        var acquisition = new FakeModAcquisitionService();
+        var acquisition = new FakeModAcquisitionService { NextResolve = (5820, "1.1") };
         var auth = new FakeNexusAuthService
         {
             State = new NexusAuthState(NexusAuthMethod.OAuth, "premium", IsPremium: true),
@@ -153,7 +158,7 @@ public sealed class DmfPromptServiceTests
         var dialogs = new FakeDialogService(); // ConfirmResult default = true
 
         var launchedUris = new List<Uri>();
-        var (service, queue, _, _, _, _, _, _, _) =
+        var (service, queue, _, _, _, _, _, downloads, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs,
                 launcher: NewRecordingSpy(launchedUris));
 
@@ -164,26 +169,41 @@ public sealed class DmfPromptServiceTests
 
         // Confirm fired (the download confirm).
         Assert.Equal(1, dialogs.ConfirmCalls);
-        // Premium -> in-app API download (not the browser-open path).
+        // Premium -> enqueue (not the browser-open path).
         Assert.Empty(launchedUris);
-        var acquireCall = Assert.Single(acquisition.LatestNexusCalls);
-        Assert.Equal(DmfPromptService.DmfModId, acquireCall.ModId);
-        Assert.Equal("warhammer40kdarktide", acquireCall.GameDomain);
-        Assert.Single(dialogs.ProgressCalls);
-        var add = Assert.Single(profiles.AddModCalls);
-        Assert.Equal(created.Id, add.Id);
-        Assert.Equal(acquisition.NextResult.ContainerId, add.ContainerId);
+        // The head file was resolved once (one listing call, no download).
+        var resolve = Assert.Single(acquisition.ResolveLatestCalls);
+        Assert.Equal(DmfPromptService.DmfModId, resolve.ModId);
+        Assert.Equal("warhammer40kdarktide", resolve.GameDomain);
+        // Exactly one ProfileAdd request carrying the resolved file + the
+        // just-created active profile; no nxm key (the auth-only premium path).
+        var request = Assert.Single(downloads.Requests);
+        Assert.Equal("warhammer40kdarktide", request.GameDomain);
+        Assert.Equal(DmfPromptService.DmfModId, request.ModId);
+        Assert.Equal(5820, request.FileId);
+        Assert.Equal(DownloadPurpose.ProfileAdd, request.Purpose);
+        Assert.Null(request.ContainerId);
+        Assert.Null(request.NxmKey);
+        Assert.Null(request.ExpectedVersion);
+        Assert.Equal(created.Id, request.TargetProfileId);
+        Assert.Equal("New", request.TargetProfileName);
+        Assert.Equal("Darktide Mod Framework", request.DisplayName);
+        // No direct acquisition call, no spinner, no prompt-owned add: the
+        // queue's completion owns those.
+        Assert.Empty(acquisition.LatestNexusCalls);
+        Assert.Empty(dialogs.ProgressCalls);
+        Assert.Empty(profiles.AddModCalls);
     }
 
     [Fact]
-    public async Task NewProfile_case2_download_failure_alerts_and_does_not_add()
+    public async Task NewProfile_case2_resolve_failure_alerts_and_enqueues_nothing()
     {
         var profiles = TestDoubles.Profiles();
         var session = new FakeProfileSession(() => profiles.ListProfiles());
         var repo = new FakeModRepository(); // no DMF
         var acquisition = new FakeModAcquisitionService
         {
-            ThrowNext = new InvalidOperationException("boom"),
+            ThrowOnResolve = new InvalidOperationException("boom"),
         };
         var auth = new FakeNexusAuthService
         {
@@ -191,7 +211,7 @@ public sealed class DmfPromptServiceTests
         };
         var dialogs = new FakeDialogService();
 
-        var (service, queue, _, _, _, _, _, _, _) =
+        var (service, queue, _, _, _, _, _, downloads, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs);
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
@@ -199,13 +219,16 @@ public sealed class DmfPromptServiceTests
 
         await queue.DrainAsync(ShellDestination.Mods);
 
-        // The download confirm fired + the user accepted.
+        // The download confirm fired + the user accepted; the resolve was
+        // attempted + failed (API down, no MAIN files).
         Assert.Equal(1, dialogs.ConfirmCalls);
-        // The acquisition was attempted.
-        Assert.Single(acquisition.LatestNexusCalls);
-        // A failure alert was shown.
-        Assert.Single(dialogs.AlertCalls);
-        // No AddMod: the download did not succeed.
+        Assert.Single(acquisition.ResolveLatestCalls);
+        // The same localized failure alert the in-flight download failure used.
+        var alert = Assert.Single(dialogs.AlertCalls);
+        Assert.Equal(Localization["Dmf_DownloadFailedTitle"], alert.Title);
+        Assert.Equal(Localization.Format("Dmf_DownloadFailedMessage", "boom"), alert.Message);
+        // Nothing was enqueued (no row exists to host the failure) + no add.
+        Assert.Empty(downloads.Requests);
         Assert.Empty(profiles.AddModCalls);
     }
 
@@ -223,7 +246,7 @@ public sealed class DmfPromptServiceTests
         var dialogs = new FakeDialogService { ConfirmResult = false }; // user says No
 
         var launchedUris = new List<Uri>();
-        var (service, queue, _, _, _, _, _, _, _) =
+        var (service, queue, _, _, _, _, _, downloads, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs,
                 launcher: NewRecordingSpy(launchedUris));
 
@@ -235,6 +258,9 @@ public sealed class DmfPromptServiceTests
         Assert.Equal(1, dialogs.ConfirmCalls);
         Assert.Empty(acquisition.LatestNexusCalls);
         Assert.Empty(profiles.AddModCalls);
+        // Decline resolves nothing + enqueues nothing.
+        Assert.Empty(acquisition.ResolveLatestCalls);
+        Assert.Empty(downloads.Requests);
         // Decline opens no browser + shows no alert.
         Assert.Empty(launchedUris);
         Assert.Empty(dialogs.AlertCalls);
@@ -264,7 +290,7 @@ public sealed class DmfPromptServiceTests
         var nxmRegistration = new FakeNxmRegistrationState { IsAvailable = true, IsRegistered = true };
 
         var launchedUris = new List<Uri>();
-        var (service, queue, _, _, _, _, _, _, _) =
+        var (service, queue, _, _, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs, nxmRegistration,
                 launcher: NewRecordingSpy(launchedUris));
 
@@ -307,7 +333,7 @@ public sealed class DmfPromptServiceTests
         var nxmRegistration = new FakeNxmRegistrationState { IsAvailable = true, IsRegistered = true };
 
         var launchedUris = new List<Uri>();
-        var (service, queue, _, _, _, _, _, _, _) =
+        var (service, queue, _, _, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs, nxmRegistration,
                 launcher: NewRecordingSpy(launchedUris));
 
@@ -341,7 +367,7 @@ public sealed class DmfPromptServiceTests
         var nxmRegistration = new FakeNxmRegistrationState { IsAvailable = true, IsRegistered = false };
 
         var launchedUris = new List<Uri>();
-        var (service, queue, _, _, _, _, _, _, _) =
+        var (service, queue, _, _, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs, nxmRegistration,
                 launcher: NewRecordingSpy(launchedUris));
 
@@ -375,7 +401,7 @@ public sealed class DmfPromptServiceTests
         var dialogs = new FakeDialogService();
 
         var launchedUris = new List<Uri>();
-        var (service, queue, _, _, _, _, _, _, _) =
+        var (service, queue, _, _, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs,
                 launcher: NewRecordingSpy(launchedUris));
 
@@ -403,7 +429,7 @@ public sealed class DmfPromptServiceTests
         var dialogs = new FakeDialogService();
 
         var launchedUris = new List<Uri>();
-        var (service, queue, _, _, _, _, _, _, _) =
+        var (service, queue, _, _, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs,
                 launcher: NewRecordingSpy(launchedUris));
 
@@ -437,7 +463,7 @@ public sealed class DmfPromptServiceTests
 
         var failingLauncher = new FakeExternalLauncher { OpenUriResult = _ => false }; // shell-open failed
 
-        var (service, queue, _, _, _, _, _, _, _) =
+        var (service, queue, _, _, _, _, _, _, _, _) =
             Build(profiles, session, repo, acquisition, auth, dialogs, nxmRegistration,
                 launcher: failingLauncher);
 
@@ -461,10 +487,12 @@ public sealed class DmfPromptServiceTests
     /// <summary>
     /// Drives the case-2 prompt once (DMF not in the repo, new active profile)
     /// under the supplied Gaming Mode + auth states, returning the fakes the
-    /// guidance assertions read.
+    /// guidance assertions read (plus the created profile + the download
+    /// queue for the premium branch's enqueue asserts).
     /// </summary>
     private static async Task<(FakeDialogService Dialogs, FakeModAcquisitionService Acquisition,
-        FakeProfileService Profiles, List<Uri> Launched)> RunCase2Async(
+        FakeProfileService Profiles, List<Uri> Launched, RecordingDownloadQueue Downloads,
+        Profile Created)> RunCase2Async(
             FakeNexusAuthService auth, GamingModeState gamingMode)
     {
         var profiles = TestDoubles.Profiles();
@@ -474,7 +502,7 @@ public sealed class DmfPromptServiceTests
         var dialogs = new FakeDialogService();
         var launched = new List<Uri>();
 
-        var (service, queue, _, _, _, _, _, _, _) = Build(
+        var (service, queue, _, _, _, _, _, downloads, _, _) = Build(
             profiles, session, repo, acquisition, auth, dialogs,
             gamingMode: gamingMode,
             launcher: NewRecordingSpy(launched));
@@ -483,7 +511,7 @@ public sealed class DmfPromptServiceTests
         session.ActiveProfileId = created.Id;
 
         await queue.DrainAsync(ShellDestination.Mods);
-        return (dialogs, acquisition, profiles, launched);
+        return (dialogs, acquisition, profiles, launched, downloads, created);
     }
 
     [Fact]
@@ -494,7 +522,7 @@ public sealed class DmfPromptServiceTests
             State = new NexusAuthState(NexusAuthMethod.ApiKey, "free", IsPremium: false),
         };
 
-        var (dialogs, acquisition, profiles, launched) =
+        var (dialogs, acquisition, profiles, launched, _, _) =
             await RunCase2Async(auth, new GamingModeState(true));
 
         // An informational guidance alert (not a Yes/No confirm): there is no
@@ -520,7 +548,7 @@ public sealed class DmfPromptServiceTests
             State = new NexusAuthState(NexusAuthMethod.ApiKey, "name", IsPremium: null),
         };
 
-        var (dialogs, acquisition, _, launched) =
+        var (dialogs, acquisition, _, launched, _, _) =
             await RunCase2Async(auth, new GamingModeState(true));
 
         Assert.Equal(0, dialogs.ConfirmCalls);
@@ -536,7 +564,7 @@ public sealed class DmfPromptServiceTests
         // Not signed in at all (state null): same guidance as regular users.
         var auth = new FakeNexusAuthService { State = null };
 
-        var (dialogs, acquisition, _, launched) =
+        var (dialogs, acquisition, _, launched, _, _) =
             await RunCase2Async(auth, new GamingModeState(true));
 
         Assert.Equal(0, dialogs.ConfirmCalls);
@@ -547,28 +575,32 @@ public sealed class DmfPromptServiceTests
     }
 
     [Fact]
-    public async Task Gaming_case2_premium_user_keeps_the_in_app_download()
+    public async Task Gaming_case2_premium_user_keeps_the_enqueued_download()
     {
-        // The in-app API download works in Gaming Mode, so Premium users get
-        // the ordinary confirm + download flow there, with no guidance alert.
+        // The in-app download works in Gaming Mode, so Premium users get the
+        // ordinary confirm + enqueued download there, with no guidance alert.
         var auth = new FakeNexusAuthService
         {
             State = new NexusAuthState(NexusAuthMethod.OAuth, "premium", IsPremium: true),
         };
 
-        var (dialogs, acquisition, profiles, launched) =
+        var (dialogs, acquisition, profiles, launched, downloads, created) =
             await RunCase2Async(auth, new GamingModeState(true));
 
         // The ordinary download confirm fired and was accepted (the wording
         // still follows the shared last-known handler state, unchanged by the
         // gaming gate).
         Assert.Equal(1, dialogs.ConfirmCalls);
-        // The in-app download ran to completion + DMF was added.
-        var acquireCall = Assert.Single(acquisition.LatestNexusCalls);
-        Assert.Equal(DmfPromptService.DmfModId, acquireCall.ModId);
-        Assert.Single(dialogs.ProgressCalls);
-        var add = Assert.Single(profiles.AddModCalls);
-        Assert.Equal(acquisition.NextResult.ContainerId, add.ContainerId);
+        // The head file was resolved + the download enqueued for the new
+        // profile (the row owns progress from here; no browser is touched).
+        var resolve = Assert.Single(acquisition.ResolveLatestCalls);
+        Assert.Equal(DmfPromptService.DmfModId, resolve.ModId);
+        var request = Assert.Single(downloads.Requests);
+        Assert.Equal(DownloadPurpose.ProfileAdd, request.Purpose);
+        Assert.Equal(created.Id, request.TargetProfileId);
+        Assert.Empty(acquisition.LatestNexusCalls);
+        Assert.Empty(profiles.AddModCalls);
+        Assert.Empty(dialogs.ProgressCalls);
         // No browser, no guidance alert.
         Assert.Empty(launched);
         Assert.Empty(dialogs.AlertCalls);
@@ -585,7 +617,7 @@ public sealed class DmfPromptServiceTests
         var dmf = repo.Seed(new NexusSource { ModId = DmfPromptService.DmfModId }, "DMF", "1.0");
         var dialogs = new FakeDialogService();
 
-        var (service, queue, _, _, _, _, _, _, _) =
+        var (service, queue, _, _, _, _, _, _, _, _) =
             Build(profiles, session, repo, dialogs: dialogs,
                 gamingMode: new GamingModeState(true));
 
@@ -612,7 +644,7 @@ public sealed class DmfPromptServiceTests
         var dmf = repo.Seed(new NexusSource { ModId = DmfPromptService.DmfModId }, "DMF", "1.0");
         var dialogs = new FakeDialogService();
 
-        var (service, queue, _, _, _, _, _, _, _) =
+        var (service, queue, _, _, _, _, _, _, _, _) =
             Build(profiles, session, repo, dialogs: dialogs);
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());
@@ -647,7 +679,7 @@ public sealed class DmfPromptServiceTests
         var repo = new FakeModRepository();
         var dialogs = new FakeDialogService();
 
-        var (service, queue, _, _, _, _, _, _, _) =
+        var (service, queue, _, _, _, _, _, _, _, _) =
             Build(profiles, session, repo, dialogs: dialogs);
 
         // Create a new profile while running; the active id stays on `existing`.
@@ -671,7 +703,7 @@ public sealed class DmfPromptServiceTests
         var session = new FakeProfileSession(() => profiles.ListProfiles());
         var repo = new FakeModRepository();
         var dialogs = new FakeDialogService();
-        var (service, queue, _, _, _, _, _, _, _) =
+        var (service, queue, _, _, _, _, _, _, _, _) =
             Build(profiles, session, repo, dialogs: dialogs);
 
         // Simulate the create the Profiles page drives on Save.
@@ -687,7 +719,7 @@ public sealed class DmfPromptServiceTests
     [Fact]
     public async Task Drain_with_no_enqueued_prompt_is_a_noop()
     {
-        var (service, queue, refresh, _, _, _, _, _, dialogs) = Build();
+        var (service, queue, refresh, _, _, _, _, _, _, dialogs) = Build();
         await queue.DrainAsync(ShellDestination.Mods);
 
         // No trigger -> no prompt + no reload (nothing was drained).
@@ -706,7 +738,7 @@ public sealed class DmfPromptServiceTests
         var session = new FakeProfileSession(() => profiles.ListProfiles());
         var repo = new FakeModRepository();
         var dialogs = new FakeDialogService();
-        var (service, queue, refresh, _, _, _, _, _, _) =
+        var (service, queue, refresh, _, _, _, _, _, _, _) =
             Build(profiles, session, repo, dialogs: dialogs);
         // Seed DMF in the repo + in the (about-to-be-created) profile's list:
         // create the profile first, then add DMF to it.
@@ -731,7 +763,7 @@ public sealed class DmfPromptServiceTests
         var session = new FakeProfileSession(() => profiles.ListProfiles());
         var repo = new FakeModRepository();
         var dialogs = new FakeDialogService();
-        var (service, queue, _, _, _, _, _, _, _) =
+        var (service, queue, _, _, _, _, _, _, _, _) =
             Build(profiles, session, repo, dialogs: dialogs);
 
         var created = profiles.CreateProfile("New", string.Empty, new LaunchSettings());

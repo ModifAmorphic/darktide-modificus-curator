@@ -127,6 +127,52 @@ public sealed class PreferencesViewModelTests
     }
 
     [Fact]
+    public void Constructor_restores_external_mod_hosting_false_from_a_default_config()
+    {
+        // ExternalModHosting defaults to false (the standard game-dir hosting).
+        // The restore reads it straight from the loaded config's Preferences
+        // section + persists nothing.
+        var loader = new FakeConfigLoader { Config = CuratorConfig.CreateDefault() };
+
+        var vm = Build(loader: loader);
+
+        Assert.False(vm.ExternalModHosting);
+        Assert.Equal(0, loader.SaveCalls);
+    }
+
+    [Fact]
+    public void Constructor_restores_external_mod_hosting_true_from_the_config()
+    {
+        var config = CuratorConfig.CreateDefault();
+        config.Preferences.ExternalModHosting = true;
+
+        var vm = Build(config: config);
+
+        Assert.True(vm.ExternalModHosting);
+    }
+
+    [Fact]
+    public void Toggling_external_mod_hosting_persists_through_the_focused_read_modify_save()
+    {
+        // The toggle persists through its own read-modify-save (the density
+        // pattern), NOT through ApplyAndPersist: the launch path reads it
+        // live and it needs none of the apply steps.
+        var prefs = new FakePreferencesService();
+        var loader = new FakeConfigLoader { Config = CuratorConfig.CreateDefault() };
+        var vm = Build(prefs: prefs, loader: loader);
+
+        vm.ExternalModHosting = true;
+
+        Assert.Equal(1, loader.SaveCalls);
+        Assert.True(loader.Config.Preferences.ExternalModHosting);
+        // Sibling preferences survive the focused save (the whole live
+        // snapshot is written back).
+        Assert.NotNull(loader.LastSaved);
+        // The authority is untouched by this toggle.
+        Assert.Equal(0, prefs.ApplyCalls);
+    }
+
+    [Fact]
     public void Constructor_does_not_apply_during_the_initial_restore()
     {
         // Restoring the persisted values is a no-op apply: they already match the

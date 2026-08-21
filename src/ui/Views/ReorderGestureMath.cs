@@ -5,9 +5,12 @@ namespace Modificus.Curator.UI.Views;
 /// from <see cref="ModListView"/>'s code-behind so it is unit-testable without a
 /// real pointer pipeline. The non-obvious rules each method documents:
 /// the drag threshold is inclusive (an exact <see cref="DragThresholdDip"/>-DIP
-/// move engages; below stays a tap); the target rank excludes the source and all
-/// locked rows; the marker anchors before the target slot for an upward move and
-/// after it for a downward move; the edge auto-scroll clamps the offset to
+/// move engages; below stays a tap); the target rank excludes the source, all
+/// locked rows, and all rows hidden by the mod-list filter/search (the realized
+/// rows ARE the visible rows, so the gesture computes ranks in visible-unlocked
+/// space and the commit maps them onto the stored order); the marker anchors
+/// before the target slot for an upward move and after it for a downward move;
+/// the edge auto-scroll clamps the offset to
 /// <c>[0, scrollBarMaximum]</c>.
 /// </summary>
 internal static class ReorderGestureMath

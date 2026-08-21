@@ -12,8 +12,10 @@ namespace Modificus.Curator.Mods;
 /// repository-managed opaque version folder via
 /// <see cref="IModRepository.AddVersion"/>. Container dedup: Untracked by name,
 /// Nexus by mod id. Version dedup: re-importing the same version tag reuses its
-/// folder (refreshed); a new tag creates a new version + flips
-/// <see cref="ModVersion.IsLatest"/>.</para>
+/// folder (refreshed); a new tag creates a new version.
+/// <see cref="ModVersion.IsLatest"/> follows the repository's
+/// effective-timestamp key (see <see cref="IModRepository.AddVersion"/>), not
+/// import recency.</para>
 /// <para>
 /// <b>Source validation (both kinds):</b> the source must contain exactly one
 /// base directory with a <c>&lt;base&gt;.mod</c> descriptor inside it (the
@@ -79,6 +81,13 @@ public interface IModImportService
     /// manual imports (folder/archive via the picker or drag-and-drop) and
     /// non-Nexus sources. Forwarded to <see cref="IModRepository.AddVersion"/>
     /// as the version entry's <see cref="ModVersion.RemoteUploadedAt"/>.</param>
+    /// <param name="remoteFileId">Optional remote-source file id (the Nexus
+    /// file id) captured by the acquisition layer at download time and
+    /// forwarded to <see cref="IModRepository.AddVersion"/> as the version
+    /// entry's <see cref="ModVersion.FileId"/>. <c>null</c> for manual
+    /// imports + non-Nexus sources. Source-agnostic: Integrations owns the
+    /// Nexus metadata + passes it through; this seam does not know about
+    /// Nexus.</param>
     /// <param name="displayMetadata">Optional source-agnostic display metadata
     /// for the container, captured by the acquisition layer at download time
     /// and forwarded to <see cref="IModRepository.AddVersion"/>. A non-null
@@ -115,6 +124,7 @@ public interface IModImportService
         ModSource source,
         string version,
         DateTimeOffset? remoteUploadedAt = null,
+        int? remoteFileId = null,
         ModDisplayMetadata? displayMetadata = null);
 
     /// <summary>

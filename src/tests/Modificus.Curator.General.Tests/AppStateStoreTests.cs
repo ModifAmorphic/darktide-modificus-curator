@@ -1000,6 +1000,152 @@ public sealed class AppStateStoreTests
         }
     }
 
+    // ---- RenamedModsFolders (the game-dir takeover receipts) ---------------
+
+    [Fact]
+    public void RenamedModsFolders_is_null_when_file_is_missing()
+    {
+        var path = TempPath();
+        var store = new AppStateStore(path);
+
+        Assert.Null(store.RenamedModsFolders);
+    }
+
+    [Fact]
+    public void RenamedModsFolders_persists_and_round_trips_the_list()
+    {
+        var path = TempPath();
+        var stamp = new DateTimeOffset(2025, 7, 1, 12, 30, 0, TimeSpan.Zero);
+        var receipts = new[]
+        {
+            new RenamedModsFolder("/game/mods", "/game/mods_20250701-1230", stamp),
+        };
+        try
+        {
+            var store = new AppStateStore(path);
+
+            store.RenamedModsFolders = receipts;
+
+            Assert.True(File.Exists(path));
+            // A fresh instance over the same file reads the persisted list.
+            var reloaded = new AppStateStore(path).RenamedModsFolders;
+            Assert.NotNull(reloaded);
+            var entry = Assert.Single(reloaded);
+            Assert.Equal("/game/mods", entry.OriginalPath);
+            Assert.Equal("/game/mods_20250701-1230", entry.RenamedPath);
+            Assert.Equal(stamp, entry.RenamedAtUtc);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void Setting_null_clears_RenamedModsFolders()
+    {
+        var path = TempPath();
+        try
+        {
+            var store = new AppStateStore(path);
+            store.RenamedModsFolders = new[]
+            {
+                new RenamedModsFolder("/game/mods", "/game/mods_20250701-1230", DateTimeOffset.UtcNow),
+            };
+            store.RenamedModsFolders = null;
+
+            Assert.Null(new AppStateStore(path).RenamedModsFolders);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void Old_state_file_without_RenamedModsFolders_loads_null_for_the_new_field()
+    {
+        // First-run-after-upgrade: an existing app-state.json from before this
+        // field existed deserializes RenamedModsFolders as null (System.Text.Json
+        // default for an absent nullable member). Existing fields still read.
+        var path = TempPath();
+        try
+        {
+            var dir = System.IO.Path.GetDirectoryName(path)!;
+            Directory.CreateDirectory(dir);
+            var id = Guid.NewGuid();
+            File.WriteAllText(
+                path,
+                "{\"activeProfileId\":\"" + id + "\",\"lastUpdateCheckUtc\":\"2025-01-02T03:04:05+00:00\"}");
+
+            var store = new AppStateStore(path);
+
+            Assert.Null(store.RenamedModsFolders);
+            Assert.Equal(id, store.ActiveProfileId); // existing fields still read
+            Assert.NotNull(store.LastUpdateCheckUtc);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void Setting_RenamedModsFolders_preserves_every_sibling_field()
+    {
+        // The no-clobber guarantee now covers eight fields. Setting the
+        // receipts list must not wipe the others (the whole cached model is
+        // rewritten).
+        var path = TempPath();
+        var id = Guid.NewGuid();
+        var stamp = new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.Zero);
+        var window = new[] { stamp };
+        var known = new Dictionary<Guid, IReadOnlyList<KnownUpdateSnapshot>>
+        {
+            [id] = new[] { new KnownUpdateSnapshot(id, Guid.NewGuid(), 8, "1.0", stamp, null) },
+        };
+        var backfill = new DateTimeOffset(2025, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        var receipts = new[]
+        {
+            new RenamedModsFolder("/game/mods", "/game/mods_20250701-1230", stamp),
+        };
+        try
+        {
+            var store = new AppStateStore(path);
+            store.OnboardingCompleted = true;
+            store.ActiveProfileId = id;
+            store.LastUpdateCheckUtc = stamp;
+            store.ManualRefreshTimestamps = window;
+            store.KnownUpdates = known;
+            store.LastNexusMetadataBackfillUtc = backfill;
+            store.MainWindowState = new AppWindowState(1100.0, 700.0, false);
+
+            store.RenamedModsFolders = receipts; // must NOT wipe the others
+
+            Assert.True(store.OnboardingCompleted);
+            Assert.Equal(id, store.ActiveProfileId);
+            Assert.Equal(stamp, store.LastUpdateCheckUtc);
+            Assert.Equal(window, store.ManualRefreshTimestamps);
+            Assert.Equal(known, store.KnownUpdates);
+            Assert.Equal(backfill, store.LastNexusMetadataBackfillUtc);
+            Assert.NotNull(store.MainWindowState);
+            Assert.Equal(receipts, store.RenamedModsFolders);
+
+            // And on disk: a fresh instance sees all eight.
+            var reloaded = new AppStateStore(path);
+            Assert.True(reloaded.OnboardingCompleted);
+            Assert.Equal(id, reloaded.ActiveProfileId);
+            Assert.Equal(stamp, reloaded.LastUpdateCheckUtc);
+            Assert.Equal(backfill, reloaded.LastNexusMetadataBackfillUtc);
+            Assert.NotNull(reloaded.MainWindowState);
+            Assert.Equal(receipts, reloaded.RenamedModsFolders);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
     private static string TempPath() =>
         System.IO.Path.Combine(Path.GetTempPath(), "curator-state-" + Guid.NewGuid(), "app-state.json");
 

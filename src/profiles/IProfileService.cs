@@ -228,6 +228,14 @@ public interface IProfileService
     ModListEntry? GetBaseNameCollision(Guid id, string baseName, Guid? excludeContainerId);
 
     /// <summary>
+    /// The profiles' base folder (the live <c>ProfilesBaseFolder</c> from
+    /// config), ensured to exist. A focused read for consumers that need the
+    /// root as an ownership prefix: a staging link whose target lies under this
+    /// folder is Curator's even when the target is currently missing.
+    /// </summary>
+    string ProfilesRoot { get; }
+
+    /// <summary>
     /// The profile's launch settings (environment variables + game arguments).
     /// A focused read (no full profile + mod-list load) used by the launch path;
     /// the hosted Profiles page edits launch settings through the atomic
@@ -237,11 +245,32 @@ public interface IProfileService
     LaunchSettings GetLaunchSettings(Guid id);
 
     /// <summary>
+    /// The profile's enabled alternate mod manager, when one exists: the enabled
+    /// mod whose resolved staging target is a <c>base</c> folder containing
+    /// <c>mod_manager.lua</c>, with the staged path of that manager file.
+    /// </summary>
+    /// <remarks>
+    /// Derivation shares the staging resolver, so the answer matches what
+    /// <see cref="PrepareModRoot"/> stages. Detection is content-based and
+    /// manager-agnostic (the Darktide Mod Loader family convention); a manager
+    /// whose <c>mod_manager.lua</c> is absent from the resolved target yields
+    /// <c>null</c>, not a path. <c>ManagerPath</c> points inside the
+    /// staged tree, which exists once <see cref="PrepareModRoot"/> has run (the
+    /// launch path's calling order). The mod-list UI reads the same result for
+    /// its manager banner so the two can never disagree.
+    /// </remarks>
+    /// <exception cref="KeyNotFoundException"><paramref name="id"/> is unknown.</exception>
+    ActiveModManager? GetActiveModManager(Guid id);
+
+    /// <summary>
     /// Regenerates the profile's staged mod root (the <c>--mod-path</c>) from the
     /// current per-mod version resolution, and writes <c>mods.lst</c> from the
     /// successfully-staged enabled mods in <see cref="ModListEntry.Order"/>.
-    /// Idempotent (each call clears + rebuilds <c>staged/</c>). Returns the
-    /// <c>--mod-path</c> to pass to the Relay launcher.
+    /// Idempotent (each call clears + rebuilds <c>staged/</c>). Also rewrites
+    /// the staging ownership marker (<c>.curator.json</c>: schema, profile id +
+    /// name, projection timestamp) into the staged <c>mods/</c> on every pass,
+    /// so a game-dir hosting link aimed at this tree can prove Curator owns it.
+    /// Returns the <c>--mod-path</c> to pass to the Relay launcher.
     /// </summary>
     /// <remarks>
     /// Staging links, not copies (the repository holds the files). A staging-link

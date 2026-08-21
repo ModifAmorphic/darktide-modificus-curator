@@ -12,15 +12,17 @@
         WindowStartupLocation="CenterOwner">
 
   <!--
-    A modal spinner shown while a short async operation (the DMF download) is in
-    flight. The message is set once before the dialog is shown and does not
-    change, so SizeToContent="Height" (honored at show time in Avalonia 12.x)
-    sizes the window to its content at the current font scale. There are no
-    buttons: the DialogService closes the window from the work's continuation
-    (the user cannot cancel a DMF download mid-flight; a partial archive is
-    useless + the import would fail). The drawn title bar's close button is
-    hidden by DialogTitleBar.ShowClose="false" so the user cannot dismiss the
-    spinner while the work is running.
+    A modal spinner shown while a short async operation is in flight (the app
+    self-update download; mod downloads render as rows on the mod list instead,
+    through the download queue). The message is set once before the dialog is
+    shown and does not change, so SizeToContent="Height" (honored at show time
+    in Avalonia 12.x) sizes the window to its content at the current font
+    scale. There are no buttons: the DialogService closes the window from the
+    work's continuation (the work cannot be cancelled mid-flight; a partial
+    result is useless). The drawn title bar's close button is hidden by
+    DialogTitleBar.ShowClose="false" so the user cannot dismiss the spinner
+    while the work is running. The window title reuses the Dmf_Downloading
+    string (the dialog predates its generalization).
   -->
   <Border BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
           BorderThickness="1">

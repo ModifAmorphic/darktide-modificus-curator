@@ -54,13 +54,13 @@ internal sealed class ModAcquisitionService : IModAcquisitionService
     }
 
     /// <inheritdoc />
-    public async Task<(Guid ContainerId, string VersionId)> AcquireFromNexusAsync(
+    public async Task<NexusAcquisitionResult> AcquireFromNexusAsync(
         string gameDomain,
         int modId,
         int fileId,
         string? nxmKey = null,
         long? nxmExpires = null,
-        IProgress<long>? progress = null,
+        IProgress<(long Received, long? Total)>? progress = null,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(gameDomain);
@@ -72,16 +72,16 @@ internal sealed class ModAcquisitionService : IModAcquisitionService
             .ConfigureAwait(false);
 
         // 2. Resolve metadata (name + version + the file's remote-publish
-        //    timestamp + the display metadata). No degraded fallback: a failure
-        //    here surfaces as a clear error and nothing partial lands. The
-        //    publish timestamp is recorded on the imported version so the
-        //    update check compares publish dates (the imported file vs the
-        //    latest file), NOT Curator's import date (which would always be
-        //    newer than any past upload and so mask an outdated install). The
-        //    display metadata (summary, thumbnail, adult flag) comes from the
-        //    same GetModInfoAsync call the name did, so persisting it adds no
-        //    Nexus request.
-        var (modName, version, remoteUploadedAt, displayMetadata) =
+        //    timestamp + the display metadata + whether the file is the head
+        //    release). No degraded fallback: a failure here surfaces as a clear
+        //    error and nothing partial lands. The publish timestamp is recorded
+        //    on the imported version so the update check compares publish dates
+        //    (the imported file vs the latest file), NOT Curator's import date
+        //    (which would always be newer than any past upload and so mask an
+        //    outdated install). The display metadata (summary, thumbnail, adult
+        //    flag) comes from the same GetModInfoAsync call the name did, so
+        //    persisting it adds no Nexus request.
+        var (modName, version, remoteUploadedAt, displayMetadata, isHeadFile) =
             await ResolveMetadataAsync(gameDomain, modId, fileId, ct).ConfigureAwait(false);
 
         // 3. Download the archive to a temp file, then hand it to the import
@@ -103,9 +103,10 @@ internal sealed class ModAcquisitionService : IModAcquisitionService
                 "Acquired Nexus mod {Mod} file {File} ({Version}); importing.",
                 modId, fileId, version);
 
-            return _import.Import(
+            var (containerId, versionId) = _import.Import(
                 tempPath, modName, new NexusSource { ModId = modId }, version,
-                remoteUploadedAt, displayMetadata);
+                remoteUploadedAt, fileId, displayMetadata);
+            return new NexusAcquisitionResult(containerId, versionId, version, isHeadFile);
         }
         finally
         {
@@ -115,10 +116,35 @@ internal sealed class ModAcquisitionService : IModAcquisitionService
     }
 
     /// <inheritdoc />
-    public async Task<(Guid ContainerId, string VersionId)> AcquireLatestNexusAsync(
+    public async Task<NexusAcquisitionResult> AcquireLatestNexusAsync(
         string gameDomain,
         int modId,
-        IProgress<long>? progress = null,
+        IProgress<(long Received, long? Total)>? progress = null,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(gameDomain);
+
+        // One implementation of "the current release": the latest-file resolution
+        // lives in ResolveLatestNexusAsync (shared with the no-download resolve
+        // callers), so the two entry points cannot disagree on the head file.
+        // The acquisition's own ListModFilesAsync call inside
+        // AcquireFromNexusAsync re-fetches the same list (for the version string
+        // + publish timestamp); this call is the price of resolving the fileId
+        // from the mod id alone.
+        var (fileId, _) = await ResolveLatestNexusAsync(gameDomain, modId, ct).ConfigureAwait(false);
+
+        // Auth-only / premium download path: no nxm key or expiry. The caller
+        // gates on premium before invoking. The resolved id is an int here, so
+        // no narrowing is needed.
+        return await AcquireFromNexusAsync(
+            gameDomain, modId, fileId, nxmKey: null, nxmExpires: null, progress, ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<(int FileId, string Version)> ResolveLatestNexusAsync(
+        string gameDomain,
+        int modId,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(gameDomain);
@@ -126,12 +152,10 @@ internal sealed class ModAcquisitionService : IModAcquisitionService
         // List the mod's files, filter to MAIN / non-archived, and pick the
         // newest by upload timestamp. The category_id == 1 convention is
         // universal across Nexus games (MAIN); archived files are excluded so
-        // the update targets a current release, not a historical one the author
-        // has superseded. The acquisition's own ListModFilesAsync call below
-        // re-fetches the same list (for the version string + publish timestamp); this
-        // call is the price of resolving the fileId from the mod id alone.
-        // NexusModFiles.LatestMain is shared with the update-check thorough pass
-        // so both call sites agree on "latest MAIN release".
+        // the resolve targets a current release, not a historical one the
+        // author has superseded. NexusModFiles.LatestMain is shared with the
+        // update-check thorough pass + the acquisition metadata pass so every
+        // call site agrees on "latest MAIN release".
         var files = await _nexus.ListModFilesAsync(gameDomain, modId, ct).ConfigureAwait(false);
         var latest = NexusModFiles.LatestMain(files.Data);
 
@@ -141,14 +165,10 @@ internal sealed class ModAcquisitionService : IModAcquisitionService
                 $"Nexus mod {modId} has no MAIN file available (all files are optional, archived, or absent).");
         }
 
-        // Auth-only / premium download path: no nxm key or expiry. The caller
-        // (the per-mod update button) gates on premium before invoking. The
-        // ModFile.FileId is long in the v1 response shape; Nexus file ids fit
-        // comfortably in int (every other call site treats them as int), so the
-        // narrowing cast is safe + matches the established assumption.
-        return await AcquireFromNexusAsync(
-            gameDomain, modId, (int)latest.FileId, nxmKey: null, nxmExpires: null, progress, ct)
-            .ConfigureAwait(false);
+        // The ModFile.FileId is long in the v1 response shape; Nexus file ids
+        // fit comfortably in int (every other call site treats them as int), so
+        // the narrowing cast is safe + matches the established assumption.
+        return ((int)latest.FileId, latest.Version);
     }
 
     // ---- step 1: resolve the CDN download URI ------------------------------
@@ -181,7 +201,7 @@ internal sealed class ModAcquisitionService : IModAcquisitionService
 
     // ---- step 2: resolve name + version + display metadata ----------------
 
-    private async Task<(string Name, string Version, DateTimeOffset? RemoteUploadedAt, ModDisplayMetadata DisplayMetadata)> ResolveMetadataAsync(
+    private async Task<(string Name, string Version, DateTimeOffset? RemoteUploadedAt, ModDisplayMetadata DisplayMetadata, bool IsHeadFile)> ResolveMetadataAsync(
         string gameDomain, int modId, int fileId, CancellationToken ct)
     {
         var info = await _nexus.GetModInfoAsync(gameDomain, modId, ct).ConfigureAwait(false);
@@ -229,19 +249,25 @@ internal sealed class ModAcquisitionService : IModAcquisitionService
         // share it so the rules cannot drift.
         var displayMetadata = ModDisplayMetadataMapper.ToDisplayMetadata(info.Data!);
 
-        return (modName, version, remoteUploadedAt, displayMetadata);
+        // Head-ness from the same files listing the version came from: the
+        // acquired file is the head when it IS the newest non-archived MAIN
+        // entry. No extra API call.
+        var isHeadFile = NexusModFiles.LatestMain(files.Data)?.FileId == fileId;
+
+        return (modName, version, remoteUploadedAt, displayMetadata, isHeadFile);
     }
 
     // ---- step 3: stream the archive to disk --------------------------------
 
     /// <summary>
     /// Downloads <paramref name="uri"/> to <paramref name="destinationPath"/>
-    /// using an 81920-byte buffered copy. Reports cumulative bytes to
+    /// using an 81920-byte buffered copy. Reports cumulative bytes plus the
+    /// response <c>Content-Length</c> (when the server sent one) to
     /// <paramref name="progress"/> when provided.
     /// </summary>
     private static async Task DownloadToFileAsync(
         HttpClient http, Uri uri, string destinationPath,
-        IProgress<long>? progress, CancellationToken ct)
+        IProgress<(long Received, long? Total)>? progress, CancellationToken ct)
     {
         // ResponseHeadersRead so the network stream starts flowing before the
         // whole body is buffered; we copy it ourselves with a bounded buffer.
@@ -249,6 +275,7 @@ internal sealed class ModAcquisitionService : IModAcquisitionService
             .ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
+        var totalLength = response.Content.Headers.ContentLength;
         await using var network = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
         using var file = new FileStream(
             destinationPath,
@@ -262,11 +289,11 @@ internal sealed class ModAcquisitionService : IModAcquisitionService
         long total = 0;
         int read;
         while ((read = await network.ReadAsync(buffer.AsMemory(0, DownloadBufferSize), ct)
-            .ConfigureAwait(false)) > 0)
+                   .ConfigureAwait(false)) > 0)
         {
             await file.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
             total += read;
-            progress?.Report(total);
+            progress?.Report((total, totalLength));
         }
     }
 

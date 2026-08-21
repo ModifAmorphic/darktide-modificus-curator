@@ -30,13 +30,41 @@ expected conditions:
   launch that won't happen) -- `MissingDiscoveryFields` lists them. The
   per-platform required set comes from the active `IPlatformLaunchStrategy`.
 - Prepares the mod root (`IProfileService.PrepareModRoot(profileId)` -- writes
-  `mods.lst` and returns the `--mod-path`). A staging-link creation failure
+  `mods.lst` + the staging ownership marker and returns the staged root). A
+  staging-link creation failure
   (the raised built-in exception: `Win32Exception` from the junction path on
   Windows, `IOException` / `UnauthorizedAccessException` from the symlink path
   on Linux) is caught here and mapped to `StagingFailed`, carrying the
   exception's body on `Message` (the full exception is also logged). An unknown
   profile (`KeyNotFoundException` from PrepareModRoot) is caught and mapped to
   `Error`.
+- Derives the profile's enabled alternate mod manager
+  (`IProfileService.GetActiveModManager(profileId)` -- an enabled mod whose
+  resolved staging target is a `base` folder containing `mod_manager.lua`).
+  The derivation shares the staging resolver, so the answer matches what the
+  pass above staged; a non-null result becomes the `--mod-manager` value
+  (below), and `null` means Relay's built-in mod manager (no flag). The
+  derivation locates + verifies the manager in the staged tree; the launch
+  path projects the flag value onto the effective mod root at the hosting
+  point (the same root as `--mod-path`: the game dir under default hosting,
+  whose mods link resolves to the staged tree, and the staged root itself
+  under the external preference).
+- Hosts the staged tree in the game dir (the default) or applies the external
+  opt-out, both read live from the launch's config snapshot:
+  - **Game-dir hosting (the default):** derives `GAME_DIR` from the discovered
+    game binary (`dirname(dirname(binary))`, validated to exist) and runs
+    `IGameDirModsHost.EnsureHosting(GAME_DIR, stagedRoot)`. The `--mod-path`
+    handed to the strategy becomes `GAME_DIR` (Relay's contract is unchanged:
+    the parent of the `mods/` folder it consumes). A foreign entry at the
+    game-dir `mods` slot returns `GameDirConflict` before the spawn, carrying
+    the detected path on `Message` and the game dir on `GameDirPath`; nothing
+    was mutated, and the caller surfaces a consent prompt. A hosting-link
+    IO/Win32 failure is mapped to `Error` with the exception's message.
+  - **External hosting (`Preferences.ExternalModHosting = true`):** the
+    `--mod-path` is the staged root as before, plus a best-effort
+    `IGameDirModsHost.RemoveOwnedLink(GAME_DIR)` (a foreign entry is never
+    touched in this mode; a removal failure is logged, never thrown). With no
+    derivable game dir, the removal is skipped and the launch proceeds.
 - Reads the profile's launch settings (`IProfileService.GetLaunchSettings`) fresh
   on each launch + passes them to the strategy (environment merge + game-arg
   emission). No Relay version preflight: `--` + game args are emitted
@@ -54,11 +82,12 @@ expected conditions:
 ```csharp
 public sealed record LaunchResult(
     LaunchStatus Status,
-    string? Message,                         // populated for Error + StagingFailed
+    string? Message,                         // Error + StagingFailed (exception body); GameDirConflict (detected path)
     IReadOnlyList<string> MissingDiscoveryFields,  // populated only for DiscoveryIncomplete
-    Task? RelayExited = null);               // Launched only: completes when the spawned process exits
+    Task? RelayExited = null,                // Launched only: completes when the spawned process exits
+    string? GameDirPath = null);             // GameDirConflict only: the resolved game dir
 
-public enum LaunchStatus { Launched, DiscoveryIncomplete, StagingFailed, Error }
+public enum LaunchStatus { Launched, DiscoveryIncomplete, GameDirConflict, StagingFailed, Error }
 ```
 
 - `Launched` -- the launcher process was started; `RelayExited` completes when
@@ -68,11 +97,16 @@ public enum LaunchStatus { Launched, DiscoveryIncomplete, StagingFailed, Error }
   not tracked.
 - `DiscoveryIncomplete` -- discovery is missing required fields; the field names
   mirror `DiscoveryResult` properties so the UI can map them to a prompt.
+- `GameDirConflict` -- a foreign entry occupies the game-dir `mods` slot, so
+  hosting was not set up and the game was not launched. `Message` carries the
+  detected path (the caller's localized consent prompt interpolates it);
+  `GameDirPath` carries the game dir so the consented takeover needs no
+  re-derivation. No game-dir mutation happened.
 - `StagingFailed` -- the profile's mod root could not be prepared (a staging
   link could not be created). `Message` carries the raised exception's body (a
   runtime/OS error); the UI surfaces it after the localized framing.
-- `Error` -- unknown profile, missing runtime dir, or process-start failure; see
-  `Message`.
+- `Error` -- unknown profile, missing runtime dir, an underivable game dir,
+  game-dir hosting failure, or process-start failure; see `Message`.
 
 `MissingDiscoveryFields` is derived from the `DiscoveryResult` fields directly
 (Linux needs Steam + the game binary + compatdata + Proton; Windows needs only
@@ -80,16 +114,69 @@ the game binary), so it and `DiscoveryStatus` cannot diverge -- it is equivalent
 to `Status != Complete`. The per-platform required set is owned by the active
 `IPlatformLaunchStrategy` (`RequiredDiscoveryFields`).
 
+### `IGameDirModsHost`
+
+The one service that reads the game-dir `mods` ownership ladder and performs
+game-dir mutations. Some mods resolve game-directory-relative paths at runtime,
+so the default launch serves the staged tree under `<game>/mods` through a
+single self-identifying link (an NTFS junction on Windows, a symlink on Linux,
+both privilege-free, via the Profiles `StagingLinkCreator` primitive).
+
+```csharp
+public interface IGameDirModsHost
+{
+    GameDirHostingResult EnsureHosting(string gameDir, string stagedRoot);
+    string? TakeOver(string gameDir);
+    void RemoveOwnedLink(string gameDir);
+}
+```
+
+- **Ownership is decided by the marker, never the reparse point.** A link at
+  `<gameDir>/mods` is Curator's when either proof holds: the staging marker
+  (`.curator.json`, written by every `PrepareModRoot` pass) exists inside the
+  link's target, or the resolved target lies under the profiles root
+  (`IProfileService.ProfilesRoot`) -- the prefix rule keeps a dead link
+  Curator's after a data move. Reparse-ness alone proves nothing: a user may
+  have made their own junction or symlink.
+- `EnsureHosting` ladder: an absent slot creates the link silently; a
+  Curator-owned link is left in place (already pointing at
+  `<stagedRoot>/mods`) or silently re-pointed (delete + recreate of the link
+  only; the staged tree is never touched through the link); anything else (a
+  real directory, a real file, a user link to elsewhere, a dead link outside
+  Curator's space) is foreign and returned as
+  `GameDirHostingOutcome.Conflict` with the detected path -- nothing is
+  mutated. Link IO failures propagate as the raised built-in exceptions (the
+  launch service maps them to `Error`).
+- `TakeOver` performs the consented takeover of a foreign entry: rename to a
+  `mods_<yyyyMMdd-HHmm>` sibling (bumping a numeric suffix on collision), a
+  receipt recorded in the app-state (`IRenamedModsFoldersState`), then a
+  best-effort `README.txt` inside the renamed folder (folder case only)
+  explaining the move and that nothing was deleted (a README failure is
+  logged, never surfaced). Returns the renamed entry's full path (the shell's
+  rename notice carries it), or `null` when nothing was renamed (an absent or
+  already-owned slot).
+- `RemoveOwnedLink` is the external-hosting opt-out's cleanup: it removes a
+  Curator-owned link best-effort (an absent slot, a foreign entry, or an IO
+  failure leaves everything as it was; failures are logged, never thrown).
+
+The default implementation `GameDirModsHost` (public, registered from the
+composition root after `AddProfiles` supplies the link primitive and
+`AddGeneral` the receipts role) holds no per-call state; the profiles root is
+read live per ladder run.
+
 ### Injectable seams
 
 - `IPlatformLaunchStrategy` (internal) -- the per-platform launch surface:
   - `RequiredDiscoveryFields(discovery)` -- the discovery fields this platform
     requires but could not resolve (Windows: the game binary only; Linux: Steam +
     game binary + compatdata + Proton).
-  - `Start(launcherPath, discovery, gameBinary, modPath, logFile, launchSettings, createNoWindow) → ISpawnedProcess?`
+  - `Start(launcherPath, discovery, gameBinary, modPath, modManagerFile, logFile, launchSettings, createNoWindow) → ISpawnedProcess?`
     -- the spawn. Windows: a direct invocation of the launcher with native
     (untranslated) args; Linux: `<proton> run <launcher.exe> <args>` with both
     `STEAM_COMPAT_*` env vars and the path-valued flags `Z:\`-translated. The
+    `modManagerFile` parameter is the staged alternate-manager file (Relay's
+    `--mod-manager`), or `null` for Relay's built-in manager; verbatim on
+    Windows, `Z:\`-translated on Linux. The
     `launchSettings` parameter carries the profile's environment variables
     (merged into the spawn request) + game arguments (appended after the
     launcher's own flags as a bare `--` separator then one argv entry each).
@@ -198,7 +285,11 @@ so the precedence is unit-testable on any CI OS.
 native Windows paths. Args: `--game-binary`, `--mod-path`, `--log-file`
 (verbatim, untranslated; the value is Relay's own per-day log path
 `relay-<yyyyMMdd>.log` resolved at launch by `RelayLog` from the configured
-`Logging.RelayLogFile` stem); then an unconditional bare `--log-append` flag
+`Logging.RelayLogFile` stem); an optional `--mod-manager` pair immediately
+after the `--mod-path` value pair when the profile has an enabled alternate
+mod manager (the absolute projected manager path, verbatim; absent when
+there is none -- see the "Alternate mod manager" note under the launch-settings merge); then an
+unconditional bare `--log-append` flag
 (Relay writes a per-day file shared across launches, so it must append rather
 than overwrite each launch; no value, appended right after `--log-file`); then,
 when the profile's `EnableLuaLogs` toggle is on, a bare `--log-lua` flag (tees
@@ -226,11 +317,15 @@ Command: `<proton> run <launcher.exe> <args>`, where:
 - The `proton` command + the launcher.exe path are **native Linux paths**
   (Proton resolves the `.exe` from a native path).
 - The launcher's *own* path-valued flags (`--game-binary`, `--mod-path`,
-  `--log-file`) are **`Z:\`-translated** (the launcher runs under Wine and needs
-  Windows paths) -- including `--log-file`, otherwise the Relay shell log
-  couldn't be written where Curator expects. The `--log-file` value is Relay's
-  own per-day log path `relay-<yyyyMMdd>.log` (resolved at launch by `RelayLog`
-  from the configured `Logging.RelayLogFile` stem, then `Z:\`-translated). After
+  `--mod-manager` when present, `--log-file`) are **`Z:\`-translated** (the
+  launcher runs under Wine and needs Windows paths) -- including `--log-file`,
+  otherwise the Relay shell log couldn't be written where Curator expects. The
+  `--log-file` value is Relay's own per-day log path `relay-<yyyyMMdd>.log`
+  (resolved at launch by `RelayLog` from the configured
+  `Logging.RelayLogFile` stem, then `Z:\`-translated). The optional
+  `--mod-manager` pair sits immediately after the `--mod-path` value pair when
+  the profile has an enabled alternate mod manager (its projected path,
+  `Z:\`-translated like every path-valued flag). After
   `--log-file`'s value comes an unconditional bare `--log-append` flag (Relay
   writes a per-day file shared across launches, so it must append; a bare flag,
   NOT path-valued, so it is not `Z:\`-translated). When the profile's
@@ -276,7 +371,7 @@ right after `--log-file`'s value (before `--log-lua`, `--skip-splash`, and any
 `--` + game args). Relay writes a per-day `relay-<yyyyMMdd>.log` shared across
 launches, so it must append rather than overwrite each launch. The flag carries
 no value, so on Linux it is NOT `Z:\`-translated (only `--game-binary`,
-`--mod-path`, `--log-file` are path-valued).
+`--mod-path`, `--mod-manager`, `--log-file` are path-valued).
 
 **Lua logging:** when the profile's `EnableLuaLogs` toggle is on, Curator appends
 the bare `--log-lua` flag right after `--log-append` (before `--skip-splash` and
@@ -292,6 +387,29 @@ It skips Darktide's intro splash state (the splash screens and intro video) so
 the game advances directly to the title screen. The flag carries no value, so on
 Linux it is NOT `Z:\`-translated. Its Relay env form `RELAY_SKIP_SPLASH` is
 reserved so the toggle is the single source of truth.
+
+**Alternate mod manager:** when the profile has an enabled alternate mod-manager
+mod (an enabled mod whose resolved staging target is a `base` folder containing
+`mod_manager.lua`, per Relay v1.1.0's manager slot), Curator passes
+`--mod-manager <absolute path>` immediately after the `--mod-path` value pair.
+The derivation locates + verifies the manager in the staged tree; the launch
+path projects the flag value onto the effective mod root, formulated where
+`--mod-path` is (the game dir under default hosting, whose mods link resolves
+to the staged tree so it is the same file; the staged root under the external
+preference). Relay uses the path verbatim with no canonicalization (a relative
+path would resolve against the game's `binaries/` CWD, so Curator always
+passes an absolute one). When no manager is active -- none enabled, the mod
+unresolvable, or `mod_manager.lua` missing from the resolved target -- no flag
+is emitted (Relay's built-in manager loads `mods.lst` as before), never a path
+to a missing file: the launcher hard-refuses (exit 2) a configured-but-missing
+manager, so a stale flag would turn into a launch failure. The value is
+`Z:\`-translated on Linux exactly like `--mod-path` (the launcher-under-Wine
+opens the file itself). Its Relay env form `RELAY_MOD_MANAGER` is reserved so
+the detection is the single source of truth. No Relay version preflight is
+performed for the flag (consistent with the `--` forwarding decision: Curator
+bundles Relay >= the manager slot). The staging + `mods.lst` projection are
+unchanged: the manager mod stages + lists like any ordinary mod, and the mod
+list surfaces a caution banner while it controls ordering.
 
 #### AppImage desktop-identity sanitization
 
@@ -346,10 +464,25 @@ public static IServiceCollection AddRelayClient(this IServiceCollection services
 wiring a custom launch hook) can pre-register an override before calling
 `AddRelayClient` -- the same pattern the Steam library uses for its platform
 seams. The strategy is selected once, here, from the host OS, so the launch
-service contains no per-call OS branch. `IRelayLaunchService` is `AddSingleton`
+service contains no per-launch OS branch. `IRelayLaunchService` is `AddSingleton`
 (holds no per-launch state). Resolves `IProfileService`, `ISteamService`,
-`CuratorConfig`, `IPlatformLaunchStrategy`, and `ILogger<RelayLaunchService>`
-from the container.
+`CuratorConfig`, `IPlatformLaunchStrategy`, `IGameDirModsHost`, and
+`ILogger<RelayLaunchService>` from the container.
+
+`IGameDirModsHost` is registered by the composition root (not inside
+`AddRelayClient`) because its collaborators span the Profiles staging-link
+primitive and the app-state receipts role:
+
+```csharp
+services.AddSingleton<IGameDirModsHost>(sp => new GameDirModsHost(
+    sp.GetRequiredService<StagingLinkCreator>(),     // AddProfiles
+    sp.GetRequiredService<IProfileService>(),         // AddProfiles
+    sp.GetRequiredService<IRenamedModsFoldersState>(),// AddGeneral
+    sp.GetRequiredService<ILogger<GameDirModsHost>>()));
+```
+
+A host wiring `AddRelayClient` alone must supply an `IGameDirModsHost`
+registration (tests register a fake).
 
 ## Dependencies
 
@@ -377,13 +510,34 @@ and the Windows empty-removal/override assertion, plus the launch-settings merge
 Linux profile env before Proton startup alongside the AppImage removals + the
 `STEAM_COMPAT_*` overrides; Windows profile env as overrides; empty/legacy when no
 settings, plus the `CreateNoWindow` derivation from the global `ShowRelayConsole`
-preference read live per launch), `GameArgumentsTests` (the bare-`--` contract via the pure
-`BuildLauncherArgs(gameBinary, modPath, logFile, LaunchSettings)` seam: empty
+preference read live per launch), `GameDirModsHostTests` (the full claim ladder
+against the real platform link primitive + the real app-state receipts store:
+absent-creates, ours-by-marker left in place, ours re-pointed with the old
+target surviving, ours by marker outside the profiles root, dead link under the
+profiles root silently recreated, foreign real dir/file/link/dead-link
+conflicts reported untouched, the takeover rename + README + receipt incl.
+collision bump + file case + no-op cases + the host-through-ladder retry, and
+the best-effort removal semantics), the game-dir hosting step inside
+`RelayLaunchServiceTests` (the `--mod-path` switch to `GAME_DIR` under hosting
+and back to the staged root under the external preference read live per launch,
+the owned-link removal call, the `GameDirConflict` result shape, the link-failure
++ underivable-game-dir `Error` mappings, the Linux `Z:\` translation of
+`GAME_DIR`, and a real-host end-to-end launch from the temp game dir, plus the
+alternate-manager handoff: the `--mod-manager` pair carries the manager file
+projected onto the effective mod root (the game-dir mods link path under
+default hosting on both strategies, `Z:\`-translated on Linux; the staged
+path under the external preference), no flag + one derivation call per launch
+reaching staging, and zero derivation calls on a launch that stops at
+discovery),
+`GameArgumentsTests` (the bare-`--` contract via the pure
+`BuildLauncherArgs(gameBinary, modPath, modManagerFile, logFile, LaunchSettings)` seam: empty
 emits no `--`, multiple emit one `--` then each arg as its own element in order,
 values with spaces + quotes stay one element; the unconditional bare
 `--log-append` appends right after `--log-file`'s value, and the bare `--log-lua`
 + `--skip-splash` flags append after it when the matching toggles are on, none
-path-translated), `RelayLogTests` (Relay's own per-day log path resolution +
+path-translated; the `--mod-manager` pair lands immediately after the
+`--mod-path` pair when a manager file is passed (verbatim on Windows,
+`Z:\`-translated on Linux) and is absent when null), `RelayLogTests` (Relay's own per-day log path resolution +
 the best-effort prune of old `relay-*.log` to the shared retained count),
 `ProcessLauncherTests`
 (the deterministic `ProcessLauncher.BuildStartInfo` path: a requested inherited

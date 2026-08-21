@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -68,6 +69,18 @@ public enum ModAddMode
 /// a "not found" badge (staging warns at launch). A linked container's external
 /// availability is pushed down to its row from
 /// <see cref="IModRepository.IsExternalAvailable"/> at reload.</para>
+/// <para><b>Filter / search projection:</b> <see cref="Mods"/> stays the
+/// authoritative full list; the row list renders <see cref="VisibleMods"/>, the
+/// projection under the session-transient hide-disabled filter
+/// (<see cref="HideDisabledMods"/>), updates-only filter
+/// (<see cref="ShowUpdatesOnly"/>), and name search (<see cref="SearchText"/>,
+/// case-insensitive ordinal substring). The projection state is view-only: it
+/// is never persisted, survives reloads and navigation, and clears on an
+/// active-profile change. Reordering works through the projection: move and
+/// drag targets are computed among the visible unlocked rows, then committed
+/// to the stored order through the visibility-aware
+/// <see cref="ModReorderPlanner"/> (hidden rows keep their relative order and
+/// shift at most one slot; locked rows keep their exact slots).</para>
 /// <para><b>Edits are allowed while the game runs:</b> the list is the active
 /// profile's config, not the running game's. The active profile is already locked
 /// against switching by the shell, so the list stays put while the game runs and
@@ -118,6 +131,19 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     private readonly ILogger<ModListViewModel> _logger;
     private readonly IExternalLauncher _externalLauncher;
     private readonly INxmRegistrationState _nxmRegistration;
+    private readonly IModDownloadQueue _downloadQueue;
+    private readonly ModUpdateEnqueuer _updateEnqueuer;
+
+    /// <summary>
+    /// The live download-row wrappers, keyed by their coordinator item
+    /// (reference identity: an item is one in-flight download). Created on
+    /// first sight of an item in <see cref="IModDownloadQueue.Items"/> and
+    /// pruned when it leaves, so a wrapper lives exactly as long as its
+    /// item; the hosting projection reassigns the same wrapper instance
+    /// across rebuilds (morph assignments compare by reference, so an
+    /// unchanged host never re-fires).
+    /// </summary>
+    private readonly Dictionary<DownloadItem, DownloadRowViewModel> _downloadRows = new();
 
     /// <summary>
     /// The profile entries the last <see cref="Reload"/> loaded (the raw
@@ -129,14 +155,25 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     private IReadOnlyList<ModListEntry> _loadedEntries = Array.Empty<ModListEntry>();
 
     /// <summary>
+    /// The active profile's enabled alternate mod manager, from the same
+    /// <see cref="IProfileService.GetActiveModManager"/> derivation the launch
+    /// path hands to Relay (set by <see cref="Reload"/> and the enable-toggle
+    /// path; null with no active profile or no manager mod). Drives the
+    /// caution banner: while a manager mod is enabled, it (not Curator's
+    /// order) controls in-game load order.
+    /// </summary>
+    private ActiveModManager? _activeModManager;
+
+    /// <summary>
     /// Creates the list VM, subscribes to the session (reload on
     /// active-profile change), the update-check runner (row hydration on every
-    /// completed check + reload after an automatic batch installs mods), the
-    /// row context (the per-row install progress + the global premium / busy /
-    /// gaming flips, all already on the UI thread), the linked-mods child
-    /// (reload when its link flow finishes), and localization (culture
-    /// refresh), then loads the current profile's mods. The premium read lives
-    /// in the row context (fire-and-forget at its construction).
+    /// completed check), the download queue (the per-row morph + appended-row
+    /// projection, and the UpdatesApplied reload after each completed
+    /// update install), the row context (the global premium / gaming flips,
+    /// already on the UI thread), the linked-mods child (reload when its link
+    /// flow finishes), and localization (culture refresh), then loads the
+    /// current profile's mods. The premium read lives in the row context
+    /// (fire-and-forget at its construction).
     /// </summary>
     public ModListViewModel(
         IProfileService profiles,
@@ -152,6 +189,8 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         LinkedModsViewModel linkedMods,
         IExternalLauncher externalLauncher,
         INxmRegistrationState nxmRegistration,
+        IModDownloadQueue downloadQueue,
+        ModUpdateEnqueuer updateEnqueuer,
         ILogger<ModListViewModel> logger)
         : base(localization)
     {
@@ -168,20 +207,18 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _externalLauncher = externalLauncher ?? throw new ArgumentNullException(nameof(externalLauncher));
         _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
+        _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
+        _updateEnqueuer = updateEnqueuer ?? throw new ArgumentNullException(nameof(updateEnqueuer));
 
         _session.PropertyChanged += OnSessionPropertyChanged;
-        // The runner surfaces both update-family completions on the UI thread
-        // (the re-raised check-completed + the automatic batch's
-        // updates-applied); this VM does no marshaling of its own.
+        // The runner surfaces the check completion on the UI thread (the
+        // re-raised check-completed); this VM does no marshaling of its own.
         _updateCheckRunner.CheckCompleted += OnUpdateCheckCompleted;
-        _updateCheckRunner.UpdatesApplied += OnAutomaticUpdatesApplied;
         // The refresh gate is runner-owned + fed by every check result; this
         // VM renders its state (the gate marshals the event to the UI thread).
         _updateCheckRunner.RefreshGate.StateChanged += OnRefreshGateStateChanged;
-        // The row context's per-container install progress drives the matching
-        // row's spinner; its global flips (premium / busy / gaming) re-fire
-        // this VM's forwarding names + fan out to the live rows.
-        RowContext.ModUpdateProgress += OnModUpdateProgress;
+        // The row context's global flips (premium / gaming) re-fire this VM's
+        // forwarding names + fan out to the live rows.
         RowContext.PropertyChanged += OnRowContextChanged;
         ImportWorkflow.ItemImported += OnItemImported;
         // The Add split button's enabled state combines the workflow's activity
@@ -199,56 +236,209 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         IsNxmRegistered = _nxmRegistration.IsRegistered;
         _nxmRegistration.Changed += OnNxmRegistrationChanged;
 
+        // The download fan-in: ONE pair of subscriptions on this VM (both
+        // already marshaled to the UI thread by the queue) drives every
+        // download rendering decision: the per-row morph assignments, the
+        // appended DownloadRows projection, and the empty-state suppression.
+        // Rows + wrappers never subscribe to the queue themselves, so rows
+        // dropped by a reload cannot leak against it.
+        _downloadQueue.Items.CollectionChanged += OnDownloadItemsChanged;
+        _downloadQueue.ItemChanged += OnDownloadItemChanged;
+        // A completed UpdateInstall (manual click or automatic batch; the
+        // queue raises it after its acknowledge) reloads this list + flags the
+        // session pending: the new version + cleared flag show. Already
+        // marshaled to the UI thread by the queue.
+        _downloadQueue.UpdatesApplied += OnUpdatesApplied;
+
         Reload();
     }
 
     /// <summary>
-    /// The automatic-update service finished a batch with at least one
-    /// successful install. Mark the active profile as having staged changes (the
-    /// batch changed one or more mod versions) and reload so the new versions +
-    /// cleared flags show. The runner re-raises the event on the UI thread.
+    /// A queued update install completed (manual click or automatic batch; the
+    /// queue raises it on the UI thread after acknowledging the install).
+    /// Mark the active profile as having staged changes (the install changed
+    /// one or more mod versions) and reload so the new versions + cleared
+    /// flags show. The reload re-reads whatever profile is active (an
+    /// in-flight item completing after a profile switch reloads the truth of
+    /// the list being shown).
     /// </summary>
-    private void OnAutomaticUpdatesApplied(object? sender, EventArgs e)
+    private void OnUpdatesApplied(object? sender, EventArgs e)
     {
         _session.HasPendingChanges = true;
         Reload();
     }
 
-    /// <summary>
-    /// The row context reports per-install progress (a container's install
-    /// attempt started or finished, for BOTH the manual Premium path and the
-    /// automatic batch; already on the UI thread). Find the row by ContainerId
-    /// and set its <see cref="ModItemViewModel.IsUpdating"/> so the row-level
-    /// spinner (left of the Nexus badge) tracks the currently installing mod.
-    /// An event for a row no longer present (after a profile switch / reload)
-    /// is ignored, so a switch mid-batch never leaves a stale spinner on a
-    /// now-absent row.
-    /// </summary>
-    private void OnModUpdateProgress(object? sender, ModUpdateProgressEventArgs e) =>
-        ApplyModUpdateProgress(e.ContainerId, e.IsActive);
-
-    /// <summary>
-    /// Applies a per-mod install progress signal to the matching row. Finds the
-    /// row by ContainerId; sets its <see cref="ModItemViewModel.IsUpdating"/>
-    /// to <paramref name="isActive"/>. Ignores a container id with no matching
-    /// row (the row may have been removed by a profile switch / reload between
-    /// the event + this UI-thread callback).
-    /// </summary>
-    private void ApplyModUpdateProgress(Guid containerId, bool isActive)
-    {
-        var row = Mods.FirstOrDefault(m => m.ContainerId == containerId);
-        if (row is null)
-        {
-            // The row is gone (profile switch / reload). Ignore: no stale
-            // spinner is left on a now-absent row.
-            return;
-        }
-
-        row.IsUpdating = isActive;
-    }
-
     /// <summary>The active profile's mod rows, in load order (lower first).</summary>
     public ObservableCollection<ModItemViewModel> Mods { get; } = new();
+
+    /// <summary>
+    /// The visible projection of <see cref="Mods"/> the row list renders: the
+    /// full order minus rows excluded by the session-transient hide-disabled
+    /// filter, the updates-only filter, and the name search. Rebuilt from
+    /// <see cref="Mods"/> by
+    /// <see cref="RebuildVisibleMods"/> (end of every <see cref="Reload"/>, on
+    /// every filter/search state change, and after an enable toggle under an
+    /// active filter). <see cref="Mods"/> stays authoritative: everything that
+    /// consumed it before (move availability input, update hydration, the row
+    /// context fan-out, the density coordinator's full snapshot) still reads
+    /// the full list, so thumbnails and metadata hydrate regardless of
+    /// visibility and a filter change never re-triggers hydration.
+    /// </summary>
+    public ObservableCollection<ModItemViewModel> VisibleMods { get; } = new();
+
+    /// <summary>
+    /// Whether the visible projection holds at least one row. Drives the row
+    /// list's visibility (the ScrollViewer collapses when a filter empties the
+    /// visible set so the no-matches message owns the content area).
+    /// </summary>
+    [ObservableProperty]
+    private bool _hasVisibleMods;
+
+    /// <summary>
+    /// The appended download rows: the queue items with no in-place host
+    /// (fresh mods, cross-profile targets, filtered-hidden targets, null
+    /// container ids), in admission order. Rendered by the dedicated
+    /// ItemsControl below the profile rows inside the same scroll region.
+    /// Never intersects <see cref="VisibleMods"/> or <see cref="Mods"/> (the
+    /// items are <see cref="DownloadRowViewModel"/>s, not profile rows), so
+    /// download rows can never enter the reorder planner's inputs, the drag
+    /// gesture's container math, or the move commands. Rebuilt by
+    /// <see cref="RebuildDownloadRows"/>.
+    /// </summary>
+    public ObservableCollection<DownloadRowViewModel> DownloadRows { get; } = new();
+
+    /// <summary>
+    /// Whether any appended download row exists (drives the appended
+    /// ItemsControl's visibility + <see cref="HasListContent"/>).
+    /// </summary>
+    [ObservableProperty]
+    private bool _hasDownloadRows;
+
+    /// <summary>
+    /// Whether any non-terminal download item exists in the coordinator
+    /// (queued, downloading, or importing; Failed corpses do not count).
+    /// Suppresses the no-mods/add-hints empty state: an active download
+    /// above "no mods yet" reads as a contradiction.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowAddModsHint))]
+    private bool _hasActiveDownloads;
+
+    /// <summary>
+    /// Whether the scroll region has any content to show: visible profile
+    /// rows OR appended download rows (an empty profile with a live download
+    /// still shows the scroll region, hosting the appended rows).
+    /// </summary>
+    public bool HasListContent => HasVisibleMods || HasDownloadRows;
+
+    /// <summary>
+    /// Whether disabled mods are hidden from the row list (the toolbar's
+    /// visibility filter toggle). Session-transient view state: never
+    /// persisted, survives reloads and navigation, and clears on an
+    /// active-profile change. Changing it rebuilds <see cref="VisibleMods"/>.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsFilterOrSearchActive))]
+    [NotifyPropertyChangedFor(nameof(ShowAddModsHint))]
+    [NotifyPropertyChangedFor(nameof(ShowNoMatchesMessage))]
+    private bool _hideDisabledMods;
+
+    /// <summary>
+    /// Whether only rows flagged with an available update are shown (the
+    /// toolbar's updates-only filter toggle). Session-transient view state:
+    /// never persisted, survives reloads and navigation, and clears on an
+    /// active-profile change. Changing it rebuilds <see cref="VisibleMods"/>.
+    /// The filter keeps only rows whose
+    /// <see cref="ModItemViewModel.UpdateAvailable"/> is true.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsFilterOrSearchActive))]
+    [NotifyPropertyChangedFor(nameof(ShowAddModsHint))]
+    [NotifyPropertyChangedFor(nameof(ShowNoMatchesMessage))]
+    private bool _showUpdatesOnly;
+
+    /// <summary>
+    /// The search box text, filtering <see cref="VisibleMods"/> by row display
+    /// name (case-insensitive ordinal substring; empty or whitespace matches
+    /// everything). Two-way bound to the toolbar TextBox and applied
+    /// keystroke-live. Session-transient view state: never persisted, survives
+    /// reloads and navigation, and clears on an active-profile change.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSearchText))]
+    [NotifyPropertyChangedFor(nameof(IsFilterOrSearchActive))]
+    [NotifyPropertyChangedFor(nameof(ShowAddModsHint))]
+    [NotifyPropertyChangedFor(nameof(ShowNoMatchesMessage))]
+    private string _searchText = string.Empty;
+
+    /// <summary>
+    /// Whether any text is typed in the search box (drives the inner clear
+    /// affordance's visibility). Distinct from
+    /// <see cref="IsFilterOrSearchActive"/>: whitespace-only text still shows
+    /// the clear button but filters nothing.
+    /// </summary>
+    public bool HasSearchText => !string.IsNullOrEmpty(SearchText);
+
+    /// <summary>
+    /// Whether the hide-disabled filter, the updates-only filter, or a
+    /// non-whitespace search is active. Drives the no-matches state and
+    /// suppresses the ordinary no-mods / add hints (the two empty states are
+    /// mutually exclusive: while a filter or search is active, an empty
+    /// visible set reads as "no matches", not as "add a mod").
+    /// </summary>
+    public bool IsFilterOrSearchActive =>
+        HideDisabledMods || ShowUpdatesOnly || !string.IsNullOrWhiteSpace(SearchText);
+
+    /// <summary>
+    /// The localized tooltip + automation name for the hide-disabled filter
+    /// toggle, describing the action the click will perform (hide vs. show).
+    /// Re-fires on a culture change.
+    /// </summary>
+    public string HideDisabledTooltip => HideDisabledMods
+        ? _localization["ModList_ShowDisabledTooltip"]
+        : _localization["ModList_HideDisabledTooltip"];
+
+    /// <summary>
+    /// The localized tooltip + automation name for the updates-only filter
+    /// toggle, describing the action the click will perform (filter to
+    /// flagged rows vs. show all). Re-fires on a culture change.
+    /// </summary>
+    public string UpdatesOnlyTooltip => ShowUpdatesOnly
+        ? _localization["ModList_ShowAllModsTooltip"]
+        : _localization["ModList_ShowUpdatesOnlyTooltip"];
+
+    /// <summary>
+    /// The localized no-matches message shown when the full list is non-empty
+    /// but the active filter/search excludes every row. Re-fires on a culture
+    /// change.
+    /// </summary>
+    public string NoMatchesText => _localization["ModList_NoMatches"];
+
+    /// <summary>
+    /// Whether the no-matches message should show: an active profile with a
+    /// non-empty full list whose visible projection is empty while a filter or
+    /// search is active. Mutually exclusive with the ordinary empty state (see
+    /// <see cref="ShowAddModsHint"/>).
+    /// </summary>
+    public bool ShowNoMatchesMessage =>
+        HasActiveProfile && Mods.Count > 0 && VisibleMods.Count == 0 && IsFilterOrSearchActive;
+
+    /// <summary>
+    /// Filter/search state hooks: every change rebuilds the visible projection
+    /// (and with it the visible-neighbor move availability + the derived
+    /// empty-state projections). The attribute-driven notifications cover the
+    /// derived flags; the rebuild here covers the collection + move buttons.
+    /// </summary>
+    partial void OnHideDisabledModsChanged(bool value) => RebuildVisibleMods();
+
+    /// <summary>Updates-only counterpart of
+    /// <see cref="OnHideDisabledModsChanged"/>: the toggle rebuilds the
+    /// projection.</summary>
+    partial void OnShowUpdatesOnlyChanged(bool value) => RebuildVisibleMods();
+
+    /// <summary>Search counterpart of <see cref="OnHideDisabledModsChanged"/>:
+    /// each keystroke rebuilds the projection.</summary>
+    partial void OnSearchTextChanged(string value) => RebuildVisibleMods();
 
     /// <summary>
     /// The inline import-workflow child VM (application-lifetime singleton,
@@ -323,16 +513,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     public bool IsPremiumUser => RowContext.IsPremiumUser;
 
     /// <summary>
-    /// Whether the mod-update installer reports an install in flight (manual or
-    /// automatic; the coordinator-backed busy flag). Forwarded from
-    /// <see cref="RowContext"/>; rows read the same flag through their own
-    /// forwarding property, so the per-row enabled state reflects the global
-    /// "one install at a time" coordination without a parent walk.
-    /// </summary>
-    public bool AnyRowUpdating => RowContext.AnyRowUpdating;
-
-    /// <summary>
-    /// A row-affecting global (premium / install-busy / gaming) flipped on the
+    /// A row-affecting global (premium / gaming) flipped on the
     /// shared row context (already on the UI thread). Re-fires this VM's
     /// forwarding properties (the names match the context's exactly) and fans
     /// the notification out to the live rows, whose derived enabled states +
@@ -381,11 +562,6 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     [NotifyPropertyChangedFor(nameof(ShowAddModsHint))]
     private bool _hasActiveProfile;
 
-    /// <summary>Whether the active profile has at least one mod. Drives the
-    /// row-list Border's IsVisible (the rows render only when non-empty).</summary>
-    [ObservableProperty]
-    private bool _hasMods;
-
     /// <summary>
     /// The number of mods in the active profile. Drives
     /// <see cref="ShowAddModsHint"/> (the hint shows for zero or one mod, so a
@@ -398,11 +574,17 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// Whether the no-mods / DMF-only "add a mod" hint should show: an active
     /// profile with zero or one mod (so a freshly-onboarded DMF-only profile
-    /// still invites the user to add their own mods alongside the framework).
+    /// still invites the user to add their own mods alongside the framework),
+    /// NO active filter/search (an empty visible set under an active
+    /// filter/search is the no-matches state, not the add-a-mod state; the two
+    /// are mutually exclusive), and NO active download (a queued or in-flight
+    /// download renders as a row, and an active download above "no mods yet"
+    /// reads as a contradiction; terminal Failed corpses do not suppress).
     /// A dedicated derived property because the view cannot express the
     /// conjunction in a single Avalonia compiled binding.
     /// </summary>
-    public bool ShowAddModsHint => HasActiveProfile && ModCount <= 1;
+    public bool ShowAddModsHint =>
+        HasActiveProfile && ModCount <= 1 && !IsFilterOrSearchActive && !HasActiveDownloads;
 
     /// <summary>
     /// The Add split button's current mode (which action the primary click runs).
@@ -570,6 +752,34 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
             : _localization["ModList_RateLimitedTooltip"];
 
     /// <summary>
+    /// Whether the active profile has an enabled alternate mod manager mod.
+    /// Drives the full-width caution banner above the row list; visible
+    /// exactly while the manager is active (live state, never dismissed).
+    /// </summary>
+    public bool IsModManagerActive => _activeModManager is not null;
+
+    /// <summary>
+    /// The localized caution-banner text while an alternate mod manager is
+    /// active, formatted with the manager mod's display name (the loaded row's
+    /// name, falling back to the repository container's name, then the literal
+    /// "base" if even that is gone). Re-fires on a culture change.
+    /// </summary>
+    public string ModManagerBannerText => _localization.Format(
+        "ModList_ModManagerBanner",
+        _activeModManager is { } manager ? ModManagerDisplayName(manager.ContainerId) : "base");
+
+    /// <summary>
+    /// The manager mod's display name for the banner: the loaded row's name
+    /// when the manager's container is in the list, the repository
+    /// container's name otherwise, then the literal "base" (defense; the
+    /// container should always be resolvable for an enabled manager).
+    /// </summary>
+    private string ModManagerDisplayName(Guid containerId) =>
+        Mods.FirstOrDefault(m => m.ContainerId == containerId)?.Name
+            ?? _repo.Get(containerId)?.Name
+            ?? "base";
+
+    /// <summary>
     /// The inline import workflow finished a successful per-item import on the
     /// captured profile id. Reload the list only when that profile is the active
     /// one (the user is looking at it); an import that landed on a now-inactive
@@ -587,24 +797,29 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
 
     /// <summary>
     /// Session-driven reload: the active id changed (dropdown switch, create,
-    /// delete-of-active). Rebuilds the list from the new profile. Running-state
-    /// changes do not trigger a reload (the list stays put; edits are allowed
-    /// while the game runs).
+    /// delete-of-active). Rebuilds the list from the new profile and clears the
+    /// session-transient filter/search state first (a filter belongs to the
+    /// profile the user was looking at, not the one being switched to).
+    /// Running-state changes do not trigger a reload (the list stays put; edits
+    /// are allowed while the game runs).
     /// </summary>
     private void OnSessionPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(IProfileSession.ActiveProfileId))
         {
+            SearchText = string.Empty;
+            HideDisabledMods = false;
+            ShowUpdatesOnly = false;
             Reload();
         }
     }
 
     /// <summary>
     /// The mod list's localized property names, re-fired by the shared
-    /// culture-refresh base on a culture change (header, empty-state, and
-    /// refresh-gate tooltip strings; the gate re-render in
-    /// <see cref="OnCultureChanged"/> re-fires the non-localized gate
-    /// renderings alongside them).
+    /// culture-refresh base on a culture change (header, empty-state,
+    /// filter/search, refresh-gate tooltip, and manager-banner strings; the
+    /// gate re-render in <see cref="OnCultureChanged"/> re-fires the
+    /// non-localized gate renderings alongside them).
     /// </summary>
     protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
@@ -615,13 +830,18 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         nameof(RateLimitedTooltip),
         nameof(ManualRefreshTooltip),
         nameof(AddButtonTooltip),
+        nameof(HideDisabledTooltip),
+        nameof(UpdatesOnlyTooltip),
+        nameof(NoMatchesText),
+        nameof(ModManagerBannerText),
     };
 
     /// <summary>
     /// The non-list culture work: re-resolve the localized refresh-gate
     /// renderings so the rate-limit + throttle tooltips pick up the new
     /// culture immediately (the gate's own state is unchanged; the raw values
-    /// are re-read), + refresh each row's localized text.
+    /// are re-read), refresh each row's localized text, and refresh each
+    /// live download wrapper's localized status/label/tooltip strings.
     /// </summary>
     protected override void OnCultureChanged()
     {
@@ -629,6 +849,11 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         foreach (var row in Mods)
         {
             row.Refresh();
+        }
+
+        foreach (var wrapper in _downloadRows.Values)
+        {
+            wrapper.Refresh();
         }
     }
 
@@ -677,11 +902,10 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// Applies a just-landed check: refreshes the rate-limit notice from the
     /// result, refreshes in-place row names when the check renamed any container
-    /// (the name-sync piggybacks on the batch query), and re-hydrates the per-row
-    /// update flags from the profile-scoped known-update store. Called on
-    /// <see cref="IUpdateCheckService.CheckCompleted"/> + at the end of
-    /// <see cref="Reload"/> (so a freshly rebuilt list picks up the persisted
-    /// state without waiting for the next check).
+    /// (the name-sync piggybacks on the batch query), re-hydrates the per-row
+    /// update flags from the profile-scoped known-update store, and rebuilds
+    /// the visible projection (the updates-only filter reads those flags).
+    /// Called on <see cref="IUpdateCheckService.CheckCompleted"/>.
     /// </summary>
     private void ApplyCheckLanded(UpdateCheckResult? result)
     {
@@ -712,6 +936,11 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         }
 
         ApplyKnownUpdateState();
+
+        // A landed check can change per-row UpdateAvailable flags, and the
+        // updates-only filter's projection depends on them, so rebuild the
+        // projection (cheap + idempotent).
+        RebuildVisibleMods();
     }
 
     /// <summary>
@@ -772,11 +1001,14 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         if (activeId is not Guid id)
         {
             HasActiveProfile = false;
-            HasMods = false;
             ModCount = 0;
             _loadedEntries = Array.Empty<ModListEntry>();
+            _activeModManager = null;
+            OnPropertyChanged(nameof(IsModManagerActive));
+            OnPropertyChanged(nameof(ModManagerBannerText));
             // Hand an empty snapshot so old work is cancelled.
             _ = DetailedRows.SetRowsAsync(Array.Empty<ModItemViewModel>());
+            RebuildVisibleMods();
             return;
         }
 
@@ -820,23 +1052,33 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
             Mods.Add(row);
         }
 
-        HasMods = Mods.Count > 0;
         ModCount = Mods.Count;
 
-        // Compute per-row move availability over unlocked rows only: an unlocked
-        // row's move-up button is enabled when an unlocked row precedes it, and
-        // move-down when an unlocked row follows it. Locked rows disable both
-        // (their reorder grip is also disabled). Pushed down so the view binds
-        // directly without a parent walk.
-        ApplyMoveAvailability();
+        // The manager banner reads the same derivation the launch path hands
+        // to Relay, so the banner and the --mod-manager flag can never
+        // disagree. Read after the rows are built so the banner's name lookup
+        // finds the manager's row. The text notify fires even when the active
+        // flag is unchanged (a profile switch between two manager profiles
+        // changes only the name).
+        _activeModManager = _profiles.GetActiveModManager(id);
+        OnPropertyChanged(nameof(IsModManagerActive));
+        OnPropertyChanged(nameof(ModManagerBannerText));
 
         // The freshly built rows default UpdateAvailable=false; their premium /
         // busy / gaming halves read the shared row context (passed at
         // construction), so no global push happens here. Re-apply the persisted
         // known-update state (profile-scoped) so a profile switch (or a
         // post-edit reload, or a restart) reflects the recorded flags without
-        // waiting for the next check.
+        // waiting for the next check. This runs BEFORE the projection rebuild
+        // below so the updates-only filter (which reads UpdateAvailable) sees
+        // the hydrated flags, not the all-false defaults.
         ApplyKnownUpdateState();
+
+        // Rebuild the visible projection (which also recomputes per-row move
+        // availability over the visible unlocked rows): the projection is
+        // defined over the freshly built full list, so it is rebuilt at the
+        // end of every reload, not only on a filter change.
+        RebuildVisibleMods();
 
         // Hand the final row snapshot to the density coordinator so it can push
         // the current density, clear thumbnails on Compact, or start thumbnail
@@ -866,8 +1108,13 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// Applies a row's enabled toggle through <see cref="IProfileService.SetModEnabled"/>.
     /// The row's <see cref="ModItemViewModel.Enabled"/> is already two-way bound
-    /// (the CheckBox flipped it); this persists it. Defense: no-op with no active
-    /// profile.
+    /// (the CheckBox flipped it); this persists it, re-derives the manager banner
+    /// (the same <see cref="IProfileService.GetActiveModManager"/> read as
+    /// <see cref="Reload"/> and the launch path, so toggling the manager mod
+    /// updates the banner without a row rebuild), then rebuilds the visible
+    /// projection so a row disabled under an active hide-filter leaves the
+    /// visible set (expected: the filter hides what the user just disabled).
+    /// Defense: no-op with no active profile.
     /// </summary>
     [RelayCommand]
     private void ToggleEnabled(ModItemViewModel? row)
@@ -879,46 +1126,259 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
 
         _profiles.SetModEnabled(id, row.ContainerId, row.Enabled);
         _session.HasPendingChanges = true;
+        // The manager banner must follow an enable toggle immediately: the
+        // in-place path deliberately skips the row rebuild, so the derivation
+        // runs here too (both notifications fire unconditionally, matching
+        // Reload; the text notify also covers a manager name change).
+        _activeModManager = _profiles.GetActiveModManager(id);
+        OnPropertyChanged(nameof(IsModManagerActive));
+        OnPropertyChanged(nameof(ModManagerBannerText));
+        RebuildVisibleMods();
         _logger.LogDebug("Toggled {Container} enabled={Enabled}", row.ContainerId, row.Enabled);
+    }
+
+    // ---- filter / search projection -----------------------------------------
+
+    /// <summary>
+    /// Toggles the hide-disabled filter (the toolbar visibility toggle; the
+    /// property change rebuilds the projection).
+    /// </summary>
+    [RelayCommand]
+    private void ToggleHideDisabled() => HideDisabledMods = !HideDisabledMods;
+
+    /// <summary>
+    /// Toggles the updates-only filter (the toolbar flagged-rows toggle; the
+    /// property change rebuilds the projection).
+    /// </summary>
+    [RelayCommand]
+    private void ToggleUpdatesOnly() => ShowUpdatesOnly = !ShowUpdatesOnly;
+
+    /// <summary>
+    /// Rebuilds <see cref="VisibleMods"/> from <see cref="Mods"/> under the
+    /// current filter/search: a row is visible when it is enabled or the
+    /// hide-disabled filter is off, AND it is flagged with an available
+    /// update or the updates-only filter is off, AND its display name
+    /// contains the search text (case-insensitive ordinal substring; an
+    /// empty or whitespace search matches everything). Called at the end of
+    /// every <see cref="Reload"/>, on every filter/search state change, and
+    /// after an enable toggle. Also
+    /// recomputes per-row move availability over the visible unlocked rows (a
+    /// hidden row has no visible neighbors to cross) and re-fires the
+    /// derived empty-state projections. Never touches the density coordinator:
+    /// thumbnails and metadata hydrate from the full snapshot regardless of
+    /// visibility, so a filter change never re-triggers hydration.
+    /// </summary>
+    private void RebuildVisibleMods()
+    {
+        VisibleMods.Clear();
+        var search = SearchText;
+        var searching = !string.IsNullOrWhiteSpace(search);
+        foreach (var row in Mods)
+        {
+            if (HideDisabledMods && !row.Enabled)
+            {
+                continue;
+            }
+
+            if (ShowUpdatesOnly && !row.UpdateAvailable)
+            {
+                continue;
+            }
+
+            if (searching && !row.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            VisibleMods.Add(row);
+        }
+
+        HasVisibleMods = VisibleMods.Count > 0;
+        ApplyMoveAvailability();
+        OnPropertyChanged(nameof(ShowNoMatchesMessage));
+        OnPropertyChanged(nameof(HasListContent));
+        // A row entering or leaving the visible set can move a download
+        // between its two hosts (in-place morph vs. appended); the hosting
+        // projection is defined over the current visible set, so it is
+        // recomputed on every projection change too.
+        RebuildDownloadRows();
+    }
+
+    // ---- download rows (the hosting projection) ----------------------------
+
+    /// <summary>
+    /// The coordinator's collection changed (an item admitted or removed;
+    /// already on the UI thread). Enqueue returns before its add post
+    /// executes, so this, not the enqueue caller, is the first place a new
+    /// item is ever observed. Rebuilds the wrapper cache + the projection.
+    /// </summary>
+    private void OnDownloadItemsChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+        RebuildDownloadRows();
+
+    /// <summary>
+    /// The coordinator announced an item (admission, resolve, or terminal;
+    /// already on the UI thread). A resolve (a container id landing on a
+    /// previously unknown item) or a terminal transition can move the item
+    /// between hosts, so the projection is recomputed. Byte and phase
+    /// progress does not raise this (only the item's own property
+    /// notifications, which the wrapper renders directly), so this rebuild
+    /// never runs per progress tick.
+    /// </summary>
+    private void OnDownloadItemChanged(DownloadItem item) => RebuildDownloadRows();
+
+    /// <summary>
+    /// Recomputes the download hosting projection: one pass over the
+    /// coordinator's items (admission order) assigning each item exactly one
+    /// render slot. An item whose <see cref="DownloadItem.ContainerId"/> is
+    /// referenced by the active profile's CURRENT row set AND realized in
+    /// <see cref="VisibleMods"/> morphs that row in place (first matching
+    /// item in admission order wins the row; a second item with the same
+    /// container renders appended, which is how a Failed corpse and a fresh
+    /// live attempt for the same mod coexist as two rows). Every other item
+    /// appends to <see cref="DownloadRows"/>. No placement state is stored:
+    /// the assignment is re-derived from the item's container id against the
+    /// current rows on every coordinator collection/state change, every
+    /// Reload, every filter/search change, and every profile switch (the
+    /// switch reloads + clears filters, both of which land here).
+    /// </summary>
+    /// <remarks>
+    /// The morph assignment compares by reference before writing, so an
+    /// unchanged host never re-fires (a filter keystroke or unrelated item
+    /// change cannot churn a morphed row's content). Download rows ignore
+    /// the search and every filter (hide-disabled, updates-only) entirely:
+    /// that is exactly what the appended
+    /// fallback expresses (a filtered-out target is appended, not hidden).
+    /// </remarks>
+    private void RebuildDownloadRows()
+    {
+        var items = _downloadQueue.Items;
+
+        // Sync the wrapper cache with the collection: prune wrappers whose
+        // item left, create wrappers for new items.
+        if (_downloadRows.Count > 0)
+        {
+            var live = new HashSet<DownloadItem>(items);
+            foreach (var stale in _downloadRows.Keys.Where(k => !live.Contains(k)).ToArray())
+            {
+                _downloadRows.Remove(stale);
+            }
+        }
+
+        foreach (var item in items)
+        {
+            if (!_downloadRows.TryGetValue(item, out var wrapper))
+            {
+                wrapper = new DownloadRowViewModel(_localization, _downloadQueue, item);
+                _downloadRows[item] = wrapper;
+            }
+        }
+
+        // Resolve the in-place hosts first: the FIRST item per container id
+        // that finds a visible row wins the morph; later items with the same
+        // container append. The morph winner is tracked per ITEM (not per
+        // container) so a non-winner sharing the container still appends.
+        var morphByContainer = new Dictionary<Guid, DownloadRowViewModel>();
+        var morphedItems = new HashSet<DownloadItem>();
+        foreach (var item in items)
+        {
+            if (item.ContainerId is not { } containerId || morphByContainer.ContainsKey(containerId))
+            {
+                continue;
+            }
+
+            if (VisibleMods.FirstOrDefault(row => row.ContainerId == containerId) is { } host)
+            {
+                morphByContainer[containerId] = _downloadRows[item];
+                morphedItems.Add(item);
+            }
+        }
+
+        // Apply the morph to the live rows (reference-guarded: an unchanged
+        // assignment, including the null-to-null steady state, never fires).
+        foreach (var row in Mods)
+        {
+            var target = morphByContainer.TryGetValue(row.ContainerId, out var wrapper) ? wrapper : null;
+            if (!ReferenceEquals(row.ActiveDownload, target))
+            {
+                row.ActiveDownload = target;
+            }
+        }
+
+        // Everything not hosted in place appends, in admission order. The
+        // membership test is per item (the morph winner), so a second item
+        // sharing a morphed container still renders.
+        DownloadRows.Clear();
+        foreach (var item in items)
+        {
+            if (morphedItems.Contains(item))
+            {
+                continue;
+            }
+
+            DownloadRows.Add(_downloadRows[item]);
+        }
+
+        HasDownloadRows = DownloadRows.Count > 0;
+        HasActiveDownloads = items.Any(item => !item.IsTerminal);
+        OnPropertyChanged(nameof(HasListContent));
     }
 
     // ---- reorder (up / down / drag) ----------------------------------------
 
     /// <summary>
     /// Computes + pushes per-row <see cref="ModItemViewModel.CanMoveUp"/> /
-    /// <see cref="ModItemViewModel.CanMoveDown"/> over the unlocked rows only.
-    /// An unlocked row's move-up is enabled when an unlocked row precedes it, and
-    /// move-down when an unlocked row follows it; locked rows disable both.
-    /// Called at the end of <see cref="Reload"/> so the buttons reflect the
-    /// current order + lock state after every edit.
+    /// <see cref="ModItemViewModel.CanMoveDown"/> over the VISIBLE unlocked
+    /// rows only (the rows reorder within the visible projection: Move Up /
+    /// Move Down cross to the adjacent visible unlocked row, and a row with
+    /// only hidden or locked rows above it cannot move up). A hidden row
+    /// carries no move affordances at all (it is not rendered), so both flags
+    /// are cleared for it. Locked rows disable both. Called from
+    /// <see cref="RebuildVisibleMods"/> so the buttons reflect the current
+    /// order, lock state, and visibility after every edit or filter change.
     /// </summary>
     private void ApplyMoveAvailability()
     {
-        var unlockedIndex = 0;
-        var unlockedCount = Mods.Count(m => !m.OrderLocked);
+        // Hidden rows first: no visible neighbors, no move affordances.
         foreach (var row in Mods)
+        {
+            row.CanMoveUp = false;
+            row.CanMoveDown = false;
+        }
+
+        var visibleUnlockedCount = 0;
+        foreach (var row in VisibleMods)
+        {
+            if (!row.OrderLocked)
+            {
+                visibleUnlockedCount++;
+            }
+        }
+
+        var unlockedIndex = 0;
+        foreach (var row in VisibleMods)
         {
             if (row.OrderLocked)
             {
-                row.CanMoveUp = false;
-                row.CanMoveDown = false;
                 continue;
             }
 
             row.CanMoveUp = unlockedIndex > 0;
-            row.CanMoveDown = unlockedIndex < unlockedCount - 1;
+            row.CanMoveDown = unlockedIndex < visibleUnlockedCount - 1;
             unlockedIndex++;
         }
     }
 
     /// <summary>
-    /// The unlocked rank of <paramref name="containerId"/> in <see cref="Mods"/>,
-    /// or -1 when it is locked / missing. Unlocked rank counts only unlocked rows.
+    /// The unlocked rank of <paramref name="containerId"/> among the VISIBLE
+    /// unlocked rows, or -1 when it is locked, hidden by the current
+    /// filter/search, or missing. Visible unlocked rank counts only visible
+    /// unlocked rows: it is the space the move commands + drag gesture commit
+    /// targets in.
     /// </summary>
     private int UnlockedRankOf(Guid containerId)
     {
         var rank = 0;
-        foreach (var row in Mods)
+        foreach (var row in VisibleMods)
         {
             if (row.OrderLocked)
             {
@@ -937,11 +1397,12 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     }
 
     /// <summary>
-    /// Moves a row up one unlocked rank: the row swaps to the previous UNLOCKED
-    /// slot, crossing any locked rows it passes. Locked rows, the top unlocked
-    /// row, and a no-active-profile call are strict no-ops. Persists the new
-    /// full order through <see cref="IProfileService.SetModOrder"/> exactly once,
-    /// marks the session pending on a real order change, and reloads.
+    /// Moves a row up one visible unlocked rank: the row crosses to the previous
+    /// VISIBLE unlocked slot, skipping any hidden or locked rows it passes.
+    /// Locked rows, hidden rows, the top visible unlocked row, and a
+    /// no-active-profile call are strict no-ops. Persists the new full order
+    /// through <see cref="IProfileService.SetModOrder"/> exactly once, marks the
+    /// session pending on a real order change, and reloads.
     /// </summary>
     [RelayCommand]
     private void MoveUp(ModItemViewModel? row) => MoveTo(row, -1);
@@ -954,11 +1415,13 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     private void MoveDown(ModItemViewModel? row) => MoveTo(row, +1);
 
     /// <summary>
-    /// Shared move core: resolves the row's current unlocked rank, adds
-    /// <paramref name="delta"/>, and commits the reorder through
-    /// <see cref="CommitReorderCore"/>. Boundary rejection (target out of range
-    /// or a no-op) happens inside the planner, so a no-move call makes no service
-    /// call. No-op for a locked row or no active profile.
+    /// Shared move core: resolves the row's current rank among the VISIBLE
+    /// unlocked rows, adds <paramref name="delta"/>, and commits the reorder
+    /// through <see cref="CommitReorderCore"/> (the source crosses to the
+    /// adjacent visible unlocked row, skipping hidden rows). Boundary rejection
+    /// (target out of range or a no-op) happens inside the planner, so a
+    /// no-move call makes no service call. No-op for a locked row, a row hidden
+    /// by the current filter/search, or no active profile.
     /// </summary>
     private void MoveTo(ModItemViewModel? row, int delta)
     {
@@ -995,13 +1458,20 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     }
 
     /// <summary>
-    /// Builds + persists a reorder request against the current rows. The planner
-    /// returns null for any invalid or no-op request, so a no-change call makes
-    /// no service call and sets no pending flag.
+    /// Builds + persists a reorder request against the current rows. The
+    /// planner receives each row's locked flag AND its visibility under the
+    /// current filter/search, and constructs the full order that moves the
+    /// source within the visible subsequence while locked rows keep their
+    /// exact slots and hidden rows shift at most one slot. It returns null for
+    /// any invalid or no-op request (including a locked, hidden, or missing
+    /// source), so a no-change call makes no service call and sets no pending
+    /// flag.
     /// </summary>
     private void CommitReorderCore(Guid profileId, ReorderRequest request)
     {
-        var rows = Mods.Select(r => (r.ContainerId, r.OrderLocked)).ToArray();
+        var visibleIds = new HashSet<Guid>(VisibleMods.Select(r => r.ContainerId));
+        var rows = Mods.Select(r =>
+            (r.ContainerId, r.OrderLocked, Visible: visibleIds.Contains(r.ContainerId))).ToArray();
         var fullOrder = ModReorderPlanner.BuildFullOrder(rows, request);
         if (fullOrder is null)
         {
@@ -1012,7 +1482,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         _session.HasPendingChanges = true;
         Reload();
         _logger.LogDebug(
-            "Reordered container {Container} to unlocked rank {Rank}",
+            "Reordered container {Container} to visible unlocked rank {Rank}",
             request.SourceContainerId, request.TargetUnlockedRank);
     }
 
@@ -1204,38 +1674,38 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
 
     /// <summary>
     /// The stable per-row update action. Branches on the verified Premium state:
-    /// <b>Premium</b> installs the mod's latest MAIN release in-app via
-    /// <see cref="IModUpdateInstaller.TryInstallLatestAsync"/> (the shared
-    /// install path: coordinator-gated one-install-at-a-time, in-gate
-    /// eligibility revalidation, acknowledge-on-success, per-row progress; works
-    /// identically inside Gaming Mode); <b>regular / unknown</b> opens the mod's
-    /// Nexus files page in the user's browser via the injectable
-    /// external-launcher seam, surfacing a fallback alert on launch failure,
-    /// except inside a Steam Deck Gaming Mode session where the browser flow
-    /// cannot complete and Desktop Mode guidance is shown instead.
+    /// <b>Premium</b> resolves the mod's latest MAIN release + enqueues one
+    /// in-app UpdateInstall download via the shared enqueue front (the queue's
+    /// serial worker owns the acquisition, the acknowledge-on-success, and the
+    /// reload signal; the row morphs into a download row while the item is
+    /// live; works identically inside Gaming Mode); <b>regular / unknown</b>
+    /// opens the mod's Nexus files page in the user's browser via the
+    /// injectable external-launcher seam, surfacing a fallback alert on launch
+    /// failure, except inside a Steam Deck Gaming Mode session where the
+    /// browser flow cannot complete and Desktop Mode guidance is shown
+    /// instead.
     /// </summary>
     /// <remarks>
     /// <para><b>Defense.</b> No-op when: there is no active profile; the row is
     /// not Nexus+Latest (<see cref="ModItemViewModel.IsNexusLatest"/>); no update
     /// is flagged (<see cref="ModItemViewModel.UpdateAvailable"/>); or the row
-    /// has no <see cref="ModItemViewModel.NexusModId"/>. The Premium install path
-    /// additionally no-ops when the installer reports another install in flight
-    /// (one install at a time, shared with the automatic batch).</para>
-    /// <para><b>One install at a time, globally.</b> The installer's shared
-    /// coordinator is the single mutual-exclusion point across the manual click
-    /// + the automatic batch. Its busy flag drives
-    /// <see cref="AnyRowUpdating"/> (pushed to rows), which disables other
-    /// Premium rows' actions while an install runs; its progress events drive
-    /// this row's spinner (<see cref="ModItemViewModel.IsUpdating"/>).</para>
+    /// has no <see cref="ModItemViewModel.NexusModId"/>.</para>
+    /// <para><b>One engine.</b> The download queue's serial worker is the single
+    /// mutual-exclusion point across the manual click, the automatic batch, and
+    /// nxm downloads: a click for a file already live in the queue joins the
+    /// existing item (dedupe + pulse) instead of starting a second
+    /// acquisition.</para>
     /// <para><b>Transactional extraction.</b> The mod repository's
     /// <c>AddVersion</c> extracts into a sibling temp + atomically swaps on
-    /// success, so a mid-update failure leaves the existing version intact (the
-    /// user keeps the version they had). On Premium-install failure the command
-    /// surfaces a user-facing alert with the exception's message.</para>
+    /// success, so a mid-download failure leaves the existing version intact
+    /// (the user keeps the version they had). A head-resolve failure (the API
+    /// call before any queue item exists) surfaces a user-facing alert with
+    /// the exception's message; once enqueued, failures render inline on the
+    /// morphed row.</para>
     /// <para><b>No ConfigureAwait(false)</b> on the Premium path: the continuation
-    /// must stay on the UI thread so Reload + ShowAlertAsync run on the UI thread
-    /// (the UI-layer convention). The installer's own I/O runs on the threadpool
-    /// internally; awaiting it does not block the UI thread.</para>
+    /// must stay on the UI thread so the failure-path ShowAlertAsync runs on
+    /// the UI thread (the UI-layer convention). The resolve's I/O runs on the
+    /// threadpool internally; awaiting it does not block the UI thread.</para>
     /// </remarks>
     [RelayCommand]
     private async Task Update(ModItemViewModel? row)
@@ -1273,67 +1743,57 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     }
 
     /// <summary>
-    /// The Premium install branch of the update action: hands the install to
-    /// the shared installer (a Busy outcome when another install is in flight is
-    /// a silent no-op) and renders the outcome. On <see cref="ModInstallStatus.Installed"/>
-    /// the installer has already acquired the latest release + acknowledged the
-    /// flag, so this marks the session pending + reloads (the new version + the
-    /// cleared flag show). On <see cref="ModInstallStatus.Failed"/> the localized
-    /// alert carries the exception's message. Busy + NotEligible are silent (a
-    /// second click while busy is a no-op; an ineligible target means the flag
-    /// was stale + the next hydration clears it). Cancellation propagates out of
-    /// the installer + is swallowed here (not a failure).
+    /// The Premium branch of the update action: resolves the mod's head
+    /// release + admits one UpdateInstall item onto the download queue through
+    /// the shared enqueue front. The queue owns the rest under its serial
+    /// worker: the row morphs while the item is live (the morph hides the
+    /// update-action cell, the double-click guard), the dequeue-time
+    /// eligibility revalidation makes a stale flag a silent no-op, and the
+    /// completion acknowledges once + raises the applied event (which marks
+    /// the session pending + reloads this list). A resolve failure (the API
+    /// call before any item exists) surfaces the localized failure alert;
+    /// cancellation is swallowed (not a failure).
     /// </summary>
     private async Task UpdatePremiumAsync(Guid profileId, ModItemViewModel row, int modId)
     {
-        ModInstallOutcome outcome;
+        // A row with no resolved version cannot carry the eligibility version
+        // rule's input (the enqueue requires it); treat it like a stale flag:
+        // a silent no-op.
+        if (string.IsNullOrWhiteSpace(row.ActualVersion))
+        {
+            return;
+        }
+
         try
         {
             // No ConfigureAwait(false): the continuation must stay on the UI
-            // thread so Reload + the failure-path ShowAlertAsync below run on
-            // the UI thread (the UI-layer convention). The expected version is
-            // the row's resolved version (what the row was built from); the
-            // installer revalidates it against the container's current state
-            // inside the gate. The candidates are the entries the last Reload
-            // loaded.
-            outcome = await RowContext.InstallLatestAsync(
-                profileId,
-                row.ContainerId,
-                modId,
-                row.ActualVersion,
-                _loadedEntries.ToCandidates());
+            // thread so the failure-path ShowAlertAsync below runs on the UI
+            // thread (the UI-layer convention). The expected version is the
+            // row's resolved version (what the row was built from); the queue
+            // revalidates it against the container's current state at dequeue.
+            await _updateEnqueuer.EnqueueLatestAsync(
+                modId, row.ContainerId, row.Name, row.ActualVersion, profileId);
+            _logger.LogInformation(
+                "Enqueued the update install for mod {Container} (mod id {Mod}).",
+                row.ContainerId, modId);
         }
         catch (OperationCanceledException)
         {
             // Cancellation is not a failure: the user (or shutdown) cancelled;
             // no alert. Re-throwing would surface as an unobserved exception on
             // the fire-and-forget AsyncRelayCommand, so swallow instead.
-            _logger.LogInformation("Update of mod {Container} was cancelled.", row.ContainerId);
-            return;
+            _logger.LogInformation("Update enqueue for mod {Container} was cancelled.", row.ContainerId);
         }
-
-        switch (outcome.Status)
+        catch (Exception ex)
         {
-            case ModInstallStatus.Installed:
-                _session.HasPendingChanges = true;
-                Reload();
-                _logger.LogInformation("Updated mod {Container} to the latest Nexus release.", row.ContainerId);
-                break;
-
-            case ModInstallStatus.Failed:
-                _logger.LogError(
-                    outcome.Exception, "Update of mod {Container} failed.", row.ContainerId);
-                await _dialogs.ShowAlertAsync(
-                    _localization["Update_FailedTitle"],
-                    _localization.Format("Update_FailedMessage", row.Name) + " "
-                        + (outcome.Exception?.Message ?? outcome.Reason));
-                break;
-
-            default:
-                // Busy (another install is in flight: a clean no-op) +
-                // NotEligible (a stale flag; the installer logged the reason +
-                // the next hydration self-heals it out). Silent.
-                break;
+            // The head resolve failed (API down, no MAIN files): nothing was
+            // enqueued, so there is no row to host the failure. Surface the
+            // localized alert carrying the exception's message.
+            _logger.LogError(
+                ex, "Resolving the latest release of mod {Container} failed.", row.ContainerId);
+            await _dialogs.ShowAlertAsync(
+                _localization["Update_FailedTitle"],
+                _localization.Format("Update_FailedMessage", row.Name) + " " + ex.Message);
         }
     }
 

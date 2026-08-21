@@ -21,6 +21,7 @@ namespace Modificus.Curator.Profiles;
 ///       mods/                        (the mod host folder Relay consumes)
 ///         &lt;baseName&gt;               (staging link -> &lt;versionFolder&gt;/&lt;baseName&gt;/)
 ///         mods.lst                   (successfully-staged enabled mods, in order)
+///         .curator.json              (Curator's staging ownership marker)
 /// </code>
 /// <para>
 /// A profile references mods by <see cref="ModListEntry.ContainerId"/>; it stores
@@ -466,8 +467,37 @@ internal sealed class ProfileService : IProfileService
         }
 
         WriteModList(stagedNames, mods);
+        WriteOwnershipMarker(mods, profile);
         _logger.LogInformation("Staged {Count} mod(s) for profile {Id} at {Path}", stagedNames.Count, id, staged);
         return staged;
+    }
+
+    // ---- staging ownership marker -------------------------------------------
+
+    /// <summary>The marker schema version. Bump only on a breaking marker-shape
+    /// change (the game-dir host treats an unreadable marker as absent).</summary>
+    internal const int OwnershipMarkerSchema = 1;
+
+    /// <summary>
+    /// The persisted shape of <see cref="OwnershipMarkerFileName"/>: identifies
+    /// the profile the staged tree was projected for + when. Profiles holds the
+    /// profile identity and owns the staged tree, so the write lives here; the
+    /// relay-client game-dir host only reads the marker back to prove a link is
+    /// Curator's. App version is deliberately absent (Profiles does not know it;
+    /// profile identity + timestamp carry the troubleshooting value).
+    /// </summary>
+    internal sealed record OwnershipMarker(int Schema, Guid ProfileId, string ProfileName, DateTimeOffset ProjectedAtUtc);
+
+    /// <summary>
+    /// Rewrites the ownership marker into the staged <c>mods/</c> each pass
+    /// (the pass cleared + rebuilt the tree, so the prior marker is gone; a
+    /// marker that survived would misattribute a rebuilt tree).
+    /// </summary>
+    private static void WriteOwnershipMarker(string mods, Profile profile)
+    {
+        var marker = new OwnershipMarker(OwnershipMarkerSchema, profile.Id, profile.Name, DateTimeOffset.UtcNow);
+        var json = JsonSerializer.Serialize(marker, JsonOptions);
+        File.WriteAllText(Path.Combine(mods, StagingOwnership.MarkerFileName), json, ModListEncoding);
     }
 
     // ---- DMF fresh-add recognition ------------------------------------------
@@ -522,6 +552,55 @@ internal sealed class ProfileService : IProfileService
         return baseName == DmfBaseFolderName
             && target is not null
             && File.Exists(Path.Combine(target, DmfBaseFolderName + ".mod"));
+    }
+
+    // ---- alternate mod-manager recognition ----------------------------------
+
+    /// <summary>
+    /// The base folder name an alternate mod manager mod occupies (ordinal,
+    /// lower-case literal), mirroring the Darktide Mod Loader family
+    /// convention. Detection is content-based + manager-agnostic (no source or
+    /// Nexus id is consulted); the folder must also contain
+    /// <see cref="ModManagerFileName"/>.
+    /// </summary>
+    private const string ModManagerBaseFolderName = "base";
+
+    /// <summary>
+    /// The manager entry file inside a <c>base</c> folder that marks its
+    /// container as an alternate mod manager (the file Relay's
+    /// <c>--mod-manager</c> consumes). Its absence from the resolved target
+    /// yields no manager (never a path to a missing file).
+    /// </summary>
+    private const string ModManagerFileName = "mod_manager.lua";
+
+    /// <inheritdoc />
+    public ActiveModManager? GetActiveModManager(Guid id)
+    {
+        var baseFolder = EnsureBaseFolder();
+        // Throws KeyNotFoundException via EnsureReadable when the profile is
+        // unknown (the caller's contract).
+        var profile = ReadProfileFile(ProfileDir(baseFolder, id));
+
+        // Same resolver + order staging walks, so the answer matches what
+        // PrepareModRoot stages. The staged path is derived, not written here:
+        // it exists once the launch path's PrepareModRoot has created the link.
+        // First candidate in order wins; a second cannot normally exist (the
+        // base-name collision block stops two base mods), so first-wins is the
+        // documented defense against a hand-shaped profile.
+        foreach (var mod in profile.Mods.Where(m => m.Enabled).OrderBy(m => m.Order))
+        {
+            var (baseName, target, _) = ResolveStagingTarget(mod);
+            if (baseName == ModManagerBaseFolderName
+                && target is not null
+                && File.Exists(Path.Combine(target, ModManagerFileName)))
+            {
+                return new ActiveModManager(
+                    mod.ContainerId,
+                    Path.Combine(ModsDir(StagedDir(baseFolder, id)), baseName, ModManagerFileName));
+            }
+        }
+
+        return null;
     }
 
     // ---- staging helpers ----------------------------------------------------
@@ -664,6 +743,9 @@ internal sealed class ProfileService : IProfileService
     }
 
     // ---- launch settings ----------------------------------------------------
+
+    /// <inheritdoc />
+    public string ProfilesRoot => EnsureBaseFolder();
 
     /// <inheritdoc />
     public LaunchSettings GetLaunchSettings(Guid id)

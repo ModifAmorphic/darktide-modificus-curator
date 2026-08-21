@@ -17,9 +17,13 @@ namespace Modificus.Curator.Nxm;
 /// return non-zero.</item>
 /// <item>Try <c>pipeConnect</c>: on success, write the framed URL, close,
 /// return 0.</item>
-/// <item>On refused connect: locate the sibling Curator exe, launch it detached
-/// (no args), retry <c>pipeConnect</c> every <paramref name="retryInterval"/>
-/// until success or <paramref name="retryTimeout"/> elapses, then deliver + exit 0.</item>
+/// <item>On refused connect: consult <c>curatorRunningCheck</c>. When a
+/// Curator process is already running, skip the launch and go straight to the
+/// retry loop (a burst of handler invocations must not each launch a
+/// duplicate; the losers only die at the single-instance guard). Otherwise
+/// locate the sibling Curator exe, launch it detached (no args), then either
+/// way retry <c>pipeConnect</c> every <paramref name="retryInterval"/> until
+/// success or <paramref name="retryTimeout"/> elapses, then deliver + exit 0.</item>
 /// <item>On timeout: log "Curator did not start within Ns" to stderr, return non-zero.</item>
 /// </list>
 /// </para>
@@ -27,6 +31,19 @@ namespace Modificus.Curator.Nxm;
 /// <b>Cold start is owned by the handler, not Curator.</b> Curator's startup is
 /// untouched by the nxm handler: no <c>--nxm</c> arg, no cold-start branch. The handler
 /// owns the entire orchestration.
+/// </para>
+/// <para>
+/// <b>The pre-launch check is advisory.</b> <paramref name="curatorRunningCheck"/>
+/// runs only after a refused connect and only to avoid a duplicate launch; it
+/// adds no synchronization, and any race (Curator exiting between the check
+/// and the connect, or the check under-detecting) falls through to the
+/// existing retry/timeout semantics. On Linux, <see cref="Process.GetProcessesByName"/>
+/// compares the exact full executable name recovered from /proc cmdline when
+/// available (the kernel's 15-character comm field is only the fallback), so
+/// the check is effective there in the normal case; under-detection is
+/// confined to degraded shapes (a zombie's empty cmdline, an unreadable
+/// cmdline, or an argv0-rewriting launcher). A missed detection means one
+/// extra launch attempt, which the single-instance guard already handles.
 /// </para>
 /// <para>
 /// <b>AOT-safe.</b> No DI, no Avalonia, no JSON, no reflection. Only raw byte /
@@ -37,20 +54,32 @@ namespace Modificus.Curator.Nxm;
 /// <para>
 /// Every external dependency is an injectable seam so the relay is fully
 /// testable without real processes or pipes: <paramref name="pipeConnect"/>,
-/// <paramref name="launchCuratorFactory"/>, the retry interval, and the retry
-/// timeout all default to production behavior and are overridden by tests.
+/// <paramref name="launchCuratorFactory"/>, <paramref name="curatorRunningCheck"/>,
+/// the retry interval, and the retry timeout all default to production
+/// behavior and are overridden by tests.
 /// </para>
 /// </remarks>
 public static class NxmHandlerRelay
 {
-    /// <summary>Default connect attempt timeout for the default <paramref name="pipeConnect"/>.</summary>
-    public static readonly TimeSpan DefaultConnectTimeout = TimeSpan.FromMilliseconds(500);
+    /// <summary>
+    /// Default connect attempt timeout for the default <paramref name="pipeConnect"/>.
+    /// 1s, not less: a connected pipe frees quickly once the routed handler
+    /// returns promptly, but the enqueue gates read config from disk inside
+    /// the connected window; the headroom is cheap insurance against
+    /// slow-disk false cold-starts.
+    /// </summary>
+    public static readonly TimeSpan DefaultConnectTimeout = TimeSpan.FromMilliseconds(1000);
 
     /// <summary>Default interval between pipe-connect retries during cold start.</summary>
     public static readonly TimeSpan DefaultRetryInterval = TimeSpan.FromMilliseconds(250);
 
     /// <summary>Default total time to wait for Curator to come up during cold start.</summary>
     public static readonly TimeSpan DefaultRetryTimeout = TimeSpan.FromSeconds(30);
+
+    // The Curator exe name without extension: one source of truth for the
+    // launch path (which appends the Windows extension) and the running check
+    // (GetProcessesByName matches bare names on both platforms).
+    private const string CuratorProcessName = "Modificus.Curator";
 
     /// <summary>
     /// Runs the relay. Returns the process exit code (0 on success, non-zero on
@@ -69,6 +98,13 @@ public static class NxmHandlerRelay
     /// pipe is not owned. The default derives the sibling Curator exe from
     /// <see cref="AppContext.BaseDirectory"/>.
     /// </param>
+    /// <param name="curatorRunningCheck">
+    /// Reports whether a Curator process is already running. Consulted before
+    /// the cold-start launch so a burst of handler invocations (each seeing the
+    /// same refused pipe) does not each launch a duplicate Curator. The default
+    /// reuses <see cref="SingleInstanceGuard"/>'s process enumeration over the
+    /// Curator exe name.
+    /// </param>
     /// <param name="retryInterval">Cold-start retry interval (default 250ms).</param>
     /// <param name="retryTimeout">Cold-start total timeout (default 30s).</param>
     /// <param name="ct">Cancellation.</param>
@@ -76,6 +112,7 @@ public static class NxmHandlerRelay
         string[] args,
         Func<string, CancellationToken, Task<(bool connected, Stream? stream)>>? pipeConnect = null,
         Func<ProcessStartInfo>? launchCuratorFactory = null,
+        Func<bool>? curatorRunningCheck = null,
         TimeSpan? retryInterval = null,
         TimeSpan? retryTimeout = null,
         CancellationToken ct = default)
@@ -84,6 +121,7 @@ public static class NxmHandlerRelay
 
         var connect = pipeConnect ?? DefaultPipeConnect;
         var launchFactory = launchCuratorFactory ?? DefaultLaunchCuratorFactory;
+        var curatorRunning = curatorRunningCheck ?? DefaultCuratorRunningCheck;
         var interval = retryInterval ?? DefaultRetryInterval;
         var timeout = retryTimeout ?? DefaultRetryTimeout;
 
@@ -99,10 +137,20 @@ public static class NxmHandlerRelay
         if (await ConnectAndDeliverAsync(connect, url, ct).ConfigureAwait(false))
             return ExitOk;
 
-        // 3. Cold start: launch Curator, retry the pipe.
-        Console.Error.WriteLine("curator nxm handler: Curator is not running; launching it.");
-        if (!LaunchCurator(launchFactory))
-            return ExitLaunchFailed;
+        // 3. Cold start: launch Curator (skipped when the advisory pre-check
+        // sees one already running; races just fall through to the retry
+        // semantics below), then retry the pipe.
+        if (curatorRunning())
+        {
+            Console.Error.WriteLine(
+                "curator nxm handler: Curator is already running; waiting for the pipe.");
+        }
+        else
+        {
+            Console.Error.WriteLine("curator nxm handler: Curator is not running; launching it.");
+            if (!LaunchCurator(launchFactory))
+                return ExitLaunchFailed;
+        }
 
         // 4. Retry connect until Curator binds the pipe or the timeout elapses.
         var deadline = DateTimeOffset.UtcNow + timeout;
@@ -225,6 +273,15 @@ public static class NxmHandlerRelay
         }
     }
 
+    private static bool DefaultCuratorRunningCheck()
+    {
+        // The same detection SingleInstanceGuard enforces with, reused rather
+        // than reimplemented. The handler's own name differs from Curator's on
+        // both platforms, so excluding self is symmetry, not a necessity.
+        using var current = Process.GetCurrentProcess();
+        return new SingleInstanceGuard().IsAnotherInstanceRunning(CuratorProcessName, current.Id);
+    }
+
     private static ProcessStartInfo DefaultLaunchCuratorFactory()
     {
         var path = ResolveCuratorMainExe(AppContext.BaseDirectory);
@@ -261,7 +318,7 @@ public static class NxmHandlerRelay
     {
         // The handler exe is a sibling of the main Curator exe (both ship in the
         // same dir). Modificus.Curator on Linux, Modificus.Curator.exe on Windows.
-        var exeName = OperatingSystem.IsWindows() ? "Modificus.Curator.exe" : "Modificus.Curator";
+        var exeName = OperatingSystem.IsWindows() ? CuratorProcessName + ".exe" : CuratorProcessName;
         var path = Path.Combine(baseDirectory, exeName);
         if (!File.Exists(path))
             throw new CuratorMainExeNotFoundException(path, baseDirectory);

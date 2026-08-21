@@ -933,7 +933,7 @@ public sealed class NexusModMetadataServiceTests
         public ModContainer? FindBySource(ModSource source) => throw new NotImplementedException();
         public ModContainer? FindUntrackedByName(string name) => throw new NotImplementedException();
         public ModContainer CreateContainer(ModSource source, string name) => throw new NotImplementedException();
-        public ModContainer AddVersion(Guid containerId, string versionString, Action<string> populateFolder, DateTimeOffset? remoteUploadedAt = null, ModDisplayMetadata? displayMetadata = null) => throw new NotImplementedException();
+        public ModContainer AddVersion(Guid containerId, string versionString, Action<string> populateFolder, DateTimeOffset? remoteUploadedAt = null, int? remoteFileId = null, ModDisplayMetadata? displayMetadata = null) => throw new NotImplementedException();
         public ModContainer? RenameContainer(Guid containerId, string newName) => throw new NotImplementedException();
         public void RemoveVersion(Guid containerId, string versionFolder) => throw new NotImplementedException();
         public string GetVersionFolderPath(Guid containerId, string versionFolder) => throw new NotImplementedException();
@@ -963,7 +963,7 @@ public sealed class NexusModMetadataServiceTests
         public ModContainer? FindBySource(ModSource source) => throw new NotImplementedException();
         public ModContainer? FindUntrackedByName(string name) => throw new NotImplementedException();
         public ModContainer CreateContainer(ModSource source, string name) => throw new NotImplementedException();
-        public ModContainer AddVersion(Guid containerId, string versionString, Action<string> populateFolder, DateTimeOffset? remoteUploadedAt = null, ModDisplayMetadata? displayMetadata = null) => throw new NotImplementedException();
+        public ModContainer AddVersion(Guid containerId, string versionString, Action<string> populateFolder, DateTimeOffset? remoteUploadedAt = null, int? remoteFileId = null, ModDisplayMetadata? displayMetadata = null) => throw new NotImplementedException();
         public ModContainer? RenameContainer(Guid containerId, string newName) => throw new NotImplementedException();
         public void RemoveVersion(Guid containerId, string versionFolder) => throw new NotImplementedException();
         public string GetVersionFolderPath(Guid containerId, string versionFolder) => throw new NotImplementedException();

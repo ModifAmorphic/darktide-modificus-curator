@@ -34,8 +34,9 @@ public sealed class ModListGamingModeTests
         FakeNexusAuthService? auth = null,
         FakeDialogService? dialogs = null,
         FakeNxmRegistrationState? nxmRegistration = null,
-        FakeModUpdateInstaller? installer = null,
-        FakeExternalLauncher? launcher = null)
+        FakeModAcquisitionService? acquisition = null,
+        FakeExternalLauncher? launcher = null,
+        FakeModDownloadQueue? downloadQueue = null)
     {
         var a = Profile("Alpha");
         var profiles = TestDoubles.Profiles(a);
@@ -58,8 +59,9 @@ public sealed class ModListGamingModeTests
             auth: auth,
             dialogs: dialogs,
             nxmRegistration: nxmRegistration,
-            installer: installer,
+            acquisition: acquisition,
             launcher: launcher,
+            downloadQueue: downloadQueue,
             gamingMode: gamingMode);
         return (vm, session);
     }
@@ -274,13 +276,14 @@ public sealed class ModListGamingModeTests
     }
 
     [Fact]
-    public async Task Gaming_mode_Update_on_a_flagged_premium_row_installs_in_app()
+    public async Task Gaming_mode_Update_on_a_flagged_premium_row_enqueues_in_app()
     {
-        // Premium installs work in Gaming Mode: the acquisition runs under the
-        // coordinator with no guidance alert and no browser.
+        // Premium installs work in Gaming Mode: the update resolves + enqueues
+        // onto the download queue with no guidance alert and no browser.
         var launches = new List<Uri>();
         var dialogs = new FakeDialogService();
-        var installer = new FakeModUpdateInstaller();
+        var acquisition = new FakeModAcquisitionService();
+        var queue = new FakeModDownloadQueue();
         var auth = new FakeNexusAuthService
         {
             State = new NexusAuthState(NexusAuthMethod.OAuth, "premium", IsPremium: true),
@@ -289,17 +292,19 @@ public sealed class ModListGamingModeTests
             withNexusRow: true,
             auth: auth,
             dialogs: dialogs,
-            installer: installer,
-            launcher: FakeExternalLauncher.RecordingUris(launches));
+            acquisition: acquisition,
+            launcher: FakeExternalLauncher.RecordingUris(launches),
+            downloadQueue: queue);
         var row = vm.Mods.Single(m => m.Name == "SoundPack");
         Assert.True(vm.IsPremiumUser);
         row.UpdateAvailable = true;
 
         await vm.UpdateCommand.ExecuteAsync(row);
 
-        var call = Assert.Single(installer.Calls);
-        Assert.Equal(1234, call.ModId);
-        Assert.Equal(row.ContainerId, call.ContainerId);
+        var request = Assert.Single(queue.Requests);
+        Assert.Equal(DownloadPurpose.UpdateInstall, request.Purpose);
+        Assert.Equal(1234, request.ModId);
+        Assert.Equal(row.ContainerId, request.ContainerId);
         Assert.Empty(launches);
         Assert.Empty(dialogs.AlertCalls);
     }

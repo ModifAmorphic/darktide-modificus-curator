@@ -3,7 +3,9 @@
 **Modificus Curator** is the user-facing mod manager app for Darktide. It launches
 the game modded via
 [Mod Relay](https://github.com/ModifAmorphic/darktide-mod-relay) (DLL
-injection: no game-directory footprint, no bundle-database patching) and stays
+injection: no patched game files, no copies, no bundle-database patching; one
+self-identifying, opt-in mods link in the game folder hosts the active
+profile's staged tree) and stays
 out of the way for vanilla play (launch from Steam and the game runs
 unmodified).
 
@@ -26,8 +28,8 @@ unmodified).
   (project layout, domain libraries, the Relay contract Curator consumes,
   profiles, the Windows/Linux launch paths, v1 scope).
 - [`ui-architecture.md`](ui-architecture.md): the UI layer (the shell, the
-  profile session, the mod list, the update UI, the DMF install prompt,
-  dialogs, preferences, and i18n).
+  profile session, the mod list + its download rows, the update UI, the DMF
+  install prompt, dialogs, preferences, and i18n).
 - [`app-auto-update.md`](app-auto-update.md): the in-app self-update
   (Velopack Windows installer and Linux AppImage): the engine-neutral
   `IAppUpdateService`, the

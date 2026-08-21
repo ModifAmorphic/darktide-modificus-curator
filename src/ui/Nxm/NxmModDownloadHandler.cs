@@ -1,7 +1,5 @@
-using Avalonia.Threading;
 using Modificus.Curator.Config;
 using Modificus.Curator.General;
-using Modificus.Curator.Integrations;
 using Modificus.Curator.Mods;
 using Modificus.Curator.Nxm;
 using Modificus.Curator.Profiles;
@@ -13,89 +11,80 @@ using Microsoft.Extensions.Logging;
 namespace Modificus.Curator.UI.Nxm;
 
 /// <summary>
-/// The real <see cref="INxmModDownloadHandler"/>. Replaces the
-/// no-op default via DI "last registration wins" (registered AFTER
-/// <c>AddNxm()</c> in <see cref="CuratorComposition"/>). Receives a parsed
+/// The real <see cref="INxmModDownloadHandler"/>: the enqueue adapter in front
+/// of <see cref="IModDownloadQueue"/>. Replaces the no-op default via DI "last
+/// registration wins" (registered AFTER <c>AddNxm()</c> in
+/// <see cref="CuratorComposition"/>). Receives a parsed
 /// <see cref="NxmModDownloadUrl"/> (the result of clicking "Mod manager
-/// download" on a Nexus file page, relayed by the handler exe + IPC
-/// router), checks auth + active profile, calls the acquisition service to
-/// download + import the mod, and registers it in the active profile. On any
-/// failure, surfaces an error dialog via <see cref="IDialogService.ShowAlertAsync"/>.
+/// download" on a Nexus file page, relayed by the handler exe + IPC router),
+/// gates it, peeks the repository for a row name, enqueues the download, and
+/// returns within milliseconds. The queue owns the acquisition, the profile
+/// registration, the acknowledge, and the reload.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Lives in the UI assembly, not Integrations.</b> The handler coordinates UI
-/// concerns: it reads the active profile from <see cref="IProfileSession"/> (the
-/// single active-profile authority, in UI), shows error dialogs through
-/// <see cref="IDialogService"/> (UI), and marshals those dialogs to the UI thread
-/// via <see cref="Dispatcher.UIThread"/> (Avalonia). The reusable, backend-only
-/// <see cref="IModAcquisitionService"/> lives in Integrations; this handler is the
-/// thin UI-coordinating shell over it. Placing the handler in Integrations would
-/// create a dependency cycle (Integrations cannot reference the UI assembly, which
-/// is its consumer).</para>
+/// <b>The three gates stay here.</b> Game domain, auth (live config read), and
+/// active profile are checked before anything is enqueued; a gated refusal
+/// surfaces the same modal alerts as before, because at gate time there is no
+/// download row to host the failure on. Everything after the gates belongs to
+/// the queue, whose failures render inline on the row.</para>
 /// <para>
-/// <b>Auth is required.</b> <c>NexusAuthMethod != None</c> gates every download
-/// (per the operator's "all downloads require login"). The nxm key/expires in the
-/// URL is the per-file token for the free-user download endpoint, NOT a substitute
-/// for auth. The handler reads the live config on each invocation so a user
-/// configuring Nexus from the Integrations dialog mid-session does not need to
-/// restart.</para>
+/// <b>Prompt return.</b> <see cref="HandleAsync"/> performs no acquisition and
+/// no profile write: the passing path is an in-memory peek plus an enqueue, so
+/// the IPC accept loop is freed immediately (spec 02's invariant that enqueue
+/// order equals click order). The cancellation token is accepted for the
+/// interface contract but unused: the queue owns each item's cancellation once
+/// the request is admitted.</para>
 /// <para>
-/// <b>Active profile is required.</b> No active profile means nowhere to register
-/// the mod, so the download does not proceed (a downloaded mod with nowhere to
-/// land is a poor UX).</para>
+/// <b>Naming at enqueue.</b> A repository peek (by Nexus mod id) supplies the
+/// container id and the stored name; a miss falls back to the localized
+/// "Nexus mod #&lt;id&gt;" format. No prefetch API call: a queued item that has
+/// not started shows the peek name or the fallback, and the queue swaps in the
+/// resolved name once the acquisition lands.</para>
 /// <para>
-/// <b>UI-thread marshaling.</b> The handler runs on the IPC server's background
-/// task, but <see cref="IDialogService.ShowAlertAsync"/> shows an Avalonia window
-/// (the main window owns it), which must happen on the UI thread. The
-/// <see cref="InvokeOnUi"/> seam marshals the call; production wires it to
-/// <see cref="Dispatcher.UIThread.InvokeAsync(Func{Task})"/>, tests inject a
-/// pass-through so the handler is unit-testable without a live Dispatcher.</para>
-/// <para>
-/// <b>Policy on AddMod.</b> The handler registers the mod with
-/// <see cref="ModVersionPolicy.Latest"/> (the newest downloaded version
-/// auto-tracks). The user can pin later via Track B's existing per-mod pin
-/// dropdown. This matches locally-imported mods (Track B also uses Latest for new
-/// mods).</para>
+/// <b>Lives in the UI assembly.</b> The adapter coordinates UI concerns: it
+/// reads the active profile from <see cref="IProfileSession"/> (the single
+/// active-profile authority, in UI), shows gate dialogs through
+/// <see cref="IDialogService"/> (UI), and marshals those dialogs to the UI
+/// thread via the injected seam (production wires
+/// <see cref="Avalonia.Threading.Dispatcher.UIThread"/>; tests inject a
+/// pass-through).</para>
 /// </remarks>
 internal sealed class NxmModDownloadHandler : INxmModDownloadHandler
 {
     /// <summary>
     /// The marshaling seam: runs the supplied async operation on the UI thread.
-    /// Production wires <see cref="Dispatcher.UIThread.InvokeAsync(Func{Task})"/>;
+    /// Production wires <see cref="Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(Func{Task})"/>;
     /// tests inject a pass-through.
     /// </summary>
     private readonly Func<Func<Task>, Task> _invokeOnUi;
 
-    private readonly IModAcquisitionService _acquisition;
+    private readonly IModDownloadQueue _queue;
+    private readonly IModRepository _repo;
     private readonly IProfileSession _session;
-    private readonly IProfileService _profileService;
+    private readonly IProfileService _profiles;
     private readonly IConfigLoader _configLoader;
-    private readonly IUpdateStateStore _updateState;
-    private readonly IModListRefresh _modListRefresh;
     private readonly IDialogService _dialogs;
     private readonly LocalizationService _localization;
     private readonly ILogger<NxmModDownloadHandler> _logger;
 
     public NxmModDownloadHandler(
         Func<Func<Task>, Task> invokeOnUi,
-        IModAcquisitionService acquisition,
+        IModDownloadQueue queue,
+        IModRepository repo,
         IProfileSession session,
-        IProfileService profileService,
+        IProfileService profiles,
         IConfigLoader configLoader,
-        IUpdateStateStore updateState,
-        IModListRefresh modListRefresh,
         IDialogService dialogs,
         LocalizationService localization,
         ILogger<NxmModDownloadHandler> logger)
     {
         _invokeOnUi = invokeOnUi ?? throw new ArgumentNullException(nameof(invokeOnUi));
-        _acquisition = acquisition ?? throw new ArgumentNullException(nameof(acquisition));
+        _queue = queue ?? throw new ArgumentNullException(nameof(queue));
+        _repo = repo ?? throw new ArgumentNullException(nameof(repo));
         _session = session ?? throw new ArgumentNullException(nameof(session));
-        _profileService = profileService ?? throw new ArgumentNullException(nameof(profileService));
+        _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _configLoader = configLoader ?? throw new ArgumentNullException(nameof(configLoader));
-        _updateState = updateState ?? throw new ArgumentNullException(nameof(updateState));
-        _modListRefresh = modListRefresh ?? throw new ArgumentNullException(nameof(modListRefresh));
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
         _localization = localization ?? throw new ArgumentNullException(nameof(localization));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -103,10 +92,9 @@ internal sealed class NxmModDownloadHandler : INxmModDownloadHandler
 
     /// <inheritdoc />
     /// <remarks>
-    /// All gating + acquisition errors route through <see cref="ShowAlertAsync"/>,
-    /// which marshals to the UI thread. Cancellation propagates as
-    /// <see cref="OperationCanceledException"/> (not surfaced as an error dialog:
-    /// the user, or a shutdown, caused it).
+    /// Gate refusals route through <see cref="ShowAlertAsync"/>, which marshals
+    /// to the UI thread and waits for the user's OK (unchanged behavior). The
+    /// passing path enqueues and returns promptly.
     /// </remarks>
     public async Task HandleAsync(NxmModDownloadUrl url, CancellationToken ct = default)
     {
@@ -114,8 +102,8 @@ internal sealed class NxmModDownloadHandler : INxmModDownloadHandler
 
         // 0. Darktide-only: Curator supports only Warhammer 40,000: Darktide
         //    Nexus downloads. Reject any other game before auth / profile /
-        //    acquisition so the user gets a clear reason and we do not attempt
-        //    a download that cannot land. Case-insensitive domain match.
+        //    enqueue so the user gets a clear reason and nothing is queued.
+        //    Case-insensitive domain match.
         if (!string.Equals(url.Game, NexusGameIdentity.DarktideDomain, StringComparison.OrdinalIgnoreCase))
         {
             _logger.LogWarning(
@@ -138,7 +126,8 @@ internal sealed class NxmModDownloadHandler : INxmModDownloadHandler
             return;
         }
 
-        // 2. Active-profile check (the single authority).
+        // 2. Active-profile check (the single authority). The queue captures
+        //    this id as the download's target profile.
         var profileId = _session.ActiveProfileId;
         if (profileId is null)
         {
@@ -149,53 +138,37 @@ internal sealed class NxmModDownloadHandler : INxmModDownloadHandler
             return;
         }
 
-        // 3. Acquire + register. Any failure surfaces a single error dialog with
-        //    the exception message; cancellation propagates.
+        // 3. Peek + enqueue. An in-memory repository lookup names the row (the
+        //    container's stored name, or the localized numeric fallback) and
+        //    carries the container id; the profile read supplies the target
+        //    name captured at enqueue. No acquisition, no AddMod, no reload:
+        //    the queue owns those.
         try
         {
-            var (containerId, versionId) = await _acquisition.AcquireFromNexusAsync(
-                url.Game, url.ModId, url.FileId, url.Key, url.Expires, ct: ct);
+            var profileName = _profiles.GetProfile(profileId.Value).Name;
+            var existing = _repo.FindBySource(new NexusSource { ModId = url.ModId });
+            var displayName = existing is null
+                ? _localization.Format("Nxm_ModNameFallback", url.ModId)
+                : existing.Name;
 
-            _profileService.AddMod(profileId.Value, containerId, ModVersionPolicy.Latest);
-
-            // Acknowledge the install: clear the persisted known-update entry
-            // for this container directly through the update-state store (no
-            // extra API check), so the stale known-update state (recorded
-            // before the version change) does not re-apply the flag on the
-            // reload below. The next authoritative check reconciles naturally.
-            try
-            {
-                _updateState.AcknowledgeInstall(profileId.Value, containerId);
-            }
-            catch (Exception ex)
-            {
-                // Defensive: AcknowledgeInstall should not throw, but a
-                // persistence failure must not block the reload.
-                _logger.LogWarning(ex,
-                    "Acknowledging update for container {Container} failed; the next check reconciles.",
-                    containerId);
-            }
-
-            // Refresh the mod list on the UI thread so the newly-added (or
-            // reinstalled) mod appears immediately without a profile switch.
-            await _invokeOnUi(() => { _modListRefresh.Reload(); return Task.CompletedTask; });
+            _queue.Enqueue(new ModDownloadRequest(
+                url.Game, url.ModId, url.FileId, DownloadPurpose.ProfileAdd,
+                existing?.Id, displayName, profileId.Value, profileName,
+                url.Key, url.Expires));
 
             _logger.LogInformation(
-                "Acquired Nexus mod {Mod} file {File} into profile {Profile} (container {Container}, version {Version}).",
-                url.ModId, url.FileId, profileId.Value, containerId, versionId);
-        }
-        catch (OperationCanceledException)
-        {
-            // Propagate: cancellation is expected (shutdown / user-driven), not
-            // an error to surface as a dialog.
-            throw;
+                "Enqueued the nxm download of mod {Mod} file {File} for profile {Profile}.",
+                url.ModId, url.FileId, profileId.Value);
         }
         catch (Exception ex)
         {
+            // A profile that vanished between the session read and here, or a
+            // queue admission failure: nothing was enqueued, so the failure is
+            // still gate-shaped (no row exists to host it).
             _logger.LogError(ex,
-                "Failed to acquire Nexus mod {Mod} file {File}.", url.ModId, url.FileId);
-            await ShowAlertAsync(
-                _localization["Nxm_DownloadFailedTitle"], ex.Message);
+                "Failed to enqueue the nxm download of mod {Mod} file {File}.",
+                url.ModId, url.FileId);
+            await ShowAlertAsync(_localization["Nxm_DownloadFailedTitle"], ex.Message);
         }
     }
 

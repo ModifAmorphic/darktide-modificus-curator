@@ -71,25 +71,31 @@ Updates come from the Curator GitHub repository's releases. The Velopack source
 is constructed anonymously:
 
 ```csharp
+var options = new UpdateOptions { AllowVersionDowngrade = true };
 var source = new GithubSource(
     "https://github.com/ModifAmorphic/darktide-modificus-curator",
     accessToken: null,
-    prerelease: true,
+    prerelease: false,
     downloader: null);
-var manager = new UpdateManager(source);
+var manager = new UpdateManager(source, options);
 ```
 
 `GithubSource` lives in the `Velopack.Sources` namespace. The token is `null`
 (anonymous), which is subject to GitHub's unauthenticated rate limit (60
 requests/hour per IP). That is ample for a single check per startup plus the
 occasional manual check; the check is best-effort anyway (a rate-limit hit just
-means the notice does not appear this session). Prereleases are included because
-every release today is a prerelease; excluding them would hide every published
-build.
+means the notice does not appear this session). The feed contains stable
+releases only: `prerelease: false` means a user is never offered a pre-release
+in-app, and the only pre-release path is a manual download from GitHub.
 
 `downloader: null` is the documented default in Velopack 1.2.0; Velopack
-substitutes its own HttpClient-based downloader. `new UpdateManager(source)` is
-the `IUpdateSource` overload (the manager takes the source, not a URL).
+substitutes its own HttpClient-based downloader. `new UpdateManager(source,
+options)` is the `IUpdateSource` overload (the manager takes the source, not a
+URL). `UpdateOptions { AllowVersionDowngrade = true }` makes the latest stable
+release authoritative even when it is semver-older than the installed version:
+a manually-installed pre-release is offered the latest stable in-app and
+self-heals onto the release track, applied as a full-package update with no
+deltas.
 
 The source is config-driven, not hardcoded. `VelopackAppUpdateService` reads
 `CuratorConfig.AppUpdates.SourceOverride` once at construction, via the injected
@@ -104,7 +110,7 @@ instead:
 ```csharp
 // A directory path is read straight off disk (expecting the running package's
 // channel feed alongside the .nupkg); a URL is fetched.
-var manager = new UpdateManager(sourceOverride);
+var manager = new UpdateManager(sourceOverride, options);
 ```
 
 This is how local update testing and self-hosted update feeds work, with no code
@@ -286,8 +292,9 @@ the notice flow:
 
 1. `ConfirmAsync` asks "vX is available, download and restart?".
 2. On confirm, `ShowProgressAsync` runs `DownloadUpdatesAsync` under a
-   buttonless, non-closeable modal spinner (the same `ProgressDialog` the DMF
-   download uses).
+   buttonless, non-closeable modal spinner (`ProgressDialog`; mod downloads do
+   not use it, they render as rows on the mod list through the download
+   queue).
 3. On success, `ApplyUpdatesAndRestart` exits the process and Velopack
    relaunches under the new version.
 4. On a download failure, an alert surfaces the error and the apply step is
@@ -402,8 +409,8 @@ but `ApplyUpdatesAndRestart(info.TargetFullRelease, restartArgs: null)` takes
   Velopack does. The Linux release workflow seeds the prior `linux-x64` feed and
   full package so `vpk` can emit a delta. The first AppImage update downloads a
   full package because no local base nupkg exists yet.
-- **Channel switching.** There is one feed (the repo's releases, prereleases
-  included). No stable/beta channel toggle and no user-facing feed switcher. The
+- **Channel switching.** There is one feed (the repo's stable releases). No
+  stable/beta channel toggle and no user-facing feed switcher. The
   feed source itself is operator-configurable for local testing and self-hosting
   via `CuratorConfig.AppUpdates.SourceOverride` (a machine-config field set in
   `config.json`, not a UI control), but there is no channel concept the user can
@@ -454,10 +461,13 @@ To stage a newer version locally:
    `AppUpdates.SourceOverride` to that directory path in Curator's `config.json`
    (`VelopackAppUpdateService` reads it once at construction via the injected
    `IConfigLoader`; `UpdateManager`'s `urlOrPath` overload reads
-   the package's channel feed straight off disk, so the local feed is tested without
-   GitHub and without any code edit). Clear the field to revert to the
-   production source. Alternatively, upload the platform feed and nupkg to a
-   GitHub prerelease.
+    the package's channel feed straight off disk, so the local feed is tested without
+    GitHub and without any code edit). Clear the field to revert to the
+    production source. Uploading the platform feed and nupkg to a GitHub
+    prerelease is no longer an alternative: pre-releases are excluded from the
+    in-app feed by design, so such an upload never reaches the in-app updater.
+    The `SourceOverride` route (a local directory or a self-hosted URL) is the
+    sanctioned update-flow testing path.
 
 Then verify:
 

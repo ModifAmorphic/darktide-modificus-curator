@@ -120,6 +120,7 @@ public sealed class SingleInstanceGuard
 
     public SingleInstanceGuard(OtherInstanceEnumerator? enumerate = null, ILogger? logger = null);
     public void EnsureOnlyInstance(string ipcPipeName);
+    public bool IsAnotherInstanceRunning(string processName, int excludingPid);
 }
 ```
 
@@ -127,6 +128,14 @@ public sealed class SingleInstanceGuard
 `Process.GetCurrentProcess`, invokes the enumerator with that name, and throws
 `NxmSingleInstanceException` if any other live process shares the name. The IPC
 pipe name is carried on the exception as context.
+
+`IsAnotherInstanceRunning` is the non-throwing query over the same
+enumeration: true when any live process other than `excludingPid` shares
+`processName`. Callers checking for "another me" pass the current process's
+name and PID; callers checking for a different executable pass that
+executable's name (`NxmHandlerRelay` asks whether Curator is up before its
+cold-start launch, reusing this guard instead of duplicating the
+enumeration).
 
 - **Production enumerator** (`EnumerateOthers`, the default): uses
   `Process.GetProcessesByName(processName)` and excludes self by PID. Enumeration
@@ -199,8 +208,11 @@ public sealed class NxmSingleInstanceException : Exception
   `Disconnect` between clients (the same server instance accepts the next client;
   no rebind, the pipe name stays claimed for the app's lifetime). Per-connection
   exceptions are logged and swallowed so one bad client cannot kill the server.
-  The loop processes one connection at a time, which is acceptable for v1
-  (handler invocations are rare and short). Cancellation shuts the server down.
+  The loop processes one connection at a time, which rests on an explicit
+  invariant: `RouteAsync` must return promptly. Request processing is the routed
+  handler's responsibility and must not run inline on the accept loop (the
+  handler enqueues or refuses; it does not work inline). Cancellation shuts the
+  server down.
 
 Separating the two concerns means single-instance is fast (no probe timeout) and
 the pipe is its own check that degrades on failure.
@@ -227,6 +239,11 @@ RFC 8252), logs collection URLs as "unsupported in v1", and logs unparseable
 URLs as a warning. Handler exceptions are caught at the router boundary so one
 bad handler invocation cannot kill the IPC accept loop.
 
+Both seams carry a prompt-return contract: `RouteAsync` runs inline on the IPC
+accept loop and must return promptly, and `HandleAsync` must enqueue the
+download (or refuse it via its gate) rather than work inline. A slow return
+blocks every later nxm delivery.
+
 The library ships a **no-op default implementation** of the mod-download handler
 (internal, `NoOpNxmModDownloadHandler`): it logs the parsed URL at Information
 and returns. A real implementation (the acquisition flow) supersedes it via DI
@@ -248,7 +265,7 @@ pipes.
 ```csharp
 public static class NxmHandlerRelay
 {
-    public static readonly TimeSpan DefaultConnectTimeout;   // 500ms
+    public static readonly TimeSpan DefaultConnectTimeout;   // 1s
     public static readonly TimeSpan DefaultRetryInterval;    // 250ms
     public static readonly TimeSpan DefaultRetryTimeout;     // 30s
 
@@ -256,6 +273,7 @@ public static class NxmHandlerRelay
         string[] args,
         Func<string, CancellationToken, Task<(bool connected, Stream? stream)>>? pipeConnect = null,
         Func<ProcessStartInfo>? launchCuratorFactory = null,
+        Func<bool>? curatorRunningCheck = null,
         TimeSpan? retryInterval = null,
         TimeSpan? retryTimeout = null,
         CancellationToken ct = default);
@@ -268,6 +286,11 @@ public sealed class CuratorMainExeNotFoundException : Exception
 }
 ```
 
+The 1s connect timeout (not less) is deliberate: a connected pipe frees quickly
+once the routed handler returns promptly, but the enqueue gates read config
+from disk inside the connected window, so the headroom is cheap insurance
+against slow-disk false cold-starts.
+
 Returns the process exit code (0 on success, non-zero on no-arg or unrecoverable
 failure). Behavior:
 
@@ -275,11 +298,25 @@ failure). Behavior:
    `/`). If none, log to stderr and return `1`.
 2. Hot path (Curator running): try `pipeConnect`. On success, write the framed URL,
    close, return `0`.
-3. Cold start (Curator not running): on refused connect, locate the sibling Curator
-   exe via `launchCuratorFactory`, start it detached (no args), retry `pipeConnect`
-   every `retryInterval` (250ms) until success or `retryTimeout` (30s) elapses,
-   then deliver and return `0`.
+3. Cold start (Curator not running): on refused connect, consult
+   `curatorRunningCheck`. When a Curator process is already running (another
+   handler in a launch burst got there first), skip the launch and log "Curator
+   is already running; waiting for the pipe." Otherwise locate the sibling Curator
+   exe via `launchCuratorFactory`, start it detached (no args). Either way, retry
+   `pipeConnect` every `retryInterval` (250ms) until success or `retryTimeout`
+   (30s) elapses, then deliver and return `0`.
 4. On timeout: log "Curator did not start within Ns" to stderr and return `3`.
+
+The pre-launch check is advisory with no synchronization: races (Curator
+exiting between the check and the connect, or the check under-detecting; on
+Linux `GetProcessesByName` compares the exact full executable name recovered
+from `/proc` cmdline when available, so it is effective in the normal case and
+under-detects only in degraded shapes such as a zombie's empty cmdline, an
+unreadable cmdline, or an argv0-rewriting launcher) fall through to the
+existing retry/timeout semantics, and a missed detection means one extra
+launch attempt that the single-instance guard already handles. The default
+check reuses `SingleInstanceGuard.IsAnotherInstanceRunning` over the Curator
+exe name.
 
 `UseShellExecute` stays `false` on both OSes (the handler launches the exe
 directly). Setting it to `true` on Linux for detached launch routes through
@@ -470,9 +507,13 @@ Process model:
   it, and the resolved handler acts on it (the no-op default logs it; the real
   handler acquires the mod).
 - **Curator not running (cold start):** the handler's connect is refused, so it
-  launches the sibling Curator exe (no args) and retries the pipe every 250ms up to
-  30s. Once Curator's `Bind` succeeds, the handler connects, delivers the URL, and
-  exits. Curator starts normally; it has no `--nxm` arg and no cold-start branch.
+  consults the advisory pre-check. With no Curator process running it launches
+  the sibling Curator exe (no args); with one already running (a burst of
+  "Mod manager download" clicks, where an earlier handler launched Curator
+  seconds ago) it skips the launch and waits. Either way it retries the pipe
+  every 250ms up to 30s. Once Curator's `Bind` succeeds, the handler connects,
+  delivers the URL, and exits. Curator starts normally; it has no `--nxm` arg
+  and no cold-start branch.
 
 ## Dependencies
 
@@ -504,16 +545,19 @@ Process model:
   throws `IOException`) leaves `IsBound` false without throwing.
 - **`SingleInstanceGuard`**: the injected `OtherInstanceEnumerator` reports
   another instance (throws `NxmSingleInstanceException`) and reports alone
-  (proceeds); the production enumerator path is not exercised against real
-  processes.
+  (proceeds); the `IsAnotherInstanceRunning` query answers true/false over the
+  same enumeration and passes the caller's name + excluding pid through; the
+  production enumerator path is not exercised against real processes.
 - **`NxmRouter`**: a mod-download URL routes to the mod handler with parsed
   fields; an OAuth callback URL is logged + dropped (the OAuth-callback
   handler seam is gone; Curator OAuth uses loopback); collection and unparseable URLs route to neither; a throwing
   handler does not propagate.
 - **`NxmHandlerRelay`**: hot path (connect first try, no launch), cold start
-  (refuse, launch, retry, deliver), cold-start timeout, no-URL arg, multi-arg,
-  and the missing-sibling-exe path (`CuratorMainExeNotFoundException` exits
-  non-zero without retrying).
+  (refuse, launch exactly once, retry, deliver), the cold-start pre-check split
+  (a reported running Curator skips the launch, prints the waiting stderr line,
+  and still delivers on retry or times out without launching), cold-start
+  timeout, no-URL arg, multi-arg, and the missing-sibling-exe path
+  (`CuratorMainExeNotFoundException` exits non-zero without retrying).
 - **`LinuxNxmHandlerRegistrar`** (Linux-gated): Register writes the `.desktop`
   file with the expected content; `IsRegistered` reflects the faked `xdg-mime`;
   standalone registration stays direct; AppImage registration copies the

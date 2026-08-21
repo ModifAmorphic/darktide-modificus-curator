@@ -348,7 +348,8 @@ the host OS.
 | Windows | `WinProcessLookup` | `Process.GetProcessesByName(processName)` (process comm) |
 
 `LinuxProcessLookup` reads `argv[0]` because the kernel `comm` field (what
-`GetProcessesByName` reads on Unix, capped at 15 chars) is **unreliable under
+`GetProcessesByName` falls back to on Unix when the untruncated name cannot be
+recovered from `/proc` cmdline, capped at 15 chars) is **unreliable under
 Proton** -- Darktide's `comm` is literally `main`, which would yield a false
 negative while the game is running.
 

@@ -355,6 +355,18 @@
     <value>On Linux the Relay console always shows under Proton and can't be hidden from here.</value>
     <comment>Tooltip on the Show console on launch row in the Preferences dialog on Linux, where the checkbox is shown checked + disabled (Wine spawns the console regardless of the setting until a Relay-side GUI-subsystem fix, so the persisted value is not forced or written).</comment>
   </data>
+  <data name="Preferences_ExternalModHosting" xml:space="preserve">
+    <value>Load mods from Curator's profile directory (experimental)</value>
+    <comment>Checkbox in the Preferences dialog for the external mod-hosting mode: launch with mods served from Curator's profile directory only, no mods-folder link in the game directory.</comment>
+  </data>
+  <data name="Preferences_ExternalModHostingTooltip" xml:space="preserve">
+    <value>Launches the game with mods hosted from Curator's profile directory instead of the game directory.</value>
+    <comment>Tooltip on the external mod-hosting row in the Preferences dialog.</comment>
+  </data>
+  <data name="Preferences_ExternalModHostingWarning" xml:space="preserve">
+    <value>May experience issues with mods that require absolute paths</value>
+    <comment>Inline experimental-mode hint shown beneath the external mod-hosting checkbox.</comment>
+  </data>
 
   <!-- ============================================================ -->
   <!-- Mod list (ModListView / ModListViewModel / ModItemViewModel) -->
@@ -411,6 +423,38 @@
   <data name="ModList_DetailedRowsTooltip" xml:space="preserve">
     <value>Detailed mod descriptions</value>
     <comment>Tooltip + accessibility name on the Detailed density toolbar button.</comment>
+  </data>
+  <data name="ModList_SearchWatermark" xml:space="preserve">
+    <value>Search mods</value>
+    <comment>Placeholder text in the mod-list search box (filters rows by mod name as you type).</comment>
+  </data>
+  <data name="ModList_ClearSearchTooltip" xml:space="preserve">
+    <value>Clear search</value>
+    <comment>Tooltip + accessibility name on the clear button inside the mod-list search box.</comment>
+  </data>
+  <data name="ModList_HideDisabledTooltip" xml:space="preserve">
+    <value>Hide disabled mods</value>
+    <comment>Tooltip + accessibility name on the visibility filter toggle while disabled mods are shown (the click hides them).</comment>
+  </data>
+  <data name="ModList_ShowDisabledTooltip" xml:space="preserve">
+    <value>Show disabled mods</value>
+    <comment>Tooltip + accessibility name on the visibility filter toggle while disabled mods are hidden (the click shows them again).</comment>
+  </data>
+  <data name="ModList_ShowUpdatesOnlyTooltip" xml:space="preserve">
+    <value>Show only mods with updates</value>
+    <comment>Tooltip + accessibility name on the updates-only filter toggle while all rows are shown (the click filters the list to flagged rows).</comment>
+  </data>
+  <data name="ModList_ShowAllModsTooltip" xml:space="preserve">
+    <value>Show all mods</value>
+    <comment>Tooltip + accessibility name on the updates-only filter toggle while the filter is active (the click shows every row again).</comment>
+  </data>
+  <data name="ModList_NoMatches" xml:space="preserve">
+    <value>No mods match the current search or filter.</value>
+    <comment>Inline message shown when the active profile has mods but the search box or an active filter (hide-disabled, updates-only) excludes every row.</comment>
+  </data>
+  <data name="ModList_ModManagerBanner" xml:space="preserve">
+    <value>{0} is managing ordering of mods. Changes to mod order in Curator will not be reflected in game.</value>
+    <comment>Full-width caution banner above the row list, shown while the active profile has an enabled alternate mod manager mod (e.g. AML). {0} is the manager mod's display name.</comment>
   </data>
 
   <data name="ModRow_Enabled" xml:space="preserve">
@@ -514,7 +558,7 @@
     <comment>Tooltip on the stable update-action button for a Premium user when an update is available (click installs directly).</comment>
   </data>
   <data name="ModRow_UpdateTooltipOpenFiles" xml:space="preserve">
-    <value>An update is available. Open the Nexus files page to download it</value>
+    <value>Newer version available. Open the Nexus files page to download</value>
     <comment>Tooltip on the stable update-action button for a regular or unknown Premium user when an update is available (click opens the files page; Premium is required for a direct install).</comment>
   </data>
   <data name="ModRow_UpdateTooltipNoUpdate" xml:space="preserve">
@@ -841,6 +885,43 @@
   </data>
 
   <!-- ============================================================ -->
+  <!-- Game-dir conflict (GameDirConflictDialog / shell launch flow) -->
+  <!-- ============================================================ -->
+
+  <data name="GameDir_Title" xml:space="preserve">
+    <value>Existing mods folder</value>
+    <comment>Title of the game-dir conflict modal (and its follow-up notice) shown when a launch finds a foreign entry at the game directory's mods slot.</comment>
+  </data>
+  <data name="GameDir_Message" xml:space="preserve">
+    <value>Found an existing mods folder in the Darktide game directory. Curator needs to rename it to continue (or you can cancel and take care of the folder).</value>
+    <comment>Body of the game-dir conflict modal; asks whether to rename the foreign mods folder aside so Curator can deploy mods there.</comment>
+  </data>
+  <data name="GameDir_MessageFootnote" xml:space="preserve">
+    <value>* If you previously patched Darktide make sure to unpatch it or run verify integrity of game files in Steam.</value>
+    <comment>Small-print advisory under the game-dir conflict modal body, for setups where the game itself was patched by an older modding method.</comment>
+  </data>
+  <data name="GameDir_CancelButton" xml:space="preserve">
+    <value>Cancel</value>
+    <comment>The Cancel button in the game-dir conflict modal. Aborts the launch; no game-dir mutation.</comment>
+  </data>
+  <data name="GameDir_RenameButton" xml:space="preserve">
+    <value>Rename</value>
+    <comment>The Rename (accent) button in the game-dir conflict modal. Renames the foreign entry aside (nothing deleted, receipt + best-effort README recorded) and retries the launch once, now hosted.</comment>
+  </data>
+  <data name="GameDir_RenamedNotice" xml:space="preserve">
+    <value>Renamed the existing mods folder to {0}.</value>
+    <comment>One-line alert shown after a successful takeover, before the launch retry. {0} is the renamed folder's path returned by the takeover.</comment>
+  </data>
+  <data name="GameDir_StillConflicts" xml:space="preserve">
+    <value>The game's mods folder is still occupied by something Curator didn't create: {0}</value>
+    <comment>Body of the error alert shown when a game-dir conflict recurs in the same launch attempt (the retry is one-shot per consent). {0} is the detected path.</comment>
+  </data>
+  <data name="GameDir_TakeOverFailed" xml:space="preserve">
+    <value>Curator couldn't move the existing mods folder aside.</value>
+    <comment>Localized framing for the alert shown when the consented takeover fails. The exception's message is appended after this at the call site.</comment>
+  </data>
+
+  <!-- ============================================================ -->
   <!-- Launch overlay (in-window blocking progress)                 -->
   <!-- ============================================================ -->
 
@@ -1082,11 +1163,7 @@
   </data>
   <data name="Dmf_Downloading" xml:space="preserve">
     <value>Downloading DMF…</value>
-    <comment>Title of the alert shown while the DMF download is in flight (a modal spinner). No em-dash.</comment>
-  </data>
-  <data name="Dmf_DownloadingMessage" xml:space="preserve">
-    <value>Downloading DMF from Nexus Mods. This takes a few seconds.</value>
-    <comment>Body of the in-flight DMF download alert.</comment>
+    <comment>Window title of the generic modal progress dialog (the key predates its generalization; currently shown for the app self-update download). No em-dash.</comment>
   </data>
   <data name="Dmf_DownloadFailedTitle" xml:space="preserve">
     <value>Could not download DMF</value>
@@ -1134,6 +1211,76 @@
   <data name="Nxm_DownloadFailedTitle" xml:space="preserve">
     <value>Download failed</value>
     <comment>Title of the alert shown when an nxm:// download or its profile registration fails.</comment>
+  </data>
+  <data name="Nxm_ModNameFallback" xml:space="preserve">
+    <value>Nexus mod #{0}</value>
+    <comment>The display name for an nxm download whose mod is not yet in the repository. {0} is the Nexus mod id.</comment>
+  </data>
+
+  <!-- ============================================================ -->
+  <!-- NXM download queue (ModDownloadQueue)                         -->
+  <!-- (the serial download coordinator; inline failure messages     -->
+  <!--  rendered on the download row)                                -->
+  <!-- ============================================================ -->
+
+  <data name="ModDownloadQueue_SignedOutMessage" xml:space="preserve">
+    <value>Nexus sign-in was cleared before this download started.</value>
+    <comment>Inline failure on a download row: the user signed out of Nexus between the click and the download's turn.</comment>
+  </data>
+  <data name="ModDownloadQueue_ProfileDeletedMessage" xml:space="preserve">
+    <value>The profile this download was for no longer exists.</value>
+    <comment>Inline failure on a download row: the target profile was deleted before the download completed.</comment>
+  </data>
+  <data name="ModDownloadQueue_ModRemovedMessage" xml:space="preserve">
+    <value>This mod was removed from the profile while it was downloading.</value>
+    <comment>Inline failure on a download row: the mod was removed from the target profile before the download's registration ran.</comment>
+  </data>
+
+  <!-- ============================================================ -->
+  <!-- Download rows (ModListView / DownloadRowViewModel)           -->
+  <!-- (the row UI rendering one queued download: the in-place      -->
+  <!--  morph on a mod row + the appended row below the list)      -->
+  <!-- ============================================================ -->
+
+  <data name="ModRow_DownloadQueued" xml:space="preserve">
+    <value>Queued</value>
+    <comment>Status word on a download row: waiting for the serial download worker.</comment>
+  </data>
+  <data name="ModRow_DownloadDownloading" xml:space="preserve">
+    <value>Downloading</value>
+    <comment>Status word on a download row: the archive download is in flight.</comment>
+  </data>
+  <data name="ModRow_DownloadImporting" xml:space="preserve">
+    <value>Importing</value>
+    <comment>Status word on a download row: the bytes are in and the mod is being imported.</comment>
+  </data>
+  <data name="ModRow_DownloadFailed" xml:space="preserve">
+    <value>Failed</value>
+    <comment>Status word on a download row: the download failed; the message, Retry, and dismiss follow it.</comment>
+  </data>
+  <data name="ModRow_DownloadForProfile" xml:space="preserve">
+    <value>for profile {0}</value>
+    <comment>The always-shown target-profile label on an appended download row. {0} is the target profile's name captured at enqueue.</comment>
+  </data>
+  <data name="ModRow_DownloadCancelTooltip" xml:space="preserve">
+    <value>Cancel download</value>
+    <comment>Tooltip and automation name for a download row's Cancel button.</comment>
+  </data>
+  <data name="ModRow_DownloadRetryTooltip" xml:space="preserve">
+    <value>Retry download</value>
+    <comment>Tooltip and automation name for a failed download row's Retry button.</comment>
+  </data>
+  <data name="ModRow_DownloadDismissTooltip" xml:space="preserve">
+    <value>Dismiss</value>
+    <comment>Tooltip and automation name for a failed download row's dismiss button.</comment>
+  </data>
+  <data name="ModRow_DownloadRowAutomation" xml:space="preserve">
+    <value>{0}: {1}</value>
+    <comment>Automation name for a download row without a progress detail (queued, importing, or failed). {0} is the mod name, {1} the status word.</comment>
+  </data>
+  <data name="ModRow_DownloadRowProgressAutomation" xml:space="preserve">
+    <value>{0}: {1}, {2}</value>
+    <comment>Automation name for a downloading row. {0} is the mod name, {1} the status word, {2} the percent (or received bytes when the total is unknown).</comment>
   </data>
 
   <!-- ============================================================ -->

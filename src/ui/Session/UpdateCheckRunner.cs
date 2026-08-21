@@ -204,8 +204,9 @@ public sealed class UpdateCheckRunner
     /// (the manual throttle's sliding window) across restarts.</param>
     /// <param name="autoUpdate">The opt-in Premium automatic-update installer,
     /// chained after each check completes (the runner captures the exact result
-    /// + awaits the install batch so a manual CheckNow keeps its spinner active
-    /// through the installations).</param>
+    /// + awaits the enqueue batch so a manual CheckNow keeps its spinner active
+    /// through the resolves + enqueues; the installs themselves run on the
+    /// download queue afterward).</param>
     /// <param name="logger">Structured logger for swallowed exceptions.</param>
     /// <param name="startTimer">Starts the periodic tick. Production wires this
     /// to a <c>DispatcherTimer</c> (UI thread); tests pass null and invoke the
@@ -239,16 +240,14 @@ public sealed class UpdateCheckRunner
         RefreshGate = new UpdateRefreshGate(
             this, invokeOnUi, startCountdownTimer, stopCountdownTimer, _getNow);
 
-        // Surface the two UI-relevant update-family completions (a check
-        // landing + an automatic batch applying installs) as runner events,
-        // marshaled to the UI thread. The runner is the only driver of both
-        // underlying services, so the mod list subscribes here instead of
-        // holding either service itself; the raw services' own events stay
-        // untouched for their own subscribers.
+        // Surface the check completion as a runner event, marshaled to the UI
+        // thread. The runner is the only driver of the check service, so the
+        // mod list subscribes here instead of holding the service itself; the
+        // raw service's own event stays untouched for its own subscribers.
+        // (Install completions are not re-raised here: they surface through
+        // the download queue's own UpdatesApplied event.)
         _updateCheck.CheckCompleted += (s, result) =>
             _invokeOnUi(() => CheckCompleted?.Invoke(this, result));
-        _autoUpdate.UpdatesApplied += (s, e) =>
-            _invokeOnUi(() => UpdatesApplied?.Invoke(this, e));
     }
 
     /// <summary>
@@ -259,14 +258,6 @@ public sealed class UpdateCheckRunner
     /// hydration) subscribe here rather than to the service.
     /// </summary>
     public event EventHandler<UpdateCheckResult?>? CheckCompleted;
-
-    /// <summary>
-    /// The automatic-update service finished a batch with at least one
-    /// successful install, raised on the UI thread. The UI-facing re-raise of
-    /// <see cref="IAutomaticUpdateService.UpdatesApplied"/> (the runner chains
-    /// the batch after each check).
-    /// </summary>
-    public event EventHandler? UpdatesApplied;
 
     /// <summary>
     /// The refresh-gate policy for the manual "check now" affordance: the

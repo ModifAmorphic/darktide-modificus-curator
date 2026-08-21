@@ -10,11 +10,14 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Modificus.Curator.UI.Tests;
 
 /// <summary>
-/// The RowContext contract: the three row-affecting globals (premium /
-/// install-busy / gaming) live on one shared observable object passed once to
-/// every row, and a flip on the context re-fires exactly the row + list-VM
-/// properties the former per-flag value pushes re-fired (the derived enabled
-/// states + tooltips), with no per-row value copies left to drift.
+/// The RowContext contract: the row-affecting globals (premium / gaming) live
+/// on one shared observable object passed once to every row, and a flip on the
+/// context re-fires exactly the row + list-VM properties the former per-flag
+/// value pushes re-fired (the derived enabled states + tooltips), with no
+/// per-row value copies left to drift. Install-busy state is not on the
+/// context (an update in flight is a queue item rendered as the row's
+/// download morph; the queue-front behavior is covered by the mod-list update
+/// tests).
 /// </summary>
 public sealed class ModRowContextTests
 {
@@ -32,7 +35,6 @@ public sealed class ModRowContextTests
         profiles.WithMods(a.Id,
             new ModListEntry { ContainerId = nexus.Id, Enabled = true, Order = 0, Policy = ModVersionPolicy.Latest });
 
-        var installer = new FakeModUpdateInstaller();
         var session = new FakeProfileSession { ActiveProfileId = a.Id };
         var localization = new LocalizationService();
         var importWorkflow = new ImportWorkflowViewModel(
@@ -50,24 +52,22 @@ public sealed class ModRowContextTests
         var runner = new UpdateCheckRunner(
             session, profiles, updateCheck, new FakeConfigLoader(), new FakeAppStateStore(),
             new FakeAutomaticUpdateService(), NullLogger<UpdateCheckRunner>.Instance);
+        var queue = new FakeModDownloadQueue();
+        var acquisition = new FakeModAcquisitionService();
 
         return new ModListViewModel(
             profiles, session, repo, new FakeDialogService(), localization,
             updateState, runner, context, importWorkflow, detailedRows, linkedMods,
             new FakeExternalLauncher(), new FakeNxmRegistrationState(),
+            queue, new ModUpdateEnqueuer(acquisition, queue, profiles),
             NullLogger<ModListViewModel>.Instance);
     }
 
-    private static ModRowContext MakeContext(bool gaming = false)
-    {
-        var installer = new FakeModUpdateInstaller();
-        return new ModRowContext(
+    private static ModRowContext MakeContext(bool gaming = false) =>
+        new(
             new FakeNexusAuthService(),
-            installer,
             new GamingModeState(gaming),
-            static action => action(),
             NullLogger<ModRowContext>.Instance);
-    }
 
     [Fact]
     public void Premium_flip_on_the_context_refires_row_and_list_properties()
@@ -96,36 +96,6 @@ public sealed class ModRowContextTests
     }
 
     [Fact]
-    public void Busy_flip_through_the_installer_refires_rows_exactly_like_the_push_did()
-    {
-        var installer = new FakeModUpdateInstaller();
-        var context = new ModRowContext(
-            new FakeNexusAuthService(),
-            installer,
-            new GamingModeState(false),
-            static action => action(),
-            NullLogger<ModRowContext>.Instance);
-        var vm = BuildWithContext(context);
-        var row = Assert.Single(vm.Mods);
-        var rowFired = new List<string>();
-        row.PropertyChanged += (_, e) => rowFired.Add(e.PropertyName!);
-
-        installer.IsBusy = true;
-        installer.RaiseBusyChanged();
-
-        // The context mirrored the coordinator's flag + the row's derived
-        // enabled state re-fired through the parent's fan-out.
-        Assert.True(context.AnyRowUpdating);
-        Assert.True(row.AnyRowUpdating);
-        Assert.Contains(nameof(ModItemViewModel.AnyRowUpdating), rowFired);
-        Assert.Contains(nameof(ModItemViewModel.UpdateActionEnabled), rowFired);
-
-        installer.IsBusy = false;
-        installer.RaiseBusyChanged();
-        Assert.False(row.AnyRowUpdating);
-    }
-
-    [Fact]
     public void Gaming_reads_through_rows_and_the_list_vm_off_the_constant_context()
     {
         var context = MakeContext(gaming: true);
@@ -134,27 +104,6 @@ public sealed class ModRowContextTests
         var row = Assert.Single(vm.Mods);
         Assert.True(vm.IsGamingMode);
         Assert.True(row.IsGamingMode);
-    }
-
-    [Fact]
-    public void InstallLatestAsync_delegates_to_the_shared_installer()
-    {
-        var installer = new FakeModUpdateInstaller();
-        var context = new ModRowContext(
-            new FakeNexusAuthService(),
-            installer,
-            new GamingModeState(false),
-            static action => action(),
-            NullLogger<ModRowContext>.Instance);
-        var containerId = Guid.NewGuid();
-
-        _ = context.InstallLatestAsync(Guid.NewGuid(), containerId, 8, "1.0", Array.Empty<ModListCandidate>());
-
-        var call = Assert.Single(installer.Calls);
-        Assert.Equal(containerId, call.ContainerId);
-        Assert.Equal(8, call.ModId);
-        Assert.Equal("1.0", call.ExpectedVersion);
-        Assert.Equal(nameof(FakeModUpdateInstaller.TryInstallLatestAsync), call.Method);
     }
 
     [Fact]
@@ -181,9 +130,7 @@ public sealed class ModRowContextTests
         var auth = new FakeNexusAuthService { ThrowOnGetCurrentState = true };
         var context = new ModRowContext(
             auth,
-            new FakeModUpdateInstaller(),
             new GamingModeState(false),
-            static action => action(),
             NullLogger<ModRowContext>.Instance);
 
         Assert.False(context.IsPremiumUser);

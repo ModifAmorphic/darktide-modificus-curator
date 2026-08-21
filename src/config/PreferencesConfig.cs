@@ -22,6 +22,10 @@ namespace Modificus.Curator.Config;
 /// when launching the game. <c>false</c> by default (the window is hidden);
 /// Relay's output is captured in its log file regardless. Read at launch time
 /// by the Relay launcher, not applied live to the running app.</para>
+/// <para><b>ExternalModHosting:</b> the experimental external mod-hosting mode
+/// (<c>false</c> by default). Read at launch time like
+/// <see cref="ShowRelayConsole"/>; see <see cref="ExternalModHosting"/> for the
+/// behavior switch it performs.</para>
 /// </remarks>
 public sealed class PreferencesConfig
 {
@@ -48,10 +52,23 @@ public sealed class PreferencesConfig
     /// <summary>
     /// Whether to show the Mod Relay console window when launching the game.
     /// <c>false</c> by default (the window is hidden). Relay's output is captured
-    /// in its log file regardless, so the console is redundant. Read at launch
-    /// time by the Relay launcher; not applied live to the running app.
+    /// in its log file regardless. Read at launch time by the Relay launcher;
+    /// not applied live to the running app.
     /// </summary>
     public bool ShowRelayConsole { get; set; }
+
+    /// <summary>
+    /// The experimental external mod-hosting mode: serve mods from the staged
+    /// root without the game-dir hosting link. <c>false</c> by default (the
+    /// standard behavior hosts the staged mods tree in the game directory
+    /// through one self-identifying link, which some mods require). <c>true</c>
+    /// restores the staging-only launch: the game-dir link (when Curator owns
+    /// one) is removed best-effort and a foreign game-dir <c>mods</c> entry is
+    /// never touched. Known issue: mods that resolve game-directory-relative
+    /// paths will not load. Global, not per-profile (one game-dir slot, one
+    /// authority); read live at launch time.
+    /// </summary>
+    public bool ExternalModHosting { get; set; }
 
     /// <summary>
     /// The mod-list row density: <see cref="ModRowDensity.Detailed"/> (multi-line

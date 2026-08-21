@@ -231,6 +231,7 @@ internal sealed class ModRepository : IModRepository
         string versionString,
         Action<string> populateFolder,
         DateTimeOffset? remoteUploadedAt = null,
+        int? remoteFileId = null,
         ModDisplayMetadata? displayMetadata = null)
     {
         lock (_sync)
@@ -256,29 +257,32 @@ internal sealed class ModRepository : IModRepository
                 // Dedup: reuse the existing folder + entry. PopulateAtomically swaps
                 // the new content into the existing version folder atomically (the
                 // old contents survive any populateFolder failure); the version
-                // entry (Folder, VersionString, IsLatest, ImportedAt) is left
-                // unchanged so the manifest ordering stays stable. (Re-importing a
-                // version is a file refresh, not a re-order.) RemoteUploadedAt is
-                // the one entry field refreshed on re-import: a re-acquired version
-                // carries the current remote-publish timestamp (callers pass null
-                // for manual re-imports, which clears it; non-remote sources aren't
-                // update-checked anyway).
+                // entry (Folder, VersionString, ImportedAt) is left unchanged so
+                // the import stamp stays stable. (Re-importing a version is a file
+                // refresh, not a re-stamp.) RemoteUploadedAt + FileId are the
+                // entry fields refreshed on re-import: a re-acquired version
+                // carries the current remote facts (callers pass nulls for manual
+                // re-imports, which clears them; non-remote sources aren't
+                // update-checked anyway). Latest is then re-evaluated: a refreshed
+                // remote timestamp can make the reused entry newly newest.
                 var versionDir = VersionDir(baseFolder, containerId, existing.Folder);
                 PopulateAtomically(versionDir, populateFolder);
-                var refreshed = existing with { RemoteUploadedAt = remoteUploadedAt };
-                versions = container.Versions.Select(v => ReferenceEquals(v, existing) ? refreshed : v).ToList();
+                var refreshed = existing with { RemoteUploadedAt = remoteUploadedAt, FileId = remoteFileId };
+                versions = WithLatestMarked(
+                    container.Versions.Select(v => ReferenceEquals(v, existing) ? refreshed : v).ToList());
                 _logger.LogInformation(
                     "Re-imported version '{Version}' on container {Id} (folder reused: {Folder})",
                     versionString, containerId, existing.Folder);
             }
             else
             {
-                // New version: new opaque folder + new entry stamped now; the new
-                // entry is the newest by ImportedAt, so it becomes IsLatest and the
-                // flag is cleared on every other version. PopulateAtomically stages
-                // into a temp + swaps into the new version folder; on a
-                // populateFolder failure nothing is created on disk and the manifest
-                // is left untouched (no entry added below).
+                // New version: new opaque folder + new entry stamped now.
+                // PopulateAtomically stages into a temp + swaps into the new
+                // version folder; on a populateFolder failure nothing is created
+                // on disk and the manifest is left untouched (no entry added
+                // below). Latest is recomputed over ALL versions with the
+                // effective-timestamp key, so importing an older remote file
+                // leaves the flag on the existing newest entry.
                 var folder = Guid.NewGuid().ToString("N");
                 var versionDir = VersionDir(baseFolder, containerId, folder);
                 PopulateAtomically(versionDir, populateFolder);
@@ -287,17 +291,14 @@ internal sealed class ModRepository : IModRepository
                 {
                     Folder = folder,
                     VersionString = versionString,
-                    IsLatest = true,
                     ImportedAt = DateTimeOffset.UtcNow,
                     RemoteUploadedAt = remoteUploadedAt,
+                    FileId = remoteFileId,
                 };
-                versions = container.Versions
-                    .Select(v => v with { IsLatest = false })
-                    .Append(entry)
-                    .ToList();
+                versions = WithLatestMarked(container.Versions.Append(entry).ToList());
                 _logger.LogInformation(
-                    "Added version '{Version}' on container {Id} (folder: {Folder}, isLatest=true)",
-                    versionString, containerId, folder);
+                    "Added version '{Version}' on container {Id} (folder: {Folder}, isLatest: {IsLatest})",
+                    versionString, containerId, folder, versions.First(v => v.Folder == folder).IsLatest);
             }
 
             // DisplayMetadata is container-scoped: a non-null argument
@@ -315,6 +316,25 @@ internal sealed class ModRepository : IModRepository
             WriteContainer(updated, baseFolder);
             return updated;
         }
+    }
+
+    /// <summary>
+    /// Recomputes the <see cref="ModVersion.IsLatest"/> flag over
+    /// <paramref name="versions"/>: the newest by effective timestamp carries
+    /// it, every other entry does not. Shared by both
+    /// <see cref="AddVersion"/> branches and the
+    /// <see cref="RemoveVersion"/> promotion so the key cannot drift between
+    /// sites.
+    /// </summary>
+    private static List<ModVersion> WithLatestMarked(List<ModVersion> versions)
+    {
+        // Effective timestamp: the remote publish date when known, else the
+        // import date. ImportedAt breaks exact ties (two files within the
+        // remote timestamp granularity); an all-null container degenerates to
+        // a plain ImportedAt argmax. MaxBy returns the first max, so exact
+        // double-ties stay stable in storage order.
+        var newest = versions.MaxBy(v => (v.RemoteUploadedAt ?? v.ImportedAt, v.ImportedAt))!;
+        return versions.Select(v => v with { IsLatest = ReferenceEquals(v, newest) }).ToList();
     }
 
     /// <inheritdoc />
@@ -556,15 +576,13 @@ internal sealed class ModRepository : IModRepository
             var wasLatest = existing.IsLatest;
             var versions = container.Versions.Where(v => !ReferenceEquals(v, existing)).ToList();
 
-            // If the removed entry was latest, promote the newest remaining by
-            // ImportedAt (stable on ties; MaxBy returns the first max for ties under
-            // LINQ-to-Objects, matching the storage order).
+            // If the removed entry was latest, re-evaluate the flag over the
+            // survivors with the same effective-timestamp key AddVersion uses
+            // (remote publish date when known, else import date, ImportedAt
+            // tie-break).
             if (wasLatest && versions.Count > 0)
             {
-                var newest = versions.MaxBy(v => v.ImportedAt)!;
-                versions = versions
-                    .Select(v => v with { IsLatest = ReferenceEquals(v, newest) })
-                    .ToList();
+                versions = WithLatestMarked(versions);
             }
 
             var updated = container with { Versions = versions };

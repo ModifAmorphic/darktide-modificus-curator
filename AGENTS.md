@@ -9,7 +9,11 @@
 Darktide (.NET 10 + Avalonia 12). The app is user-usable. It launches the game
 modded via
 [Mod Relay](https://github.com/ModifAmorphic/darktide-mod-relay) (DLL
-injection: no game-directory footprint, no bundle-database patching; the runtime
+injection: no patched game files, no copies, no bundle-database patching; the
+one game-dir footprint is a self-identifying, opt-in mods link at
+`<game>/mods` pointing at the active profile's staged tree, so mods that
+resolve game-directory-relative paths work -- a foreign entry at that slot is
+never claimed or deleted; the runtime
 is a separate repo) and stays out of the way for vanilla play (launch from Steam
 = unmodified game). See `docs/architecture/` for the architecture.
 
@@ -30,7 +34,8 @@ game-binary constraints now live with the runtime, in
   Mods, Nexus, Preferences, Settings) + profile management, global
   Preferences + i18n, the mod-list UI + local import, the
   Launch flow + discovery escape-hatch, the nxm:// scheme
-  handler, Nexus auth + Integrations destination, mod acquisition, the update-check
+  handler, Nexus auth + Integrations destination, mod acquisition, the
+  serial nxm download queue + its mod-list download rows, the update-check
   service, the mod-list update UI, the DMF new-profile install prompt, the
   first-run Welcome onboarding, and in-app self-update for the Windows
   installer plus Linux AppImage (Velopack).
@@ -38,15 +43,23 @@ game-binary constraints now live with the runtime, in
   create profiles, import mods (folder/archive, Nexus/Untracked) or link an
   external mod folder without copying it, manage
   the mod list (enable/disable/reorder/policy/remove), configure Settings
-  (discovery paths + mod-repo location), and launch modded Darktide. The mod
+  (discovery paths + mod-repo location), download Nexus mods ("Mod manager
+  download" links, premium update installs, opt-in automatic updates, the DMF
+  prompt) through one download queue that renders each download as a row in
+  the mod list (in place on the target mod's row, or appended below the list
+  for new mods; cancel/retry/dismiss inline; a head-file download tracks
+  latest, an old-file download pins to that version), and launch modded
+  Darktide. The mod
   list has a persisted Compact/Detailed row density (Detailed is the default,
   with a Nexus summary and a cached thumbnail per row; Compact is the one-line
   variant, surviving only when persisted or selected, and
   absent/unknown normalizes to Detailed). Every
   Nexus Latest row shows a stable update-action button (disabled + neutral when
-  no update, enabled + accent when flagged); a Premium click installs in-app,
+  no update, enabled + accent when flagged); a Premium click enqueues an
+  in-app install that renders as the row's download morph,
   a regular/unknown click opens the mod's Nexus files page. Premium users can
-  additionally opt into automatic flagged-update installation after each check.
+  additionally opt into automatic flagged-update installation after each check
+  (each flagged mod is enqueued onto the same download queue).
   The first app startup shows a one-time Welcome modal introducing Curator and
   offering to set up Nexus. Whenever a new profile is created + set active
   without DMF (Darktide Mod Framework, Nexus mod 8) in it, a modal prompt
@@ -170,9 +183,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           yields once to the Avalonia dispatcher at Loaded
                           priority so the freshly-disabled button paints, then
                           runs the synchronous launch on the UI thread;
-                           branches on `LaunchResult.Status`, keeping the
-                           attempt state through failure-dialog handling; after
-                           `Launched` + the eager refresh the attempt state
+                            branches on `LaunchResult.Status`, keeping the
+                            attempt state through failure-dialog handling
+                            (incl. the GameDirConflict consent modal + its
+                            one-shot retry); after
+                            `Launched` + the eager refresh the attempt state
                            stays set until BOTH the session's running-state
                            signal observes Darktide AND the spawned Relay
                            process exits (the exit task carried on the result:
@@ -232,11 +247,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           itself); the avatar palette is deterministic from the
                           profile Guid so a profile keeps its color across reloads,
                           sorting, and app restarts;
-                          the Mods destination (`ModListViewModel` + `ModListView`):
-                          the active profile's mod list (the dominant content area),
-                          with its own toolbar (refresh, rate-limit notice,
-                          the Compact/Detailed density selector, the Add split
-                          button) shown only on Mods, and the
+                           the Mods destination (`ModListViewModel` + `ModListView`):
+                           the active profile's mod list (the dominant content area),
+                            with its own toolbar (refresh, rate-limit notice, the
+                            search box, the Compact/Detailed density selector with the
+                            hide-disabled + updates-only filter toggles, the Add split
+                            button) shown
+                            only on Mods, and the
                           inline import card (`ImportWorkflowViewModel` +
                           `ImportWorkflowView`, an application-lifetime singleton
                           child VM registered before `ModListViewModel`) directly
@@ -255,11 +272,40 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           The toolbar's density selector is two drawn-icon buttons
                           (view_headline for Compact, view_agenda for Detailed)
                           bound to `DetailedModRowsViewModel.SetDensityCommand`;
-                          the active one carries the `selected` class (the shell's
-                          conditional-class pattern, not a ToggleButton). Detailed is
-                          the default; absent/unknown normalizes to Detailed, and
-                          Compact survives only when persisted or selected.
-                          Detailed renders a rounded card per row laid
+                           the active one carries the `selected` class (the shell's
+                           conditional-class pattern, not a ToggleButton). Detailed is
+                           the default; absent/unknown normalizes to Detailed, and
+                           Compact survives only when persisted or selected.
+                            The toolbar also carries the view-projection controls: a
+                            fixed-width search box (keystroke-live TwoWay
+                            `SearchText`, case-insensitive ordinal substring on the
+                            row name, with an inner clear button built from the
+                            Fluent theme's own text-box clear-button chrome), a
+                            hide-disabled visibility toggle (drawn
+                            visibility/visibility_off paths, `selected` while
+                            hiding), and an updates-only toggle (one stable drawn
+                            Material update glyph + `selected` while filtering,
+                            keeping only rows flagged `UpdateAvailable`). All
+                            compose with AND and drive the VM's `VisibleMods`
+                            projection
+                            of the authoritative `Mods` list (rebuilt by one
+                            `RebuildVisibleMods` at the end of every Reload (after
+                            the known-update-flag hydration, so the updates-only
+                            filter sees hydrated flags), on
+                            every filter/search change, and after an enable
+                            toggle under an active filter; a landed check also
+                            reprojects, since it can change the flags); the state is
+                            session-transient (never persisted, survives reloads
+                            + navigation, cleared on an active-profile change).
+                           `DetailedModRowsViewModel.SetRowsAsync` keeps
+                           receiving the FULL snapshot, so thumbnails + metadata
+                           hydrate regardless of visibility and a filter change
+                           never re-triggers hydration. An active profile with a
+                           non-empty full list but an empty projection shows the
+                           localized no-matches message, exclusive with the
+                           no-mods/add-hints empty state (the hints gate on
+                           `!IsFilterOrSearchActive` too).
+                           Detailed renders a rounded card per row laid
                           out as one adaptive Grid (the card root carries
                           `Container.Name="detailedModRow"` +
                           `Container.Sizing="Width"`, so a `ContainerQuery
@@ -354,49 +400,60 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           calls `PreventGestureRecognition`, marks handled, and
                           captures the pointer to the grip; a reorder starts only
                           after an 8-DIP movement threshold (a tap is inert).
-                          While dragging, the target rank is computed among the
-                          other unlocked rows only (locked rows are never
-                          destinations; an unlocked row may cross locks), a 2-DIP
-                          accent insertion line renders before/after the target
-                          row (non-hit-testable), the realized item container (the
-                          full-width actual row) is lifted via a `RenderTransform`
-                          `TranslateTransform` + `ZIndex` so it follows the pointer
-                          while its layout slot stays reserved (rows do not jump),
-                          and a `DispatcherTimer` edge-band auto-scrolls the
-                          ScrollViewer, keeping the lifted row under the pointer +
-                          recomputing the target/marker per step. Every mutated
-                          container property is restored from a snapshot on each
-                          finish/cancel path (before VM Reload on a valid drop).
-                          A release inside the viewport recomputes the target
-                          from the final release position (closing the one-tick
-                          auto-scroll/layout lag), releases capture, then commits
-                          through
-                          `ModListViewModel.CommitReorderCommand` (one immutable
-                          `ReorderRequest` of source ContainerId + target
-                          unlocked rank; the pure `ModReorderPlanner` builds the
-                          legal full order around locked slots; the planner
-                          rejects same-rank / out-of-range / locked-source /
-                          missing-source requests without a service call, so a
-                          no-op persists nothing). Escape, `PointerCaptureLost`,
-                          view detachment, a release outside the viewport, or an
-                          invalid target all cancel without persistence + restore
-                          the lifted container. Capture
-                          is released before the VM command runs because Reload
-                          rebuilds row containers. The gesture is single-pointer:
-                          a second grip press while a row gesture is armed is
-                          ignored before it can claim the gesture, and Move /
-                          Release / CaptureLost process only the active captured
-                          pointer (by reference), so a simultaneous second
-                          pointer cannot move, commit, cancel, or release the
-                          active gesture. The gesture is custom pointer
-                          handling, structurally separate from the outer Grid's
-                          native external file/folder `DragDrop.DoDragDropAsync`
-                          handlers (which are unchanged); native drag is rejected
-                          for reorder because Avalonia 12.1 X11 lacks Escape
-                          cancel and its platform modal loops make the touch
-                          threshold/marker/auto-scroll less dependable. Move Up /
-                          Move Down move an unlocked row one unlocked rank,
-                          crossing locked rows; the lock toggle
+                           While dragging, the target rank is computed among the
+                           other VISIBLE unlocked rows only (locked rows are
+                           never destinations; filter-hidden rows are not
+                           realized so they cannot be destinations either; an
+                           unlocked row may cross locks and hidden rows), a 2-DIP
+                           accent insertion line renders before/after the target
+                           row (non-hit-testable), the realized item container (the
+                           full-width actual row) is lifted via a `RenderTransform`
+                           `TranslateTransform` + `ZIndex` so it follows the pointer
+                           while its layout slot stays reserved (rows do not jump),
+                           and a `DispatcherTimer` edge-band auto-scrolls the
+                           ScrollViewer, keeping the lifted row under the pointer +
+                           recomputing the target/marker per step. Every mutated
+                           container property is restored from a snapshot on each
+                           finish/cancel path (before VM Reload on a valid drop).
+                           A release inside the viewport recomputes the target
+                           from the final release position (closing the one-tick
+                           auto-scroll/layout lag), releases capture, then commits
+                           through
+                           `ModListViewModel.CommitReorderCommand` (one immutable
+                           `ReorderRequest` of source ContainerId + target rank
+                           among the visible unlocked OTHER rows; the pure
+                           `ModReorderPlanner` builds the legal full order by
+                           remove+insert within the non-locked stream, anchored to
+                           visible-unlocked rows, so locked rows keep their exact
+                           indices, hidden rows never anchor, shift at most one
+                           slot, and keep their relative order, and an all-visible
+                           input reproduces the pure lock projection; the planner
+                           rejects same-order / out-of-range / locked-source /
+                           hidden-source / missing-source requests without a
+                           service call, so a no-op persists nothing). Escape,
+                           `PointerCaptureLost`,
+                           view detachment, a release outside the viewport, or an
+                           invalid target all cancel without persistence + restore
+                           the lifted container. Capture
+                           is released before the VM command runs because Reload
+                           rebuilds row containers. The gesture is single-pointer:
+                           a second grip press while a row gesture is armed is
+                           ignored before it can claim the gesture, and Move /
+                           Release / CaptureLost process only the active captured
+                           pointer (by reference), so a simultaneous second
+                           pointer cannot move, commit, cancel, or release the
+                           active gesture. The gesture is custom pointer
+                           handling, structurally separate from the outer Grid's
+                           native external file/folder `DragDrop.DoDragDropAsync`
+                           handlers (which are unchanged); native drag is rejected
+                           for reorder because Avalonia 12.1 X11 lacks Escape
+                           cancel and its platform modal loops make the touch
+                           threshold/marker/auto-scroll less dependable. Move Up /
+                           Move Down move an unlocked row one VISIBLE unlocked
+                           rank, crossing locked + hidden rows (`CanMoveUp` /
+                           `CanMoveDown` follow visible unlocked neighbors, so a
+                           row with only hidden or locked rows above it cannot
+                           move up); the lock toggle
                           (`ToggleOrderLockCommand` -> `SetModOrderLocked`)
                           flips lock metadata only and does NOT set
                           `HasPendingChanges` (lock metadata alone does not
@@ -441,13 +498,20 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           refreshes auth state (one registration probe per
                           enter), leaving cancels in-flight auth via
                           `Deactivate`;
-                          the Preferences destination (`PreferencesViewModel` +
-                          `PreferencesView`): theme + font scale + language + the
-                          show-Relay-console toggle (hidden by default; Windows-only,
-                          shown checked + disabled on Linux as a display-only
-                          reflection of the console that always shows under Proton
-                          until a Relay-side GUI-subsystem fix) via
-                          `IPreferencesService` + the i18n infrastructure
+                           the Preferences destination (`PreferencesViewModel` +
+                           `PreferencesView`): theme + font scale + language + the
+                           show-Relay-console toggle (hidden by default; Windows-only,
+                           shown checked + disabled on Linux as a display-only
+                           reflection of the console that always shows under Proton
+                           until a Relay-side GUI-subsystem fix) + the experimental
+                           external-mod-hosting toggle (labeled "Load mods from
+                           Curator's profile directory (experimental)" with the
+                           hint "May experience issues with mods that require
+                           absolute paths"; the preference is set only here,
+                           never from the conflict flow; persisted through its
+                           own focused read-modify-save + read live per launch)
+                           via
+                           `IPreferencesService` + the i18n infrastructure
                           (`Strings.resx` + `LocalizationService` for dynamic
                           culture switching; localized VMs derive from the
                           small `LocalizedViewModel` base (ui/ViewModels/)
@@ -493,14 +557,15 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           visible on a later visit); leaving Settings reloads the mod
                           list + re-reads the startup-check toggle + refreshes the
                           app-update notice;
-                          `IDialogService` is narrowed to true modals only (the
-                          six methods: `ShowWelcomeAsync`, `ConfirmAsync`,
-                          `ShowDiscoveryEscapeHatchAsync`, `ShowAlertAsync`,
-                          `ShowUnsavedChangesAsync`, `ShowProgressAsync<T>`;
-                          the escape-hatch dialog VM is built by the narrow
-                          per-dialog `IDiscoveryEscapeHatchFactory`, so
-                          DialogService carries no Steam/config/gaming
-                          dependencies + constructs no view models);
+                           `IDialogService` is narrowed to true modals only (the
+                           seven methods: `ShowWelcomeAsync`, `ConfirmAsync`,
+                           `ShowDiscoveryEscapeHatchAsync`, `ShowAlertAsync`,
+                           `ShowUnsavedChangesAsync`,
+                           `ShowGameDirConflictAsync`, `ShowProgressAsync<T>`;
+                           the escape-hatch dialog VM is built by the narrow
+                           per-dialog `IDiscoveryEscapeHatchFactory`, so
+                           DialogService carries no Steam/config/gaming
+                           dependencies + constructs no view models);
                           hosted
                           destinations are not modals and never flow through it;
                           the inline import card is a hosted `UserControl`
@@ -510,14 +575,33 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           pipe bind which degrades gracefully on IOException; a second Curator exits
                           via `NxmSingleInstanceException` -> `Environment.Exit(1)` before the
                           window shows);
-                          `IModAcquisitionService` (download + extract + place
-                          orchestrator in Integrations) + the real `NxmModDownloadHandler` (in UI,
-                          coordinating IDialogService + IProfileSession + Dispatcher.UIThread,
-                          acknowledging a successful acquisition via IUpdateStateStore + reloading
-                          the list via the one-member `IModListRefresh` (ui/Session/) implemented by
-                          ModListViewModel + forwarded by the composition root) that
-                          replaces the no-op default via DI last-registration-wins, registered after
-                          AddNxm() in CuratorComposition;
+                           `IModAcquisitionService` (download + extract + place
+                           orchestrator in Integrations, returning
+                           `NexusAcquisitionResult` with per-file byte progress
+                           + `ResolveLatestNexusAsync` for head-file resolution
+                           without a download) + the serial `IModDownloadQueue`
+                           (ui/Session/ModDownloadQueue: one worker, FIFO,
+                           deduped by game domain + mod id + file id with
+                           join+pulse; dequeue-time auth recheck +
+                           `UpdateEligibility` revalidation + the exact-FileId
+                           repository hit check (a hit registers with no
+                           network); head file -> LatestPolicy, non-head ->
+                           PinnedPolicy to the clicked version, applied via
+                           SetModPolicy when the container is already in the
+                           profile; ProfileAdd vs UpdateInstall completions;
+                           token-authoritative cancel) + the real
+                           `NxmModDownloadHandler` (in UI, the enqueue adapter
+                           in front of the queue: gates each link (game domain,
+                           auth, active profile; gate failures keep the
+                           modal-alert path since there is no row to host
+                           them), peeks the repository for a row name, enqueues
+                           onto the queue, and returns within milliseconds so
+                           the nxm IPC accept loop never blocks on a download;
+                           the queue owns the acquisition, the profile
+                           registration, the acknowledge, and the reload) that
+                           replaces the no-op default via DI
+                           last-registration-wins, registered after
+                           AddNxm() in CuratorComposition;
                           the shared `INxmRegistrationState` (ui/Session/, an
                           application-lifetime singleton): the last-known OS
                           `nxm://` registration for every UI surface (shell
@@ -576,149 +660,180 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            sliding-window throttle (10 free/hour then 1/2min,
                            independent of the interval gate); registered + started
                            best-effort from CuratorComposition);
-                          the mod-list update UI per-row update
-                          signal + per-mod update action. `ModListViewModel`
-                          subscribes to `UpdateCheckRunner.CheckCompleted` +
-                          `UpdateCheckRunner.UpdatesApplied` (the runner
-                          re-raises both update-family completions on the UI
-                          thread; the VM holds neither update service) and
-                          reads the
-                          profile-scoped `IUpdateStateStore` (persisted in
-                          `IKnownUpdateState.KnownUpdates` / app-state.json, so a
-                          restart inside the interval gate shows prior flags
-                          before any API call) for per-row `UpdateAvailable`
-                          (matched by ContainerId; the VM passes the entries
-                          its last Reload loaded as the hydration candidates),
-                          while the refresh-gate policy lives in the
-                          runner-owned `UpdateRefreshGate` (ui/Session/): the
-                          rate-limit tracking fed by every captured check
-                          result, the effective-reset computation (server
-                          reset governs, 1-minute fallback when silent), the
-                          manual-throttle read, the shared 1-second countdown
-                          timer lifecycle, + the IsRateLimitActive /
-                          IsManualThrottled / IsRefreshEnabled decisions; the
-                          VM keeps only the localized rendering (tooltip
-                          priority rate-limit > throttle > normal,
-                          BuildThrottleTooltip, FormatRemaining, IsCheckingNow)
-                          driven by the gate's marshaled StateChanged. A
-                          rate-limited check disables the refresh button until
-                          the server-reported reset in `UpdateCheckResult.RateLimitResetsAt`
-                          elapses (1-minute client-side fallback when Nexus
-                          sent no reset), and the pill reads "Refresh disabled
-                          due to rate-limiting" exactly while the button is
-                          rate-limit-blocked, distinct from the client-side
-                          manual fire-count throttle which remains. The three
-                          row-affecting globals live on one shared observable
-                          `ModRowContext` (ui/ViewModels/, created in
-                          composition before the list VM, passed once to every
-                          row): the one-shot construction-time premium read
-                          (no mid-session refresh), the installer's busy flag
-                          mirrored on the UI thread, + the constant gaming
-                          flag; it also re-raises the installer's per-container
-                          progress marshaled + fronts `InstallLatestAsync`
-                          (the single install path in Integrations) for the
-                          manual Premium action. Rows keep their public names
-                          as context-forwarding reads, + the list VM's single
-                          context subscription fans change notifications into
-                          the live rows (re-firing exactly the derived
-                          properties the former per-flag pushes re-fired; no
-                          per-row subscription, so rows dropped by a reload
-                          cannot leak). The VM exposes an async
-                          `UpdateCommand(row)` that branches on
-                          premium: Premium hands the install to
-                          `ModRowContext.InstallLatestAsync` (the
-                          single install path in Integrations:
-                          coordinator-gated one-install-at-a-time, in-gate
-                          eligibility revalidation, acquire + acknowledge-on-
-                          success, per-row progress; Busy + NotEligible are
-                          silent no-ops, Failed surfaces the localized alert
-                          with the exception's message, Installed reloads +
-                          flags HasPendingChanges); regular/unknown opens the
-                          mod's Nexus files page via the shared
-                          IExternalLauncher (fallback alert on failure).
-                          `CheckForUpdatesNowCommand` awaits the runner's
-                          thorough check (driving an `IsCheckingNow` spinner on
-                          the Mods toolbar refresh button; the await now also covers the
-                          chained automatic-update batch) and drives the manual
-                          sliding-window throttle's countdown tooltip + disabled
-                          button via the runner's `NextManualRefreshAllowedAt`,
-                          sharing one countdown timer with the rate-limit gate so
-                          either cause keeps the button disabled and the rate-limit
-                          reason takes tooltip precedence when both are active).
-                          The view's source badge
-                          is a `HyperlinkButton` to the mod's remote page; the
-                          stable update-action cell is a fixed-width `Panel`
-                          reserved on every row holding a drawn download-arrow
-                          button + indeterminate `ProgressBar` (toggled by
-                          `IsUpdating`). The button shows for Nexus + Latest rows
-                          regardless of tier (disabled + neutral when no update,
-                          enabled + accent-blue arrow when flagged); Pinned/
-                          Untracked rows keep the reserved cell but no button. The
-                           rate-limit notice sits in the Mods toolbar. The Add split
-                           button has four flyout items, all modes that set
-                           the default on click (the face label tracks the
-                           mode): "Add Nexus Mods" (the default; opens the
-                           Darktide Nexus Mods games page in the browser), "Add
-                           Mod (archive)", "Add Mod (folder)", and "Link
-                           external folder" (folder picker, no modal; the
-                           link flow lives on the `LinkedModsViewModel` child,
-                           the ImportWorkflowViewModel pattern, exposed as
-                           `vm.LinkedMods` and raised via its `ModsLinked`
-                           event for the parent's reload);
-                           `LinkedMods.LinkModsCommand` peeks the base name,
-                           runs the collision check (excluding a re-link),
-                           then `LinkFolder` + `AddMod(LatestPolicy)`. In Gaming
-                           Mode the Add button disables entirely (every mode is
-                           desktop-dependent; `IsAddEnabled` + a Desktop Mode
-                           tooltip on the disabled button + an inline toolbar
-                           hint + early-returns in the picker paths +
-                           `AddNexusModsCommand` shows Desktop Mode guidance
-                           instead of launching the browser). A linked row's
-                           badge cell is a two-state indicator: available shows an
-                           "External" pill (`OpenFolderCommand` opens the OS file
-                           manager at the external folder; disabled with a
-                           Desktop Mode tooltip while gaming), broken shows a
-                           non-clickable "Folder unavailable" text in the same cell
-                           (caution brush; `IsExternalBroken` pushed from
-                           `IsExternalAvailable` at Reload). The policy ComboBox is
-                           disabled for linked rows + the update-action cell stays
-                           empty (space preserved). A Nexus + Latest row's source
-                           badge appends the installed release tag inline
-                           (e.g. `Nexus #8 · 1.0`, the `ActualVersion` joined from the
-                           repo); Pinned exposes its version in the pin dropdown +
-                           Untracked isn't Nexus-sourced, so neither appends it to the
-                           badge. `ModItemViewModel`
-                           carries the INPC state + derived `SourceUrl`/`UpdatePageUrl`/
-                           `IsNexusLatest`/`CanShowUpdateAction`/
-                           `UpdateActionEnabled`/`UpdateActionTooltip`/`NexusModId`;
-                           `IsPremiumUser` + `AnyRowUpdating` + `IsGamingMode`
-                           are context-forwarding reads off the shared
-                           `ModRowContext`, so the per-row enabled state +
-                           tooltip recompute from one source when the context
-                           flips (while gaming, a
-                           regular/unverified flagged row's update action +
-                           tooltip carry Desktop Mode guidance instead of the
-                           files-page launch; Premium rows keep the in-app
-                           install path). The `IModUpdateInstaller`
-                           (Integrations, holding the `UpdateCoordinator`: the
-                           single one-install-at-a-time gate) is the one
-                           Premium install path for both the manual row action
-                           + the automatic batch (in-gate eligibility
-                           revalidation via UpdateEligibility, acquire,
-                           acknowledge-on-success exactly once, per-attempt
-                           ModUpdateProgress events driving the row spinner
-                           for both paths). The `IAutomaticUpdateService`
-                           (ui/Session/) is the opt-in Premium automatic batch
-                           chained after each check from `UpdateCheckRunner`
-                           (captures the exact result, gates on authoritative
-                           Success + updates + AutomaticUpdatesEnabled + active
-                           profile + a fresh Premium verify, then runs the
-                           sequential batch through
-                           `installer.InstallLatestAsync` with per-iteration
-                           candidate re-pull + active-profile re-check,
-                           isolates per-mod failures into one summary alert,
-                           stops on profile switch, raises UpdatesApplied so
-                           the list VM reloads).
+                           the mod-list update UI per-row update
+                           signal + per-mod update action. `ModListViewModel`
+                           subscribes to `UpdateCheckRunner.CheckCompleted`
+                           (the runner re-raises the check completion on the
+                           UI thread; the VM holds no update service; install
+                           completions are not re-raised by the runner) + to
+                           the download queue's `UpdatesApplied` (raised by
+                           the queue itself after a successful UpdateInstall
+                           completion; on it the VM flags HasPendingChanges +
+                           reloads) and
+                           reads the
+                           profile-scoped `IUpdateStateStore` (persisted in
+                           `IKnownUpdateState.KnownUpdates` / app-state.json, so a
+                           restart inside the interval gate shows prior flags
+                           before any API call) for per-row `UpdateAvailable`
+                           (matched by ContainerId; the VM passes the entries
+                           its last Reload loaded as the hydration candidates),
+                           while the refresh-gate policy lives in the
+                           runner-owned `UpdateRefreshGate` (ui/Session/): the
+                           rate-limit tracking fed by every captured check
+                           result, the effective-reset computation (server
+                           reset governs, 1-minute fallback when silent), the
+                           manual-throttle read, the shared 1-second countdown
+                           timer lifecycle, + the IsRateLimitActive /
+                           IsManualThrottled / IsRefreshEnabled decisions; the
+                           VM keeps only the localized rendering (tooltip
+                           priority rate-limit > throttle > normal,
+                           BuildThrottleTooltip, FormatRemaining, IsCheckingNow)
+                           driven by the gate's marshaled StateChanged. A
+                           rate-limited check disables the refresh button until
+                           the server-reported reset in `UpdateCheckResult.RateLimitResetsAt`
+                           elapses (1-minute client-side fallback when Nexus
+                           sent no reset), and the pill reads "Refresh disabled
+                           due to rate-limiting" exactly while the button is
+                           rate-limit-blocked, distinct from the client-side
+                           manual fire-count throttle which remains. Downloads
+                           render as rows in the mod list through one shared
+                           status template + three hosts (the Compact morph
+                           slot, the Detailed morph slot, the appended row): a
+                           download whose container is referenced by the
+                           active profile's current row set AND realized in
+                           VisibleMods morphs that row in place
+                           (`ModItemViewModel.ActiveDownload`, assigned
+                           exclusively by the parent's re-derived hosting
+                           projection; while morphed the summary area + action
+                           strip swap to the download content, the policy
+                           editor + update-action cell suppress, and the
+                           structural controls stay functional), and everything
+                           else (fresh mods, cross-profile targets,
+                           filtered-hidden targets) appends below the list in
+                           a dedicated ItemsControl labeled with the target
+                           profile. The projection is structural: the
+                           appended collection never intersects VisibleMods or
+                           the reorder machinery, download rows can never enter
+                           the reorder planner's inputs, the drag gesture's
+                           container math, or the move commands. The two
+                           row-affecting globals live on one shared observable
+                           `ModRowContext` (ui/ViewModels/, created in
+                           composition before the list VM, passed once to every
+                           row): the one-shot construction-time premium read
+                           (no mid-session refresh) + the constant gaming
+                           flag; install-busy state is not a context member
+                           (an update in flight is a queue item rendered as
+                           the row morph). Rows keep their public names
+                           as context-forwarding reads, + the list VM's single
+                           context subscription fans change notifications into
+                           the live rows (re-firing exactly the derived
+                           properties the former per-flag pushes re-fired; no
+                           per-row subscription, so rows dropped by a reload
+                           cannot leak). The VM exposes an async
+                           `UpdateCommand(row)` that branches on
+                           premium: Premium resolves the head file + enqueues
+                           one UpdateInstall item through `ModUpdateEnqueuer`
+                           (ui/Session/, the enqueue front over
+                           ResolveLatestNexusAsync + the queue shared by the
+                           manual action + the automatic batch + the DMF
+                           download; the queue's serial worker is the gate:
+                           dequeue-time eligibility revalidation, acquire +
+                           acknowledge-on-success, UpdatesApplied reload; a
+                           resolve failure (no row yet) surfaces the localized
+                           alert, a stale flag is a silent no-op, and the row
+                           morph is the busy surface); regular/unknown opens the
+                           mod's Nexus files page via the shared
+                           IExternalLauncher (fallback alert on failure).
+                           `CheckForUpdatesNowCommand` awaits the runner's
+                           thorough check (driving an `IsCheckingNow` spinner on
+                           the Mods toolbar refresh button; the await also covers the
+                           chained automatic-update enqueue batch) and drives the manual
+                           sliding-window throttle's countdown tooltip + disabled
+                           button via the runner's `NextManualRefreshAllowedAt`,
+                           sharing one countdown timer with the rate-limit gate so
+                           either cause keeps the button disabled and the rate-limit
+                           reason takes tooltip precedence when both are active).
+                           The view's source badge
+                           is a `HyperlinkButton` to the mod's remote page; the
+                           stable update-action cell is a fixed-width `Panel`
+                           reserved on every row holding a drawn download-arrow
+                           button. The button shows for Nexus + Latest rows
+                           regardless of tier (disabled + neutral when no update,
+                           enabled + accent-blue arrow when flagged); Pinned/
+                           Untracked rows keep the reserved cell but no button;
+                           a morphed row does not render the cell at all (the
+                           morph's progress owns the row's progress surface +
+                           hiding the button is the double-click guard). The
+                           rate-limit notice sits in the Mods toolbar. While
+                           the active profile has an enabled alternate mod
+                           manager mod, a full-width non-dismissible caution
+                           banner (a drawn swap-vert icon +
+                           `ModManagerBannerText` carrying the manager mod's
+                           display name, the same `GetActiveModManager`
+                           derivation the launch flag consumes, read at every
+                           Reload + the enable-toggle path) sits between the
+                           import card + the row list, gating nothing
+                           (reorder/lock controls stay fully functional). The Add split
+                            button has four flyout items, all modes that set
+                            the default on click (the face label tracks the
+                            mode): "Add Nexus Mods" (the default; opens the
+                            Darktide Nexus Mods games page in the browser), "Add
+                            Mod (archive)", "Add Mod (folder)", and "Link
+                            external folder" (folder picker, no modal; the
+                            link flow lives on the `LinkedModsViewModel` child,
+                            the ImportWorkflowViewModel pattern, exposed as
+                            `vm.LinkedMods` and raised via its `ModsLinked`
+                            event for the parent's reload);
+                            `LinkedMods.LinkModsCommand` peeks the base name,
+                            runs the collision check (excluding a re-link),
+                            then `LinkFolder` + `AddMod(LatestPolicy)`. In Gaming
+                            Mode the Add button disables entirely (every mode is
+                            desktop-dependent; `IsAddEnabled` + a Desktop Mode
+                            tooltip on the disabled button + an inline toolbar
+                            hint + early-returns in the picker paths +
+                            `AddNexusModsCommand` shows Desktop Mode guidance
+                            instead of launching the browser). A linked row's
+                            badge cell is a two-state indicator: available shows an
+                            "External" pill (`OpenFolderCommand` opens the OS file
+                            manager at the external folder; disabled with a
+                            Desktop Mode tooltip while gaming), broken shows a
+                            non-clickable "Folder unavailable" text in the same cell
+                            (caution brush; `IsExternalBroken` pushed from
+                            `IsExternalAvailable` at Reload). The policy ComboBox is
+                            disabled for linked rows + the update-action cell stays
+                            empty (space preserved). A Nexus + Latest row's source
+                            badge appends the installed release tag inline
+                            (e.g. `Nexus #8 · 1.0`, the `ActualVersion` joined from the
+                            repo); Pinned exposes its version in the pin dropdown +
+                            Untracked isn't Nexus-sourced, so neither appends it to the
+                            badge. `ModItemViewModel`
+                            carries the INPC state + derived `SourceUrl`/`UpdatePageUrl`/
+                            `IsNexusLatest`/`CanShowUpdateAction`/
+                            `UpdateActionEnabled`/`UpdateActionTooltip`/`NexusModId`;
+                            `IsPremiumUser` + `IsGamingMode`
+                            are context-forwarding reads off the shared
+                            `ModRowContext`, so the per-row enabled state +
+                            tooltip recompute from one source when the context
+                            flips (while gaming, a
+                            regular/unverified flagged row's update action +
+                            tooltip carry Desktop Mode guidance instead of the
+                            files-page launch; Premium rows keep the in-app
+                            install path). The `IAutomaticUpdateService`
+                            (ui/Session/) is the opt-in Premium automatic batch
+                            chained after each check from `UpdateCheckRunner`
+                            (captures the exact result, gates on authoritative
+                            Success + updates + AutomaticUpdatesEnabled + active
+                            profile + a fresh Premium verify, then runs the
+                            sequential enqueue batch through
+                            `ModUpdateEnqueuer` with per-iteration
+                            active-profile re-check (a switch stops scheduling
+                            + cancels the still-queued items admitted for the
+                            left profile; an item the worker already started
+                            completes under its own rules), isolates per-mod
+                            RESOLVE failures into one summary alert (download
+                            failures render on their rows), and adds nothing
+                            else: the queue's UpdatesApplied is the reload
+                            signal the list VM consumes).
                            The check is split by trigger:
                            `IUpdateCheckService.CheckAsync` (the v2 GraphQL
                            `modsByUid` batch query, 1 API call for all mods)
@@ -740,7 +855,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           `CuratorConfig.AppUpdates.SourceOverride` (the default)
                           builds the production anonymous
                           `Velopack.Sources.GithubSource` pointing at the Curator
-                          repo, prereleases included; a set value (a local dir or
+                          repo, stable releases only; a set value (a local dir or
                           URL) builds the manager from `UpdateManager`'s
                           urlOrPath overload for local testing / self-hosted feeds,
                           read once at construction via the injected
@@ -773,59 +888,66 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           threadpool thread and the shell/Settings handlers
                           marshal to the UI thread via the shared `Action<Action>`
                           seam;
-                          the DMF (Darktide Mod Framework)
-                          install-prompt coordinator `DmfPromptService`
-                          (ui/Session/) + the modal `ProgressDialog`
-                          (ui/Views/) used for its in-flight download, all
-                          routed through the shell-owned modal queue
-                          `IShellModalQueue` (ui/Session/:
-                          `Enqueue(owner, showOn, modal)` + `DrainAsync`; an
-                          owner's newer enqueue replaces its unconsumed entry,
-                          different owners queue independently, the drain
-                          consumes before running so a thrown modal cannot
-                          re-fire). The coordinator subscribes to
-                          `IProfileService.ProfileCreated` at construction
-                          (nothing depends on it, so composition resolves it
-                          once at startup to establish the subscription); when
-                          `ProfilesViewModel.Save` calls `CreateProfile`, the
-                          already-subscribed coordinator enqueues its prompt
-                          for the Mods destination, and
-                          `ShellViewModel.NavigateAsync` drains the queue after
-                          the destination switch + enter effects, so the DMF
-                          prompt runs as the topmost modal with Mods already
-                          selected underneath; the drained delegate reloads
-                          the mod list itself so an accepted existing/Premium
-                          DMF add is visible immediately afterward. A queued
-                          entry survives visits to other destinations and runs
-                          only on a real Mods entry; the shell no longer knows
-                          DMF exists.
-                          The prompt fires for one trigger
-                          when DMF is not in the active profile: every new
-                          profile that becomes active (no persisted flag: a
-                          fresh ask per profile). Two cases: DMF in the repo
-                          but not the profile -> instant add (case 1); DMF not
-                           in the repo -> a download confirm (the message
-                           tailors to whether Curator owns the `nxm://` handler,
-                           read from the shared `INxmRegistrationState` with no
-                           probe:
-                           manager-download vs. manual-import guidance); on
-                          confirm, premium users get the in-app API download
-                          under a spinner + add, while everyone else (no auth,
-                          regular, or unknown premium state) gets the DMF Nexus
-                          files page opened in the browser regardless of nxm
-                          setup (when Curator owns the handler, the user clicks
-                          Download there + the handler picks up the URL + adds
-                          DMF to the active profile via the standard nxm flow;
-                           when Curator does not own it, the user downloads the
-                           archive and imports it via the normal add flow; on a
-                           browser-launch failure, a fallback alert carries the
-                           files-page URL) (case 2).
-                           In Gaming Mode, case 2 resolves the Premium state
-                           first: premium users get the same confirm + in-app
-                           download, while everyone else (no auth, regular, or
-                           unknown) gets an informational Desktop Mode alert
-                           (no confirm, no browser launch, no acquisition
-                           call; no nxm probe).
+                           the DMF (Darktide Mod Framework)
+                           install-prompt coordinator `DmfPromptService`
+                           (ui/Session/), all
+                           routed through the shell-owned modal queue
+                           `IShellModalQueue` (ui/Session/:
+                           `Enqueue(owner, showOn, modal)` + `DrainAsync`; an
+                           owner's newer enqueue replaces its unconsumed entry,
+                           different owners queue independently, the drain
+                           consumes before running so a thrown modal cannot
+                           re-fire). The coordinator subscribes to
+                           `IProfileService.ProfileCreated` at construction
+                           (nothing depends on it, so composition resolves it
+                           once at startup to establish the subscription); when
+                           `ProfilesViewModel.Save` calls `CreateProfile`, the
+                           already-subscribed coordinator enqueues its prompt
+                           for the Mods destination, and
+                           `ShellViewModel.NavigateAsync` drains the queue after
+                           the destination switch + enter effects, so the DMF
+                           prompt runs as the topmost modal with Mods already
+                           selected underneath; the drained delegate reloads
+                           the mod list itself so an accepted existing-DMF add
+                           is visible immediately afterward (an accepted
+                           premium download needs no reload here: the download
+                           queue's completion owns the add + reloads). A queued
+                           entry survives visits to other destinations and runs
+                           only on a real Mods entry; the shell no longer knows
+                           DMF exists.
+                           The prompt fires for one trigger
+                           when DMF is not in the active profile: every new
+                           profile that becomes active (no persisted flag: a
+                           fresh ask per profile). Two cases: DMF in the repo
+                           but not the profile -> instant add (case 1); DMF not
+                            in the repo -> a download confirm (the message
+                            tailors to whether Curator owns the `nxm://` handler,
+                            read from the shared `INxmRegistrationState` with no
+                            probe:
+                            manager-download vs. manual-import guidance); on
+                           confirm, premium users get the download enqueued
+                           onto the shared download queue (DMF's head file is
+                           resolved first so the queue's dedupe key is real +
+                           the download fetches the exact file offered at
+                           confirm; the download row owns progress + the
+                           queue's completion owns the add + reload; a resolve
+                           failure (no row yet) surfaces the localized alert),
+                           while everyone else (no auth,
+                           regular, or unknown premium state) gets the DMF Nexus
+                           files page opened in the browser regardless of nxm
+                           setup (when Curator owns the handler, the user clicks
+                           Download there + the handler picks up the URL + adds
+                           DMF to the active profile via the standard nxm flow;
+                            when Curator does not own it, the user downloads the
+                            archive and imports it via the normal add flow; on a
+                            browser-launch failure, a fallback alert carries the
+                            files-page URL) (case 2).
+                            In Gaming Mode, case 2 resolves the Premium state
+                            first: premium users get the same confirm + enqueued
+                            in-app download, while everyone else (no auth, regular, or
+                            unknown) gets an informational Desktop Mode alert
+                            (no confirm, no browser launch, no acquisition
+                            call; no nxm probe).
                            Decline is respected; DMF can be added later via the
                            normal add flow. The DMF flow never opens Nexus
                            Integrations or stops at an informational dead-end.
@@ -862,12 +984,15 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         URL, file manager for a folder, narrow failure filter),
                         the NexusGameIdentity constants (the Darktide game
                         domain + game id),
-                        app-state store (active profile id +
-                        last update-check timestamp + manual-refresh throttle
-                        window + profile-scoped known-update snapshots +
-                        last Nexus display-metadata backfill timestamp +
-                        the main window's persisted geometry as the atomic
-                        `AppWindowState` record under `MainWindowState`), AddGeneral() DI ext)
+                         app-state store (active profile id +
+                         last update-check timestamp + manual-refresh throttle
+                         window + profile-scoped known-update snapshots +
+                         last Nexus display-metadata backfill timestamp +
+                         the main window's persisted geometry as the atomic
+                         `AppWindowState` record under `MainWindowState` +
+                         the game-dir takeover receipts as `RenamedModsFolder`
+                         records under `RenamedModsFolders` via the
+                         `IRenamedModsFoldersState` role), AddGeneral() DI ext)
   config/               Modificus.Curator.Config -- the CuratorConfig schema + defaults (POCO),
                         including the NexusConfig slot under Integrations
                         (AuthMethod {None,OAuth,ApiKey}, ApiKey, OAuth tokens, base URLs,
@@ -879,20 +1004,31 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         CompatdataPath/ProtonBinaryPath snapshot fields; automatic
                         mode rewrites the active-platform fields from the discoverer,
                         manual mode validates the stored paths as-is)
-                        + the Preferences.ModRowDensity slot (Detailed default,
-                        Compact the one-line variant; absent/unknown normalizes to
-                        Detailed) + the AppPaths.ModThumbnailCacheDir root
-                        (<app-data>/cache/mod-thumbnails)
-  profiles/             Modificus.Curator.Profiles -- profile data model, persistence,
+                         + the Preferences.ModRowDensity slot (Detailed default,
+                         Compact the one-line variant; absent/unknown normalizes to
+                         Detailed) + the Preferences.ExternalModHosting slot
+                         (the experimental staging-only launch opt-out; default
+                         false = game-dir hosting; read live per launch) + the
+                         AppPaths.ModThumbnailCacheDir root
+                         (<app-data>/cache/mod-thumbnails)
+   profiles/             Modificus.Curator.Profiles -- profile data model, persistence,
                           container-based staging (ProfileService.PrepareModRoot
                           discovers each enabled mod's base folder name inside the
                           resolved version folder + staging links (an NTFS junction
                           on Windows, a symlink on Linux) staged/mods/<baseName> ->
-                          <versionFolder>/<baseName>/, then writes mods.lst; the
+                          <versionFolder>/<baseName>/, then writes mods.lst + the
+                          staging ownership marker (.curator.json inside the
+                          staged mods/, rewritten every pass with schema +
+                          profile id/name + projection timestamp via the shared
+                          StagingOwnership.MarkerFileName contract, so a game-dir
+                          hosting link aimed at the tree can prove Curator owns
+                          it; relay-client reads only the file's presence); the
                           base name, not the container's display name, is the link
                           + mods.lst name; the StagingLinkCreator delegate selects
                           junction vs symlink per OS; a linked container stages
-                          directly from its external folder, no version resolution) + SetModPolicy transitions + the
+                          directly from its external folder, no version
+                          resolution; the focused ProfilesRoot read feeds the
+                          game-dir ownership prefix check) + SetModPolicy transitions + the
                         profile-scoped load-order lock (ModListEntry.OrderLocked:
                         a locked entry keeps its exact zero-based index across
                         SetModOrder, so a reorder projects the requested ordering
@@ -923,11 +1059,27 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         single source of truth consumed by both the service and
                         the UI) -- names non-empty/no =/no NUL, no NUL in values,
                         case-insensitive duplicate rejection, reserved-name block
-                        of 14 Curator-owned OS/launch + Relay config env (adds
-                        RELAY_LUA_LOGS + RELAY_SKIP_SPLASH); backward-
+                        of 15 Curator-owned OS/launch + Relay config env (adds
+                        RELAY_LUA_LOGS + RELAY_SKIP_SPLASH +
+                        RELAY_MOD_MANAGER, the last owned by the manager-mod
+                        detection behind Relay's --mod-manager flag);
+                        backward-
                         compat null/missing normalization to empty, mirroring Mods;
                         GetLaunchSettings is the focused read the launch path uses;
-                        apply at launch) + ModCleanup (the startup
+                        apply at launch) + the alternate-mod-manager derivation
+                        (GetActiveModManager: the focused read returning the
+                        ActiveModManager record -- the enabled mod whose
+                        resolved staging target is a base folder containing
+                        mod_manager.lua, plus the staged manager file path;
+                        content-based + manager-agnostic (no Nexus id, no
+                        base.mod involvement, no special AddMod behavior),
+                        shares the staging resolver so the answer matches what
+                        PrepareModRoot stages, yields null when the manager
+                        file is missing from the resolved target (never a path
+                        Relay would hard-refuse), first-in-order-wins over a
+                        hand-shaped duplicate; the manager mod stages +
+                        lists like any ordinary mod; one derivation consumed
+                        by both the launch flag + the mod-list banner) + ModCleanup (the startup
                         prune orchestration; keeps a referenced linked container by
                         containerId sentinel, since a linked container has no versions)
   mods/          Modificus.Curator.Mods -- the unified mod repository
@@ -959,19 +1111,27 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         success so failed re-imports are non-destructive; validates the
                         source has exactly one base dir with a matching <base>.mod +
                         preserves the base folder under <versionFolder>/<base>/;
-                        exposes GetBaseName + FindExistingContainer peeks for the
-                        collision block; AddVersion dedup refreshes
-                        RemoteUploadedAt from the re-acquired version's
-                        remote-publish timestamp + takes an optional ModDisplayMetadata
-                        that replaces the container's DisplayMetadata in the same
-                        manifest update, null preserving the prior value so a manual
-                        re-import never erases a prior acquisition or backfill;
-                        TryInitializeDisplayMetadata is the atomic missing-only
-                        initialization seam (writes + persists under the repo lock,
-                        returns false if DisplayMetadata is already non-null); LinkFolder records an external
-                        folder as a metadata-only LinkedSource container with no
-                        copy, + IsExternalAvailable reports a linked container's
-                        transient external-folder availability).
+                         exposes GetBaseName + FindExistingContainer peeks for the
+                         collision block; AddVersion dedup refreshes
+                         RemoteUploadedAt + FileId from the re-acquired version's
+                         remote facts + takes an optional ModDisplayMetadata
+                         that replaces the container's DisplayMetadata in the same
+                         manifest update, null preserving the prior value so a manual
+                         re-import never erases a prior acquisition or backfill;
+                         ModVersion persists the Nexus FileId (nullable, the
+                         RemoteUploadedAt precedent; recorded on both the
+                         new-version + dedup-reuse branches, so legacy entries
+                         self-heal by attrition) + the IsLatest contract keys on
+                         the effective timestamp (RemoteUploadedAt ?? ImportedAt,
+                         tie-break ImportedAt) re-evaluated at every
+                         AddVersion/RemoveVersion, so importing an older remote
+                         file never flips latest (issue #232);
+                         TryInitializeDisplayMetadata is the atomic missing-only
+                         initialization seam (writes + persists under the repo lock,
+                         returns false if DisplayMetadata is already non-null); LinkFolder records an external
+                         folder as a metadata-only LinkedSource container with no
+                         copy, + IsExternalAvailable reports a linked container's
+                         transient external-folder availability).
   integrations/         Modificus.Curator.Integrations -- the Nexus Mods v1
                         client + auth
                         (INexusClient over the v1 REST endpoints with per-request
@@ -989,21 +1149,32 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         build-time const; no client secret (Nexus accepts this
                         client as a public client; PKCE S256 protects the flow);
                         client_id is posted in the token body; scope "openid";
-                        IModAcquisitionService the download +
-                        extract + place orchestrator over INexusClient +
-                        IModImportService + a plain HttpClient for the CDN
-                        download; AcquireFromNexusAsync resolves the download
-                        links, fetches name + version metadata, downloads to
-                        temp, then imports via IModImportService.Import;
-                        the same GetModInfoAsync call that resolves the name also
-                        supplies the display metadata (summary + thumbnail URL +
-                        adult flag), normalized once through the shared internal
-                        ModDisplayMetadataMapper + forwarded through Import so it
-                        lands on the container with no extra Nexus call;
-                        AcquireLatestNexusAsync resolves the newest
-                        non-archived MAIN file via ListModFilesAsync then forwards
-                        to AcquireFromNexusAsync with null nxm tokens (premium
-                        path); ModFile gains an `archived` bool for the filter;
+                         IModAcquisitionService the download +
+                         extract + place orchestrator over INexusClient +
+                         IModImportService + a plain HttpClient for the CDN
+                         download; AcquireFromNexusAsync resolves the download
+                         links, fetches name + version metadata, downloads to
+                         temp, then imports via IModImportService.Import,
+                         returning NexusAcquisitionResult (container + version
+                         ids, the release tag, + IsHeadFile, whether the file
+                         is the mod's newest non-archived MAIN file, computed
+                         from the listing the acquisition already reads at
+                         zero extra API calls) with per-file byte progress
+                         (cumulative received + the Content-Length total when
+                         sent, null without one, no separate HEAD call);
+                         the same GetModInfoAsync call that resolves the name also
+                         supplies the display metadata (summary + thumbnail URL +
+                         adult flag), normalized once through the shared internal
+                         ModDisplayMetadataMapper + forwarded through Import so it
+                         lands on the container with no extra Nexus call;
+                         AcquireLatestNexusAsync resolves the newest
+                         non-archived MAIN file then forwards
+                         to AcquireFromNexusAsync with null nxm tokens (premium
+                         path); ResolveLatestNexusAsync resolves the head file
+                         id + tag without a download (one ListModFilesAsync
+                         call) for callers that need a concrete file id before
+                         any item exists (the queue's dedupe key, resolved by
+                         the enqueue fronts); ModFile gains an `archived` bool for the filter;
                         INexusModMetadataService the stable-v1 display-metadata
                         backfill (Nexus-only, missing-only, active-profile-prioritized,
                         one GetModInfoAsync per candidate, at most 25 attempted
@@ -1063,11 +1234,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         caller-mapped `ModListCandidate` records
                         (ContainerId + Policy), so Integrations holds no
                         Profiles reference; + the pure static
-                        `UpdateEligibility` evaluator, the one source of the
-                        four known-update eligibility rules (member /
-                        LatestPolicy / NexusSource same ModId / ordinal-ignore-
-                        case version match), shared by the store's hydration
-                        self-heal + the install-time revalidation)
+                         `UpdateEligibility` evaluator, the one source of the
+                         four known-update eligibility rules (member /
+                         LatestPolicy / NexusSource same ModId / ordinal-ignore-
+                         case version match), shared by the store's hydration
+                         self-heal + the download queue's dequeue-time
+                         revalidation (UI))
   steam/                Modificus.Curator.Steam -- Steam + Darktide + Proton discovery
                         (multi-library + compatdata; Linux Proton resolves from Steam's
                         CompatToolMapping in config.vdf, app-specific entry first then
@@ -1121,7 +1293,19 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         Z:\-translated on Linux); a profile's SkipSplash emits
                         Relay's bare --skip-splash flag appended after --log-lua
                         (skips Darktide's intro splash state, no value, not
-                        Z:\-translated on Linux); game args append one bare -- then
+                        Z:\-translated on Linux); when the profile has an
+                        enabled alternate mod manager (derived right after the
+                        staging pass via GetActiveModManager, which locates +
+                        verifies the manager in the staged tree), the pair
+                        --mod-manager + the ABSOLUTE projected manager file lands
+                        immediately after the --mod-path value pair (verbatim
+                        on Windows, Z:\-translated on Linux; the launch path
+                        projects the flag value onto the effective mod root --
+                        the game dir under default hosting, the staged root
+                        under the external preference -- formulated where
+                        --mod-path is; null means Relay's built-in manager
+                        and no flag, and a manager file missing from the
+                        resolved target never gets one); game args append one bare -- then
                         each arg as its own ArgumentList entry (Relay's --
                          contract; no version preflight); the spawn seam IProcessLauncher takes
                          one immutable ProcessLaunchRequest with FilePath,
@@ -1141,16 +1325,50 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         configured RelayDir, then on both platforms falls back to the
                         app-local relay/ shipped inside a Velopack payload at
                         <BaseDirectory>/relay/, then uses the portable sibling fallback
-                        on Windows only)
+                         on Windows only; the game-dir mod host step between
+                         staging + spawn: IGameDirModsHost/GameDirModsHost owns
+                         the <game>/mods ownership ladder (claims proven by the
+                         staging marker inside the link's target or a target
+                         under the profiles root, never reparse-ness alone;
+                         absent -> create silently, ours -> re-point silently
+                         via delete+recreate of the link only, foreign ->
+                         LaunchStatus.GameDirConflict with the detected path on
+                         Message + the game dir on GameDirPath before any
+                         mutation; TakeOver performs the consented rename-aside
+                         takeover (returning the renamed entry's path, null
+                         when nothing was renamed): mods_<yyyyMMdd-HHmm> with
+                         numeric bump on collision + a receipt through
+                         IRenamedModsFoldersState + a best-effort README.txt
+                         inside the renamed folder (folder case only, a
+                         failure logged never surfaced);
+                         RemoveOwnedLink is the
+                         best-effort external-mode cleanup that never touches a
+                         foreign entry; link creation reuses the Profiles
+                         StagingLinkCreator primitive; registered in the
+                         composition root after AddProfiles + AddGeneral).
+                         Hosting is the default: GAME_DIR =
+                         dirname(dirname(DarktideGameBinaryPath)) validated to
+                         exist, --mod-path = GAME_DIR (the Linux strategy
+                         Z:\-translates it exactly as before); the
+                         Preferences.ExternalModHosting opt-out (read live per
+                         launch) restores --mod-path = staged root + the
+                         best-effort owned-link removal; link IO/Win32 failures
+                         map to LaunchStatus.Error with the exception message)
   nxm/                  Modificus.Curator.Nxm -- the nxm:// scheme-handler plumbing:
                         NxmUrlParser (mod-download / oauth-callback /
                         collection URL types), NxmIpcFraming (length-prefixed UTF-8 frames),
-                        SingleInstanceGuard (the process-enumeration single-instance check,
-                        with an injectable enumerator seam), NxmIpcServer (the named-pipe
-                        server; Bind runs two SEPARATE checks: SingleInstanceGuard first
-                        (fatal NxmSingleInstanceException on collision), then the pipe bind
-                        which degrades gracefully on IOException; accept loop Disconnects
-                        between clients), INxmRouter + no-op INxmModDownloadHandler
+                         SingleInstanceGuard (the process-enumeration single-instance check,
+                         with an injectable enumerator seam + the non-throwing
+                         IsAnotherInstanceRunning query over the same enumeration, which
+                         the handler relay reuses for its cold-start pre-check), NxmIpcServer (the named-pipe
+                         server; Bind runs two SEPARATE checks: SingleInstanceGuard first
+                         (fatal NxmSingleInstanceException on collision), then the pipe bind
+                         which degrades gracefully on IOException; accept loop Disconnects
+                         between clients, resting on the explicit invariant that
+                         INxmRouter.RouteAsync returns promptly: request processing is the
+                         routed handler's responsibility (enqueue-or-refuse), never inline
+                         on the accept loop; the RouteAsync + HandleAsync docs state the
+                         prompt-return contract), INxmRouter + no-op INxmModDownloadHandler
                         default (the real handler is registered via AddSingleton
                         last-wins, in CuratorComposition after AddNxm()), the OS
                         scheme-handler registrar
@@ -1168,9 +1386,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                          both platforms: it never removes another program's registration +
                          touches only Curator's own registration files (a no-op or a
                          removal of Curator's own files depending on platform state), so
-                         callers never pre-check), + NxmHandlerRelay (the testable core the
-                        handler exe calls: hot-path IPC delivery + cold-start launch+retry,
-                        UseShellExecute=false on both OSes). AOT-friendly (IsAotCompatible;
+                          callers never pre-check), + NxmHandlerRelay (the testable core the
+                          handler exe calls: hot-path IPC delivery + cold-start launch+retry with an
+                          advisory process pre-check (a detected Curator process skips the
+                          duplicate launch and goes straight to the retry loop, the burst
+                          case; distinct stderr lines per branch; the default reuses the
+                          SingleInstanceGuard enumeration; 1s default connect timeout),
+                          UseShellExecute=false on both OSes). AOT-friendly (IsAotCompatible;
                         only raw byte/UTF-8 IO in the handler path).
   nxm-handler/          Modificus.Curator.NxmHandler -- the OS-registered nxm:// scheme handler
                         (console exe, native AOT). Program.cs is one line: NxmHandlerRelay.RunAsync.
@@ -1180,18 +1402,34 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
     Modificus.Curator.General.Tests/         xUnit tests for the general library
                                           (incl. the AppStateStore KnownUpdates round-trip +
                                           old-file-without-field compatibility + the
-                                          atomic MainWindowState record round-trip)
+                                          atomic MainWindowState record round-trip + the
+                                          RenamedModsFolders receipts round-trip/no-clobber/
+                                          old-file compatibility)
     Modificus.Curator.Profiles.Tests/        xUnit tests for the profiles library (incl. staging
+                                          + the staging ownership marker (written/rewritten
+                                          per pass, profile identity + timestamp, the
+                                          renamed-profile refresh) + ProfilesRoot
                                           + the launch-settings round-trip/normalization/validation
                                           + DmfAddTests: the DMF fresh-add rule -- Nexus mod 8 +
                                           canonical dmf/dmf.mod recognition (untracked + linked),
                                           prepend-at-rank-0-locked with survivor metadata intact,
                                           lookalikes/unknown ids ordinary, idempotent re-add,
                                           remove-then-re-add)
+                                          + ModManagerDetectionTests: the alternate-manager
+                                          derivation -- base/mod_manager.lua recognition (untracked +
+                                          Nexus + linked, the exact staged manager path), ordinary
+                                          staging/mods.lst behavior for the manager mod, null for
+                                          disabled/unresolvable/missing-file/capitalized-Base shapes,
+                                          the unknown-profile throw, first-in-order-wins)
     Modificus.Curator.Mods.Tests/      xUnit tests for the mod repository + import
                                         (incl. the linked-folder add + linked-container prune,
                                         + the display-metadata AddVersion/Import pass-through
-                                        + TryInitializeDisplayMetadata atomic missing-only init)
+                                        + the IsLatest effective-timestamp contract (an older
+                                        remote file never flips latest, at add/remove/dedup)
+                                        + FileId persistence on both AddVersion branches
+                                        + TryInitializeDisplayMetadata atomic missing-only init
+                                        + the manager archive shape: base/mod_manager.lua with an
+                                        empty base.mod validates with base name base)
     Modificus.Curator.Integrations.Tests/    xUnit tests for the Nexus client
                                           (against a fake HttpMessageHandler),
                                           the auth factories (apikey / OAuth / None + selector),
@@ -1201,7 +1439,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           ephemeral port, the NexusConfig JSON round-trip, and the
                                           ModAcquisitionService (download + extract + place against
                                           a fake INexusClient + fake IModImportService + stub CDN,
-                                          incl. the display-metadata capture from the shared mapper)
+                                          incl. the display-metadata capture from the shared mapper,
+                                          the progress tuple (Content-Length total + null total),
+                                          the remoteFileId forward, the IsHeadFile computation,
+                                          + ResolveLatestNexusAsync's no-download head resolution)
                                           + the UpdateCheckService (Nexus-only
                                           update check against a fake INexusClient +
                                           caller-built ModListCandidate batches +
@@ -1214,12 +1455,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           source-changed/version-changed entries)
                                           + the UpdateEligibility evaluator (the four
                                           rules + every rejection reason + the
-                                          case-insensitive version match)
-                                          + the ModUpdateInstaller (gate semantics
-                                          Try-Busy vs awaiting, in-gate revalidation,
-                                          acknowledge-on-success-only, the progress
-                                          bracket, the Failed outcome shape,
-                                          cancellation propagation)
+                                          case-insensitive version match; the
+                                          update-install revalidation that
+                                          consumes it runs in the UI-layer
+                                          download queue, covered by
+                                          ModDownloadQueueTests)
                                           + the NexusModMetadataService (stable-v1
                                           display-metadata backfill: the 24-hour gate,
                                           the 25-attempt cap, active-profile-priority
@@ -1240,7 +1480,23 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             `dotnet test` = xUnit; `dotnet run` = composition smoke harness);
                                             covers RelayLaunchServiceTests (Windows + Linux arg
                                             assembly + DiscoveryIncomplete/StagingFailed/Error
-                                            mapping + the RelayExited exit tracking over the
+                                            mapping + the game-dir hosting step: the --mod-path
+                                            switch to GAME_DIR under hosting + back to the staged
+                                            root under the external preference read live per
+                                            launch, the owned-link removal call, the
+                                            GameDirConflict result shape, the link-failure +
+                                            underivable-game-dir Error mappings, the Linux Z:\
+                                            translation of GAME_DIR, + a real-host end-to-end
+                                            launch from the temp game dir
+                                            + the --mod-manager handoff: the flag pair carries
+                                            the manager file projected onto the effective mod
+                                            root (the game-dir mods link path under default
+                                            hosting on both strategies, Z:\-translated on
+                                            Linux; the staged path under the external
+                                            preference), no flag + one derivation call per
+                                            launch reaching staging, zero calls on a
+                                            discovery-incomplete launch
+                                            + the RelayExited exit tracking over the
                                             fake ISpawnedProcess: completes when the fake exits,
                                             completes + disposes when exit observation throws,
                                             null on every non-Launched result + the Linux five-key AppImage-identity
@@ -1249,8 +1505,23 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             before Proton startup alongside the AppImage
                                             removals + STEAM_COMPAT_* overrides, Windows
                                             profile env as overrides, empty/legacy when no
-                                            settings) + GameArgumentsTests (the bare-`--`
-                                            contract via the pure BuildLauncherArgs seam),
+                                            settings) + GameDirModsHostTests (every claim-ladder
+                                            row against the real platform link primitive + the
+                                            real receipts store: absent creates, ours-by-marker
+                                            left in place, ours re-pointed with the old target
+                                            surviving, ours by marker outside the profiles root,
+                                            a dead link under the profiles root silently
+                                            recreated, foreign real dir/file/link/dead-link
+                                            conflicts reported untouched, the takeover rename +
+                                            receipt + best-effort README incl. a README-write
+                                            failure still recording the receipt, collision bump +
+                                            file case + no-op cases + the host-through-ladder
+                                            retry, + the
+                                            best-effort removal semantics) + GameArgumentsTests (the bare-`--`
+                                            contract via the pure BuildLauncherArgs seam, incl.
+                                            the --mod-manager pair immediately after --mod-path
+                                            when a manager file is passed: verbatim Windows /
+                                            Z:\-translated Linux / absent when null),
                                             ProcessLauncherTests (the deterministic BuildStartInfo
                                             path: a requested inherited key is removed, an
                                             unrelated inherited key remains, an override is
@@ -1286,7 +1557,15 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             the exit lands, timeout clears the attempt
                                             for retry when the combined wait stays unresolved, failure results keep the attempt through the
                                             dialog then clear, exception path clears, direct
-                                            concurrent execution rejected) + the LaunchOverlayTests
+                                            concurrent execution rejected) + the
+                                            ShellGameDirConflictTests (the game-dir consent
+                                            flow: both choices, the retry-once guard with a
+                                            second conflict surfacing the error alert, the
+                                            rename notice + its before-the-retry ordering +
+                                            the null-return skip, the takeover-failure alert,
+                                            the attempt state held through the modal, + the
+                                            malformed-result
+                                            degradation) + the LaunchOverlayTests
                                             (the full-client launch overlay as XML source tests:
                                             overlay bound to the attempt state + SplitView disabled,
                                             top-layered hit-testable scrim, localized card + stock
@@ -1304,31 +1583,61 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             toggle (EnableLuaLogs emits Relay's bare --log-lua flag) +
                                             a SkipSplash toggle (SkipSplash emits Relay's bare
                                              --skip-splash flag)) + the
-                                            NxmModDownloadHandler auth/profile gates + error
-                                            wiring + the mod-list update flow: profile-scoped
-                                            known-update persistence/hydration, the
-                                            UpdateCheckRunner candidate pull + the
-                                            unreadable-profile skip, the
-                                            UpdateRefreshGate (server reset
-                                            governs, fallback cooldown, timer
-                                            lifecycle, marshaled StateChanged,
-                                            throttle coupling), the stable
-                                            per-row update action (no-update disabled, flagged
-                                            accent, Premium install, regular/unknown files-page
-                                            open, launcher failure alert, unsupported rows),
-                                            UpdateCommand premium/regular branches + one-at-a-time
-                                            + the Busy/NotEligible silent no-ops + the Failed alert
-                                            via the installer outcome + the automatic-update setting
-                                            + the AutomaticUpdateService
-                                            gating/sequencing/isolation/profile-switch/mid-batch-
-                                            profile-deletion/cancellation + the installer-driven
-                                            progress + busy push-down + SourceUrl resolution; + the
-                                            linked-folder flow
+                                             NxmModDownloadHandler gates + peek + enqueue +
+                                             error wiring + the mod-list update flow: profile-scoped
+                                             known-update persistence/hydration, the
+                                             UpdateCheckRunner candidate pull + the
+                                             unreadable-profile skip, the
+                                             UpdateRefreshGate (server reset
+                                             governs, fallback cooldown, timer
+                                             lifecycle, marshaled StateChanged,
+                                             throttle coupling), the stable
+                                             per-row update action (no-update disabled, flagged
+                                             accent, Premium resolve + enqueue, regular/unknown
+                                             files-page open, launcher failure alert, unsupported
+                                             rows),
+                                             UpdateCommand premium/regular branches
+                                             + the stale-flag silent no-op + the resolve-failure
+                                             alert + the automatic-update setting
+                                             + the AutomaticUpdateService
+                                             gating/sequencing/resolve-failure isolation/profile-
+                                             switch/mid-batch-profile-deletion/cancellation;
+                                             + the download queue (ModDownloadQueueTests:
+                                             serial FIFO worker, dedupe join + pulse,
+                                             dequeue-time auth recheck + eligibility
+                                             revalidation, the exact-FileId repository hit,
+                                             head/non-head policy on both paths, ProfileAdd vs
+                                             UpdateInstall completions, token-authoritative
+                                             cancel (queued drop + active interrupt),
+                                             retry/dismiss, mixed nxm + update clicks sharing
+                                             the worker, the admission-event ordering on a
+                                             fast hit)
+                                             + the download rows (ModListDownloadRowsTests: the
+                                             morph-in-place vs appended hosting projection incl.
+                                             filter-hidden targets + rehosting on profile switch
+                                             + reload, the morph's affordance suppression with
+                                             structural controls kept, the empty-state
+                                             suppression while a download is active, the failed
+                                             corpse + fresh attempt coexisting, cancel/dismiss/
+                                             retry forwarding, the join pulse, every phase/byte
+                                             render state; DownloadRowXamlTests: the one shared
+                                             status template hosted by all three surfaces, the
+                                             appended section separate with no reorder
+                                             affordances, the morph suppression bindings, the
+                                             drawn-geometry icons + resx keys);
+                                             + SourceUrl resolution; + the
+                                             linked-folder flow
                                             (LinkModsCommand peek/collision-refusal/re-link +
                                             LatestPolicy add, the linked badge two-state available/
                                             broken, OpenFolderCommand launch + failure alert, the
                                             disabled policy + empty update-action cell for linked
                                             rows, IsExternalBroken on Reload);
+                                            + the mod-list manager banner
+                                            (ModListModManagerBannerTests: IsModManagerActive +
+                                            ModManagerBannerText follow the GetActiveModManager
+                                            result at every Reload + on the enable-toggle path,
+                                            flipping off when the result clears, the row/repo/
+                                            "base" name fallback chain);
                                             + the profile-scoped load-order lock + drag-reorder
                                             surface (the lock-aware FakeProfileService projection,
                                             OrderLocked carried on Reload + move/grip availability,
@@ -1344,22 +1653,46 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             only, marker before/after/none, lift translation
                                             (pointer delta + scroll-offset delta, both directions),
                                             edge-band auto-scroll + offset clamp);
-                                            + the DmfPromptService (the two DMF
-                                            cases: add existing / download + add or
-                                            browser-open, the new-profile trigger
-                                            (enqueue on create, prompt on the modal
-                                            queue's Mods drain, reload after the
-                                            prompt), the decline path, the premium
-                                            in-app download,
-                                            the non-premium/unknown/no-auth browser-open
-                                            regardless of the registration state (the
-                                            confirm wording follows the shared state
-                                            with zero probes), the Gaming Mode branch
-                                            (non-premium tiers get the Desktop Mode
-                                            alert with zero browser/acquisition calls;
-                                            premium keeps the in-app download; case 1
-                                            unchanged), and the
-                                            prompt-timing-after-create)
+                                            + the filter/search projection
+                                            (ModListFilterTests: hide-filter/search/combined
+                                            narrowing, clearing restores, projection survives
+                                            reload + clears on profile switch, ToggleEnabled
+                                            under the hide-filter, the no-matches vs add-hint
+                                            exclusivity, the updates-only filter (flagged-rows
+                                            projection incl. the reload hydration-ordering
+                                            regression, AND-composition with the other filters,
+                                            a landed check reprojecting the live filter,
+                                            session-transient lifecycle, empty-state
+                                            exclusivity, tooltip locality), move availability
+                                            over visible unlocked
+                                            neighbors, reorder-through-filter via Move Up/Down +
+                                            CommitReorder with hidden rows keeping relative order +
+                                            one SetModOrder call, locked rows keeping indices,
+                                            no-op/hidden-source/out-of-range rejections)
+                                            + the pure visibility-aware planner
+                                            (ModReorderPlannerTests: all-visible parity with the
+                                            lock projection, move up/down across hidden rows
+                                            landing the source adjacent in the stored order,
+                                            drop-at-end with trailing hidden rows, single visible
+                                            row, locked-interleaved, hidden/locked/missing source
+                                            + rank-range rejections);
+                                             + the DmfPromptService (the two DMF
+                                             cases: add existing / download + add or
+                                             browser-open, the new-profile trigger
+                                             (enqueue on create, prompt on the modal
+                                             queue's Mods drain, reload after the
+                                             prompt), the decline path, the premium
+                                             enqueued download (head resolved at
+                                             enqueue; resolve failure alerts),
+                                             the non-premium/unknown/no-auth browser-open
+                                             regardless of the registration state (the
+                                             confirm wording follows the shared state
+                                             with zero probes), the Gaming Mode branch
+                                             (non-premium tiers get the Desktop Mode
+                                             alert with zero browser/acquisition calls;
+                                             premium keeps the in-app download; case 1
+                                             unchanged), and the
+                                             prompt-timing-after-create)
                                             + the Gaming Mode gating (ModListGamingModeTests:
                                             Add-button availability, the gaming guidance
                                             alerts for AddNexusMods + regular-tier
@@ -1381,12 +1714,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             PreferencesService theme mapping
                                             ResolveThemeVariant + the stored-System
                                             guarantee under gaming)
-                                            + the ModRowContext (premium/busy/gaming
-                                            flips re-fire exactly the row + list
-                                            properties the per-flag pushes re-fired,
-                                            the install front delegates, dropped rows
-                                            receive no notifications, the premium-read
-                                            failure stays false) + the ShellModalQueue
+                                             + the ModRowContext (premium/gaming
+                                             flips re-fire exactly the row + list
+                                             properties the per-flag pushes re-fired,
+                                             dropped rows
+                                             receive no notifications, the premium-read
+                                             failure stays false) + the ShellModalQueue
                                             (run-once after the drain, newest-wins per
                                             owner, independent owners in enqueue order,
                                             other destinations stay queued, a thrown
@@ -1421,8 +1754,16 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             localized getters must be in the known VM
                                             set)
     Modificus.Curator.Nxm.Tests/             xUnit tests for the nxm library (parser, framing,
-                                            IPC server resilience, SingleInstanceGuard, router,
-                                            relay helper, standalone + AppImage Linux registrar
+                                            IPC server resilience, SingleInstanceGuard
+                                            (incl. SingleInstanceGuardTests: the
+                                            IsAnotherInstanceRunning query's true/false
+                                            answers over the injected enumeration + the
+                                            name/pid pass-through), router,
+                                            relay helper (incl. the cold-start pre-check
+                                            split: a reported running Curator skips the
+                                            launch, prints the waiting stderr line, still
+                                            delivers or times out without launching),
+                                            standalone + AppImage Linux registrar
                                             (incl. the child-env sanitizer dropping exactly
                                             LD_PRELOAD), owned-registration
                                             maintenance, the Windows registrar's self-guarded
@@ -1467,18 +1808,20 @@ scripts/            release.env: the install manifest (standalone RELEASE_URL /
                     in place of the download, for offline extraction tests) /
                     CURATOR_APPIMAGE (local AppImage) / VELOPACK_STATE_DIR.
 .github/workflows/  curator-build (the PR gate: an Ubuntu-only format job
-                    auto-commits `dotnet format` as `style: dotnet format [skip ci]`
-                    for same-repo PRs, verify-only for fork PRs and workflow_dispatch;
-                    build + test on a Windows/Ubuntu matrix and a separate Ubuntu 22.04
-                    AppImage publish/pack/extract/feed/syntax-check/installer/uninstaller
-                    smoke (shell syntax checks on all four production Linux scripts
-                    install.sh, install-standalone.sh, uninstall.sh,
-                    uninstall-standalone.sh; runs the AppImage installer + AppImage
-                    uninstaller + standalone uninstaller harnesses; also asserts the
-                    Velopack-generated internal desktop file carries
-                    StartupWMClass=ModifAmorphic.ModificusCurator) depend on the format
-                    job; no artifact upload; release-please-only PRs are ignored via
-                    paths-ignore; there is intentionally no push trigger),
+                     checks out the PR head branch, runs `dotnet format`,
+                     and auto-commits with `[skip ci]` on pull requests (format runs
+                     without committing on workflow_dispatch); build + test on a
+                     Windows/Ubuntu matrix and a separate Ubuntu 22.04
+                     AppImage publish/pack/extract/feed/syntax-check/installer/uninstaller
+                     smoke (shell syntax checks on all four production Linux scripts
+                     install.sh, install-standalone.sh, uninstall.sh,
+                     uninstall-standalone.sh; runs the AppImage installer + AppImage
+                     uninstaller + standalone uninstaller harnesses; also asserts the
+                     Velopack-generated internal desktop file carries
+                     StartupWMClass=ModifAmorphic.ModificusCurator) depend on the format
+                     job; no artifact upload; release-please-only PRs are ignored via
+                     paths-ignore; runs on PRs into any branch; there is intentionally
+                     no push trigger),
                     release (release-please cuts the release; each platform job resolves
                     the newest non-draft stable Relay release and downloads its
                     Windows x64
@@ -1609,26 +1952,40 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   session-scoped `HasPendingChanges` flag the mod-list edits set and Launch
   clears, surfaced as a yellow "changes pending" status dot while the game
   runs), global
-  Preferences + i18n infrastructure, the mod-list UI (view mods with
-  source/version badges, enable/disable, remove-with-confirm, reorder (drag the
-  per-row grip at the left edge, or Move Up / Move Down buttons;
-  profile-scoped per-row order locks keep a row's exact zero-based position
-  across any reorder, toggled by a lock button beside Move Up /
-  Move Down; the grip is the only surface that initiates a drag so the rest of
-  every row stays touch-scrolling surface), per-mod
-  Latest/Pinned policy, local folder/archive import
-  via file picker + drag-and-drop, and linking an external mod folder without
-  copying it, joined to containers via `IModRepository` by
-  `ContainerId`; a persisted Compact/Detailed row density with cached
-  thumbnails + a stable-v1 display-metadata backfill, owned by the
-  `DetailedModRowsViewModel` child + the UI-layer `IModThumbnailService`), and Launch (`LaunchCommand` -> `IRelayLaunchService.Launch`
-  -> branch on `LaunchResult.Status` (`Launched` -> an immediate
-  `IsGameRunning` refresh (the session's `Refresh`) so the running indicator +
-  launch/switch gates react at once, and clears `HasPendingChanges` since the
-  successful stage re-staged the profile; `DiscoveryIncomplete` -> the focused discovery
-  escape-hatch modal over the shared `DiscoveryField` descriptor; `StagingFailed`
-  -> a localized modal alert whose body appends the raised staging exception's
-  message (a runtime/OS error) to the localized framing; `Error` -> modal alert) + a Settings destination editing `CuratorConfig.Discovery` (the global
+   Preferences + i18n infrastructure, the mod-list UI (view mods with
+   source/version badges, enable/disable, remove-with-confirm, reorder (drag the
+   per-row grip at the left edge, or Move Up / Move Down buttons;
+   profile-scoped per-row order locks keep a row's exact zero-based position
+   across any reorder, toggled by a lock button beside Move Up /
+   Move Down; the grip is the only surface that initiates a drag so the rest of
+   every row stays touch-scrolling surface), per-mod
+   Latest/Pinned policy, local folder/archive import
+   via file picker + drag-and-drop, and linking an external mod folder without
+   copying it, joined to containers via `IModRepository` by
+   `ContainerId`; Nexus downloads (nxm links, premium update installs,
+   automatic updates, the DMF prompt) all run through one serial download
+   queue (`IModDownloadQueue`, ui/Session/) whose items render as rows in the
+   mod list (in place on the target row, appended below for new mods) with
+   cancel/retry inline; a persisted Compact/Detailed row density with cached
+   thumbnails + a stable-v1 display-metadata backfill, owned by the
+    `DetailedModRowsViewModel` child + the UI-layer `IModThumbnailService`), and Launch (`LaunchCommand` -> `IRelayLaunchService.Launch`
+   -> branch on `LaunchResult.Status` (`Launched` -> an immediate
+   `IsGameRunning` refresh (the session's `Refresh`) so the running indicator +
+   launch/switch gates react at once, and clears `HasPendingChanges` since the
+   successful stage re-staged the profile; `DiscoveryIncomplete` -> the focused discovery
+   escape-hatch modal over the shared `DiscoveryField` descriptor; `GameDirConflict`
+   -> the two-choice game-dir conflict modal (`ShowGameDirConflictAsync`,
+   the UnsavedChangesDialog pattern incl. EscapeClosesBehavior, Cancel the enum
+   default so ESC/X/close abort): Rename performs the consented
+   `IGameDirModsHost.TakeOver(result.GameDirPath)` (returning the renamed
+   path), shows the one-line rename notice carrying it, then retries the
+   launch once; Cancel aborts; a
+   second conflict in the same attempt chain surfaces the standard error alert
+   (no loop; a takeover failure surfaces an alert with no retry; the
+   launch-attempt overlay state holds through the modal + notice + retry
+   exactly like the failure dialogs); `StagingFailed`
+   -> a localized modal alert whose body appends the raised staging exception's
+   message (a runtime/OS error) to the localized framing; `Error` -> modal alert) + a Settings destination editing `CuratorConfig.Discovery` (the global
   `OverrideAutomaticDiscovery` mode + Discover button over the shared
   `DiscoveryField` descriptor; automatic mode keeps the rows read-only with the
   discoverer owning the snapshot, manual mode makes them editable + validates the
@@ -1672,6 +2029,11 @@ dotnet run   --project src/ui --configuration Release   # app shell window
 - **Conventional Commits** (`type(scope): subject`); commit freely on feature
   branches. Branch + PR flow; no unreviewed merges to `main`.
 - Don't commit secrets, the game binary, or anything under `_local/`.
+- **Label GitHub issues.** Every issue carries at least one fitting label:
+  `enhancement` (new-capability asks), `bug` (something broken),
+  `documentation`, plus the specific ones where they apply (`steam-deck` for
+  Steam Deck / SteamOS Gaming Mode compatibility, `virus-scan` for the
+  post-release AV manual-review issue).
 - **Do not trust training data for framework/library version-specific APIs.** The
   project uses Avalonia 12.x + .NET 10, which postdate the model's training data.
   Before deciding an approach or delegating UI/framework work: determine the exact

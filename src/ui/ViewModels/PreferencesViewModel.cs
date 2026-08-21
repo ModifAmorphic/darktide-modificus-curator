@@ -39,6 +39,11 @@ namespace Modificus.Curator.UI.ViewModels;
 /// is shown checked + disabled as a display-only reflection of the platform
 /// reality (the persisted value stays inert; see
 /// <see cref="EffectiveRelayConsoleChecked"/>).</para>
+/// <para><b>ExternalModHosting:</b> the experimental external mod-hosting
+/// opt-out (<c>false</c> by default; the standard behavior hosts the staged
+/// mods tree in the game directory). Persisted immediately through a focused
+/// read-modify-save + read at launch time; the view presents it as
+/// experimental with its known issue stated.</para>
 /// </remarks>
 public partial class PreferencesViewModel : LocalizedViewModel
 {
@@ -53,6 +58,7 @@ public partial class PreferencesViewModel : LocalizedViewModel
     private static readonly ThemeMode DefaultTheme = ThemeMode.System;
 
     private readonly IPreferencesService _preferences;
+    private readonly IConfigLoader _configLoader;
 
     /// <summary>Whether a property change should fire <see cref="ApplyAndPersist"/>.</summary>
     /// <remarks>
@@ -62,9 +68,22 @@ public partial class PreferencesViewModel : LocalizedViewModel
     /// </remarks>
     private bool _suppressApply;
 
+    /// <summary>
+    /// The external mod-hosting toggle: serve mods from the staging folder
+    /// without the game-dir hosting link (the experimental opt-out of the
+    /// standard game-dir hosting). Restored from the live snapshot at
+    /// construction; every change persists immediately through the focused
+    /// read-modify-save (the launch path reads it live, like the other
+    /// launch-affecting preferences; there is no live-apply step).
+    /// </summary>
+    [ObservableProperty]
+    private bool _externalModHosting;
+
     /// <param name="preferences">The apply+persist authority.</param>
     /// <param name="configLoader">The one-off snapshot read of the current
-    /// preferences.</param>
+    /// preferences (and the read-modify-save target for the external-hosting
+    /// toggle, which deliberately does not widen
+    /// <see cref="IPreferencesService.ApplyAndPersist"/>).</param>
     /// <param name="localization">Resolves the localized tooltip text and refreshes
     /// it on a culture change.</param>
     /// <param name="isRelayConsoleToggleSupported">Whether the Show console on launch
@@ -79,6 +98,7 @@ public partial class PreferencesViewModel : LocalizedViewModel
         : base(localization)
     {
         _preferences = preferences;
+        _configLoader = configLoader;
         _localization = localization;
         IsRelayConsoleToggleSupported = isRelayConsoleToggleSupported;
 
@@ -107,6 +127,7 @@ public partial class PreferencesViewModel : LocalizedViewModel
                 string.Equals(o.Name, configured.Language, StringComparison.OrdinalIgnoreCase))
                 ?? LanguageOptions[0];
             ShowRelayConsole = configured.ShowRelayConsole;
+            ExternalModHosting = configured.ExternalModHosting;
         }
         finally
         {
@@ -207,6 +228,28 @@ public partial class PreferencesViewModel : LocalizedViewModel
         // The display-only checked state tracks ShowRelayConsole on Windows, so a
         // change here must re-fire EffectiveRelayConsoleChecked for the binding.
         OnPropertyChanged(nameof(EffectiveRelayConsoleChecked));
+    }
+
+    partial void OnExternalModHostingChanged(bool value) => PersistExternalModHosting();
+
+    /// <summary>
+    /// Persists <see cref="ExternalModHosting"/> through a focused
+    /// read-modify-save over the live config (load the snapshot, write the one
+    /// field, save), the density-selection pattern: the toggle is read at
+    /// launch time and needs none of the apply steps, so it does not widen
+    /// <see cref="IPreferencesService.ApplyAndPersist"/>. Suppressed during the
+    /// initial restore.
+    /// </summary>
+    private void PersistExternalModHosting()
+    {
+        if (_suppressApply)
+        {
+            return;
+        }
+
+        var config = _configLoader.Load();
+        config.Preferences.ExternalModHosting = ExternalModHosting;
+        _configLoader.Save(config);
     }
 
     /// <summary>

@@ -95,3 +95,16 @@ public interface IMainWindowStatePersistence
     /// </summary>
     AppWindowState? MainWindowState { get; set; }
 }
+
+/// <summary>
+/// The persisted receipts for foreign game-dir <c>mods</c> entries renamed
+/// aside with user consent. Audit data only: assignment replaces the whole
+/// recorded list.
+/// </summary>
+public interface IRenamedModsFoldersState
+{
+    /// <summary>
+    /// The recorded receipts, or <c>null</c> when none are recorded.
+    /// </summary>
+    IReadOnlyList<RenamedModsFolder>? RenamedModsFolders { get; set; }
+}

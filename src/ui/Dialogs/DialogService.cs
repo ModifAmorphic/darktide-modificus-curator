@@ -222,6 +222,29 @@ public sealed class DialogService : IDialogService
 
     /// <inheritdoc />
     /// <remarks>
+    /// Uses the dedicated <see cref="GameDirConflictDialog"/> for the same
+    /// reason the unsaved-changes prompt has its own: the three choices have
+    /// distinct caller-side semantics (takeover + retry, preference + retry,
+    /// abort), so a generic N-button dialog would couple unrelated prompts.
+    /// The Cancel default + ESC / title-bar close / window close all fall out
+    /// of the dialog's <see cref="GameDirConflictDialog.Result"/> default
+    /// without a special close-handler path here.
+    /// </remarks>
+    public async Task<GameDirConflictChoice> ShowGameDirConflictAsync(string title, string message)
+    {
+        var dialog = new GameDirConflictDialog
+        {
+            Title = title,
+        };
+        dialog.SetMessage(message);
+
+        using var _ = DisableOwnerForModal();
+        await dialog.ShowDialog(_owner);
+        return dialog.Result;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
     /// <para>
     /// <b>Spinner lifecycle:</b> the <see cref="ProgressDialog"/> is shown with
     /// <c>ShowDialog</c> (nested event loop on the UI thread, owner disabled via

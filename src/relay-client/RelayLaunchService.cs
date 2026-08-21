@@ -10,9 +10,10 @@ namespace Modificus.Curator.RelayClient;
 /// <summary>
 /// Default <see cref="IRelayLaunchService"/>. A thin orchestrator: it runs
 /// the platform-agnostic launch flow (discover → check completeness → prepare
-/// mod root → launcher-exists → spawn → result mapping) and delegates the
-/// platform-varying pieces to an <see cref="IPlatformLaunchStrategy"/> selected
-/// once at DI registration from the runtime OS. Contains no per-launch OS branch.
+/// mod root → game-dir hosting (or the external opt-out) → launcher-exists →
+/// spawn → result mapping) and delegates the platform-varying pieces to an
+/// <see cref="IPlatformLaunchStrategy"/> selected once at DI registration from
+/// the runtime OS. Contains no per-launch OS branch.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -55,6 +56,7 @@ internal sealed class RelayLaunchService : IRelayLaunchService
     private readonly ISteamService _steam;
     private readonly IConfigLoader _configLoader;
     private readonly IPlatformLaunchStrategy _strategy;
+    private readonly IGameDirModsHost _gameDirHost;
     private readonly ILogger<RelayLaunchService> _logger;
 
     public RelayLaunchService(
@@ -62,12 +64,14 @@ internal sealed class RelayLaunchService : IRelayLaunchService
         ISteamService steam,
         IConfigLoader configLoader,
         IPlatformLaunchStrategy strategy,
+        IGameDirModsHost gameDirHost,
         ILogger<RelayLaunchService> logger)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _steam = steam ?? throw new ArgumentNullException(nameof(steam));
         _configLoader = configLoader ?? throw new ArgumentNullException(nameof(configLoader));
         _strategy = strategy ?? throw new ArgumentNullException(nameof(strategy));
+        _gameDirHost = gameDirHost ?? throw new ArgumentNullException(nameof(gameDirHost));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -97,18 +101,19 @@ internal sealed class RelayLaunchService : IRelayLaunchService
                     MissingDiscoveryFields: missing);
             }
 
-            // PrepareModRoot writes mods.lst + ensures the mod root exists and
-            // returns the --mod-path. A staging-link creation failure surfaces as
+            // PrepareModRoot writes mods.lst + the staging ownership marker and
+            // returns the staged root (the parent of the hosted mods tree). A
+            // staging-link creation failure surfaces as
             // the raised built-in exception (Win32Exception from the junction
             // path on Windows, IOException / UnauthorizedAccessException from the
             // symlink path on Linux) and is mapped to StagingFailed here; the
             // exception's message is carried on the result so the UI can append
             // it to the localized framing. KeyNotFoundException (unknown profile)
             // is caught below and mapped to LaunchStatus.Error.
-            string modPath;
+            string stagedRoot;
             try
             {
-                modPath = _profiles.PrepareModRoot(profileId);
+                stagedRoot = _profiles.PrepareModRoot(profileId);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
             {
@@ -118,6 +123,15 @@ internal sealed class RelayLaunchService : IRelayLaunchService
                     Message: ex.Message,
                     MissingDiscoveryFields: Array.Empty<string>());
             }
+
+            // The manager derivation shares the staging resolver, so its answer
+            // matches what the pass above staged; the just-created staging link
+            // means the manager file exists at the derived path. Null = no
+            // --mod-manager flag (Relay's built-in manager loads mods.lst). The
+            // derivation verifies + locates the manager in the staged tree; the
+            // flag value is projected onto the effective mod root at the hosting
+            // point (the same root as --mod-path).
+            var modManager = _profiles.GetActiveModManager(profileId);
 
             var launcherPath = ResolveLauncherPath(
                 config.RelayDir, AppContext.BaseDirectory, OperatingSystem.IsWindows());
@@ -137,6 +151,75 @@ internal sealed class RelayLaunchService : IRelayLaunchService
             }
 
             var gameBinary = discovery.DarktideGameBinaryPath!;
+
+            // Game-dir hosting: mods that resolve game-directory-relative
+            // paths need the mods tree under <game>/mods, so the default
+            // serves the staged tree through one Curator-owned link there and
+            // hands Relay the game dir as --mod-path (Relay's contract is
+            // unchanged: the parent of the mods folder). The external-hosting
+            // preference (read live from this launch's snapshot) restores the
+            // staging-only launch instead. Both read live per launch like the
+            // other launch-affecting preferences.
+            var gameDir = DeriveGameDir(gameBinary);
+            string modPath;
+            if (config.Preferences.ExternalModHosting)
+            {
+                // Best-effort cleanup only; a failure to remove the link is
+                // logged inside the host and never blocks the launch.
+                if (gameDir is not null && Directory.Exists(gameDir))
+                {
+                    _gameDirHost.RemoveOwnedLink(gameDir);
+                }
+                modPath = stagedRoot;
+            }
+            else
+            {
+                if (gameDir is null || !Directory.Exists(gameDir))
+                {
+                    var derived = gameDir ?? "(unresolvable)";
+                    _logger.LogError(
+                        "The derived game directory '{Derived}' does not exist (binary {Binary}).", derived, gameBinary);
+                    return ErrorResult(
+                        $"The game directory '{derived}' derived from the Darktide binary does not exist.");
+                }
+
+                GameDirHostingResult hosting;
+                try
+                {
+                    hosting = _gameDirHost.EnsureHosting(gameDir, stagedRoot);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
+                {
+                    _logger.LogError(ex, "Game-dir hosting failed for profile {Id}.", profileId);
+                    return ErrorResult($"Failed to host mods in the game directory: {ex.Message}");
+                }
+
+                if (hosting.Outcome == GameDirHostingOutcome.Conflict)
+                {
+                    // Nothing was mutated: the consent prompt (and any takeover
+                    // + retry) belongs to the caller.
+                    _logger.LogWarning(
+                        "Foreign entry at the game-dir mods slot for profile {Id}: {Path}.",
+                        profileId, hosting.ConflictPath);
+                    return new LaunchResult(
+                        LaunchStatus.GameDirConflict,
+                        Message: hosting.ConflictPath,
+                        MissingDiscoveryFields: Array.Empty<string>(),
+                        GameDirPath: gameDir);
+                }
+
+                modPath = gameDir;
+            }
+
+            // Project the manager file onto the same effective mod root as --mod-path:
+            // under default hosting that is the game dir (whose mods link resolves to
+            // the staged tree), under the external preference the staged root itself.
+            // GetRelativePath is safe by construction: ProfileService composes
+            // ManagerPath under the staged root, so the relative portion is always the
+            // in-tree location (mods\<base>\mod_manager.lua), never a ".." climb.
+            string? modManagerFile = modManager is null
+                ? null
+                : Path.Combine(modPath, Path.GetRelativePath(stagedRoot, modManager.ManagerPath));
 
             // Relay writes its own per-day log: its mod_loader opens --log-file
             // directly (an external process, not Serilog). Resolve today's path
@@ -173,7 +256,7 @@ internal sealed class RelayLaunchService : IRelayLaunchService
             // console appears regardless, so the flag is a harmless no-op there.
             var createNoWindow = !config.Preferences.ShowRelayConsole;
 
-            var spawned = _strategy.Start(launcherPath, discovery, gameBinary, modPath, logFile, launchSettings, createNoWindow);
+            var spawned = _strategy.Start(launcherPath, discovery, gameBinary, modPath, modManagerFile, logFile, launchSettings, createNoWindow);
 
             if (spawned is null)
             {
@@ -276,6 +359,21 @@ internal sealed class RelayLaunchService : IRelayLaunchService
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Derives the game directory from the Darktide binary path:
+    /// <c>dirname(dirname(binary))</c>, per the Darktide layout
+    /// (<c>&lt;game&gt;/binaries/darktide.exe</c>). Pure so the derivation is
+    /// unit-testable on any CI OS; returns <c>null</c> when the binary path is
+    /// too shallow to carry a grandparent directory.
+    /// </summary>
+    internal static string? DeriveGameDir(string gameBinary)
+    {
+        ArgumentNullException.ThrowIfNull(gameBinary);
+
+        var binaries = Path.GetDirectoryName(gameBinary);
+        return binaries is null ? null : Path.GetDirectoryName(binaries);
     }
 
     /// <summary>

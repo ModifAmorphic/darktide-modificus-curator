@@ -52,10 +52,11 @@ public sealed record ModContainer
 
     /// <summary>
     /// The container's imported versions, in storage order. One of them may
-    /// carry <see cref="ModVersion.IsLatest"/> (the newest by
-    /// <see cref="ModVersion.ImportedAt"/>); the repository maintains the
-    /// invariant. Exposed as an immutable <see cref="IReadOnlyList{T}"/>:
-    /// mutations go through <see cref="IModRepository"/>.
+    /// carry <see cref="ModVersion.IsLatest"/> (the newest by the
+    /// effective-timestamp key; see <see cref="ModVersion.IsLatest"/>); the
+    /// repository maintains the invariant. Exposed as an immutable
+    /// <see cref="IReadOnlyList{T}"/>: mutations go through
+    /// <see cref="IModRepository"/>.
     /// </summary>
     public IReadOnlyList<ModVersion> Versions { get; init; } = Array.Empty<ModVersion>();
 

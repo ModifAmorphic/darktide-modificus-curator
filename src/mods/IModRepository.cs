@@ -58,8 +58,9 @@ public interface IModRepository
     /// final version folder) so the caller extracts/copies the mod files into
     /// it; on success the repo atomically swaps the temp into the version folder
     /// (a same-volume <c>Directory.Move</c> rename), records the version entry
-    /// on the manifest, and flips <see cref="ModVersion.IsLatest"/> to the
-    /// newest (by <see cref="ModVersion.ImportedAt"/>).
+    /// on the manifest, and re-evaluates <see cref="ModVersion.IsLatest"/> over
+    /// the container's versions (the effective-timestamp key; see
+    /// <see cref="ModVersion.IsLatest"/>).
     /// </summary>
     /// <remarks>
     /// <para>
@@ -76,16 +77,26 @@ public interface IModRepository
     /// <b>Upsert by <see cref="ModVersion.VersionString"/></b>: re-adding a
     /// version whose <paramref name="versionString"/> already exists on the
     /// container reuses its folder (the temp is swapped into the existing
-    /// folder name); the existing version entry's
-    /// <see cref="ModVersion.IsLatest"/> + <see cref="ModVersion.ImportedAt"/>
-    /// are left unchanged (a re-import refreshes the files, not the manifest
-    /// ordering), but <see cref="ModVersion.RemoteUploadedAt"/> IS overwritten
-    /// from <paramref name="remoteUploadedAt"/> (matching how dedup refreshes
-    /// files: a re-acquired version carries the current remote-publish
-    /// timestamp, not the stale one from the first import). A new
-    /// <paramref name="versionString"/> creates a new opaque folder + a new
-    /// version entry stamped with the current time, and that new entry becomes
-    /// <see cref="ModVersion.IsLatest"/> (it is the newest).</para>
+    /// folder name); the reused entry's
+    /// <see cref="ModVersion.ImportedAt"/> is left unchanged (a re-import
+    /// refreshes the files, not the import stamp), but
+    /// <see cref="ModVersion.RemoteUploadedAt"/> +
+    /// <see cref="ModVersion.FileId"/> ARE overwritten from the call (a
+    /// re-acquired version carries the current remote facts, not the stale
+    /// ones from the first import; a manual re-import passes nulls and clears
+    /// them). A new <paramref name="versionString"/> creates a new opaque
+    /// folder + a new version entry stamped with the current time and the
+    /// call's remote facts.</para>
+    /// <para>
+    /// <b>Latest key:</b> after either branch the repository re-evaluates
+    /// <see cref="ModVersion.IsLatest"/> over ALL of the container's versions
+    /// with the effective-timestamp key (see <see cref="ModVersion.IsLatest"/>).
+    /// Importing an older file therefore never flips latest, and a dedup
+    /// re-import promotes the reused entry only when its refreshed remote
+    /// timestamp makes it newly newest. Containers whose versions all have a
+    /// null <see cref="ModVersion.RemoteUploadedAt"/> (manual imports, linked)
+    /// order purely by <see cref="ModVersion.ImportedAt"/>; mixed
+    /// null/non-null manifests coalesce per-entry with no migration.</para>
     /// <para>
     /// <b>Display metadata is container-scoped, not version-scoped.</b> A
     /// non-null <paramref name="displayMetadata"/> replaces
@@ -114,6 +125,14 @@ public interface IModRepository
     /// remote sources, which aren't update-checked anyway. Source-agnostic:
     /// Integrations (the acquisition layer) owns Nexus metadata + passes it
     /// through; this seam does not know about Nexus.</param>
+    /// <param name="remoteFileId">Optional remote-source file id (the Nexus
+    /// file id) captured at acquisition. Recorded on the version entry in BOTH
+    /// branches, mirroring <paramref name="remoteUploadedAt"/>: a new version
+    /// creates the entry with it, a dedup re-import overwrites the reused
+    /// entry's value (so the first re-acquisition backfills a legacy entry).
+    /// <c>null</c> for manual imports + non-remote sources. Source-agnostic:
+    /// Integrations owns Nexus metadata + passes it through; this seam does
+    /// not know about Nexus.</param>
     /// <param name="displayMetadata">Optional source-agnostic display metadata
     /// captured at acquisition for remote-source mods (Nexus) and applied to
     /// the container in the same manifest update as the version mutation. A
@@ -132,6 +151,7 @@ public interface IModRepository
         string versionString,
         Action<string> populateFolder,
         DateTimeOffset? remoteUploadedAt = null,
+        int? remoteFileId = null,
         ModDisplayMetadata? displayMetadata = null);
 
     /// <summary>
@@ -189,7 +209,8 @@ public interface IModRepository
     /// Removes a version from the container's manifest + deletes its folder
     /// (idempotent: a missing container or folder is a no-op). If the removed
     /// version carried <see cref="ModVersion.IsLatest"/>, the newest remaining
-    /// version (by <see cref="ModVersion.ImportedAt"/>) is promoted.
+    /// version by the effective-timestamp key (see
+    /// <see cref="ModVersion.IsLatest"/>) is promoted.
     /// </summary>
     void RemoveVersion(Guid containerId, string versionFolder);
 

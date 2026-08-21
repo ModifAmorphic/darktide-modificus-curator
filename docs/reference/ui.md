@@ -2,9 +2,12 @@
 
 > The Avalonia 12 front end of Modificus Curator. Owns the SplitView shell with
 > five hosted destinations (Profiles, Mods, Nexus, Preferences,
-> Settings), profile management, the mod list, every true modal (Welcome,
+> Settings), profile management, the mod list + its download rows, every true
+> modal (Welcome,
 > confirm, import, discovery escape-hatch, alert, progress), global preferences
-> (theme, font scale, language), the i18n infrastructure, the DMF install-prompt
+> (theme, font scale, language), the i18n infrastructure, the serial Nexus
+> download queue (the one download engine behind nxm clicks, premium update
+> installs, the automatic batch, and the DMF download), the DMF install-prompt
 > coordinator, the update-check runner, and the app self-update service. Domain
 > data stays behind backend library services; the one focused exception is the
 > UI-owned thumbnail presentation cache (see
@@ -213,6 +216,22 @@ owned by `IProfileSession`; launch availability derives directly from
   timeout. Bounded detector handoff, not process supervision (no process
   handle is taken; the facade owns the spawned handle and its disposal, and
   Darktide stays untracked beyond the session signal).
+- `LaunchCommand` result handling, including the game-dir consent chain: a
+  `GameDirConflict` result shows the two-choice game-dir conflict modal
+  through `IDialogService.ShowGameDirConflictAsync`. Rename performs the
+  consented `IGameDirModsHost.TakeOver(result.GameDirPath)` (returning the
+  renamed entry's path), shows a one-line notice carrying it, and retries the
+  launch once (the notice precedes the retry so the information survives a
+  later launch failure; a null return skips the notice and still retries);
+  Cancel aborts. The retry is
+  one-shot per consent: a second conflict in the same attempt chain surfaces
+  the standard error alert instead of another prompt, so the flow can never
+  loop. A takeover failure surfaces an alert (the exception's message after
+  the localized framing) with no retry. The attempt state holds through the
+  modal + notice + retry exactly like the failure dialogs. The other statuses
+  are unchanged: `DiscoveryIncomplete` opens the escape hatch (no retry),
+  `StagingFailed` + `Error` show alerts, and `Launched` runs the running-state
+  handoff described above.
 
 The hosted page view models are application-lifetime singletons; navigation
 never calls an old Window-close final-cleanup (`Detach`) path. There is no
@@ -438,13 +457,15 @@ public interface IDialogService
     Task<bool> ShowDiscoveryEscapeHatchAsync(IReadOnlyList<string> missingFields);
     Task ShowAlertAsync(string title, string message);
     Task<UnsavedChangesChoice> ShowUnsavedChangesAsync(string title, string message, bool canSave);
+    Task<GameDirConflictChoice> ShowGameDirConflictAsync(string title, string message);
     Task<T> ShowProgressAsync<T>(string title, string message, Func<Task<T>> work);
 }
 ```
 
-Six true-modal methods: the first-run Welcome, a binary confirm, the launch
+Seven true-modal methods: the first-run Welcome, a binary confirm, the launch
 discovery escape hatch, a single-button alert, an unsaved-changes three-choice
-prompt, and a non-dismissable progress spinner. Copied local-import failures
+prompt, the game-dir conflict prompt, and a non-dismissable
+progress spinner. Copied local-import failures
 surface inline in the `ImportWorkflowView` card (not through this seam); the
 linked-folder flow continues using `ShowAlertAsync` for its failures.
 
@@ -465,9 +486,10 @@ linked-folder flow continues using `ShowAlertAsync` for its failures.
   true when the user submitted, false when they cancelled. No auto-retry: the
   caller does not re-launch on a true return; the user clicks Launch again.
 - `ShowAlertAsync(title, message)`: a simple modal alert (a single OK
-  button, no cancel). Used to surface a launch `Error`, a download failure,
-  a linked-folder failure, or the DMF informational case where there is
-  nothing for the user to decide, only acknowledge.
+  button, no cancel). Used to surface a launch `Error`, an nxm gate failure
+  (no auth / no active profile / non-Darktide link; there is no download row
+  to host those on), a linked-folder failure, or the DMF informational case
+  where there is nothing for the user to decide, only acknowledge.
 - `ShowUnsavedChangesAsync(title, message, canSave)`: the dedicated three-
   choice unsaved-changes prompt (left to right: Cancel, Don't save, Save;
   Save is the accent button). The `UnsavedChangesChoice` enum defaults to
@@ -478,12 +500,20 @@ linked-folder flow continues using `ShowAlertAsync` for its failures.
   available. Caller-side semantics: Save runs the caller's save core and
   proceeds only on success, Don't save reloads authority and proceeds,
   Cancel preserves the staged state and stops the attempted transition.
+- `ShowGameDirConflictAsync(title, message)`: the game-dir conflict prompt
+  (left to right: Cancel, Rename; Rename is the
+  accent button). Shown when a launch returns `GameDirConflict` (a foreign
+  entry occupies the game-dir `mods` slot; nothing was mutated). The
+  `GameDirConflictChoice` enum defaults to `Cancel`, so ESC, the title-bar
+  close, and a window close behave like the explicit Cancel button. Caller-
+  side semantics: Rename performs `IGameDirModsHost.TakeOver` (whose return
+  value drives the rename notice) + one retry, Cancel aborts.
 - `ShowProgressAsync<T>(title, message, work)`: a buttonless, non-closeable
   modal spinner over the supplied async work. The user cannot dismiss the
   spinner: the work runs to completion and the caller surfaces its result.
   The work's exception (if any) propagates to the caller; the spinner is
-  closed in either case. Used for the DMF in-app download and the app
-  self-update download.
+  closed in either case. Used for the app self-update download (mod downloads
+  render as rows on the mod list through the download queue instead).
 
 ### `DialogService`
 
@@ -868,9 +898,13 @@ Two cases on a trigger:
    owns the `nxm://` handler, read from the shared NXM registration state with
    no probe: the manager-download path when it does,
    manual-import guidance when it does not). On Yes, premium users get the
-   in-app API download under a modal spinner (via
-   `IDialogService.ShowProgressAsync` plus
-   `IModAcquisitionService.AcquireLatestNexusAsync`); everyone else (no auth,
+   download enqueued onto the shared download queue: the concrete head file is
+   resolved first (`IModAcquisitionService.ResolveLatestNexusAsync`, one
+   file-listing call, no download) so the queue's dedupe key is real and the
+   download fetches the exact file the user was offered at confirm, then the
+   download row owns progress and the queue's completion owns the add +
+   reload; a resolve failure (no row exists to host it) surfaces the localized
+   alert and enqueues nothing. Everyone else (no auth,
    regular, or unknown premium state) gets the DMF Nexus files page
    (`https://www.nexusmods.com/<darktide-domain>/mods/8?tab=files`) opened in
    the default browser via the OS shell-open (`UseShellExecute = true`),
@@ -904,9 +938,10 @@ extension) at the call site, so Integrations holds no Profiles dependency. A
 pull failure (a deleted or unreadable profile) is logged and the run skipped:
 no check call, no `LastResult` mutation. After each check completes, the
 runner captures the exact result (not a potentially raced `LastResult`) and
-chains the `IAutomaticUpdateService` (the opt-in Premium automatic installer)
-on the captured UI context, so a manual CheckNow keeps its spinner active
-through the installations. The check flags mods via three tiers (the server's
+chains the `IAutomaticUpdateService` (the opt-in Premium automatic batch) on
+the captured UI context, so a manual CheckNow keeps its spinner active
+through the head resolves + enqueues (the installs themselves run on the
+download queue afterward). The check flags mods via three tiers (the server's
 `viewerUpdateAvailable`, a mod-level version compare, and a latest-file-version
 confirmation that clears tier-2 false positives against the actual latest
 file); see
@@ -935,7 +970,6 @@ public sealed class UpdateCheckRunner
     public DateTimeOffset? NextManualRefreshAllowedAt { get; }
 
     public event EventHandler<UpdateCheckResult?>? CheckCompleted;
-    public event EventHandler? UpdatesApplied;
 
     public void Start();
     public Task CheckNowAsync();
@@ -947,14 +981,14 @@ public sealed class UpdateCheckRunner
   captures is fed into it (`ApplyResult`), and a throttled manual attempt
   re-evaluates it so the countdown engages; the mod-list VM renders its state
   through the marshaled `StateChanged` event.
-- `CheckCompleted` / `UpdatesApplied`: the UI-facing re-raises of the two
-  update-family completions (a check landing on the underlying
-  `IUpdateCheckService`, and the automatic batch's
-  `IAutomaticUpdateService.UpdatesApplied`), both marshaled to the UI thread
-  through the injected `invokeOnUi` seam. The runner is the sole driver of
-  both services, so the mod list subscribes here instead of holding either
-  service; the raw services' own events stay untouched for their own
-  subscribers.
+- `CheckCompleted`: the UI-facing re-raise of the check completion (the
+  underlying `IUpdateCheckService` event), marshaled to the UI thread through
+  the injected `invokeOnUi` seam. The runner is the sole driver of the check
+  service, so the mod list subscribes here instead of holding the service;
+  the raw service's own event stays untouched for its own subscribers.
+  (Install completions are not re-raised here: they surface through the
+  download queue's own `UpdatesApplied` event, which the mod list consumes
+  directly.)
 
 - `TickInterval`: the periodic timer's fixed tick granularity (1 minute).
   The user-configured interval
@@ -1162,9 +1196,12 @@ publish time for the Windows installer or Linux AppImage):
   `null`/whitespace (the default) builds the production anonymous `GithubSource`
   (`Velopack.Sources` namespace; repo
   `https://github.com/ModifAmorphic/darktide-modificus-curator`,
-  `accessToken: null`, `prerelease: true`); a set value (a local directory path
-  or a URL) builds the manager from `UpdateManager`'s `urlOrPath` overload
-  instead, the local-testing / self-hosted-feed path with no code change.
+  `accessToken: null`, `prerelease: false`, stable releases only); a set value
+  (a local directory path or a URL) builds the manager from `UpdateManager`'s
+  `urlOrPath` overload instead, the local-testing / self-hosted-feed path with
+  no code change. Both constructions pass
+  `UpdateOptions { AllowVersionDowngrade = true }`, so the latest stable
+  release is offered even when semver-older than the installed version.
   Construction catches `Velopack.Exceptions.NotInstalledException` (the expected
   throw for a non-Velopack run) and leaves the manager `null`, so
   `IsUpdateSupported` is `false`.
@@ -1221,110 +1258,105 @@ failures; the runner wraps the call in its own try/catch as belt-and-suspenders
 `ConfigureAwait(false)` is used only inside its `Task.Run` block, the narrow
 documented exception to the UI-layer rule for explicit background-task code.
 
-## The mod-update install path + automatic-update service
+## The download queue
 
-### `IModUpdateInstaller` (Integrations)
-
-The single Premium install path, shared by the manual per-row update action
-(`ModListViewModel`'s Update command) and the automatic Premium batch. Lives in
-Integrations with the acquisition + state-store services it orchestrates; the
-UI consumes it through the interface. The installer owns:
-
-- the shared `UpdateCoordinator` (below), the global one-install-at-a-time gate
-  so a manual click and an automatic batch can never install concurrently;
-- the in-gate eligibility revalidation via `UpdateEligibility` against the
-  caller's candidates (a stale flag yields a `NotEligible` outcome + reason,
-  nothing installed or acknowledged);
-- the acquire (`AcquireLatestNexusAsync`, the latest MAIN release) + the
-  acknowledge-on-success (`AcknowledgeInstall`, exactly once, only on success);
-- the per-attempt progress events + the coordinator-backed busy flag.
+The one Nexus download engine: a serial, FIFO, deduplicated queue
+(`ui/Session/ModDownloadQueue.cs`) that owns every acquisition end to end. All
+three download paths run through it: the `nxm://` click (the
+`NxmModDownloadHandler` enqueue adapter, above), the manual per-row Premium
+update action, and the automatic Premium batch (both through
+`ModUpdateEnqueuer`). There is no separate update installer: the queue's
+single worker is the one-download-at-a-time gate, an update and an nxm click
+can never hold two acquisitions at once, and a click for a file already live
+in the queue joins the existing item and pulses its row.
 
 ```csharp
-public interface IModUpdateInstaller
+public interface IModDownloadQueue
 {
-    bool IsBusy { get; }
-    event EventHandler? BusyChanged;
-    event EventHandler<ModUpdateProgressEventArgs>? ModUpdateProgress;
+    ObservableCollection<DownloadItem> Items { get; }   // admission order; UI-thread mutations
+    event Action<DownloadItem>? ItemChanged;            // admit / resolve / terminal, on the UI thread
+    event EventHandler? UpdatesApplied;                 // after a successful UpdateInstall completion
 
-    Task<ModInstallOutcome> TryInstallLatestAsync(   // MANUAL: refuses politely when gated
-        Guid profileId, Guid containerId, int modId, string expectedVersion,
-        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default);
-    Task<ModInstallOutcome> InstallLatestAsync(      // AUTOMATIC: awaits its turn
-        Guid profileId, Guid containerId, int modId, string expectedVersion,
-        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default);
+    DownloadItem Enqueue(ModDownloadRequest request);   // thread-safe; joins + pulses a same-key live item
+    void Cancel(DownloadItem item);                     // queued: drop; active: token-authoritative
+    void Dismiss(DownloadItem item);                    // Failed-only
+    DownloadItem Retry(DownloadItem item);              // re-issues the identical request
 }
 
-public sealed record ModInstallOutcome(
-    ModInstallStatus Status,    // Installed / Busy / NotEligible / Failed
-    string Reason = "",
-    Exception? Exception = null);   // only on Failed
-
-public sealed record ModUpdateProgressEventArgs(Guid ContainerId, bool IsActive);
+public sealed record ModDownloadRequest(
+    string GameDomain, int ModId, int FileId,
+    DownloadPurpose Purpose,            // ProfileAdd (nxm click, DMF) | UpdateInstall
+    Guid? ContainerId, string DisplayName,
+    Guid TargetProfileId, string TargetProfileName,   // captured at enqueue; display-only name
+    string? NxmKey = null, long? NxmExpires = null,   // the nxm per-file tokens
+    string? ExpectedVersion = null);                  // UpdateInstall eligibility input
 ```
 
-- `TryInstallLatestAsync`: the manual semantics. When the gate is held it
-  returns `Busy` without touching anything (a clean no-op for the caller).
-- `InstallLatestAsync`: the automatic semantics. Awaits the gate so a
-  sequential batch stays ordered, waiting its turn behind a manual install.
-- `ModInstallProgress`: raised with `IsActive == true` immediately after the
-  gate is acquired (before the eligibility check + the acquisition) and
-  `IsActive == false` from the attempt's finally block (success, failure, or
-  cancellation). Deterministic start/stop ordering per serialized attempt.
-  `ModListViewModel` subscribes, marshals to the UI thread, finds the row by
-  `ContainerId`, and sets its `IsUpdating` so the row-level spinner (left of
-  the Nexus badge) tracks the currently installing mod for BOTH paths. An
-  event for a row no longer present (after a profile switch / reload) is
-  ignored, so a mid-batch switch never leaves a stale spinner.
-- `BusyChanged` / `IsBusy`: coordinator-backed. `ModListViewModel` mirrors it
-  to `AnyRowUpdating` (pushed to rows) so per-row enabled states reflect "one
-  install at a time" without each row polling.
-- Cancellation (`OperationCanceledException`) propagates rather than becoming
-  an outcome, so each caller keeps its own cancellation posture (the VM swallows
-  it; the runner swallows it after the batch).
+- **Dedupe**: the key is (game domain, mod id, file id), case-insensitive on
+  the domain. A second click on a non-terminal item is a join: no new item, no
+  new download, one pulse counter increment the row renders as a flash.
+- **The worker pipeline** (per item, on the single worker): dequeue-time auth
+  re-check (a sign-out between enqueue and dequeue fails the item inline);
+  UpdateInstall eligibility revalidation via `UpdateEligibility` (a stale flag
+  is a silent no-op, not an error row); the repository hit check (the exact
+  `FileId` against every version of the mod's container; a hit completes with
+  no network); the miss path (`AcquireFromNexusAsync` with the item's token,
+  progress wired to the row, the cancellation token passed in); then the
+  per-purpose completion.
+- **Policy rule (both paths)**: a head file (the matched version's `IsLatest`,
+  or the acquisition's `IsHeadFile`) registers `LatestPolicy`; a non-head file
+  registers `PinnedPolicy` pinned to the clicked version. A ProfileAdd for a
+  container already in the target profile applies via `SetModPolicy` (`AddMod`
+  would no-op on policy; the user's click must win); a fresh container takes
+  `AddMod`. A deleted target profile or a mod removed mid-flight fails the row
+  inline.
+- **Completions**: ProfileAdd acknowledges the install best-effort and reloads
+  the mod list when the target is still the active profile (through the lazy
+  `IModListRefresh` seam); UpdateInstall acknowledges once and raises
+  `UpdatesApplied` (the queue raises it on the UI thread; `ModListViewModel`
+  consumes it directly to flag the session pending + reload).
+- **Cancellation is token-authoritative**: `Cancel` cancels the item's token
+  synchronously and marshals only the presentation; the worker re-checks the
+  token at dequeue (a queued cancel never starts the acquisition) and honors
+  it mid-acquisition, so no phase-write race can resurrect a cancelled
+  download. Completed and cancelled items leave the collection; failed items
+  stay until dismissed or retried.
+- **Threading**: `Enqueue` is safe from any thread; every item state and
+  collection mutation publishes through the injected `Action<Action>` marshal
+  seam, so `Items`, `ItemChanged`, and the item property notifications are
+  observed on the UI thread. The worker itself is an explicit `Task.Run`
+  loop.
 
-### `UpdateCoordinator` (Integrations)
+Downloads render as rows in the mod list (see
+[Download rows](#download-rows)); there is no popup, flyout, or modal spinner
+for a mod download.
 
-Coordinates mod-update installs so only one runs at a time globally, held by
-the installer and shared across both Premium install paths. Keeps a manual
-click and an automatic batch from installing the same mod concurrently without
-relying on per-VM flags.
+### `ModUpdateEnqueuer`
 
-```csharp
-public sealed class UpdateCoordinator
-{
-    public bool IsBusy { get; }
-    public event EventHandler? BusyChanged;
-
-    public bool TryAcquire(out IDisposable? scope);   // non-blocking (the installer's manual path)
-    public Task<IDisposable> AcquireAsync(CancellationToken ct = default); // awaiting (the installer's batch path)
-}
-```
-
-- `IsBusy`: flips on acquire + release and raises `BusyChanged` (on the
-  acquiring/releasing thread). The installer surfaces it; the `ModRowContext`
-  mirrors it (marshaled) as the rows' install-busy global.
-- `TryAcquire`: non-blocking. The installer's manual semantics use it; a second
-  click while an install runs is a clean no-op.
-- `AcquireAsync`: awaiting. The installer's automatic semantics use it; the
-  batch serializes anyway, but the coordinator is the single mutual-exclusion
-  point across both paths.
+The enqueue front for premium mod-update installs. Both callers (the manual
+per-row update action and the automatic Premium batch) resolve the mod's head
+file through `IModAcquisitionService.ResolveLatestNexusAsync` (one file-listing
+call, no download) and admit one `UpdateInstall` item onto the shared queue,
+so the queue's dedupe key is the real head file. The head resolve is the one
+step with no row to host a failure on: its exceptions propagate to the caller
+(the manual path surfaces the localized failure alert; the batch aggregates
+resolve failures into its summary alert). Once an item is admitted, failures
+land on the row.
 
 ### `IAutomaticUpdateService`
 
-The opt-in Premium automatic mod-update batch. Chained directly from
+The opt-in Premium automatic update batch, chained directly from
 `UpdateCheckRunner` after a check completes (the runner captures the exact
-result, not a potentially raced `LastResult`), it sequentially installs flagged
-updates for the active profile's Nexus Latest mods when the user has enabled it
-AND a fresh Premium verification passes. Independent of
+result, not a potentially raced `LastResult`). Independent of
 `ModListViewModel` (to avoid the existing ModListViewModel -> UpdateCheckRunner
-dependency becoming circular). The installs route through the shared
-`IModUpdateInstaller`; the service owns only the gates, the sequential batch,
-and the aggregated failure feedback.
+dependency becoming circular). The installs are `UpdateInstall` items admitted
+onto the download queue through `ModUpdateEnqueuer`; the service owns only the
+gates, the enqueue batch, the stop/cancel-on-profile-switch policy, and the
+aggregated resolve-failure alert.
 
 ```csharp
 public interface IAutomaticUpdateService
 {
-    event EventHandler? UpdatesApplied;
     Task RunAfterCheckAsync(UpdateCheckResult result, Guid profileId, CancellationToken ct = default);
 }
 ```
@@ -1333,18 +1365,16 @@ public interface IAutomaticUpdateService
   `Success` with updates, `NexusConfig.AutomaticUpdatesEnabled` being on, the
   active profile still matching, and a fresh `GetCurrentStateAsync` returning
   `IsPremium == true` (the Premium request fires ONLY when the gates pass, so
-  an empty result or a disabled setting costs no extra API call). Then runs the
-  sequential batch: each iteration re-checks the active profile (a switch stops
-  scheduling further entries) + re-pulls the candidates, then calls
-  `installer.InstallLatestAsync` (the awaiting semantics). Per-mod failures are
-  isolated into one aggregated localized alert; a fully successful batch is
-  silent beyond the installer's per-row progress. `UpdatesApplied` is raised
-  when at least one install succeeded so the mod list can reload (new versions
-  + cleared flags) without the service depending on it.
-- `UpdatesApplied`: raised (on the caller's thread) when at least one install in
-  the last batch succeeded. `UpdateCheckRunner` (the sole driver of the batch)
-  re-raises it on the UI thread; `ModListViewModel` subscribes there and
-  reloads.
+  an empty result or a disabled setting costs no extra API call). Then runs
+  the enqueue batch: each iteration re-checks the active profile (a switch
+  stops scheduling further entries and cancels the still-queued items admitted
+  for the left profile; an item the worker already started completes under its
+  own rules), resolves the head file, and admits one item. A download failure
+  renders inline on its row (the queue's Failed phase with retry), so only
+  resolve failures (no row exists to host them) surface here, as one
+  aggregated localized summary alert naming the mods; a fully successful batch
+  is silent beyond the download rows. The reload signal is the queue's own
+  `UpdatesApplied` event, which `ModListViewModel` consumes directly.
 
 This is independent of `NexusConfig.AutoUpdateCheckEnabled`: periodic checking
 being off never disables automatic installation (startup + switch + manual
@@ -1456,6 +1486,46 @@ public DetailedModRowsViewModel DetailedRows { get; }
   cancelled. The handoff is the single seam; `ModListViewModel` performs no
   density, backfill, or thumbnail work itself.
 
+### `ModListViewModel` filter / search projection
+
+The mod list renders a projection of the authoritative `Mods` list under three
+session-transient controls. The new public surface:
+
+| Member | Meaning |
+| --- | --- |
+| `ObservableCollection<ModItemViewModel> VisibleMods` | The rendered projection: `Mods` minus rows hidden by the filter/search. Rebuilt by one private `RebuildVisibleMods` at the end of every `Reload` (after the known-update-flag hydration, so the updates-only filter sees hydrated flags), on every filter/search state change, and after an enable toggle under an active filter. `Mods` stays authoritative (update hydration, the row-context fan-out, and the density coordinator's snapshot all still read the full list, so a filter change never re-triggers thumbnail/metadata hydration). |
+| `bool HasVisibleMods` | Whether the projection holds at least one row. Drives the row-list ScrollViewer visibility (it collapses when a filter empties the visible set). |
+| `bool HideDisabledMods` | The hide-disabled visibility toggle (session-transient; never persisted, survives reloads + navigation, cleared on an active-profile change). Changing it rebuilds the projection. |
+| `bool ShowUpdatesOnly` | The updates-only filter toggle (same transient lifecycle as the hide flag). The filter keeps only rows whose `UpdateAvailable` is true; changing it rebuilds the projection. A landed check also reprojects, since it can change the flags. |
+| `string SearchText` | The search box text (keystroke-live TwoWay; case-insensitive ordinal substring on the row name; empty or whitespace matches everything; same transient lifecycle as the flag). |
+| `bool HasSearchText` | Whether any text is typed (drives the inner clear affordance). Distinct from `IsFilterOrSearchActive`: whitespace-only text shows the clear button but filters nothing. |
+| `bool IsFilterOrSearchActive` | Whether the hide filter, the updates-only filter, or a non-whitespace search is active. Suppresses the add-hints empty state. |
+| `string HideDisabledTooltip` | Localized hide/show tooltip + automation name for the toggle (describes the action the click performs). Re-fires on a culture change. |
+| `string UpdatesOnlyTooltip` | Localized filter/show-all tooltip + automation name for the updates-only toggle (describes the action the click performs). Re-fires on a culture change. |
+| `string NoMatchesText` | Localized no-matches message. Re-fires on a culture change. |
+| `bool ShowNoMatchesMessage` | Derived: an active profile with a non-empty full list whose projection is empty while a filter/search is active. Exclusive with `ShowAddModsHint` (which now also gates on `!IsFilterOrSearchActive`). |
+| `ToggleHideDisabledCommand` | Flips `HideDisabledMods`. |
+| `ToggleUpdatesOnlyCommand` | Flips `ShowUpdatesOnly`. |
+
+Move availability (`CanMoveUp` / `CanMoveDown`) is computed over the VISIBLE
+unlocked rows: Move Up / Move Down cross to the adjacent visible unlocked row,
+and a row with only hidden or locked rows above it cannot move up. Reorder
+commits map visible ranks onto the stored order through the visibility-aware
+`ModReorderPlanner` (below).
+
+### `ModListViewModel` manager-banner state
+
+The list surfaces the alternate-mod-manager derivation as two members:
+
+| Member | Meaning |
+| --- | --- |
+| `bool IsModManagerActive` | Whether the active profile has an enabled alternate mod manager mod. Read from the same `IProfileService.GetActiveModManager` derivation the launch path hands to Relay as its `--mod-manager` flag (one derivation, so the banner and the flag can never disagree); re-derived on every `Reload` and on the enable-toggle path (in place: the toggle deliberately skips the row rebuild). Drives the banner's visibility. |
+| `string ModManagerBannerText` | The localized caution text, formatted with the manager mod's display name: the loaded row's name, falling back to the repository container's name, then the literal `base`. Re-fires on a culture change. |
+
+The banner is live state, not a notification: it is visible exactly while the
+manager is active, is not dismissible (disable or remove the manager mod to
+clear it), and gates nothing (reorder/lock controls stay fully functional).
+
 ### `ModItemViewModel` display state
 
 The row gains observable state + derived projections for display metadata,
@@ -1487,7 +1557,7 @@ calls (state-only):
 | Member | Meaning |
 | --- | --- |
 | `bool OrderLocked` | Joined from `ModListEntry.OrderLocked` on reload. A locked row keeps its exact zero-based position; its grip + both move buttons are disabled. |
-| `bool CanMoveUp` / `bool CanMoveDown` | Whether the row can move to the previous/next unlocked rank (an unlocked row with an unlocked row above/below). Computed by the parent over unlocked rows on reload; `false` for a locked row. |
+| `bool CanMoveUp` / `bool CanMoveDown` | Whether the row can move to the previous/next VISIBLE unlocked rank (an unlocked visible row with an unlocked visible row above/below; a row with only hidden or locked rows above cannot move up). Computed by the parent over the visible projection on reload and on every filter/search change; `false` for a locked or hidden row. |
 | `bool IsGripEnabled` | Derived: `!OrderLocked`. Bound to the grip's `IsHitTestVisible` so a locked grip stops intercepting pointer input and falls through to touch scrolling. |
 | `string OrderLockTooltip` | Localized tooltip + click-action text for the order-lock button (lock vs. unlock). |
 | `string OrderLockAutomationName` | Localized automation name describing the row's current locked/unlocked state. |
@@ -1496,8 +1566,15 @@ calls (state-only):
 `Refresh()` also re-fires `OrderLockTooltip` + `OrderLockAutomationName` on a
 culture change. The lock toggle (`ToggleOrderLock`) and the reorder commit
 (`CommitReorder`) live on `ModListViewModel`; `ModReorderPlanner` is the pure
-order-construction helper (rejects same-rank / out-of-range / locked-source /
-missing-source without a service call), and `ReorderGestureMath` is the pure
+visibility-aware order-construction helper: it receives each row's container
+id, locked flag, and visibility under the current filter/search, moves the
+source by remove + insert within the non-locked stream anchored to
+visible-unlocked rows (locked rows keep their exact slots, hidden rows shift
+at most one slot and keep their relative order, an all-visible input
+reproduces the pure lock projection), and rejects same-order / out-of-range /
+locked-source / hidden-source / missing-source requests without a service
+call. `ReorderRequest.TargetUnlockedRank` is the insertion rank among the
+visible unlocked OTHER rows. `ReorderGestureMath` is the pure
 pointer-gesture math (threshold, target rank, marker, lift translation, edge
 auto-scroll + clamp),
 both unit-tested separately. The order-lock button reads through BOTH shape
@@ -1530,6 +1607,31 @@ feature).
   the pill keeps its content width at wide widths while still ellipsizing at
   narrow widths (full text in the tooltip) without pushing the density pair or
   Add out.
+- **Toolbar search box + hide-disabled toggle.** A fixed-width (200 DIP)
+  TextBox between the flexible column and the density pair: a keystroke-live
+  TwoWay binding to `SearchText` (no `UpdateSourceTrigger`; Avalonia TextBox
+  bindings update per keystroke by default) with a localized `PlaceholderText`
+  watermark. The inner clear affordance is a `TextBox.InnerRightContent`
+  Button reusing the Fluent theme's own clear-button chrome
+  (`Theme=FluentTextBoxButton` + the theme's drawn X geometry via `PathIcon`,
+  invoking the TextBox's `Clear` method, `Focusable=False` so the box keeps
+  focus after the click), visible only while `HasSearchText` is true. The
+  hide-disabled toggle is a third `icon density` button inside the density
+  group: `selected` bound to `HideDisabledMods`, drawn
+  `visibility_off`/`visibility` paths swapped by the flag, bound to
+  `ToggleHideDisabledCommand`, with the dynamic hide/show tooltip +
+  automation name. The updates-only toggle is a fourth `icon density` button
+  in the same group: one stable drawn Material `update` glyph (updates-only
+  has no natural crossed-out variant to swap), `selected` bound to
+  `ShowUpdatesOnly`, bound to `ToggleUpdatesOnlyCommand`, with the dynamic
+  filter/show-all tooltip + automation name.
+- **Manager banner.** A full-width caution `Border` in the page grid's row 2,
+  between the inline import card (row 1) and the row list (row 3):
+  `IsVisible` bound to `IsModManagerActive`, a `CuratorCautionBackgroundBrush`
+  face carrying a drawn Material `swap_vert` icon (caution foreground) + the
+  wrapping `ModManagerBannerText`. Non-dismissible live state (no close
+  affordance) that gates nothing; it clears when the manager mod is disabled
+  or removed.
 - **Row template.** A `Panel` hosts two mutually exclusive roots selected by the
   row's `IsDetailed` projection: the Compact `Grid` (`compactRow`, four
   columns: grip, name, badges, action strip) and a Detailed `Border` (the
@@ -1586,35 +1688,68 @@ public partial class ModRowContext : ObservableObject
 {
     public ModRowContext(
         INexusAuthService auth,          // the one-shot premium read
-        IModUpdateInstaller installer,   // busy + progress + the install front
         IGamingModeState gamingMode,
-        Action<Action> invokeOnUi,       // marshals the installer's events
         ILogger<ModRowContext> logger);
 
     public bool IsGamingMode { get; }               // constant
     public bool IsPremiumUser { get; set; }         // the read lands here
-    public bool AnyRowUpdating { get; set; }        // the installer's busy flag
-
-    public event EventHandler<ModUpdateProgressEventArgs>? ModUpdateProgress;
-
-    public Task<ModInstallOutcome> InstallLatestAsync(
-        Guid profileId, Guid containerId, int modId,
-        string expectedVersion, IReadOnlyList<ModListCandidate> candidates);
 }
 ```
 
 The one shared observable context for the row-affecting global mod-update
-state (premium / install-busy / gaming). Created once in composition before
+state (premium / gaming). Created once in composition before
 `ModListViewModel`, which passes the same instance to every
 `ModItemViewModel` at construction: rows read their global halves off it
 (their public property names stay as context-forwarding reads, so bindings are
 unchanged), and the list VM's single context subscription fans change
 notifications into the live rows (no per-row subscription against the
 application-lifetime context, so rows dropped by a reload cannot leak).
-`ModUpdateProgress` re-raises the installer's per-container progress on the
-UI thread (the list VM finds the row and drives its spinner), and
-`InstallLatestAsync` delegates to the shared installer so the manual Premium
-install action and the state it produces share one seam.
+Install-busy state is not here: an update in flight is a queue item, and the
+row renders it as the download morph (see [Download rows](#download-rows));
+there is no separate global busy flag to mirror.
+
+### Download rows
+
+Downloads render as rows in the mod list, never popups or flyouts. One item
+template (the shared download status template in `ModListView.axaml`) is
+hosted in two places:
+
+- **In-place morph**: a download whose container is referenced by the active
+  profile's current row set AND realized in `VisibleMods` morphs that row
+  (`ModItemViewModel.ActiveDownload`, assigned exclusively by the parent's
+  hosting projection). While morphed, the summary/metadata area and the
+  action strip swap to the download content, the policy editor and the
+  update-action cell suppress (the morphing download is about to write the
+  policy itself; hiding the button is the double-click guard), and the
+  structural controls (grip, lock, move, remove, enabled) stay functional:
+  position and membership are profile metadata staged at launch.
+- **Appended row**: every other item (fresh mods, cross-profile targets,
+  filtered-hidden targets, null container ids) renders below the profile rows
+  in a dedicated `ItemsControl` inside the same scroll region, in admission
+  order, always showing its target-profile label.
+
+The hosting projection is re-derived from scratch (no stored placement
+state) on every coordinator collection/state change, every reload, every
+filter/search change, and every profile switch: the first item per container
+id that finds a visible row wins the morph, later items with the same
+container append (how a failed corpse and a fresh attempt for the same mod
+coexist as two rows). The projection is structurally separate from the mod
+rows: `DownloadRows` is an `ObservableCollection<DownloadRowViewModel>` that
+never intersects `VisibleMods` or `Mods`, so download rows can never enter
+the reorder planner's inputs, the drag gesture's container math, or the move
+commands.
+
+`DownloadRowViewModel` is the row-facing projection of one `DownloadItem`:
+it owns no download state (every phase, byte, name, and pulse change arrives
+through the item's own UI-thread property notifications) and re-fires the
+derived bindables the shared template consumes: the phase flags, the
+determinate/indeterminate progress choice (percent + MB/MB with a known
+total), the localized status word, the always-shown target-profile label,
+the failure text, the automation string, and the join-pulse flash. Its
+Cancel, Dismiss, and Retry commands forward straight to the queue with the
+wrapped item. An active download also suppresses the no-mods/add-hints empty
+state (an active download above "no mods yet" reads as a contradiction;
+terminal failed corpses do not suppress).
 
 ### `LinkedModsViewModel`
 
@@ -1819,6 +1954,11 @@ the OS scheme-handler registration, and the update-check runner start. The
 UI registers its own surface after the backend libraries:
 
 ```csharp
+// The download queue + its enqueue front, registered right after AddNxm()
+// and before the INxmModDownloadHandler override (all three below).
+services.AddSingleton<IModDownloadQueue>(sp => new ModDownloadQueue(/* acquisition, repo, profiles, session, update state, config, Func<IModListRefresh>, loc, Action<Action>, logger */));
+services.AddSingleton(sp => new ModUpdateEnqueuer(/* acquisition, queue, profiles */));  // premium update installs
+// … the INxmModDownloadHandler override (last-wins over AddNxm's no-op) …
 // Singletons: one shell, one list, one dialog service, one session.
 services.AddSingleton<IProfileSession>(sp => new ProfileSession(
     sp.GetRequiredService<ISteamService>(),
@@ -1833,8 +1973,8 @@ services.AddSingleton<INxmRegistrationState>(sp => new NxmRegistrationState(  //
     sp.GetService<INxmHandlerRegistrar>(),
     sp.GetRequiredService<Action<Action>>(),
     sp.GetRequiredService<ILogger<NxmRegistrationState>>()));
-services.AddSingleton<IModListRefresh>(sp => sp.GetRequiredService<ModListViewModel>()); // nxm-handler reload seam
-services.AddSingleton<IAutomaticUpdateService, AutomaticUpdateService>(); // Premium auto-installer (installs via IModUpdateInstaller, registered by AddIntegrations)
+services.AddSingleton<IModListRefresh>(sp => sp.GetRequiredService<ModListViewModel>()); // the queue's + children's reload seam (resolved lazily)
+services.AddSingleton<IAutomaticUpdateService, AutomaticUpdateService>(); // Premium automatic batch (enqueues via ModUpdateEnqueuer)
 services.AddSingleton<IModThumbnailService>(sp => new ModThumbnailService( // UI-owned thumbnail cache (before the coordinator that injects it)
     sp.GetRequiredService<IHttpClientFactory>().CreateClient,
     cacheDirOverride: null,
@@ -1848,8 +1988,8 @@ services.AddSingleton(sp => new DetailedModRowsViewModel(     // density coordin
     sp.GetRequiredService<ILogger<DetailedModRowsViewModel>>()));
 services.AddSingleton<ImportWorkflowViewModel>();            // inline import card (before ModListViewModel)
 services.AddSingleton(sp => new LinkedModsViewModel(/* … */)); // link-external child (before ModListViewModel)
-services.AddSingleton(sp => new ModRowContext(/* auth, installer, gamingMode, Action<Action>, logger */)); // row globals (before ModListViewModel)
-services.AddSingleton<ModListViewModel>();                   // injects the three children + the row context
+services.AddSingleton(sp => new ModRowContext(/* auth, gamingMode, logger */)); // row globals (before ModListViewModel)
+services.AddSingleton<ModListViewModel>();                   // injects the three children + the row context + the download queue
 services.AddSingleton<ProfilesViewModel>();
 services.AddSingleton<IntegrationsViewModel>();
 services.AddSingleton<PreferencesViewModel>();
@@ -1967,9 +2107,7 @@ instance violation) propagates out; `App` catches it and calls
   `NexusSource`, `UntrackedSource`, `LinkedSource`),
   `integrations` (`INexusAuthService`, `IModAcquisitionService`,
   `INexusModMetadataService`, `IUpdateCheckService`, `UpdateCheckResult`,
-  `ModUpdateInfo`, `ModListCandidate`, `IUpdateStateStore`,
-  `IModUpdateInstaller`, `ModInstallOutcome`, `ModInstallStatus`,
-  `ModUpdateProgressEventArgs`, `UpdateCoordinator`), `steam` (`ISteamService`), `relay-client`
+  `ModUpdateInfo`, `ModListCandidate`, `IUpdateStateStore`), `steam` (`ISteamService`), `relay-client`
   (`IRelayLaunchService`, `LaunchResult`, `LaunchStatus`), `nxm`
   (`INxmModDownloadHandler`, `NxmSingleInstanceException`, `NxmIpcServer`,
   `INxmHandlerRegistrar`), `launcher` (the stub).
@@ -2064,20 +2202,26 @@ No backend library references the UI (the dependency direction is one-way).
   failure alert, no-op for non-linked/broken rows; the linked badge two-state
   available/broken, disabled policy edit, empty update-action cell,
   `IsExternalBroken` on Reload), `CheckCompleted` per-row state,
-  `UpdateCommand` success / failure / one-at-a-time / premium gating,
+  `UpdateCommand` (the Premium resolve + enqueue branch incl. the
+  resolve-failure alert and the unresolved-version no-op, and the
+  regular/unknown files-page branch with premium gating),
   `CheckForUpdatesNow`, the gate-fed `IsRateLimited` + the coupled
   `IsRateLimitActive` refresh-button/pill rendering (server reset + fallback
   cooldown, precedence over the manual throttle), the `NamesChanged` in-place row
   name refresh (refreshed when the flag is set, untouched when it is not), and
   the empty-state Nexus hint (construction + both `Reload` paths perform zero
   registration probes; `IsNxmRegistered` follows the shared state).
-- **`ModRowContextTests`**: the shared row-context contract -- a premium or
-  install-busy flip on the context re-fires exactly the row + list-VM
-  properties the former per-flag pushes re-fired, the gaming constant reads
-  through rows + the list VM, `InstallLatestAsync` delegates to the shared
-  installer, rows dropped by a reload receive no context notifications (no
-  per-row subscription to leak), and a failed premium read leaves the flag
-  false.
+- **`ModListModManagerBannerTests`**: the manager-banner state through the VM
+  (the banner follows the `GetActiveModManager` result at every `Reload` and on
+  the enable-toggle path without an intervening reload, both directions, an
+  unrelated toggle leaving state + text unchanged, and the row / repository /
+  `base` name fallback chain).
+- **`ModRowContextTests`**: the shared row-context contract -- a premium flip
+  on the context re-fires exactly the row + list-VM properties the former
+  per-flag pushes re-fired, the gaming constant reads
+  through rows + the list VM, rows dropped by a reload receive no context
+  notifications (no per-row subscription to leak), and a failed premium read
+  leaves the flag false.
 - **`ModRowSharedTemplatesTests`**: the single-definition contract for the
   shared row markup -- every shared row control exists exactly once in
   `ModListView.axaml`, both row roots host the shared templates, the Compact
@@ -2113,6 +2257,28 @@ No backend library references the UI (the dependency direction is one-way).
   first / middle / last unlocked rank with multiple locks (one `SetModOrder`
   call + exact final order), same-rank / invalid-rank / locked-source /
   missing-source / no-active-profile rejection, and the no-lock move regression.
+  These run with no filter active, so they double as the all-visible degenerate
+  parity for the visibility-aware planner.
+- **`ModListFilterTests`**: the filter/search projection through the VM:
+  hide-filter / search / combined narrowing (case-insensitive ordinal
+  substring, whitespace-only matches everything but still counts as typed
+  text), clearing restores, projection mirrors the full list with no filter,
+  survives a reload, clears on a profile switch, `ToggleEnabled` under the
+  hide-filter, the no-matches vs add-hint exclusivity matrix, the
+  updates-only filter (flagged-rows projection incl. the reload
+  hydration-ordering regression, AND-composition with the other filters, a
+  landed check reprojecting the live filter, session-transient lifecycle,
+  empty-state exclusivity, tooltip locality), move availability
+  over visible unlocked neighbors, and reorder-through-filter (Move Up / Down +
+  `CommitReorder` with hidden rows keeping relative order + one `SetModOrder`
+  call + locked rows keeping indices, no-op / hidden-source / out-of-range
+  rejection, the top visible unlocked row cannot move up).
+- **`ModReorderPlannerTests`**: the pure visibility-aware planner: all-visible
+  parity with the lock-aware projection, move up / down across hidden rows
+  landing the source adjacent in the stored order, drop-at-end with trailing
+  hidden rows, hidden rows never anchoring, locked rows keeping exact indices
+  while hidden rows shift, single-visible-row no-op, hidden / locked / missing
+  source rejection, and visible-unlocked-only rank ranges.
 - **`ReorderGestureMathTests`**: the pure pointer-gesture math (8-DIP threshold
   inclusive at the boundary, target unlocked rank over other-unlocked centers,
   insertion marker before/after/none for up/down/no-op, lift translation
@@ -2178,7 +2344,9 @@ No backend library references the UI (the dependency direction is one-way).
   `ProfileCreated`; the prompt itself fires only when the shell's modal queue
   drains for Mods), the drained entry's post-prompt reload (including when
   the prompt body skips), the premium
-  in-app download, the non-premium / unknown / no-auth browser-open path (opens
+  enqueued download (head resolved at enqueue, admitted as a ProfileAdd item;
+  a resolve failure surfaces the alert and enqueues nothing), the
+  non-premium / unknown / no-auth browser-open path (opens
   regardless of the registration state; the download-confirm wording follows
   the shared state with zero probes), and the browser-launch failure
   fallback alert.
@@ -2188,9 +2356,60 @@ No backend library references the UI (the dependency direction is one-way).
   equivalence, the in-process one-shot guard, and navigation-failure
   isolation).
 - **`NxmModDownloadHandlerTests`**: the Darktide-only gate (rejects other
-  games before auth / profile / acquisition), the auth + active-profile
-  gates, the acquire / register / refresh flow, the error wiring (alert on
-  failure), the UI-thread marshaling seam.
+  games before auth / profile / enqueue), the auth + active-profile
+  gates, the peek + enqueue flow (the repository peek names the row, the
+  request carries the container id + profile + nxm tokens, nothing is
+  acquired and no profile is written), the enqueue-failure error wiring
+  (alert), the prompt-return contract, and the UI-thread marshaling seam.
+- **`ModDownloadQueueTests`**: the coordinator end to end against fakes:
+  cross-thread enqueue publishing on the seam thread, the dedupe join + pulse
+  (same key case-insensitive on the domain; a different file of the same mod
+  queues separately), FIFO serial processing with no overlap, the hit path
+  (exact file-id match completes with no network; head version registers
+  Latest, non-head pins to that version's folder; container/version/name
+  resolution), the miss path (byte progress, the Importing transition, the
+  name swap, head/non-head policy), the completions (an existing container's
+  policy rewritten via SetModPolicy, reload only when the target is still
+  active, target-profile-deleted and mod-removed inline failures, the
+  acknowledge-failure log), cancel semantics (queued drop, active
+  token-authoritative incl. an IOException surfacing as canceled, terminal
+  no-op), the dequeue-time sign-out inline failure, retry/dismiss, the
+  UpdateInstall purpose (acquire + acknowledge once + the applied event,
+  ineligible/removed/re-pinned silent no-ops, acquisition failure without
+  acknowledging, cancel propagation, a background-profile completion still
+  acknowledging + raising), mixed nxm + update clicks sharing the serial
+  worker, the admission-event ordering on a fast hit, and the
+  UpdateInstall request validation.
+- **`ModListDownloadRowsTests`**: the row hosting through the list VM: an
+  item targeting a visible row morphs it in place, a filtered-out target
+  renders appended, a profile switch rehosts both directions, a null
+  container id always appends, a resolve landing a container id moves an
+  appended item in place, a reload preserves the morph on the rebuilt row, a
+  failed corpse + a fresh attempt render side by side, removing the item
+  clears the morph + the appended row, an active download suppresses the
+  add-hints empty state (a failed corpse does not), the no-matches message
+  coexists with appended rows, a morphed row suppresses the policy + update
+  affordances but keeps the structural controls (incl. lock semantics), the
+  Cancel/Dismiss/Retry forwarding, every phase/byte projection render state,
+  the always-shown target-profile label, the join pulse re-fire + decay, the
+  resolved-name forward, and reorders committing through the mod rows with
+  downloads present.
+- **`DownloadRowXamlTests`**: the download-row surfaces as repository source
+  tests over `ModListView.axaml` / `Strings.resx` (the XAML parsed as XML):
+  the shared download status template exists once and is hosted by all three
+  surfaces (the Compact morph slot, the Detailed morph slot, the appended
+  row), the appended section is a separate `ItemsControl` over `DownloadRows`
+  with no reorder affordances, the morph suppresses the update affordances
+  and disables policy, the morphed strip binds the wrapper's Cancel, retry +
+  dismiss exist once in the shared template, the join-pulse flash is bound on
+  every host with a fading animation, every download resx key exists, and
+  every download icon is drawn geometry (no glyph text).
+- **`AutomaticUpdateServiceTests`**: the enqueue batch -- one UpdateInstall
+  item per flagged candidate, resolve failures isolated into one aggregated
+  alert, a download failure row-hosted and never alerted, scheduling stops
+  after a prior profile switch, a mid-batch switch cancels the queued but
+  not the active items, the deleted-profile stop, and resolve-cancellation
+  propagation.
 - **`EscapeClosesBehaviorTests`**: the pure `ShouldClose` helper behind the
   ESC-closes-dialogs behavior (true for `Key.Escape`, false for other keys).
   The KeyDown-to-Close wiring is rendered UI and not covered by a

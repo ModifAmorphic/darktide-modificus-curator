@@ -54,9 +54,8 @@
     </DataTemplate>
 
     <!--
-      The source-badge area: the per-row update spinner plus three
-      mutually-exclusive badge states driven by row-VM flags (only one visible
-      per row):
+      The source-badge area: three mutually-exclusive badge states driven by
+      row-VM flags (only one visible per row):
         - Nexus/Untracked badge (HyperlinkButton, NavigateUri=SourceUrl): for
           rows that are not linked. For Nexus the click opens the mod page; for
           Untracked the NavigateUri is null (no-op).
@@ -73,13 +72,6 @@
     -->
     <DataTemplate x:Key="ModRowBadgesTemplate" x:DataType="vm:ModItemViewModel">
       <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-        <!-- Indeterminate progress while a per-row update install runs.
-             Visible only for the row whose IsUpdating is true; sits left of
-             the badge. -->
-        <ProgressBar Width="18" Height="18"
-                     IsIndeterminate="True"
-                     IsVisible="{Binding IsUpdating}"
-                     VerticalAlignment="Center" />
         <!-- Nexus / Untracked badge (hidden for linked rows). -->
         <HyperlinkButton Classes="badge"
                          NavigateUri="{Binding SourceUrl}"
@@ -151,7 +143,9 @@
           dropdown shows the readable version tag and stores the opaque folder
           id, which the SetPolicyPinned command wraps as
           PinnedPolicy(versionId). Disabled for linked rows (a linked mod has
-          a single implicit version).
+          a single implicit version) and while a download morphs the row
+          (IsPolicyEditable covers both; the morphing download writes the
+          policy itself at completion, so a manual edit would race it).
         -->
         <StackPanel Orientation="Horizontal" Spacing="6"
                     VerticalAlignment="Center">
@@ -166,6 +160,7 @@
                     SelectedItem="{Binding SelectedVersion, Mode=TwoWay}"
                     SelectionChanged="PinnedVersion_Changed"
                     IsVisible="{Binding IsPinned}"
+                    IsEnabled="{Binding IsPolicyEditable}"
                     PlaceholderText="{ReflectionBinding [ModRow_PinnedVersionPlaceholder], Source={StaticResource Loc}}"
                     MinWidth="120">
             <ComboBox.ItemTemplate>
@@ -181,17 +176,19 @@
           EVERY row (so later controls never shift when the button
           appears/disappears). For Nexus + Latest rows it holds the update
           button; for Pinned Nexus and Untracked rows the cell stays reserved
-          but empty. The button stays visible even while a row is updating
-          (it is disabled via UpdateActionEnabled); the indeterminate progress
-          affordance lives in the badge area so this cell does not shift.
-          No update -> disabled, neutral/grey download arrow (the updateAction
-          :disabled style dims the whole button to 0.4 opacity); update
-          available -> enabled with the accent-blue arrow. Premium click runs
-          the in-app update; regular/unknown click opens the mod's Nexus files
-          page (the row VM carries the click behavior; the tooltip
+          but empty. No update -> disabled, neutral/grey download arrow (the
+          updateAction:disabled style dims the whole button to 0.4 opacity);
+          update available -> enabled with the accent-blue arrow. Premium click
+          enqueues the in-app update; regular/unknown click opens the mod's
+          Nexus files page (the row VM carries the click behavior; the tooltip
           distinguishes the cases).
+          While a download morphs the row, the WHOLE cell is not rendered
+          (the morph's progress owns the row's progress surface, and hiding
+          the update button entirely is the double-click guard) and the strip
+          instead offers the download's Cancel.
         -->
-        <Panel Classes="updateCell" MinWidth="28" VerticalAlignment="Center">
+        <Panel Classes="updateCell" MinWidth="28" VerticalAlignment="Center"
+               IsVisible="{Binding !IsDownloadMorphed}">
           <Button Classes="icon updateAction"
                   Click="Update_Click"
                   CommandParameter="{Binding}"
@@ -215,6 +212,28 @@
             </Panel>
           </Button>
         </Panel>
+
+        <!--
+          The download Cancel: replaces the update-action cell's position in
+          the strip while a download morphs the row (the morph swaps the
+          strip's action offering to Cancel only; Enabled, policy, and the
+          move/lock/remove cluster remain). The command + tooltip bind
+          through the row's ActiveDownload wrapper; disabled once the item is
+          terminal (a Failed row offers Retry + dismiss in the status area).
+        -->
+        <Button Classes="icon downloadCancel"
+                IsVisible="{Binding IsDownloadMorphed}"
+                IsEnabled="{Binding ActiveDownload.CanCancel}"
+                Command="{Binding ActiveDownload.CancelCommand}"
+                ToolTip.Tip="{Binding ActiveDownload.CancelTooltip}"
+                AutomationProperties.Name="{Binding ActiveDownload.CancelTooltip}">
+          <!-- Material "cancel" (24x24 source): filled circle with the X
+               knocked out, distinct from the dismiss button's bare X. -->
+          <Path Width="16" Height="16" Stretch="Uniform"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                Fill="{Binding $parent[Button].Foreground}"
+                Data="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z" />
+        </Button>
 
         <!--
           Move up (drawn up-chevron). Enabled only for an unlocked row with an
@@ -292,6 +311,85 @@
                 Data="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
         </Button>
       </WrapPanel>
+    </DataTemplate>
+
+    <!--
+      The shared download status content, ONE definition hosted by all three
+      download surfaces through ContentControl.ContentTemplate: the Compact
+      row's morph slot, the Detailed card's morph slot (both content-bound to
+      the row's ActiveDownload), and the appended download row (bound to the
+      wrapper itself). The DataContext is the DownloadRowViewModel (the
+      row-facing projection of one queue item); phase flags, percent, bytes,
+      and the failure message are its derived bindables, all driven by the
+      item's own UI-thread notifications. Layout by phase: Queued = status
+      word only; Downloading = determinate bar + percent + "12.3 / 27.5 MB"
+      (indeterminate bar + received bytes only when the total is unknown);
+      Importing = indeterminate bar; Failed = message + Retry + dismiss.
+      The Cancel button is NOT here: each host carries it beside this
+      content (the morph's action strip and the appended row's own cluster),
+      so the two hosts place it without forking the status definition.
+    -->
+    <DataTemplate x:Key="ModRowDownloadStatusTemplate" x:DataType="vm:DownloadRowViewModel">
+      <StackPanel Orientation="Horizontal" Spacing="6"
+                  VerticalAlignment="Center"
+                  AutomationProperties.Name="{Binding AutomationText}">
+        <!-- The status word (Queued / Downloading / Importing / Failed). -->
+        <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" />
+        <!-- Determinate bar: Downloading with a known total. -->
+        <ProgressBar Width="80" Minimum="0" Maximum="100"
+                     Value="{Binding ProgressPercent}"
+                     IsVisible="{Binding ShowDeterminateProgress}"
+                     VerticalAlignment="Center" />
+        <!-- Indeterminate bar: Downloading with an unknown total, or
+             Importing. -->
+        <ProgressBar Width="60" IsIndeterminate="True"
+                     IsVisible="{Binding ShowIndeterminateProgress}"
+                     VerticalAlignment="Center" />
+        <!-- Whole-number percent label beside the determinate bar. -->
+        <TextBlock Text="{Binding PercentText}"
+                   IsVisible="{Binding ShowDeterminateProgress}"
+                   MinWidth="36" TextAlignment="Right"
+                   VerticalAlignment="Center" />
+        <!-- Byte progress: "12.3 / 27.5 MB", or received-only when the
+             total is unknown. -->
+        <TextBlock Text="{Binding BytesText}"
+                   IsVisible="{Binding IsDownloading}"
+                   FontSize="11" Opacity="0.8"
+                   VerticalAlignment="Center" />
+        <!-- Failure: the message inline (caution foreground, full text in
+             the tooltip) + Retry + dismiss. Shown on both hosts; the row
+             returns to normal on dismiss, retry, or the next reload. -->
+        <StackPanel Orientation="Horizontal" Spacing="4"
+                    IsVisible="{Binding IsFailed}"
+                    VerticalAlignment="Center">
+          <TextBlock Text="{Binding FailureText}"
+                     Foreground="{DynamicResource CuratorCautionBrush}"
+                     TextTrimming="CharacterEllipsis" MaxWidth="320"
+                     ToolTip.Tip="{Binding FailureText}"
+                     VerticalAlignment="Center" />
+          <!-- Retry (drawn refresh arrow, the toolbar refresh icon's
+               geometry). -->
+          <Button Classes="icon downloadRetry"
+                  Command="{Binding RetryCommand}"
+                  ToolTip.Tip="{Binding RetryTooltip}"
+                  AutomationProperties.Name="{Binding RetryTooltip}">
+            <Path Width="16" Height="16" Stretch="Uniform"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  Fill="{Binding $parent[Button].Foreground}"
+                  Data="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
+          </Button>
+          <!-- Dismiss (drawn X). -->
+          <Button Classes="icon downloadDismiss"
+                  Command="{Binding DismissCommand}"
+                  ToolTip.Tip="{Binding DismissTooltip}"
+                  AutomationProperties.Name="{Binding DismissTooltip}">
+            <Path Width="16" Height="16" Stretch="Uniform"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  Fill="{Binding $parent[Button].Foreground}"
+                  Data="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+          </Button>
+        </StackPanel>
+      </StackPanel>
     </DataTemplate>
   </UserControl.Resources>
 
@@ -525,6 +623,51 @@
     <Style Selector="Grid.compactRow WrapPanel.actionStrip > Button.remove">
       <Setter Property="Margin" Value="4,0,0,0" />
     </Style>
+    <!--
+      The morph's download Cancel in the Compact strip: the same left margin
+      the (collapsed) update-action cell and Move Up carry, so the single-line
+      rhythm is unchanged while a download morphs the row.
+    -->
+    <Style Selector="Grid.compactRow WrapPanel.actionStrip > Button.downloadCancel">
+      <Setter Property="Margin" Value="8,0,0,0" />
+    </Style>
+    <!--
+      The join-pulse flash: when a dedupe join pulses an item, its host row
+      (either host: the Compact root, the Detailed card, or an appended
+      download row) briefly lights a subdued background and fades it back out
+      over ~0.9s. Driven by the wrapper's IsPulsed flag (bound to each root's
+      downloadPulse class, the shell's conditional-class pattern); the
+      animation's default no-fill returns the background to the style value
+      when it completes, and the VM decays the flag so a later join can
+      re-light the class. Modest by design: the point is "the second click
+      visibly registered", nothing more. Two selector groups (the Grid roots
+      and the Detailed card's Border root) because the animated property is
+      Panel.Background vs. Border.Background.
+    -->
+    <Style Selector="Grid.compactRow.downloadPulse, Grid.downloadRow.downloadPulse">
+      <Style.Animations>
+        <Animation Duration="0:0:0.9">
+          <KeyFrame Cue="0%">
+            <Setter Property="Background" Value="{DynamicResource SystemControlHighlightBaseMediumLowBrush}" />
+          </KeyFrame>
+          <KeyFrame Cue="100%">
+            <Setter Property="Background" Value="Transparent" />
+          </KeyFrame>
+        </Animation>
+      </Style.Animations>
+    </Style>
+    <Style Selector="Border.detailedRow.downloadPulse">
+      <Style.Animations>
+        <Animation Duration="0:0:0.9">
+          <KeyFrame Cue="0%">
+            <Setter Property="Background" Value="{DynamicResource SystemControlHighlightBaseMediumLowBrush}" />
+          </KeyFrame>
+          <KeyFrame Cue="100%">
+            <Setter Property="Background" Value="Transparent" />
+          </KeyFrame>
+        </Animation>
+      </Style.Animations>
+    </Style>
   </UserControl.Styles>
 
   <!--
@@ -553,22 +696,25 @@
     built-in theme chrome, not an authored glyph.
   -->
 
-  <Grid RowDefinitions="Auto,Auto,*">
+  <Grid RowDefinitions="Auto,Auto,Auto,*">
 
-    <!-- Header: check-now refresh + rate-limit notice +
-         Compact/Detailed density selector + Add split button (hidden until a
-         profile is active). The destination title lives in the global shell
-         header; this toolbar shows only the Mods-specific actions. Refresh is
-         first; the rate-limit notice follows it and occupies the single flexible
-         (*) column so the pill keeps its content width at wide widths while the
-         column still gives it a finite constraint for ellipsis at narrow widths
-         (its full text stays in the tooltip), never pushing the density pair or
-         Add out. The density pair sits adjacent immediately before Add. The
-         toolbar carries the page's safe left + right insets (the row
+    <!-- Header: check-now refresh + rate-limit notice + search box +
+         Compact/Detailed density selector with the hide-disabled +
+         updates-only filters + Add split button (hidden until a profile is
+         active). The destination
+         title lives in the global shell header; this toolbar shows only the
+         Mods-specific actions. Refresh is first; the rate-limit notice follows
+         it and occupies the single flexible (*) column so the pill keeps its
+         content width at wide widths while the column still gives it a finite
+         constraint for ellipsis at narrow widths (its full text stays in the
+         tooltip), never pushing the search box, the density pair, or Add out.
+         The fixed-width search box sits between the flexible column and the
+         density pair; the density pair sits adjacent immediately before Add.
+         The toolbar carries the page's safe left + right insets (the row
          ScrollViewer below spans to the destination edge so its scrollbar sits
          at the edge, not inset). -->
     <Grid Grid.Row="0"
-          ColumnDefinitions="Auto,*,Auto,Auto,Auto"
+          ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto"
           IsVisible="{Binding HasActiveProfile}"
           Margin="20,12,20,8">
       <!--
@@ -644,21 +790,56 @@
                      VerticalAlignment="Center" />
       </StackPanel>
       <!--
-        Compact / Detailed density selector. Two adjacent drawn-icon buttons
-        immediately before Add; the active one carries the `selected` class
-        (bound to DetailedRows.IsCompact / IsDetailed, the shell's conditional
-        class pattern) so the current density is visibly distinct. Clicking a
-        button runs DetailedRows.SetDensityCommand with the ModRowDensity enum
-        value as its parameter; the coordinator normalizes, persists, and
-        reprocesses rows. A click on the already-active density is a strict
-        no-op (the coordinator's value-equal guard), so the buttons stay
-        enabled. The compact-icon shape comes from the `icon` class; the
-        `density` class carries the selected/pointerover background chrome.
-        Icons are Material 24x24 source: view_headline (four dense lines) for
-        Compact, view_agenda (two stacked blocks) for Detailed, so the two read
-        as distinct densities rather than two near-identical lists.
+        Search box. A fixed-width TextBox between the flexible rate-limit
+        column and the density pair; TwoWay binding to SearchText is
+        keystroke-live (the projection rebuilds per keystroke). The inner
+        clear affordance reuses the Fluent theme's own text-box clear-button
+        chrome (FluentTextBoxButton, the same ControlTheme the theme's
+        built-in clearButton class applies) with the theme's drawn X geometry;
+        it is visible only while search text is present and invokes the
+        TextBox's own Clear method (no code-behind; the theme's button is
+        Focusable=False so the box keeps focus after the click).
       -->
-      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2"
+      <TextBox Grid.Column="2"
+               Width="200"
+               Margin="16,0,0,0"
+               VerticalAlignment="Center"
+               Text="{Binding SearchText, Mode=TwoWay}"
+               PlaceholderText="{ReflectionBinding [ModList_SearchWatermark], Source={StaticResource Loc}}">
+        <TextBox.InnerRightContent>
+          <Button Theme="{StaticResource FluentTextBoxButton}"
+                  Command="{Binding $parent[TextBox].Clear}"
+                  ClipToBounds="True"
+                  IsVisible="{Binding HasSearchText}"
+                  ToolTip.Tip="{ReflectionBinding [ModList_ClearSearchTooltip], Source={StaticResource Loc}}"
+                  AutomationProperties.Name="{ReflectionBinding [ModList_ClearSearchTooltip], Source={StaticResource Loc}}">
+            <PathIcon Width="10" Height="10"
+                      Data="{StaticResource TextBoxClearButtonData}" />
+          </Button>
+        </TextBox.InnerRightContent>
+      </TextBox>
+      <!--
+        Compact / Detailed density selector + the hide-disabled and
+        updates-only filter toggles. Two adjacent drawn-icon density buttons
+        immediately before Add; the active one
+        carries the `selected` class (bound to DetailedRows.IsCompact /
+        IsDetailed, the shell's conditional class pattern) so the current
+        density is visibly distinct. Clicking a button runs
+        DetailedRows.SetDensityCommand with the ModRowDensity enum value as its
+        parameter; the coordinator normalizes, persists, and reprocesses rows.
+        A click on the already-active density is a strict no-op (the
+        coordinator's value-equal guard), so the buttons stay enabled. The
+        compact-icon shape comes from the `icon` class; the `density` class
+        carries the selected/pointerover background chrome. Icons are Material
+        24x24 source: view_headline (four dense lines) for Compact, view_agenda
+        (two stacked blocks) for Detailed, so the two read as distinct
+        densities rather than two near-identical lists. The hide-disabled
+        visibility toggle (same icon/density chrome, selected while hiding)
+        filters the row list to enabled mods only, and the trailing
+        updates-only toggle narrows the list to rows flagged with an available
+        update.
+      -->
+      <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="2"
                    VerticalAlignment="Center" Margin="16,0,0,0">
         <Button Classes="icon density"
                 Classes.selected="{Binding DetailedRows.IsCompact}"
@@ -684,6 +865,56 @@
                 Fill="{Binding $parent[Button].Foreground}"
                 Data="M20 3H3c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h17c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zm0 10H3c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h17c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1z" />
         </Button>
+        <!--
+          Hide-disabled filter toggle. Same icon/density chrome; the selected
+          class tracks HideDisabledMods (the shell's conditional-class pattern).
+          The icon reads through shape like the order lock reads through color:
+          Material "visibility_off" (crossed-out eye) while hiding, Material
+          "visibility" (open eye) while showing all. The tooltip + automation
+          name describe the action the click performs (hide vs. show).
+        -->
+        <Button Classes="icon density"
+                Classes.selected="{Binding HideDisabledMods}"
+                Command="{Binding ToggleHideDisabledCommand}"
+                Margin="8,0,0,0"
+                ToolTip.Tip="{Binding HideDisabledTooltip}"
+                AutomationProperties.Name="{Binding HideDisabledTooltip}">
+          <Panel>
+            <!-- Material "visibility_off" (24x24 source): shown while the
+                 filter hides disabled mods. -->
+            <Path Width="16" Height="16" Stretch="Uniform"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  IsVisible="{Binding HideDisabledMods}"
+                  Fill="{Binding $parent[Button].Foreground}"
+                  Data="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 21 21 19.73 3.27 2 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z" />
+            <!-- Material "visibility" (24x24 source): shown while all rows are
+                 visible. -->
+            <Path Width="16" Height="16" Stretch="Uniform"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  IsVisible="{Binding !HideDisabledMods}"
+                  Fill="{Binding $parent[Button].Foreground}"
+                  Data="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
+          </Panel>
+        </Button>
+        <!--
+          Updates-only filter toggle. Same icon/density chrome but ONE stable
+          glyph (updates-only has no natural crossed-out variant to swap), so
+          the active state reads through the `selected` class alone (the
+          density selector's pattern). The tooltip + automation name describe
+          the action the click performs (filter to flagged rows vs. show all).
+        -->
+        <Button Classes="icon density"
+                Classes.selected="{Binding ShowUpdatesOnly}"
+                Command="{Binding ToggleUpdatesOnlyCommand}"
+                ToolTip.Tip="{Binding UpdatesOnlyTooltip}"
+                AutomationProperties.Name="{Binding UpdatesOnlyTooltip}">
+          <!-- Material "update" (24x24 source): a circular arrow with a down arrow,
+               the toolbar's updates-only filter toggle. -->
+          <Path Width="16" Height="16" Stretch="Uniform"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                Fill="{Binding $parent[Button].Foreground}"
+                Data="M21,10.12h-6.78l2.74-2.82c-2.73-2.7-7.15-2.8-9.88-0.1c-2.73,2.71-2.73,7.08,0,9.79s7.15,2.71,9.88,0 C18.32,15.65,19,14.08,19,12.1h2c0,1.98-0.88,4.55-2.64,6.29c-3.51,3.48-9.21,3.48-12.72,0c-3.5-3.47-3.53-9.11-0.02-12.58 s9.14-3.47,12.65,0L21,3V10.12z M12.5,8v4.25l3.5,2.08l-0.72,1.21L11,13V8H12.5z" />
+        </Button>
       </StackPanel>
       <!--
         Add split button: primary click runs the current mode's action; the
@@ -701,7 +932,7 @@
         guidance while disabled, and the toolbar hint below explains without
         hover.
       -->
-      <SplitButton Grid.Column="3"
+      <SplitButton Grid.Column="4"
                    Click="Add_Click"
                    ToolTip.Tip="{Binding AddButtonTooltip}"
                    ToolTip.ShowOnDisabled="True"
@@ -738,7 +969,7 @@
         toolbar grid hard-clips rather than reflowing; Gaming-Mode-only and
         sized to fit with slack at the minimum width.
       -->
-      <TextBlock Grid.Column="4"
+      <TextBlock Grid.Column="5"
                  Text="{ReflectionBinding [ModList_AddGamingModeHint], Source={StaticResource Loc}}"
                  IsVisible="{Binding IsGamingMode}"
                  FontSize="11"
@@ -762,6 +993,36 @@
     </Panel>
 
     <!--
+      Alternate mod-manager banner: shown exactly while the active profile has
+      an enabled manager mod (the same derivation the launch path hands to
+      Relay as its mod-manager flag). Caution language like the rate-limit
+      pill, because the manager, not Curator, owns in-game load order while
+      active. Not dismissible: it is live state (disable or remove the manager
+      mod to clear it), not a notification.
+    -->
+    <Border Grid.Row="2"
+            IsVisible="{Binding IsModManagerActive}"
+            Background="{DynamicResource CuratorCautionBackgroundBrush}"
+            CornerRadius="8"
+            Padding="8,6"
+            Margin="20,0,20,4">
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+        <!-- Material "swap_vert" (24x24 source): drawn geometry, themed via
+             the caution foreground. -->
+        <Path Grid.Column="0"
+              Width="16" Height="16" Stretch="Uniform"
+              VerticalAlignment="Center"
+              Fill="{DynamicResource CuratorCautionBrush}"
+              Data="M16 17.01V10h-2v7.01h-3L15 21l4-3.99h-3zM9 3L5 6.99h3v7.01h2V6.99h3L9 3z" />
+        <TextBlock Grid.Column="1"
+                   Text="{Binding ModManagerBannerText}"
+                   FontSize="12"
+                   VerticalAlignment="Center"
+                   TextWrapping="Wrap" />
+      </Grid>
+    </Border>
+
+    <!--
       Content area: the drag-and-drop target (AllowDrop/Drop/DragOver stay here
       so drag-and-drop behavior is unchanged). Background="Transparent" is set
       explicitly so the empty area is hit-testable for drops (a Panel/Grid with
@@ -777,11 +1038,24 @@
       left + right margins inside the ItemsControl so the action controls have
       a clear right inset without moving the scrollbar off the edge.
     -->
-    <Grid Grid.Row="2"
+    <Grid Grid.Row="3"
           Background="Transparent"
           DragDrop.AllowDrop="True"
           DragDrop.Drop="OnDrop"
           DragDrop.DragOver="OnDragOver">
+
+      <!--
+        No-matches state: an active profile whose full list is non-empty but
+        whose visible projection is empty under an active search/filter. Distinct
+        from the no-mods empty state below (they are mutually exclusive: while a
+        search or filter is active the add hints do not render), styled to match
+        it (centered, subdued).
+      -->
+      <TextBlock IsVisible="{Binding ShowNoMatchesMessage}"
+                 Text="{Binding NoMatchesText}"
+                 HorizontalAlignment="Center" VerticalAlignment="Center"
+                 Margin="20,0"
+                 Opacity="0.6" />
 
       <!--
         Empty: active profile with zero or one mod (typically DMF-only right
@@ -792,7 +1066,8 @@
         into the app, or inside a Gaming Mode session, where it reads as the
         Desktop Mode guidance instead (the nxm instruction cannot be followed
         there even when registered). The no-profile state is owned by the
-        shell.
+        shell. Suppressed while a search or filter is active (ShowAddModsHint);
+        the no-matches state above owns that case.
       -->
       <StackPanel IsVisible="{Binding ShowAddModsHint}"
                   HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8"
@@ -807,20 +1082,35 @@
                    HorizontalAlignment="Center" />
       </StackPanel>
 
-      <!-- The mod rows (visible only when there is at least one mod). The
-           ScrollViewer spans to the destination edge so its vertical scrollbar
-           sits at the edge; horizontal scrolling is disabled (rows wrap their
-           content rather than extending the page). The inner ItemsControl
-           carries the page's safe left + right insets so the row content +
-           the action controls have a clear right inset from the scrollbar.
-           No rectangle Border around the populated list: the edge-spanning
+      <!-- The mod rows (the visible projection; rendered when at least one
+           row is visible) + the appended download rows (below them, inside
+           the same scroll region). The ScrollViewer spans to the destination
+           edge so its vertical scrollbar sits at the edge; horizontal
+           scrolling is disabled (rows wrap their content rather than
+           extending the page). The mod-list ItemsControl carries the page's
+           safe left + right insets so the row content + the action controls
+           have a clear right inset from the scrollbar. Its ItemsSource is the
+           VM's VisibleMods projection: the drag gesture's realized-container
+           math (target ranks, marker anchors, lift lookup) is index-aligned
+           to this collection, and commits map visible ranks back onto the
+           stored order through the planner. The download ItemsControl below
+           is a SEPARATE control over a separate collection (DownloadRows, in
+           admission order): its rows are never containers of the mod-list
+           ItemsControl, never enter VisibleMods, and carry no reorder
+           affordances, so download rows can never become drag sources or
+           drop targets. Its visibility follows HasListContent (visible
+           profile rows OR appended downloads): an empty or no-matches
+           profile with a live download still hosts the appended section,
+           while the no-matches message above coexists unchanged. No
+           rectangle Border around the populated list: the edge-spanning
            ScrollViewer reads as a clean list, not a boxed region. -->
       <ScrollViewer x:Name="ModListScroll"
-                    IsVisible="{Binding HasMods}"
+                    IsVisible="{Binding HasListContent}"
                     HorizontalScrollBarVisibility="Disabled"
                     VerticalScrollBarVisibility="Auto"
                     Padding="0">
-        <ItemsControl x:Name="ModListItems" ItemsSource="{Binding Mods}" Margin="20,0">
+        <StackPanel>
+          <ItemsControl x:Name="ModListItems" ItemsSource="{Binding VisibleMods}" Margin="20,0">
             <ItemsControl.ItemTemplate>
             <DataTemplate x:DataType="vm:ModItemViewModel">
               <!--
@@ -851,6 +1141,7 @@
                 every column.
               -->
               <Grid Classes="compactRow"
+                    Classes.downloadPulse="{Binding ActiveDownload.IsPulsed}"
                     ColumnDefinitions="Auto,*,Auto,Auto"
                     Margin="0,3" MinHeight="32"
                     IsVisible="{Binding !IsDetailed}">
@@ -860,11 +1151,26 @@
                                   Content="{Binding}"
                                   ContentTemplate="{StaticResource ModRowGripTemplate}" />
 
-                  <!-- Name -->
-                  <TextBlock Grid.Column="1"
-                             Text="{Binding Name}"
-                             VerticalAlignment="Center"
-                             TextTrimming="CharacterEllipsis" />
+                  <!--
+                    Name (column 1) + the download morph slot: while a
+                    download morphs the row, the shared download status
+                    content follows the name on the same single line (the
+                    name keeps the star column and ellipsizes; the morph
+                    content takes its natural width at the right edge of
+                    the pair).
+                  -->
+                  <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding Name}"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" />
+                    <ContentControl Grid.Column="1"
+                                    Margin="8,0,0,0"
+                                    VerticalAlignment="Center"
+                                    Content="{Binding ActiveDownload}"
+                                    ContentTemplate="{StaticResource ModRowDownloadStatusTemplate}"
+                                    IsVisible="{Binding IsDownloadMorphed}" />
+                  </Grid>
 
                   <!--
                     Source badge area (column 2): the shared badge cluster.
@@ -927,6 +1233,7 @@
                 -->
                 <Border IsVisible="{Binding IsDetailed}"
                         Classes="detailedRow"
+                        Classes.downloadPulse="{Binding ActiveDownload.IsPulsed}"
                         Container.Name="detailedModRow"
                         Container.Sizing="Width"
                         Margin="0,3"
@@ -1022,14 +1329,23 @@
                         safely trimmed. The full text is preserved in the
                         tooltip (when non-null) + the automation name (always,
                         so the fallback text stays reachable by assistive tech
-                        even when visually clipped).
+                        even when visually clipped). While a download morphs
+                        the row, this swaps for the shared download status
+                        content (status word + progress + failure), bound to
+                        the row's ActiveDownload wrapper.
                       -->
                       <TextBlock Grid.Row="1" Grid.Column="2"
                                  Text="{Binding SummaryText}"
                                  MaxLines="2" TextWrapping="Wrap"
                                  TextTrimming="CharacterEllipsis"
                                  ToolTip.Tip="{Binding SummaryTooltip}"
-                                 AutomationProperties.Name="{Binding SummaryText}" />
+                                 AutomationProperties.Name="{Binding SummaryText}"
+                                 IsVisible="{Binding !IsDownloadMorphed}" />
+                      <ContentControl Grid.Row="1" Grid.Column="2"
+                                      VerticalAlignment="Center"
+                                      Content="{Binding ActiveDownload}"
+                                      ContentTemplate="{StaticResource ModRowDownloadStatusTemplate}"
+                                      IsVisible="{Binding IsDownloadMorphed}" />
 
                       <!--
                         Action strip (row 2), the SAME shared template the
@@ -1073,7 +1389,74 @@
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>
-        </ScrollViewer>
+
+          <!--
+            The appended download rows: queue items with no in-place host
+            (fresh mods, cross-profile targets, filtered-hidden targets, null
+            container ids), in admission order, below the profile rows.
+            One row per item: a drawn download arrow, the display name with
+            the always-shown "for profile {name}" label, the SAME shared
+            download status content the morph hosts, and the item's Cancel.
+            No grip, no markers, no move/lock/remove: no reorder affordances.
+            A completed row simply vanishes (the item leaves the coordinator
+            collection; the completion reload surfaces the real mod row).
+            The root Grid carries the join-pulse flash class like the morph
+            hosts do.
+          -->
+          <ItemsControl x:Name="DownloadListItems"
+                        ItemsSource="{Binding DownloadRows}"
+                        IsVisible="{Binding HasDownloadRows}"
+                        Margin="20,8,20,0">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:DownloadRowViewModel">
+                <Grid Classes="downloadRow"
+                      Classes.downloadPulse="{Binding IsPulsed}"
+                      ColumnDefinitions="Auto,*,Auto,Auto"
+                      Margin="0,3" MinHeight="32"
+                      AutomationProperties.Name="{Binding AutomationText}">
+                  <!-- Material "download" (24x24 source): the row's
+                       activity marker. -->
+                  <Path Grid.Column="0"
+                        Width="16" Height="16" Stretch="Uniform"
+                        Margin="8,0,0,0" VerticalAlignment="Center"
+                        Fill="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                        Data="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
+                  <!-- Name + the always-shown target profile label. -->
+                  <StackPanel Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding DisplayName}"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding DisplayName}" />
+                    <TextBlock Text="{Binding ProfileLabel}"
+                               FontSize="11" Opacity="0.6"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding ProfileLabel}" />
+                  </StackPanel>
+                  <!-- The shared download status content (status word +
+                       progress + failure with Retry + dismiss). -->
+                  <ContentControl Grid.Column="2"
+                                  Margin="12,0,0,0" VerticalAlignment="Center"
+                                  Content="{Binding}"
+                                  ContentTemplate="{StaticResource ModRowDownloadStatusTemplate}" />
+                  <!-- Cancel (the same drawn icon + command the morph's
+                       strip offers). -->
+                  <Button Grid.Column="3"
+                          Classes="icon downloadCancel"
+                          Margin="8,0,0,0"
+                          IsEnabled="{Binding CanCancel}"
+                          Command="{Binding CancelCommand}"
+                          ToolTip.Tip="{Binding CancelTooltip}"
+                          AutomationProperties.Name="{Binding CancelTooltip}">
+                    <Path Width="16" Height="16" Stretch="Uniform"
+                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                          Fill="{Binding $parent[Button].Foreground}"
+                          Data="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z" />
+                  </Button>
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </ScrollViewer>
       </Grid>
   </Grid>
 </UserControl>

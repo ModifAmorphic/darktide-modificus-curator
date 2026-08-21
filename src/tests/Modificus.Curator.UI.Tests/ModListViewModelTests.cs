@@ -67,7 +67,7 @@ public sealed class ModListViewModelTests
         var vm = Build(profiles, new FakeProfileSession { ActiveProfileId = a.Id }, repo);
 
         Assert.True(vm.HasActiveProfile);
-        Assert.True(vm.HasMods);
+        Assert.True(vm.HasVisibleMods);
         Assert.False(vm.ShowAddModsHint);
         Assert.Equal(2, vm.Mods.Count);
         // Sorted by Order.
@@ -92,7 +92,7 @@ public sealed class ModListViewModelTests
         var vm = Build(profiles, new FakeProfileSession { ActiveProfileId = null });
 
         Assert.False(vm.HasActiveProfile);
-        Assert.False(vm.HasMods);
+        Assert.False(vm.HasVisibleMods);
         Assert.Empty(vm.Mods);
     }
 
@@ -104,7 +104,7 @@ public sealed class ModListViewModelTests
         var vm = Build(profiles, new FakeProfileSession { ActiveProfileId = a.Id });
 
         Assert.True(vm.HasActiveProfile);
-        Assert.False(vm.HasMods);
+        Assert.False(vm.HasVisibleMods);
         Assert.True(vm.ShowAddModsHint);
         Assert.Empty(vm.Mods);
     }
@@ -698,12 +698,14 @@ public sealed class ModListViewModelTests
 
     // ---- update-check -> per-row state -------------------------------------
 
-    /// <summary>Builds the VM with explicit update-check + installer + auth
+    /// <summary>Builds the VM with explicit update-check + acquisition + queue
     /// fakes so the update-flow tests can shape each one. The profile service +
     /// repository are seeded with a Nexus+Latest mod (containerA) + an
     /// Untracked mod (containerB) so the per-row assertions have distinct rows.
-    /// Returns the VM + the two rows' container ids.</summary>
-    private static (ModListViewModel Vm, Guid NexusContainerId, Guid UntrackedContainerId, FakeUpdateCheckService UpdateCheck, FakeModUpdateInstaller Installer, FakeNexusAuthService Auth, FakeUpdateStateStore UpdateState)
+    /// The premium update action runs the real enqueue front over the
+    /// acquisition + queue fakes (mirroring composition). Returns the VM + the
+    /// two rows' container ids.</summary>
+    private static (ModListViewModel Vm, Guid NexusContainerId, Guid UntrackedContainerId, FakeUpdateCheckService UpdateCheck, FakeModAcquisitionService Acquisition, FakeNexusAuthService Auth, FakeUpdateStateStore UpdateState, FakeModDownloadQueue Queue, FakeProfileSession Session)
         BuildForUpdateFlow(FakeNexusAuthService? auth = null, FakeDialogService? dialogs = null)
     {
         var a = Profile("Alpha");
@@ -719,17 +721,29 @@ public sealed class ModListViewModelTests
         var updateCheck = new FakeUpdateCheckService();
         var effectiveAuth = auth ?? new FakeNexusAuthService(); // default premium
         var updateState = new FakeUpdateStateStore(repo);
-        var installer = new FakeModUpdateInstaller { StateStore = updateState };
+        var acquisition = new FakeModAcquisitionService();
+        var queue = new FakeModDownloadQueue();
         var vm = TestDoubles.BuildModList(profiles, session, repo,
-            updateCheck: updateCheck, installer: installer, auth: effectiveAuth,
-            updateState: updateState, dialogs: dialogs);
-        return (vm, nexus.Id, untracked.Id, updateCheck, installer, effectiveAuth, updateState);
+            updateCheck: updateCheck, acquisition: acquisition, auth: effectiveAuth,
+            updateState: updateState, dialogs: dialogs, downloadQueue: queue);
+        return (vm, nexus.Id, untracked.Id, updateCheck, acquisition, effectiveAuth, updateState, queue, session);
+    }
+
+    /// <summary>Flags the VM's Nexus row via a completed check so the update
+    /// command's defenses pass; returns the row.</summary>
+    private static ModItemViewModel FlagNexusRow(
+        ModListViewModel vm, FakeUpdateCheckService updateCheck, Guid nexusId)
+    {
+        updateCheck.RaiseCheckCompleted(new UpdateCheckResult(
+            new[] { new ModUpdateInfo(nexusId, 8, "DMF", "1.0", DateTimeOffset.UtcNow) },
+            DateTimeOffset.UtcNow, false, Thorough: false, Outcome: CheckOutcome.Success));
+        return Row(vm, "DMF");
     }
 
     [Fact]
     public void CheckCompleted_sets_per_row_UpdateAvailable_from_the_flagged_container_ids()
     {
-        var (vm, nexusId, untrackedId, updateCheck, _, _, _) = BuildForUpdateFlow();
+        var (vm, nexusId, untrackedId, updateCheck, _, _, _, _, _) = BuildForUpdateFlow();
 
         // Raise a result flagging ONLY the Nexus container.
         updateCheck.RaiseCheckCompleted(new UpdateCheckResult(
@@ -747,7 +761,7 @@ public sealed class ModListViewModelTests
     [Fact]
     public void CheckCompleted_with_no_updates_clears_every_row()
     {
-        var (vm, nexusId, _, updateCheck, _, _, _) = BuildForUpdateFlow();
+        var (vm, nexusId, _, updateCheck, _, _, _, _, _) = BuildForUpdateFlow();
 
         // First flag the Nexus row, then raise an empty result: the marker
         // should clear (the badge reflects the latest check, not a stale one).
@@ -781,7 +795,7 @@ public sealed class ModListViewModelTests
     [Fact]
     public void Reload_reapplies_the_last_check_result_to_a_freshly_rebuilt_list()
     {
-        var (vm, nexusId, _, updateCheck, _, _, _) = BuildForUpdateFlow();
+        var (vm, nexusId, _, updateCheck, _, _, _, _, _) = BuildForUpdateFlow();
 
         // Stage a result flagging the Nexus container, then trigger a reload
         // (e.g. a profile edit). The freshly built rows should pick up the last
@@ -856,7 +870,7 @@ public sealed class ModListViewModelTests
         // The manual trigger awaits the runner's thorough task; IsCheckingNow
         // is true while it runs + cleared after. The view binds the button's
         // IsEnabled + the spinner's IsVisible to it.
-        var (vm, _, _, _, _, _, _) = BuildForUpdateFlow();
+        var (vm, _, _, _, _, _, _, _, _) = BuildForUpdateFlow();
         Assert.False(vm.IsCheckingNow);
 
         // The fake runner's CheckNowAsync dispatches a thread-pool task that
@@ -872,7 +886,7 @@ public sealed class ModListViewModelTests
         // Re-entrancy guard: a second invocation while IsCheckingNow is true is
         // a no-op (the command checks the flag itself, not just the button's
         // IsEnabled). Set the flag directly to simulate an in-flight check.
-        var (vm, _, _, _, _, _, _) = BuildForUpdateFlow();
+        var (vm, _, _, _, _, _, _, _, _) = BuildForUpdateFlow();
         vm.IsCheckingNow = true;
 
         await vm.CheckForUpdatesNowCommand.ExecuteAsync(null);
@@ -882,108 +896,132 @@ public sealed class ModListViewModelTests
         Assert.True(vm.IsCheckingNow);
     }
 
-    // ---- the update flow (one at a time, premium-only) ---------------------
+    // ---- the update flow (premium enqueues, regular opens the files page) ---
 
     [Fact]
-    public async Task UpdateCommand_success_installs_reloads_and_toggles_IsUpdating()
+    public async Task UpdateCommand_premium_enqueues_one_update_install_and_morphs_the_row()
     {
-        var (vm, nexusId, _, updateCheck, installer, _, updateState) = BuildForUpdateFlow();
-        // Flag the Nexus row so the command's defenses pass.
-        updateCheck.RaiseCheckCompleted(new UpdateCheckResult(
-            new[] { new ModUpdateInfo(nexusId, 8, "DMF", "1.0", DateTimeOffset.UtcNow) },
-            DateTimeOffset.UtcNow, false, Thorough: false, Outcome: CheckOutcome.Success));
-        var row = Row(vm, "DMF");
+        var (vm, nexusId, _, updateCheck, acquisition, _, _, queue, session) = BuildForUpdateFlow();
+        var row = FlagNexusRow(vm, updateCheck, nexusId);
         Assert.True(vm.IsPremiumUser);
+        acquisition.NextResolve = (4242, "2.0");
 
         await vm.UpdateCommand.ExecuteAsync(row);
 
-        // The install went through the installer with the row's container +
-        // mod id + resolved version, via the Try (manual) semantics.
-        var call = Assert.Single(installer.Calls);
-        Assert.Equal(nexusId, call.ContainerId);
-        Assert.Equal(8, call.ModId);
-        Assert.Equal("1.0", call.ExpectedVersion);
-        Assert.Equal(nameof(FakeModUpdateInstaller.TryInstallLatestAsync), call.Method);
-        // The installer's acknowledge-on-success cleared the flag via the
-        // reload (the acknowledged store is what ApplyKnownUpdateState reads).
-        Assert.Contains(updateState.AcknowledgeCalls, c => c.ContainerId == nexusId);
-        Assert.False(Row(vm, "DMF").UpdateAvailable);
-        // The spinner toggled through the installer's progress + no stuck state.
-        Assert.False(row.IsUpdating);
-        Assert.False(vm.AnyRowUpdating);
+        // ONE UpdateInstall request through the enqueue front: the resolved
+        // head file id, the row's container + resolved version (the
+        // eligibility input), the display name, + the active profile as the
+        // target.
+        var request = Assert.Single(queue.Requests);
+        Assert.Equal(DownloadPurpose.UpdateInstall, request.Purpose);
+        Assert.Equal("warhammer40kdarktide", request.GameDomain);
+        Assert.Equal(8, request.ModId);
+        Assert.Equal(4242, request.FileId);
+        Assert.Equal(nexusId, request.ContainerId);
+        Assert.Equal(row.Name, request.DisplayName);
+        Assert.Equal("1.0", request.ExpectedVersion);
+        Assert.Equal(session.ActiveProfileId, request.TargetProfileId);
+        // The admitted item morphs the row in place (the queue's collection
+        // change drives the hosting projection; no separate spinner state).
+        Assert.True(row.IsDownloadMorphed);
+        Assert.Same(queue.Items.Single(), row.ActiveDownload!.Item);
     }
 
     [Fact]
-    public async Task UpdateCommand_failure_surfaces_an_alert_and_clears_IsUpdating()
+    public async Task UpdateCommand_completion_reloads_and_marks_pending_changes()
+    {
+        var (vm, nexusId, _, updateCheck, _, _, _, queue, session) = BuildForUpdateFlow();
+        var row = FlagNexusRow(vm, updateCheck, nexusId);
+
+        await vm.UpdateCommand.ExecuteAsync(row);
+        Assert.False(session.HasPendingChanges);
+
+        // Simulate the queue's UpdateInstall completion: the terminal
+        // transition (the item leaves the collection) + the applied event.
+        var item = queue.Items.Single();
+        item.Phase = DownloadPhase.Completed;
+        queue.Remove(item);
+        queue.RaiseUpdatesApplied();
+
+        // The bridged event did the old Installed-outcome work: pending
+        // changes flagged + the list rebuilt (a fresh row object), and the
+        // row is an ordinary mod row again.
+        Assert.True(session.HasPendingChanges);
+        Assert.NotSame(row, Row(vm, "DMF"));
+        Assert.False(Row(vm, "DMF").IsDownloadMorphed);
+    }
+
+    [Fact]
+    public async Task UpdateCommand_resolve_failure_surfaces_an_alert_and_enqueues_nothing()
     {
         var dialogs = new FakeDialogService();
-        var (vm2, nexusId, _, uc, installer, _, _) =
+        var (vm2, nexusId, _, uc, acquisition, _, _, queue, _) =
             BuildForUpdateFlow(dialogs: dialogs);
-        installer.NextOutcome = new ModInstallOutcome(
-            ModInstallStatus.Failed, "boom", new InvalidOperationException("boom"));
-        uc.RaiseCheckCompleted(new UpdateCheckResult(
-            new[] { new ModUpdateInfo(nexusId, 8, "DMF", "1.0", DateTimeOffset.UtcNow) },
-            DateTimeOffset.UtcNow, false, Thorough: false, Outcome: CheckOutcome.Success));
-        var row = Row(vm2, "DMF");
+        acquisition.ThrowOnResolve = new InvalidOperationException("boom");
+        var row = FlagNexusRow(vm2, uc, nexusId);
 
         await vm2.UpdateCommand.ExecuteAsync(row);
 
-        // The failure surfaced as an alert naming the mod + the exception
-        // message (the outcome record carries the exception for exactly this).
+        // The resolve failure surfaced as an alert naming the mod + the
+        // exception message; nothing was admitted (no row to host it on).
         var alert = Assert.Single(dialogs.AlertCalls);
         Assert.Contains("DMF", alert.Message);
         Assert.Contains("boom", alert.Message);
-        // IsUpdating cleared + AnyRowUpdating re-enabled (no stuck state).
-        Assert.False(row.IsUpdating);
-        Assert.False(vm2.AnyRowUpdating);
+        Assert.Empty(queue.Requests);
+        Assert.Empty(queue.Items);
+        Assert.False(row.IsDownloadMorphed);
     }
 
     [Fact]
-    public async Task UpdateCommand_is_one_at_a_time_a_busy_installer_is_a_silent_noop()
+    public async Task UpdateCommand_second_click_while_live_joins_the_queued_item()
     {
-        var (vm, nexusId, _, updateCheck, installer, _, updateState) = BuildForUpdateFlow();
-        updateCheck.RaiseCheckCompleted(new UpdateCheckResult(
-            new[] { new ModUpdateInfo(nexusId, 8, "DMF", "1.0", DateTimeOffset.UtcNow) },
-            DateTimeOffset.UtcNow, false, Thorough: false, Outcome: CheckOutcome.Success));
-        // Simulate "another install is in flight": the installer answers Busy
-        // (the Try semantics refuse politely under the shared gate; the real
-        // coordinator mutual exclusion is covered by the installer's own
-        // tests). The manual command is then a silent no-op: no alert, no
-        // spinner, no acknowledge, no reload.
-        installer.NextTryIsBusy = true;
-        var row = Row(vm, "DMF");
+        // The queue's dedupe makes a second click on the same head file join
+        // + pulse the existing item rather than admit a second download (the
+        // double-click guard is the morph hiding the button; this is the
+        // command-level equivalent).
+        var (vm, nexusId, _, updateCheck, _, _, _, queue, _) = BuildForUpdateFlow();
+        var row = FlagNexusRow(vm, updateCheck, nexusId);
 
         await vm.UpdateCommand.ExecuteAsync(row);
+        var item = queue.Items.Single();
+        await vm.UpdateCommand.ExecuteAsync(row);
 
-        Assert.False(row.IsUpdating);
-        Assert.False(vm.AnyRowUpdating);
-        Assert.Empty(updateState.AcknowledgeCalls);
-        // The call DID reach the installer (the refusal came from the gate).
-        Assert.Single(installer.Calls);
+        Assert.Equal(2, queue.Requests.Count); // both clicks reached the queue
+        Assert.Single(queue.Items); // ...but only one item exists
+        Assert.Same(item, queue.Items.Single());
+        Assert.Equal(1, item.Pulse); // the second click pulsed it
     }
 
     [Fact]
-    public async Task UpdateCommand_not_eligible_outcome_is_a_silent_noop()
+    public async Task UpdateCommand_a_row_without_a_resolved_version_is_a_silent_noop()
     {
-        // A stale flag (the installer's in-gate revalidation rejects the
-        // target) surfaces as a silent no-op: no alert, no acknowledge.
-        var (vm, nexusId, _, updateCheck, installer, _, updateState) = BuildForUpdateFlow();
-        updateCheck.RaiseCheckCompleted(new UpdateCheckResult(
-            new[] { new ModUpdateInfo(nexusId, 8, "DMF", "1.0", DateTimeOffset.UtcNow) },
-            DateTimeOffset.UtcNow, false, Thorough: false, Outcome: CheckOutcome.Success));
-        installer.NextOutcome = new ModInstallOutcome(ModInstallStatus.NotEligible, "version changed");
-        var row = Row(vm, "DMF");
+        // The enqueue requires the expected version (the eligibility rule's
+        // input); a row whose container resolves no version cannot satisfy it.
+        // The old installer would have answered NotEligible (silent); the
+        // command keeps that posture: no resolve call, no enqueue, no alert.
+        var dialogs = new FakeDialogService();
+        var (vm, nexusId, _, updateCheck, acquisition, _, _, queue, _) =
+            BuildForUpdateFlow(dialogs: dialogs);
+        // Re-seed the container with NO versions: the row's resolved version
+        // reads empty while the policy stays Nexus+Latest.
+        var row = FlagNexusRow(vm, updateCheck, nexusId);
+        row = new ModItemViewModel(
+            Localization, TestDoubles.RowContext(), nexusId, "DMF",
+            new NexusSource { ModId = 8 }, "", true, 0, ModVersionPolicy.Latest,
+            Array.Empty<ModVersion>(), found: true);
+        row.UpdateAvailable = true;
 
         await vm.UpdateCommand.ExecuteAsync(row);
 
-        Assert.Empty(updateState.AcknowledgeCalls);
-        Assert.False(row.IsUpdating);
+        Assert.Empty(acquisition.ResolveLatestCalls);
+        Assert.Empty(queue.Requests);
+        Assert.Empty(dialogs.AlertCalls);
     }
 
     [Fact]
     public void UpdateCommand_is_a_noop_for_untracked_rows()
     {
-        var (vm, _, _, updateCheck, installer, _, _) = BuildForUpdateFlow();
+        var (vm, _, _, updateCheck, acquisition, _, _, queue, _) = BuildForUpdateFlow();
         // Even if the check erroneously flagged the Untracked container, the
         // command's IsNexusLatest defense blocks the call.
         updateCheck.RaiseCheckCompleted(new UpdateCheckResult(
@@ -995,18 +1033,19 @@ public sealed class ModListViewModelTests
 
         vm.UpdateCommand.Execute(row);
 
-        Assert.Empty(installer.Calls);
+        Assert.Empty(acquisition.ResolveLatestCalls);
+        Assert.Empty(queue.Requests);
     }
 
     [Fact]
     public async Task UpdateCommand_is_a_noop_without_an_active_profile()
     {
-        var (vm, _, _, updateCheck, installer, _, _) = BuildForUpdateFlow();
+        var (vm, _, _, updateCheck, acquisition, _, _, queue, _) = BuildForUpdateFlow();
         // Clear the active profile (a fresh build with a null session id is
         // cleaner than mutating the session after build).
         var profiles = TestDoubles.Profiles();
         var vm2 = TestDoubles.BuildModList(profiles, new FakeProfileSession { ActiveProfileId = null },
-            updateCheck: updateCheck, installer: installer);
+            updateCheck: updateCheck, acquisition: acquisition);
 
         // A synthetic row (the empty profile has none) exercises the defense.
         var synthetic = new ModItemViewModel(Localization, TestDoubles.RowContext(), Guid.NewGuid(), "X",
@@ -1014,7 +1053,8 @@ public sealed class ModListViewModelTests
             Array.Empty<ModVersion>(), true);
         await vm2.UpdateCommand.ExecuteAsync(synthetic);
 
-        Assert.Empty(installer.Calls);
+        Assert.Empty(acquisition.ResolveLatestCalls);
+        Assert.Empty(queue.Requests);
     }
 
     // ---- per-row source URL resolution -------------------------------------
@@ -1462,7 +1502,7 @@ public sealed class ModListViewModelTests
     /// cover every row type. Returns the VM, the launcher-invocation recorder,
     /// and the row lookup helpers.
     /// </summary>
-    private static (ModListViewModel Vm, FakeUpdateCheckService UpdateCheck, FakeUpdateStateStore UpdateState, List<Uri> Launches, FakeDialogService Dialogs)
+    private static (ModListViewModel Vm, FakeUpdateCheckService UpdateCheck, FakeUpdateStateStore UpdateState, List<Uri> Launches, FakeDialogService Dialogs, FakeModDownloadQueue Queue)
         BuildForRowAction(bool premium = true, FakeExternalLauncher? launcher = null)
     {
         var a = Profile("Alpha");
@@ -1489,10 +1529,11 @@ public sealed class ModListViewModelTests
                 ? new NexusAuthState(NexusAuthMethod.OAuth, "tester", IsPremium: true)
                 : new NexusAuthState(NexusAuthMethod.ApiKey, "free", IsPremium: false),
         };
+        var queue = new FakeModDownloadQueue();
         var vm = TestDoubles.BuildModList(profiles, session, repo,
             updateCheck: updateCheck, updateState: updateState, auth: auth,
-            dialogs: dialogs, launcher: launcher);
-        return (vm, updateCheck, updateState, launches, dialogs);
+            dialogs: dialogs, launcher: launcher, downloadQueue: queue);
+        return (vm, updateCheck, updateState, launches, dialogs, queue);
     }
 
     [Fact]
@@ -1503,7 +1544,7 @@ public sealed class ModListViewModelTests
         // updateAction:disabled style dims this exact state (CanShowUpdateAction
         // true + UpdateActionEnabled false) to 0.4 opacity. These two assertions
         // are the VM-side guard for that UI correction.
-        var (vm, _, _, _, _) = BuildForRowAction();
+        var (vm, _, _, _, _, _) = BuildForRowAction();
 
         var row = Row(vm, "NexusLatest");
         Assert.True(row.CanShowUpdateAction); // visible (Nexus + Latest)
@@ -1512,35 +1553,9 @@ public sealed class ModListViewModelTests
     }
 
     [Fact]
-    public void UpdateAction_stays_visible_but_disabled_while_row_is_updating()
-    {
-        // During a per-row update the button must STAY VISIBLE in its fixed
-        // action cell (CanShowUpdateAction remains true) but be DISABLED
-        // (UpdateActionEnabled is false because it includes !IsUpdating). The
-        // progress affordance moved to the source-badge area, so the action cell
-        // does not shift. This is the VM-side guard for that UI behavior.
-        var (vm, updateCheck, _, _, _) = BuildForRowAction(premium: true);
-        var nexusLatestId = Row(vm, "NexusLatest").ContainerId;
-        updateCheck.RaiseCheckCompleted(new UpdateCheckResult(
-            new[] { new ModUpdateInfo(nexusLatestId, 8, "NexusLatest", "1.0", DateTimeOffset.UtcNow) },
-            DateTimeOffset.UtcNow, false, false, Outcome: CheckOutcome.Success));
-
-        var row = Row(vm, "NexusLatest");
-        // Baseline: flagged + premium -> visible + enabled.
-        Assert.True(row.CanShowUpdateAction);
-        Assert.True(row.UpdateActionEnabled);
-
-        // Simulate the in-flight install (the command sets this itself on a real
-        // run). The button stays visible but is now disabled.
-        row.IsUpdating = true;
-        Assert.True(row.CanShowUpdateAction); // still visible
-        Assert.False(row.UpdateActionEnabled); // disabled while updating
-    }
-
-    [Fact]
     public void UpdateAction_pinned_and_untracked_rows_do_not_expose_an_action()
     {
-        var (vm, _, _, _, _) = BuildForRowAction();
+        var (vm, _, _, _, _, _) = BuildForRowAction();
 
         // Pinned Nexus and Untracked rows never show the action button.
         Assert.False(Row(vm, "NexusPinned").CanShowUpdateAction);
@@ -1550,7 +1565,7 @@ public sealed class ModListViewModelTests
     [Fact]
     public void UpdateAction_flagged_premium_row_is_enabled_with_install_tooltip()
     {
-        var (vm, updateCheck, _, _, _) = BuildForRowAction(premium: true);
+        var (vm, updateCheck, _, _, _, _) = BuildForRowAction(premium: true);
         var nexusLatestId = Row(vm, "NexusLatest").ContainerId;
 
         updateCheck.RaiseCheckCompleted(new UpdateCheckResult(
@@ -1564,9 +1579,9 @@ public sealed class ModListViewModelTests
     }
 
     [Fact]
-    public async Task UpdateAction_premium_click_installs_and_clears_the_flag_without_a_fresh_check()
+    public async Task UpdateAction_premium_click_enqueues_without_a_fresh_check()
     {
-        var (vm, updateCheck, updateState, _, _) = BuildForRowAction(premium: true);
+        var (vm, updateCheck, _, _, _, queue) = BuildForRowAction(premium: true);
         var nexusLatestId = Row(vm, "NexusLatest").ContainerId;
         updateCheck.RaiseCheckCompleted(new UpdateCheckResult(
             new[] { new ModUpdateInfo(nexusLatestId, 8, "NexusLatest", "1.0", DateTimeOffset.UtcNow) },
@@ -1575,20 +1590,19 @@ public sealed class ModListViewModelTests
         var callsBefore = updateCheck.CallCount;
         await vm.UpdateCommand.ExecuteAsync(Row(vm, "NexusLatest"));
 
-        // NO fresh post-update CheckAsync was issued (the installer's
-        // acknowledgement cleared the flag without an extra API call).
+        // NO fresh post-update CheckAsync was issued (the queue's completion
+        // acknowledges + the applied event reload; no extra API call here).
         Assert.Equal(callsBefore, updateCheck.CallCount);
-        // The install was acknowledged (the recorded call targeted this container).
-        Assert.Contains(updateState.AcknowledgeCalls, c => c.ContainerId == nexusLatestId);
-        // The row flag cleared after the reload (the acknowledged store is the
-        // source of truth ApplyKnownUpdateState reads back).
-        Assert.False(Row(vm, "NexusLatest").UpdateAvailable);
+        // The click admitted exactly one UpdateInstall item for the row.
+        var request = Assert.Single(queue.Requests);
+        Assert.Equal(DownloadPurpose.UpdateInstall, request.Purpose);
+        Assert.Equal(nexusLatestId, request.ContainerId);
     }
 
     [Fact]
     public async Task UpdateAction_regular_click_opens_the_nexus_files_page()
     {
-        var (vm, updateCheck, _, launches, _) = BuildForRowAction(premium: false);
+        var (vm, updateCheck, _, launches, _, queue) = BuildForRowAction(premium: false);
         var nexusLatestId = Row(vm, "NexusLatest").ContainerId;
         updateCheck.RaiseCheckCompleted(new UpdateCheckResult(
             new[] { new ModUpdateInfo(nexusLatestId, 8, "NexusLatest", "1.0", DateTimeOffset.UtcNow) },
@@ -1601,15 +1615,17 @@ public sealed class ModListViewModelTests
 
         await vm.UpdateCommand.ExecuteAsync(row);
 
-        // The files-page URL was opened via the external-launcher seam.
+        // The files-page URL was opened via the external-launcher seam, with
+        // ZERO queue interaction (the regular tier never downloads).
         var opened = Assert.Single(launches);
         Assert.Equal("https://www.nexusmods.com/warhammer40kdarktide/mods/8?tab=files", opened.AbsoluteUri);
+        Assert.Empty(queue.Requests);
     }
 
     [Fact]
     public async Task UpdateAction_launcher_failure_surfaces_an_alert()
     {
-        var (vm, updateCheck, _, _, dialogs) = BuildForRowAction(
+        var (vm, updateCheck, _, _, dialogs, _) = BuildForRowAction(
             premium: false,
             launcher: new FakeExternalLauncher { OpenUriResult = _ => false }); // simulate launch failure
         var nexusLatestId = Row(vm, "NexusLatest").ContainerId;
@@ -1690,7 +1706,7 @@ public sealed class ModListViewModelTests
         // The non-Premium branch opens the files page through the builder's
         // in-memory default launcher; nothing shells open.
         await vm.UpdateCommand.ExecuteAsync(row);
-        Assert.False(row.IsUpdating);
+        Assert.False(row.IsDownloadMorphed); // the regular tier never downloads
     }
 
     // ---- add Nexus Mods (AddNexusModsCommand) ------------------------------
@@ -1720,95 +1736,6 @@ public sealed class ModListViewModelTests
 
         var alert = Assert.Single(dialogs.AlertCalls);
         Assert.Contains("nexusmods.com", alert.Message);
-    }
-
-    // ---- automatic-update per-mod progress ---------------------------------
-
-    /// <summary>
-    /// Builds a VM with one Nexus+Latest row and returns it with the wired
-    /// <see cref="FakeModUpdateInstaller"/> so the progress tests can raise
-    /// <see cref="FakeModUpdateInstaller.RaiseModUpdateProgress"/> (the
-    /// installer is the single progress source for BOTH the manual + automatic
-    /// paths).
-    /// </summary>
-    private static (ModListViewModel Vm, Guid NexusContainerId, FakeModUpdateInstaller Installer)
-        BuildForAutoProgress()
-    {
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var repo = new FakeModRepository();
-        var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");
-        profiles.WithMods(a.Id,
-            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var installer = new FakeModUpdateInstaller();
-        var vm = TestDoubles.BuildModList(profiles, session, repo, installer: installer);
-        return (vm, nexus.Id, installer);
-    }
-
-    [Fact]
-    public void ModUpdateProgress_marks_only_the_matching_row_then_clears_it()
-    {
-        // The installer's progress event sets IsUpdating on the matching row
-        // only. An active=true for the installed container sets it; an
-        // active=false clears it.
-        var (vm, nexusId, installer) = BuildForAutoProgress();
-
-        Assert.False(Row(vm, "DMF").IsUpdating);
-
-        // Raise active=true for the DMF row.
-        installer.RaiseModUpdateProgress(nexusId, isActive: true);
-        Assert.True(Row(vm, "DMF").IsUpdating);
-
-        // Raise active=false to clear it.
-        installer.RaiseModUpdateProgress(nexusId, isActive: false);
-        Assert.False(Row(vm, "DMF").IsUpdating);
-    }
-
-    [Fact]
-    public void ModUpdateProgress_for_an_unknown_container_is_ignored()
-    {
-        // An event for a container that is not in the current list (removed by a
-        // profile switch / reload between the event + the UI-thread callback) is
-        // silently ignored: no exception, no row change.
-        var (vm, _, installer) = BuildForAutoProgress();
-
-        installer.RaiseModUpdateProgress(Guid.NewGuid(), isActive: true);
-
-        Assert.False(Row(vm, "DMF").IsUpdating);
-    }
-
-    [Fact]
-    public void ModUpdateProgress_for_a_stale_container_after_reload_is_ignored()
-    {
-        // Simulate a profile switch mid-batch: the VM reloads (rows rebuilt),
-        // then a late progress event for a container that is no longer present
-        // lands. The stale event must not set IsUpdating on any current row.
-        var (vm, _, installer) = BuildForAutoProgress();
-
-        vm.Reload();
-        installer.RaiseModUpdateProgress(Guid.NewGuid(), isActive: true);
-
-        Assert.False(Row(vm, "DMF").IsUpdating);
-    }
-
-    [Fact]
-    public void Installer_busy_flag_drives_AnyRowUpdating_and_pushes_down()
-    {
-        // AnyRowUpdating mirrors the installer's busy flag (the coordinator
-        // behind it), + the flag is pushed down to rows so per-row enabled
-        // states recompute without a parent walk.
-        var (vm, nexusId, installer) = BuildForAutoProgress();
-
-        installer.IsBusy = true;
-        installer.RaiseBusyChanged();
-        Assert.True(vm.AnyRowUpdating);
-        Assert.True(Row(vm, "DMF").AnyRowUpdating);
-
-        installer.IsBusy = false;
-        installer.RaiseBusyChanged();
-        Assert.False(vm.AnyRowUpdating);
-        Assert.False(Row(vm, "DMF").AnyRowUpdating);
     }
 
     // ---- link external folder (LinkModsCommand) -----------------------------
@@ -2376,34 +2303,29 @@ public sealed class ModListViewModelTests
     [Fact]
     public async Task Update_premium_success_sets_HasPendingChanges()
     {
-        // The Premium install branch changes a mod's version, so it flags the
-        // session like any other version-affecting edit. Built with a captured
-        // session so the flag is assertable.
-        var a = Profile("Alpha");
-        var profiles = TestDoubles.Profiles(a);
-        var repo = new FakeModRepository();
-        var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");
-        profiles.WithMods(a.Id,
-            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
-        var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var uc = new FakeUpdateCheckService();
-        var installer = new FakeModUpdateInstaller();
-        var vm = TestDoubles.BuildModList(profiles, session, repo,
-            updateCheck: uc, installer: installer);
-        uc.RaiseCheckCompleted(new UpdateCheckResult(
-            new[] { new ModUpdateInfo(nexus.Id, 8, "DMF", "1.0", DateTimeOffset.UtcNow) },
-            DateTimeOffset.UtcNow, false, Thorough: false, Outcome: CheckOutcome.Success));
+        // The Premium update changes a mod's version, so the completion's
+        // applied event flags the session like any other version-affecting
+        // edit. Built with a captured session so the flag is assertable.
+        var (vm, nexusId, _, updateCheck, _, _, _, queue, session) = BuildForUpdateFlow();
+        var row = FlagNexusRow(vm, updateCheck, nexusId);
         Assert.True(vm.IsPremiumUser);
         Assert.False(session.HasPendingChanges);
 
-        await vm.UpdateCommand.ExecuteAsync(Row(vm, "DMF"));
+        await vm.UpdateCommand.ExecuteAsync(row);
+        // Still false right after the enqueue: only the completion flags it.
+        Assert.False(session.HasPendingChanges);
+
+        queue.RaiseUpdatesApplied();
 
         Assert.True(session.HasPendingChanges);
     }
 
     [Fact]
-    public void AutomaticUpdatesApplied_sets_HasPendingChanges()
+    public void QueueUpdatesApplied_sets_HasPendingChanges()
     {
+        // The download queue's UpdatesApplied event (raised by every completed
+        // UpdateInstall, manual or automatic) is the reload + pending-changes
+        // signal the VM consumes.
         var a = Profile("Alpha");
         var profiles = TestDoubles.Profiles(a);
         var repo = new FakeModRepository();
@@ -2411,12 +2333,12 @@ public sealed class ModListViewModelTests
         profiles.WithMods(a.Id,
             new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
         var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var automaticUpdates = new FakeAutomaticUpdateService();
+        var queue = new FakeModDownloadQueue();
         var vm = TestDoubles.BuildModList(profiles, session, repo,
-            automaticUpdates: automaticUpdates, localization: Localization);
+            downloadQueue: queue, localization: Localization);
         Assert.False(session.HasPendingChanges);
 
-        automaticUpdates.RaiseUpdatesApplied();
+        queue.RaiseUpdatesApplied();
 
         Assert.True(session.HasPendingChanges);
     }
