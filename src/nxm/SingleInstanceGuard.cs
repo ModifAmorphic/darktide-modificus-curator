@@ -98,6 +98,19 @@ public sealed class SingleInstanceGuard
     }
 
     /// <summary>
+    /// Non-throwing query over the same process enumeration
+    /// <see cref="EnsureOnlyInstance"/> enforces with: true when any live
+    /// process other than <paramref name="excludingPid"/> shares
+    /// <paramref name="processName"/>. Callers checking for "another me" pass
+    /// the current process's name and PID (what
+    /// <see cref="EnsureOnlyInstance"/> derives internally); callers checking
+    /// for a different executable pass that executable's name (the nxm
+    /// handler relay asks whether Curator is up before its cold-start launch).
+    /// </summary>
+    public bool IsAnotherInstanceRunning(string processName, int excludingPid)
+        => _enumerate(processName, excludingPid).Length > 0;
+
+    /// <summary>
     /// The production enumerator. Uses
     /// <see cref="Process.GetProcessesByName(string)"/>, excludes self by PID,
     /// and disposes each <see cref="Process"/> handle. Enumeration failures

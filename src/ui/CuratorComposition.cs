@@ -79,27 +79,62 @@ public static class CuratorComposition
         // StartNxmServer).
         services.AddNxm();
 
+        // The serial Nexus download queue: one download at a time, FIFO, deduped
+        // by (game domain, mod id, file id). Application-lifetime singleton
+        // owning the per-item pipeline (dequeue-time auth re-check, repository
+        // hit check, acquisition with progress, per-purpose completion) and the
+        // observable item collection the download rows render from. Registered
+        // after AddNxm() and before the INxmModDownloadHandler override below
+        // (the handler takes it); like the handler, its factories resolve
+        // dependencies lazily at first use, so registrations that appear later
+        // in the collection (the Action<Action> marshal seam) are available by
+        // the time anything resolves. The mod-list refresh is a Func so the
+        // queue can be constructed BEFORE the list VM singleton it forwards to
+        // (the list VM itself consumes the queue for its download rows; an
+        // eager refresh dependency here would make that pair a construction
+        // cycle). The Func resolves on the first completed download, long
+        // after both singletons exist.
+        services.AddSingleton<IModDownloadQueue>(sp => new ModDownloadQueue(
+            sp.GetRequiredService<IModAcquisitionService>(),
+            sp.GetRequiredService<IModRepository>(),
+            sp.GetRequiredService<IProfileService>(),
+            sp.GetRequiredService<IProfileSession>(),
+            sp.GetRequiredService<IUpdateStateStore>(),
+            sp.GetRequiredService<IConfigLoader>(),
+            () => sp.GetRequiredService<IModListRefresh>(),
+            sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<Action<Action>>(),
+            sp.GetRequiredService<ILogger<ModDownloadQueue>>()));
+
+        // The enqueue front for premium mod-update installs: resolves the head
+        // release + admits an UpdateInstall item onto the queue above, so the
+        // manual per-row update action and the automatic Premium batch share
+        // one download engine with the nxm path (the queue's serial worker is
+        // the only install gate). Registered after the queue; both callers
+        // resolve it lazily through their own registrations below.
+        services.AddSingleton(sp => new ModUpdateEnqueuer(
+            sp.GetRequiredService<IModAcquisitionService>(),
+            sp.GetRequiredService<IModDownloadQueue>(),
+            sp.GetRequiredService<IProfileService>()));
+
         // Replace the no-op INxmModDownloadHandler (registered inside AddNxm)
-        // with the real acquisition handler. MS DI resolves the LAST registration
-        // for an interface, so this AddSingleton supersedes the no-op. Registered
-        // with a factory that resolves its dependencies lazily at first use (the
-        // factory delegate is deferred until the handler is first resolved by the
-        // IPC router, by which point all dependencies including IProfileSession,
-        // IDialogService, and MainWindow are registered). It coordinates the
-        // acquisition service (Integrations) with the active-profile session,
-        // the profile service, and the UI-thread alert dialog, acknowledges the
-        // install through the update-state store, and reloads the list through
-        // the narrow IModListRefresh seam. Registered with a factory so the
-        // UI-thread marshaling seam (Dispatcher.UIThread.InvokeAsync) is wired
-        // explicitly.
+        // with the real enqueue adapter. MS DI resolves the LAST registration
+        // for an interface, so this AddSingleton supersedes the no-op. The
+        // handler gates each clicked nxm:// link (game domain, auth via live
+        // config, active profile; failures keep the modal-alert path since
+        // there is no row to host them), peeks the repository for a row name,
+        // enqueues onto the queue above, and returns within milliseconds; the
+        // queue owns the acquisition, the profile registration, the
+        // acknowledge, and the reload. Registered with a factory that wires the
+        // UI-thread marshaling seam (Dispatcher.UIThread.InvokeAsync)
+        // explicitly for the gate alerts.
         services.AddSingleton<INxmModDownloadHandler>(sp => new NxmModDownloadHandler(
             invokeOnUi: action => Dispatcher.UIThread.InvokeAsync(action),
-            sp.GetRequiredService<IModAcquisitionService>(),
+            sp.GetRequiredService<IModDownloadQueue>(),
+            sp.GetRequiredService<IModRepository>(),
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IConfigLoader>(),
-            sp.GetRequiredService<IUpdateStateStore>(),
-            sp.GetRequiredService<IModListRefresh>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<ILogger<NxmModDownloadHandler>>()));
@@ -156,13 +191,13 @@ public static class CuratorComposition
             sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<NxmRegistrationState>>()));
         // The opt-in Premium automatic mod-update installer. Chained from the
-        // update-check runner after each check; each install routes through the
-        // shared IModUpdateInstaller (registered by AddIntegrations together
-        // with the UpdateCoordinator it holds, the global one-install-at-a-time
-        // gate shared with the manual per-row action). Independent of
+        // update-check runner after each check; each flagged candidate is
+        // enqueued as an UpdateInstall item onto the shared download queue
+        // through ModUpdateEnqueuer (the queue's serial worker owns the
+        // eligibility revalidation, the acquisition, the acknowledge, and the
+        // UpdatesApplied reload signal the mod list consumes). Independent of
         // ModListViewModel (to avoid the ModListViewModel ->
-        // UpdateCheckRunner dependency becoming circular) but raises
-        // UpdatesApplied so the list VM reloads after a batch.
+        // UpdateCheckRunner dependency becoming circular).
         services.AddSingleton<IAutomaticUpdateService, AutomaticUpdateService>();
 
         // The mod-thumbnail disk/in-memory cache + download orchestrator. A UI-
@@ -226,18 +261,15 @@ public static class CuratorComposition
             // side is gated by the Add split button).
             sp.GetRequiredService<IGamingModeState>(),
             sp.GetRequiredService<ILogger<LinkedModsViewModel>>()));
-        // The shared row context (premium / install-busy / gaming): created
-        // once before the mod-list VM, it reads the Nexus premium state at
-        // construction (fire-and-forget), mirrors the installer's busy flag +
-        // re-raises its per-container progress on the UI thread, and fronts
-        // the single install path for the manual Premium update action. The
-        // mod-list VM passes the same instance to every row; the rows read
-        // their global halves off it instead of receiving per-flag pushes.
+        // The shared row context (premium / gaming): created once before the
+        // mod-list VM, it reads the Nexus premium state at construction
+        // (fire-and-forget). The mod-list VM passes the same instance to every
+        // row; the rows read their global halves off it instead of receiving
+        // per-flag pushes. Install-busy state is not here: an update in flight
+        // is a queue item rendered as the row's download morph.
         services.AddSingleton(sp => new ModRowContext(
             sp.GetRequiredService<INexusAuthService>(),
-            sp.GetRequiredService<IModUpdateInstaller>(),
             sp.GetRequiredService<IGamingModeState>(),
-            sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<ModRowContext>>()));
 
         services.AddSingleton(sp => new ModListViewModel(
@@ -247,9 +279,9 @@ public static class CuratorComposition
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<IUpdateStateStore>(),
-            // The runner owns the refresh gate + surfaces both update-family
-            // completions (check completed + the automatic batch applied) on
-            // the UI thread; the VM renders its state + hydrates rows from it.
+            // The runner owns the refresh gate + surfaces the check completion
+            // on the UI thread; the VM renders its state + hydrates rows from
+            // it.
             sp.GetRequiredService<UpdateCheckRunner>(),
             sp.GetRequiredService<ModRowContext>(),
             sp.GetRequiredService<ImportWorkflowViewModel>(),
@@ -261,6 +293,14 @@ public static class CuratorComposition
             // The shared last-known nxm registration state feeds the
             // empty-state Nexus hint; the mod list never probes the OS.
             sp.GetRequiredService<INxmRegistrationState>(),
+            // The download queue feeds the mod list's download rows (the
+            // in-place morphs + the appended section) + raises the
+            // update-applied reload. Constructing the queue here is safe: its
+            // refresh dependency is lazy.
+            sp.GetRequiredService<IModDownloadQueue>(),
+            // The premium update-action front: resolves the head release +
+            // admits the UpdateInstall item onto the queue above.
+            sp.GetRequiredService<ModUpdateEnqueuer>(),
             sp.GetRequiredService<ILogger<ModListViewModel>>()));
 
         // The hosted destination view models: singletons (one instance per page,
@@ -281,7 +321,9 @@ public static class CuratorComposition
         // subscribed coordinator, which enqueues its prompt onto the
         // shell-owned modal queue; the shell drains the queue after the next
         // real navigation into Mods, and the coordinator's own post-prompt
-        // reload surfaces an accepted existing / Premium DMF add.
+        // reload surfaces an accepted existing-DMF add (a premium download
+        // lands on the download queue, whose completion owns its add +
+        // reload).
         services.AddSingleton<ProfilesViewModel>(sp => new ProfilesViewModel(
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IProfileSession>(),
@@ -332,11 +374,13 @@ public static class CuratorComposition
         // destination switch + enter effects: the DMF prompt runs as the
         // topmost modal with Mods already selected underneath, and the
         // coordinator's own post-prompt reload surfaces an accepted
-        // existing/Premium DMF add. Takes the shared nxm registration state so
+        // existing-DMF add. Takes the shared nxm registration state so
         // the download confirm can tailor its message to the last-known handler
         // ownership (manager-download vs. manual-import guidance; no probe),
         // and the Gaming Mode state so the case-2 browser branch can divert to
-        // Desktop Mode guidance there (Premium keeps the in-app download).
+        // Desktop Mode guidance there (Premium keeps the in-app download path,
+        // now the shared download queue: the premium branch resolves the head
+        // file + enqueues, and the queue's completion owns the add + reload).
         // Nothing depends on the coordinator (the shell no longer knows it
         // exists), so it is resolved once eagerly after the provider is built
         // to establish the subscription before any profile can be created.
@@ -345,6 +389,7 @@ public static class CuratorComposition
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IModRepository>(),
             sp.GetRequiredService<IModAcquisitionService>(),
+            sp.GetRequiredService<IModDownloadQueue>(),
             sp.GetRequiredService<INexusAuthService>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),

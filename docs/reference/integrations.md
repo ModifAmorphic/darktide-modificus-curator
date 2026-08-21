@@ -233,39 +233,59 @@ authorization response. Three-minute flow timeout; on expiry it surfaces
 
 ## Mod acquisition service
 
-The reusable download + extract + place orchestrator. Consumed by the nxm
-download handler and by the per-mod update button without
-retooling: both resolve `IModAcquisitionService` and feed the returned
-`(containerId, versionId)` to `IProfileService.AddMod`.
+The reusable download + extract + place orchestrator. Consumed by the UI-layer
+download queue without retooling: the queue resolves or receives a concrete
+file id, calls `AcquireFromNexusAsync`, and feeds the returned
+`NexusAcquisitionResult` to the profile registration or the update completion.
 
 ```csharp
+public sealed record NexusAcquisitionResult(
+    Guid ContainerId,        // the repository container (existing reused when known)
+    string VersionId,        // the imported version's opaque folder id (the PinnedPolicy key)
+    string Version,          // the acquired file's release tag, for display
+    bool IsHeadFile);        // the acquired file is the mod's newest non-archived MAIN file
+
 public interface IModAcquisitionService
 {
-    Task<(Guid ContainerId, string VersionId)> AcquireFromNexusAsync(
+    Task<NexusAcquisitionResult> AcquireFromNexusAsync(
         string gameDomain, int modId, int fileId,
         string? nxmKey = null, long? nxmExpires = null,
-        IProgress<long>? progress = null, CancellationToken ct = default);
+        IProgress<(long Received, long? Total)>? progress = null, CancellationToken ct = default);
 
-    Task<(Guid ContainerId, string VersionId)> AcquireLatestNexusAsync(
+    Task<NexusAcquisitionResult> AcquireLatestNexusAsync(
         string gameDomain, int modId,
-        IProgress<long>? progress = null, CancellationToken ct = default);
+        IProgress<(long Received, long? Total)>? progress = null, CancellationToken ct = default);
+
+    Task<(int FileId, string Version)> ResolveLatestNexusAsync(   // no download
+        string gameDomain, int modId, CancellationToken ct = default);
 }
 ```
 
-- `AcquireFromNexusAsync`: downloads a Nexus mod file, extracts it into the
-  repository via `IModImportService.Import`, and returns the
-  `(containerId, versionId)`. The caller handles profile registration.
+- `AcquireFromNexusAsync`: downloads a specific Nexus mod file, extracts it
+  into the repository via `IModImportService.Import`, and returns the
+  `NexusAcquisitionResult` (container + version ids, the release tag, and
+  whether the file is the mod's current head release, computed from the files
+  listing the acquisition already reads at zero extra API calls). The caller
+  handles profile registration.
 - `AcquireLatestNexusAsync`: resolves the mod's newest non-archived MAIN file
-  (category_id 1) via `ListModFilesAsync`, then delegates to
-  `AcquireFromNexusAsync` with the resolved `fileId` + null nxm key/expires (the
-  premium / auth-only download path). Throws `InvalidOperationException` when no
-  MAIN file is available. Used by the per-mod Update button on the mod list,
-  which knows the mod id (not the file id) and lets the service pick the current
-  release.
+  (category_id 1) via `ResolveLatestNexusAsync`, then delegates to
+  `AcquireFromNexusAsync` with the resolved `fileId` + null nxm key/expires
+  (the premium / auth-only download path). Throws `InvalidOperationException`
+  when no MAIN file is available. The head file is the resolved one by
+  construction, so `IsHeadFile` is true.
+- `ResolveLatestNexusAsync`: resolves the newest non-archived MAIN file WITHOUT
+  downloading it (one `ListModFilesAsync` call, nothing else). For callers
+  that know the mod id but need a concrete file id up front (the download
+  queue's dedupe key, resolved by the enqueue fronts before any item exists)
+  and acquire the file later through `AcquireFromNexusAsync`. The same
+  `LatestMain` resolution `AcquireLatestNexusAsync` acquires, from one
+  implementation, so call sites cannot disagree on "current release".
 
-The `IProgress<long>` parameter is the per-row progress hook (the nxm handler
-passes `null`; the mod-list update path passes `null` for the indeterminate
-affordance).
+The `IProgress<(long Received, long? Total)>` parameter is the byte-progress
+hook: cumulative bytes received plus the response `Content-Length` total when
+the server sent one (null total = unknown; no separate HEAD call is made), so
+a caller can render determinate progress without a second request. The
+UI-layer download queue wires it to its per-row progress.
 
 ### Acquisition flow (`ModAcquisitionService`)
 
@@ -295,25 +315,30 @@ affordance).
 3. **Download** from the CDN URI to a temp file
    (`Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() +
    Path.GetExtension(fileName))`) using a plain `HttpClient` from
-   `IHttpClientFactory` + the 81920-byte buffered copy + `IProgress<long>`
-   pattern. The real file extension (from
+   `IHttpClientFactory` + the 81920-byte buffered copy, reporting the
+   `IProgress<(long Received, long? Total)>` tuple (cumulative bytes + the
+   response `Content-Length` total when present, null without one; no HEAD
+   call). The real file extension (from
    the matched `ModFile.FileName`) is preserved on the temp file for log
    clarity; archive detection is content-based (magic bytes), so the extension
    is cosmetic. The temp file is deleted once Import returns (always, success or
    failure; no partial state).
 4. **Import** via `IModImportService.Import(tempPath, modName, new NexusSource
-   { ModId = modId }, version, remoteUploadedAt, displayMetadata)`. The import service handles
+   { ModId = modId }, version, remoteUploadedAt, remoteFileId, displayMetadata)`. The import service handles
    find-or-create-container (dedup by `NexusSource.ModId`) + add-version +
-   `IsLatest` flip + records `RemoteUploadedAt` on the new entry, and the
-   `displayMetadata` argument replaces the container's `DisplayMetadata` in the
+   the effective-timestamp `IsLatest` re-evaluation + records
+   `RemoteUploadedAt` and the Nexus `FileId` on the entry (new or reused), and
+   the `displayMetadata` argument replaces the container's `DisplayMetadata` in the
    same manifest update (an acquisition that fetched newer text wins atomically
    with the version write). Both
-   acquisition entry points (`AcquireFromNexusAsync` for nxm downloads +
-   `AcquireLatestNexusAsync` for the per-mod update button) route through this
-   call, so both record the publish date and the display metadata. Premium,
+   acquisition entry points (`AcquireFromNexusAsync` for concrete file ids +
+   `AcquireLatestNexusAsync` for resolved head files) route through this
+   call, so both record the publish date, the file id, and the display
+   metadata. Premium,
    regular nxm, automatic update, per-row update, and DMF acquisitions all
    inherit the capture through the existing common path.
-5. **Return** `(containerId, versionId)`.
+5. **Return** the `NexusAcquisitionResult` (container + version ids, the
+   release tag, and the head flag).
 
 The CDN download uses a plain `HttpClient` (not the typed `INexusClient`)
 because the CDN URL is an absolute path with the per-file token in the query
@@ -325,28 +350,39 @@ Nexus-specific headers are needed.
 The real `INxmModDownloadHandler` that replaces the no-op default. Lives
 in the UI assembly (`Modificus.Curator.UI.Nxm`), not Integrations, because it
 coordinates UI concerns: it reads the active profile from `IProfileSession`
-(UI), shows error dialogs through `IDialogService` (UI), and marshals those
-dialogs to the UI thread via `Dispatcher.UIThread` (Avalonia). Placing it in
-Integrations would create a dependency cycle (Integrations cannot reference the
-UI assembly, which is its consumer). The reusable acquisition service is the
-backend seam in Integrations; the handler is the thin UI-coordinating shell.
+(UI), shows gate-failure dialogs through `IDialogService` (UI), and marshals
+those dialogs to the UI thread via `Dispatcher.UIThread` (Avalonia). Placing it
+in Integrations would create a dependency cycle (Integrations cannot reference
+the UI assembly, which is its consumer). The reusable acquisition service is
+the backend seam in Integrations; the handler is the thin UI-coordinating
+shell.
 
-The handler's pre-flight checks + flow:
+The handler is the **enqueue adapter** in front of the UI-layer download queue
+(`IModDownloadQueue`; see the [ui reference](ui.md#the-download-queue)). It
+performs no acquisition and no profile write; the passing path is an in-memory
+peek plus one enqueue, so `HandleAsync` returns within milliseconds and the
+IPC accept loop is freed immediately (enqueue order equals click order). Its
+flow:
 
-1. **Auth check** (live config read): `NexusConfig.AuthMethod != None`
+1. **Darktide-only gate**: the URL's game domain must match the Darktide
+   domain (case-insensitive); anything else is refused before auth / profile /
+   enqueue with a localized alert naming the link's game.
+2. **Auth check** (live config read): `NexusConfig.AuthMethod != None`
    (required for every download; the `nxm://` key/expires is the per-file
    token for the free-user endpoint, NOT a substitute for auth). None ->
    `ShowAlertAsync("Nexus not configured", ...)`.
-2. **Active-profile check**: `IProfileSession.ActiveProfileId != null`. null ->
-   `ShowAlertAsync("No active profile", ...)`.
-3. **Acquire + register + refresh**: `AcquireFromNexusAsync(url.Game,
-   url.ModId, url.FileId, url.Key, url.Expires, ct: ct)` then
-   `IProfileService.AddMod(profileId, containerId, ModVersionPolicy.Latest)`,
-   then `ModListViewModel.Reload()` on the UI thread (via the handler's
-   `refreshModList` callback) so the new mod appears immediately without a
-   profile switch.
-4. **On failure** (not cancellation): `ShowAlertAsync("Download failed",
-   ex.Message)`. Cancellation propagates as `OperationCanceledException`.
+3. **Active-profile check**: `IProfileSession.ActiveProfileId != null`. null ->
+   `ShowAlertAsync("No active profile", ...)`. The gate refusals stay modal
+   alerts because at gate time there is no download row to host the failure on.
+4. **Peek + enqueue**: a repository lookup by `NexusSource.ModId` supplies the
+   container id + the row name (the localized "Nexus mod #<id>" fallback on a
+   miss; no prefetch API call), the profile read supplies the target name
+   captured at enqueue, and the request (domain, mod id, file id, purpose,
+   nxm key/expires) is admitted onto the queue. The queue owns everything
+   downstream: the dequeue-time auth recheck, the repository hit check, the
+   acquisition with progress, the profile registration or update
+   acknowledgement, and the reload; its failures render inline on the
+   download row.
 
 `ShowAlertAsync` marshals to the UI thread via an injectable `invokeOnUi` seam
 (`Func<Func<Task>, Task>`); production wires `Dispatcher.UIThread.InvokeAsync`,
@@ -466,7 +502,8 @@ public enum CheckOutcome { Failed, Success, NoAuth, NoNexusMods, RateLimited }
 
 The latest-MAIN filter (`NexusModFiles.LatestMain`, category_id 1 +
 non-archived, newest by `UploadedTimestamp`) is shared across two call sites:
-`ModAcquisitionService.AcquireLatestNexusAsync` (the per-mod update button) and
+`ModAcquisitionService.ResolveLatestNexusAsync` (one implementation behind
+both `AcquireLatestNexusAsync` and the download queue's enqueue fronts) and
 `UpdateCheckService`'s tier 3 (the latest-file-version confirmation of tier-2
 flags), so the update check and the download path agree on what "latest
 release" means. (`ModAcquisitionService.ResolveMetadataAsync` resolves a
@@ -567,8 +604,8 @@ public interface IUpdateStateStore
   it; `NoAuth`, `RateLimited`, and `Failed` preserve prior state. Called by
   `UpdateCheckService` after every check completes (inside the publish lock).
 - `AcknowledgeInstall`: removes a single profile/container entry immediately.
-  Called after a successful local version change (manual Premium update,
-  automatic update, nxm acquisition) so a just-installed version clears its own
+  Called by the download queue's completions (a ProfileAdd registration and a
+  successful UpdateInstall) so a just-installed version clears its own
   flag without an extra API check.
 - `GetKnownUpdateContainerIds`: reads the persisted snapshots for a profile,
   filters out stale ones (removed / pinned / source-changed / version-changed
@@ -590,8 +627,8 @@ The four known-update eligibility rules live in one pure static evaluator,
 `UpdateEligibility.IsEligible(candidate, container, expectedModId,
 expectedVersion, out reason)`, shared by every consumer that must decide
 whether a recorded flag still applies: the state store's hydration self-heal
-(`GetKnownUpdateContainerIds`) and the mod-update installer's in-gate
-revalidation. A flag stays eligible only while:
+(`GetKnownUpdateContainerIds`) and the UI-layer download queue's dequeue-time
+revalidation of a queued update install. A flag stays eligible only while:
 
 1. the container is still a member of the caller's candidate list,
 2. the entry is still on `LatestPolicy`,
@@ -604,58 +641,17 @@ A rejection carries a short machine-readable reason ("removed from profile",
 logging. The evaluator is pure: no services, no I/O, no clock; everything
 arrives as arguments.
 
-## Mod-update installer
+## UI wiring (`UpdateCheckRunner`)
 
-`IModUpdateInstaller` is the single Premium install path, shared by the manual
-per-row update action (the UI's Update command) and the automatic Premium batch
-(the UI's `IAutomaticUpdateService`). Routing both through one service is what
-enforces the global one-install-at-a-time guarantee and gives both paths one
-acknowledge + progress contract.
-
-```csharp
-public interface IModUpdateInstaller
-{
-    bool IsBusy { get; }
-    event EventHandler? BusyChanged;
-    event EventHandler<ModUpdateProgressEventArgs>? ModUpdateProgress;
-
-    Task<ModInstallOutcome> TryInstallLatestAsync(   // MANUAL: refuses politely when gated
-        Guid profileId, Guid containerId, int modId, string expectedVersion,
-        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default);
-    Task<ModInstallOutcome> InstallLatestAsync(      // AUTOMATIC: awaits its turn
-        Guid profileId, Guid containerId, int modId, string expectedVersion,
-        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default);
-}
-
-public sealed record ModInstallOutcome(
-    ModInstallStatus Status,    // Installed / Busy / NotEligible / Failed
-    string Reason = "",
-    Exception? Exception = null);   // only on Failed
-```
-
-- `UpdateCoordinator` (this library) is the gate: a single-slot semaphore held
-  for the install's duration. `TryInstallLatestAsync` uses its non-blocking
-  acquire (a held gate -> `Busy`, nothing touched); `InstallLatestAsync` awaits
-  it (a sequential batch waits its turn behind a manual install).
-- Eligibility is revalidated INSIDE the gate via `UpdateEligibility` against
-  the caller's candidates: a stale flag (removed / re-pinned / source-changed /
-  version-changed since the flag was recorded) -> `NotEligible` + the reason,
-  nothing installed. The manual caller passes the row's resolved version as
-  `expectedVersion`; the automatic caller passes the check result's recorded
-  `CurrentVersion`.
-- On success the installer acquires the latest MAIN release
-  (`IModAcquisitionService.AcquireLatestNexusAsync` over the Darktide domain)
-  and calls `IUpdateStateStore.AcknowledgeInstall` exactly once, so the flag
-  clears without an extra API check. Busy / NotEligible / Failed / cancelled
-  attempts never acknowledge.
-- `ModUpdateProgress` brackets every attempt (active=true after the gate is
-  acquired, active=false in the finally) so a subscriber's spinner can never
-  get stuck; `BusyChanged` / `IsBusy` mirror the coordinator.
-- A non-cancellation failure -> `Failed` carrying the exception (the manual
-  alert keeps its exact message body); `OperationCanceledException` propagates
-  so each caller keeps its own cancellation posture.
-
-### UI wiring (`UpdateCheckRunner`)
+There is no mod-update installer in this library. Premium update installs run
+through the UI-layer download queue (`IModDownloadQueue` /
+`ModUpdateEnqueuer`, both in `ui/Session/`; see the
+[ui reference](ui.md#the-download-queue)): the queue's single serial worker is
+the one-download-at-a-time gate across manual updates, the automatic batch,
+and nxm clicks, and its dequeue-time `UpdateEligibility` revalidation replaces
+the former installer's in-gate check. This library contributes only the
+primitives the queue composes: the acquisition service, the eligibility
+evaluator, and the update-state store.
 
 The triggers that fire the checks live in `UpdateCheckRunner` in `ui/Session/`,
 NOT in the Integrations library (the service has no knowledge of profile
@@ -673,9 +669,10 @@ restored active id), an active-profile switch, and the periodic timer (every
 `AutoUpdateCheckIntervalMinutes` when `AutoUpdateCheckEnabled` is on; the only
 gated trigger). A fourth trigger, the manual "check now" affordance on the mod
 list, fires `CheckThoroughAsync` via an awaitable `CheckNowAsync()` (the
-mod-list VM awaits it to drive an `IsCheckingNow` spinner; the await now also
-covers the chained `IAutomaticUpdateService` batch, so the manual spinner stays
-active through the installations). Registered + started from
+mod-list VM awaits it to drive an `IsCheckingNow` spinner; the await also
+covers the chained `IAutomaticUpdateService` enqueue batch, so the manual
+spinner stays active through the head resolves + enqueues; the installs
+themselves run on the download queue afterward). Registered + started from
 `CuratorComposition` after the provider is built (best-effort: a wiring failure
 is logged + swallowed, never blocks startup). The mod-list UI subscribes to
 `CheckCompleted` and reads the profile-scoped `IUpdateStateStore` (not
@@ -833,11 +830,6 @@ Registers:
 - `IUpdateStateStore` -> `UpdateStateStore` (singleton; the profile-scoped
   known-update persistence rules over `IKnownUpdateState.KnownUpdates` + the
   caller's candidates + the repository for hydration self-heal).
-- `UpdateCoordinator` (singleton; the global one-install-at-a-time gate, a
-  single-slot semaphore held for the app lifetime).
-- `IModUpdateInstaller` -> `ModUpdateInstaller` (singleton; the single Premium
-  install path over `IModAcquisitionService` + `IUpdateStateStore` +
-  `IModRepository` + `UpdateCoordinator`).
 
 The OAuth factory's token store + the service's token store are the SAME
 `NexusOAuthTokenStore` instance (matches production wiring). The store depends
@@ -855,7 +847,7 @@ view. No construction-time cycle.
   gate),
   `mods` (`IModImportService`, `NexusSource`, `IModRepository` /
   `ModContainer` / `ModVersion` / `ModVersionPolicy` for the acquisition +
-  update-check + update-install services, `ModDisplayMetadata` for the
+  update-check services, `ModDisplayMetadata` for the
   acquisition capture + the metadata backfill). Integrations references no
   Profiles library: the update family takes the profile's mod-list entries as
   `ModListCandidate` call parameters, mapped by the UI layer (which references
@@ -896,11 +888,16 @@ view. No construction-time cycle.
   `IModImportService` + a stub HTTP handler for the CDN download: premium vs
   free-user overload selection, first-CDN-link use, metadata resolution (name +
   version + the display-metadata capture from the shared mapper with no extra
-  API call + its pass-through to `Import`), the no-degraded-fallback error policy
+  API call + its pass-through to `Import`, including the Nexus file id
+  forwarded as `remoteFileId`), the no-degraded-fallback error policy
   (metadata failure + missing file throw, no partial import), download failure,
-  import-failure temp cleanup, progress reporting, cancellation, and the
+  import-failure temp cleanup, progress reporting (cumulative bytes + the
+  Content-Length total, null total without one), cancellation, the
   latest-MAIN-file resolution + null-nxm-token forward + no-MAIN-file throw for
-  `AcquireLatestNexusAsync`.
+  `AcquireLatestNexusAsync`, the `IsHeadFile` computation (false for an older
+  MAIN file, archived + optional files ignored for head-ness), and
+  `ResolveLatestNexusAsync` (returns the head file id + tag without
+  downloading; throws when no MAIN file exists or the domain is empty).
 - **`UpdateCheckService`** against a fake `INexusClient` + caller-built
   `ModListCandidate` batches + a fake `IModRepository` + the `FakeConfigLoader`:
    correct flagging (`viewerUpdateAvailable == true` flags, `false` + `null` do not),
@@ -927,14 +924,9 @@ view. No construction-time cycle.
 - **`UpdateEligibility`** -- the four rules evaluated directly: the eligible
   baseline, each rejection reason (removed / re-pinned / container gone /
   source changed by id + by source type / version changed), and the
-  case-insensitive version match.
-- **`ModUpdateInstaller`** against fakes: the success path (acquire over the
-  Darktide domain + acknowledge exactly once + the progress bracket), the gate
-  (Try refuses politely + touches nothing when held; InstallLatest awaits its
-  turn; IsBusy/BusyChanged mirror the coordinator), the in-gate revalidation
-  (removed / version-changed / re-pinned -> NotEligible with the reason,
-  nothing installed), the failure outcome (the exception preserved, no
-  acknowledge), and cancellation (propagates, no acknowledge, spinner closed).
+  case-insensitive version match. The update-install revalidation that
+  consumes the evaluator runs in the UI-layer download queue (covered by
+  `ModDownloadQueueTests` in `Modificus.Curator.UI.Tests`).
 - **`NexusModMetadataService`** against a fake `INexusClient` + a fake
   `IModRepository` + the `FakeConfigLoader` + a fake/real backfill state:
   the auth gate (None returns empty, no API call), the persisted 24-hour gate

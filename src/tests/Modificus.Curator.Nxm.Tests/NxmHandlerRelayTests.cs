@@ -7,18 +7,25 @@ namespace Modificus.Curator.Nxm.Tests;
 /// <see cref="NxmHandlerRelay"/>: the hot-path (pipe connects first try, URL
 /// delivered, exit 0, Curator not launched), the cold-start path (pipe refuses,
 /// Curator launched, retry connects, URL delivered, exit 0), the cold-start
-/// timeout (Curator launched, retries exhausted, non-zero exit), the no-URL-arg
-/// case (non-zero exit, Curator not launched), and the multi-arg case (first
-/// non-flag used as the URL).
+/// pre-check split (a reported running Curator skips the launch and prints the
+/// waiting line; no running Curator launches exactly once with the launching
+/// line), the cold-start timeout (retries exhausted, non-zero exit), the
+/// no-URL-arg case (non-zero exit, Curator not launched), and the multi-arg
+/// case (first non-flag used as the URL).
 /// </summary>
 /// <remarks>
 /// Every external dependency is faked: <c>pipeConnect</c> returns a capturing
 /// in-memory stream, <c>launchCuratorFactory</c> returns a marker ProcessStartInfo
-/// (no real process is started), and the retry interval/timeout are shrunk so
-/// tests are fast.
+/// (no real process is started), <c>curatorRunningCheck</c> reports a scripted
+/// answer (the production default enumerates real processes, which would make
+/// the cold-start tests depend on what else runs on the host), and the retry
+/// interval/timeout are shrunk so tests are fast.
 /// </remarks>
 public sealed class NxmHandlerRelayTests
 {
+    private const string LaunchingLine = "curator nxm handler: Curator is not running; launching it.";
+    private const string WaitingLine = "curator nxm handler: Curator is already running; waiting for the pipe.";
+
     private static readonly TimeSpan FastRetry = TimeSpan.FromMilliseconds(15);
     private static readonly TimeSpan FastTimeout = TimeSpan.FromMilliseconds(200);
 
@@ -30,12 +37,21 @@ public sealed class NxmHandlerRelayTests
         pipe.ConnectNext(); // first connect succeeds.
         bool launched = false;
 
-        var exit = await NxmHandlerRelay.RunAsync(
-            [url],
-            pipeConnect: pipe.Connect,
-            launchCuratorFactory: () => { launched = true; return Marker(); },
-            retryInterval: FastRetry,
-            retryTimeout: FastTimeout);
+        int exit;
+        using (var stderr = new StderrCapture())
+        {
+            exit = await NxmHandlerRelay.RunAsync(
+                [url],
+                pipeConnect: pipe.Connect,
+                launchCuratorFactory: () => { launched = true; return Marker(); },
+                curatorRunningCheck: () => false,
+                retryInterval: FastRetry,
+                retryTimeout: FastTimeout);
+
+            // The hot path delivers without any cold-start stderr narration.
+            Assert.DoesNotContain(LaunchingLine, stderr.Text);
+            Assert.DoesNotContain(WaitingLine, stderr.Text);
+        }
 
         Assert.Equal(0, exit);
         Assert.False(launched, "Curator must NOT be launched on the hot path.");
@@ -44,24 +60,87 @@ public sealed class NxmHandlerRelayTests
     }
 
     [Fact]
-    public async Task Cold_path_launches_curator_then_delivers_on_retry()
+    public async Task Cold_path_launches_curator_once_then_delivers_on_retry()
     {
         var url = "nxm://oauth/callback?code=ABC&state=DEF";
         var pipe = new ControllablePipe();
         pipe.RefuseNext(1); // first connect refuses; subsequent succeed.
-        bool launched = false;
+        var launches = 0;
 
-        var exit = await NxmHandlerRelay.RunAsync(
-            [url],
-            pipeConnect: pipe.Connect,
-            launchCuratorFactory: () => { launched = true; return Marker(); },
-            retryInterval: FastRetry,
-            retryTimeout: TimeSpan.FromSeconds(5));
+        int exit;
+        using (var stderr = new StderrCapture())
+        {
+            exit = await NxmHandlerRelay.RunAsync(
+                [url],
+                pipeConnect: pipe.Connect,
+                launchCuratorFactory: () => { launches++; return Marker(); },
+                curatorRunningCheck: () => false,
+                retryInterval: FastRetry,
+                retryTimeout: TimeSpan.FromSeconds(5));
+
+            Assert.Contains(LaunchingLine, stderr.Text);
+            Assert.DoesNotContain(WaitingLine, stderr.Text);
+        }
 
         Assert.Equal(0, exit);
-        Assert.True(launched, "Curator must be launched on the cold path.");
+        Assert.Equal(1, launches);
         Assert.Single(pipe.Delivered);
         Assert.Equal(url, pipe.Delivered[0]);
+    }
+
+    [Fact]
+    public async Task Cold_path_with_curator_already_running_skips_launch_and_waits()
+    {
+        // The burst case: another handler invocation already launched Curator,
+        // so the pipe is refused while it starts. This handler must NOT launch
+        // a duplicate; it prints the waiting line and delivers on retry.
+        var url = "nxm://warhammer40kdarktide/mods/8/files/5820";
+        var pipe = new ControllablePipe();
+        pipe.RefuseNext(1); // still starting; the retry connects.
+        var launches = 0;
+
+        int exit;
+        using (var stderr = new StderrCapture())
+        {
+            exit = await NxmHandlerRelay.RunAsync(
+                [url],
+                pipeConnect: pipe.Connect,
+                launchCuratorFactory: () => { launches++; return Marker(); },
+                curatorRunningCheck: () => true,
+                retryInterval: FastRetry,
+                retryTimeout: TimeSpan.FromSeconds(5));
+
+            Assert.Contains(WaitingLine, stderr.Text);
+            Assert.DoesNotContain(LaunchingLine, stderr.Text);
+        }
+
+        Assert.Equal(0, exit);
+        Assert.Equal(0, launches);
+        Assert.Single(pipe.Delivered);
+        Assert.Equal(url, pipe.Delivered[0]);
+    }
+
+    [Fact]
+    public async Task Cold_path_with_curator_already_running_times_out_without_launching()
+    {
+        // A running Curator that never binds the pipe (degraded bind, or it is
+        // exiting): the handler waits out the full retry window, then exits
+        // non-zero without ever launching a duplicate.
+        var pipe = new ControllablePipe();
+        pipe.RefuseForever();
+        var launches = 0;
+
+        var exit = await NxmHandlerRelay.RunAsync(
+            ["nxm://warhammer40kdarktide/mods/8/files/5820"],
+            pipeConnect: pipe.Connect,
+            launchCuratorFactory: () => { launches++; return Marker(); },
+            curatorRunningCheck: () => true,
+            retryInterval: FastRetry,
+            retryTimeout: FastTimeout);
+
+        Assert.NotEqual(0, exit);
+        Assert.Equal(0, launches);
+        Assert.Empty(pipe.Delivered);
     }
 
     [Fact]
@@ -76,6 +155,7 @@ public sealed class NxmHandlerRelayTests
             [url],
             pipeConnect: pipe.Connect,
             launchCuratorFactory: () => { launched = true; return Marker(); },
+            curatorRunningCheck: () => false,
             retryInterval: FastRetry,
             retryTimeout: FastTimeout);
 
@@ -148,6 +228,23 @@ public sealed class NxmHandlerRelayTests
     }
 
     // ---- fakes -----------------------------------------------------------
+
+    /// <summary>
+    /// Swaps <see cref="Console.Error"/> for a string writer so tests can
+    /// assert the relay's stderr lines; restored on dispose. Safe under the
+    /// assembly's DisableTestParallelization (no other test runs concurrently).
+    /// </summary>
+    private sealed class StderrCapture : IDisposable
+    {
+        private readonly TextWriter _original = Console.Error;
+        private readonly StringWriter _capture = new();
+
+        public StderrCapture() => Console.SetError(_capture);
+
+        public string Text => _capture.ToString();
+
+        public void Dispose() => Console.SetError(_original);
+    }
 
     private static ProcessStartInfo Marker()
     {

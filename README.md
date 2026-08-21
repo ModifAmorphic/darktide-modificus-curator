@@ -29,10 +29,16 @@ and it runs unmodified).
    cached thumbnail when one is available, with a neutral placeholder otherwise.
    Reorder mods by dragging the grip at the left edge of a row, or with the Move
    Up and Move Down buttons; lock a mod's load-order position so reordering
-   leaves it in place.
+   leaves it in place. Downloads show up in the same list: clicking
+   "Download with manager" on a Nexus mod page sends the download to Curator,
+   which appears as a row (in place on the mod it is updating, or at the bottom
+   of the list for a new mod) with live progress and a Cancel button, and
+   Retry on failure. Downloading an older file of a mod pins it to that
+   version; downloading the newest file tracks the mod's latest release.
+   Premium update installs and opt-in automatic updates download the same way.
    Curator also supports an alternate mod manager mod (for example
-   [AML](https://www.nexusmods.com/warhammer40kdarktide/mods/246)): add it to a
-   profile like any other mod and Curator stages it with the profile, hands it
+   [AML](https://www.nexusmods.com/warhammer40kdarktide/mods/246)): add it to
+   a profile like any other mod and Curator stages it with the profile, hands it
    to the launcher at launch, and shows a banner on the Mods page while the
    manager (rather than Curator) controls mod ordering.
    On first startup a one-time Welcome window introduces Curator and offers to

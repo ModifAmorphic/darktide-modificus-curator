@@ -34,7 +34,7 @@ public interface IModRepository
     ModContainer? FindBySource(ModSource source);     // Nexus by ModId; Linked by normalized ExternalPath; null for Untracked
     ModContainer? FindUntrackedByName(string name);   // Untracked identity is the container Name
     ModContainer CreateContainer(ModSource source, string name);
-    ModContainer AddVersion(Guid containerId, string versionString, Action<string> populateFolder, DateTimeOffset? remoteUploadedAt = null, ModDisplayMetadata? displayMetadata = null);
+    ModContainer AddVersion(Guid containerId, string versionString, Action<string> populateFolder, DateTimeOffset? remoteUploadedAt = null, int? remoteFileId = null, ModDisplayMetadata? displayMetadata = null);
     bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata);   // atomic missing-only initialization
     ModContainer? RenameContainer(Guid containerId, string newName);   // display label only; Id unchanged, directory does not move
     void RemoveVersion(Guid containerId, string versionFolder);
@@ -56,21 +56,34 @@ public interface IModRepository
 - `CreateContainer(source, name)`: new UUID container + empty `container.json`.
   Does not check for an existing same-identity container (the caller does that
   via `FindBySource` / `FindUntrackedByName` first).
-- `AddVersion(containerId, versionString, populateFolder, remoteUploadedAt = null, displayMetadata = null)`: upsert by
+- `AddVersion(containerId, versionString, populateFolder, remoteUploadedAt = null, remoteFileId = null, displayMetadata = null)`: upsert by
   `versionString`. Re-adding the same tag reuses + refreshes its opaque folder
-  (no re-order, `IsLatest` + `ImportedAt` unchanged; `RemoteUploadedAt` IS
-  overwritten from `remoteUploadedAt`, matching how dedup refreshes files); a
-  new tag creates a new opaque folder + a new entry that becomes `IsLatest`
-  (the newest by `ImportedAt`). The optional `remoteUploadedAt` (UTC) is the
-  underlying remote file's publish date, captured at acquisition for
-  remote-source mods (Nexus) and stamped on the entry as `RemoteUploadedAt`
-  (the update-check comparison basis). `null` for manual imports + non-remote
-  sources. Display metadata is container-scoped, not version-scoped: a non-null
-  `displayMetadata` replaces `ModContainer.DisplayMetadata` in the **same
-  manifest update** as the version mutation (a new version or a dedup), so an
-  acquisition that fetched newer summary/thumbnail text wins atomically with
-  the version write; `null` (the default, including a manual re-import via the
-  picker or drag-and-drop) leaves any prior value untouched, so a re-import
+  (no re-order, `ImportedAt` unchanged; `RemoteUploadedAt` + `FileId` ARE
+  overwritten from the call, matching how dedup refreshes files: a re-acquired
+  version carries the current remote facts, not the stale ones from the first
+  import, and a manual re-import passes nulls and clears them). A new tag
+  creates a new opaque folder + a new entry stamped with the current time and
+  the call's remote facts. After either branch the repository re-evaluates
+  `IsLatest` over ALL of the container's versions with the effective-timestamp
+  key (see [`ModVersion`](#modversion-record)): `RemoteUploadedAt` when
+  present, else `ImportedAt`, with `ImportedAt` breaking exact ties. Importing
+  an older file therefore never flips latest, and a dedup re-import promotes
+  the reused entry only when its refreshed remote timestamp makes it newly
+  newest; containers whose versions all have a null `RemoteUploadedAt` (manual
+  imports, linked) order purely by `ImportedAt`, and mixed null/non-null
+  manifests coalesce per-entry with no migration. The optional
+  `remoteUploadedAt` (UTC) is the underlying remote file's publish date,
+  captured at acquisition for remote-source mods (Nexus). `null` for manual
+  imports + non-remote sources. The optional `remoteFileId` is the remote
+  source's file id (the Nexus file id), recorded on both branches the same
+  way; `null` for manual imports + legacy manifests (a re-acquisition
+  overwrites the reused entry's value, so legacy entries self-heal by
+  attrition). Display metadata is container-scoped, not version-scoped: a
+  non-null `displayMetadata` replaces `ModContainer.DisplayMetadata` in the
+  **same manifest update** as the version mutation (a new version or a dedup),
+  so an acquisition that fetched newer summary/thumbnail text wins atomically
+  with the version write; `null` (the default, including a manual re-import via
+  the picker or drag-and-drop) leaves any prior value untouched, so a re-import
   never erases a prior Nexus acquisition or backfill. A `populateFolder`
   failure leaves both the version files + the prior metadata unchanged: the
   manifest write is never reached.
@@ -111,7 +124,8 @@ public interface IModRepository
   on the source record, not the name). Driven by the update-check name sync
   (Nexus containers).
 - `RemoveVersion(containerId, versionFolder)`: idempotent. Promotes the newest
-  remaining version to `IsLatest` if the removed one carried it.
+  remaining version by the effective-timestamp key (see
+  [`ModVersion`](#modversion-record)) if the removed one carried `IsLatest`.
 - `PruneUnreferenced(referenced)`: GC. Drops every `(containerId, versionFolder)`
   not in the referenced set + removes containers left with zero versions,
   **unless** a caller marked the container id itself as referenced. The
@@ -147,7 +161,7 @@ UI never touches the filesystem directly.
 ```csharp
 public interface IModImportService
 {
-    (Guid ContainerId, string VersionId) Import(string sourcePath, string modName, ModSource source, string version, DateTimeOffset? remoteUploadedAt = null, ModDisplayMetadata? displayMetadata = null);
+    (Guid ContainerId, string VersionId) Import(string sourcePath, string modName, ModSource source, string version, DateTimeOffset? remoteUploadedAt = null, int? remoteFileId = null, ModDisplayMetadata? displayMetadata = null);
 
     Guid LinkFolder(string externalPath);   // record an external folder as a linked container (no copy)
 
@@ -161,8 +175,9 @@ public interface IModImportService
   `FindBySource` for Nexus + Linked (dedup by source identity); `CreateContainer` if
   absent.
 - Version resolution: dedup by `versionString` (`AddVersion` reuses the existing
-  folder + refreshes its files); a new `versionString` creates a new version +
-  flips `IsLatest`.
+  folder + refreshes its files); a new `versionString` creates a new version.
+  `IsLatest` follows the repository's effective-timestamp key (see
+  [`ModVersion`](#modversion-record)), not import recency.
 - **`remoteUploadedAt`** (optional, UTC): the underlying remote file's publish
   date, forwarded by the acquisition layer (`ModAcquisitionService`) for
   remote-source mods (Nexus) and recorded on the version entry as
@@ -171,6 +186,12 @@ public interface IModImportService
   the publish date reaches the entry. `null` for manual imports (folder/archive
   via the picker or drag-and-drop) and non-Nexus sources, which aren't
   update-checked anyway.
+- **`remoteFileId`** (optional): the remote source's file id (the Nexus file
+  id), forwarded by the acquisition layer at download time and recorded on the
+  version entry as `FileId` in both the new-version and the dedup-reuse
+  branches (the same overwrite semantics as `remoteUploadedAt`). `null` for
+  manual imports + non-Nexus sources. Source-agnostic: Integrations owns the
+  Nexus metadata and passes it through; this seam does not know about Nexus.
 - **`displayMetadata`** (optional): source-agnostic display metadata forwarded
   by the acquisition layer for remote-source mods (Nexus) and passed through to
   `IModRepository.AddVersion`. A non-null value replaces the container's
@@ -325,9 +346,10 @@ One version of a mod (immutable record):
 | --- | --- |
 | `Folder` | The opaque version-folder ID (UUID-derived). The version's files live at `<ModsFolder>/<containerId>/<Folder>/`. Never the raw version tag. |
 | `VersionString` | The raw release tag (e.g. `"1.2"`, `"v2.0.1"`). Used for display only. Arbitrary source tags, not SemVer; never parsed. |
-| `IsLatest` | Whether this is the container's current latest version. Exactly one per container (the newest by `ImportedAt`). Moving latest is a one-field manifest edit. |
-| `ImportedAt` | When first imported (UTC). Orders the versions; the newest carries `IsLatest`. |
+| `IsLatest` | Whether this is the container's current latest version. Exactly one per container: the newest by the **effective timestamp** (`RemoteUploadedAt` when present, else `ImportedAt`; exact ties fall to the newer `ImportedAt`). The repository re-evaluates the flag with that key on every `AddVersion` / `RemoveVersion`, so importing an older remote file never flips latest. Moving latest is a one-field manifest edit. |
+| `ImportedAt` | When first imported (UTC). The fallback ordering key when `RemoteUploadedAt` is unknown (manual imports, legacy manifests) and the tie-break for equal remote timestamps. Never changes on a re-import. |
 | `RemoteUploadedAt` | When the underlying remote file was published (UTC), captured at acquisition for remote-source mods (Nexus). `null` for manual imports + non-remote sources. The update check uses it (with an `ImportedAt` fallback) as the comparison basis against the latest file's publish date. Backward-compatible on disk: a manifest from before this field existed deserializes it to `null`. |
+| `FileId` | The remote source's file id this version was acquired from (the Nexus file id): the exact identity that distinguishes two versions of the same mod beyond their display tags, and the download queue's repository hit check. `null` for manual imports (folder/archive via the picker or drag-and-drop) and legacy manifests; a re-acquisition overwrites the reused entry's value, so legacy entries self-heal by attrition. Backward-compatible on disk: a manifest from before this field existed deserializes it to `null`. |
 
 #### `ModSource` (abstract record)
 
@@ -470,7 +492,17 @@ absent; an older manifest without it deserializes to `null` (see
   scan (skips non-container dirs + corrupt manifests), `PruneUnreferenced`
   (drops unreferenced version folders + empty containers, keeps referenced),
   opaque version-folder naming, derived paths, and the linked-external
-  availability snapshot (recomputed on index rebuild, target left untouched).
+  availability snapshot (recomputed on index rebuild, target left untouched);
+  the `IsLatest` effective-timestamp contract (the flag follows
+  `RemoteUploadedAt ?? ImportedAt` with `ImportedAt` tie-break at add and
+  remove: an older remote file never flips latest, a newer one does, mixed
+  null/non-null manifests coalesce per-entry, a dedup re-import promotes the
+  reused entry only when its refreshed remote timestamp makes it newly
+  newest, equal remote timestamps fall to the later import, and
+  `RemoveVersion` promotes by the same key over import recency); `FileId`
+  persistence (recorded on a new version, default null, overwritten on a
+  dedup re-import, persisted through a new repository instance, and old
+  manifests deserialize it to `null`).
 - `DirectoryCopy`: faithful recursive copy (files + nested subdirs reproduced,
   target created as it goes).
 - `ModSource` JSON `$kind` round-trip (untracked/nexus/linked) + defaults + record
@@ -478,7 +510,9 @@ absent; an older manifest without it deserializes to `null` (see
 - `ModSourceParser` URL/id parsing (valid variants, trailing slash, query, plain
   id; malformed rejections: wrong host, wrong game slug, too few segments,
   non-numeric/zero/negative id).
-- `ModImportService`: container find/create + version dedup + `isLatest` flip +
+- `ModImportService`: container find/create + version dedup + the
+  effective-timestamp `isLatest` contract (importing an older remote file does
+  not flip latest) +
   folder/archive import (zip, 7z via on-the-fly SharpCompress writers, rar via
   a committed RAR5 fixture under `Fixtures/`) + the source-structure validation
   (both kinds require exactly one base directory with a matching `<base>.mod`
@@ -490,7 +524,8 @@ absent; an older manifest without it deserializes to `null` (see
   absolute-path entries is refused; nothing is written outside the extraction
   root) + the two import-time peeks (`GetBaseName` validates + returns the base
   name without creating anything; `FindExistingContainer` resolves the would-be
-  dedup container without creating it) + the **linked-folder add**
+  dedup container without creating it) + `remoteFileId` pass-through (recorded
+  on a new version, overwritten on a dedup re-import) + the linked-folder add
   (`LinkFolder`: no copy, shape validation reused, containment rejection of
   mods-root / profiles-root overlap in either direction, refresh returns the
   same container id, sentinel-survival across the add).

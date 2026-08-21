@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -129,6 +130,19 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     private readonly ILogger<ModListViewModel> _logger;
     private readonly IExternalLauncher _externalLauncher;
     private readonly INxmRegistrationState _nxmRegistration;
+    private readonly IModDownloadQueue _downloadQueue;
+    private readonly ModUpdateEnqueuer _updateEnqueuer;
+
+    /// <summary>
+    /// The live download-row wrappers, keyed by their coordinator item
+    /// (reference identity: an item is one in-flight download). Created on
+    /// first sight of an item in <see cref="IModDownloadQueue.Items"/> and
+    /// pruned when it leaves, so a wrapper lives exactly as long as its
+    /// item; the hosting projection reassigns the same wrapper instance
+    /// across rebuilds (morph assignments compare by reference, so an
+    /// unchanged host never re-fires).
+    /// </summary>
+    private readonly Dictionary<DownloadItem, DownloadRowViewModel> _downloadRows = new();
 
     /// <summary>
     /// The profile entries the last <see cref="Reload"/> loaded (the raw
@@ -152,12 +166,13 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// Creates the list VM, subscribes to the session (reload on
     /// active-profile change), the update-check runner (row hydration on every
-    /// completed check + reload after an automatic batch installs mods), the
-    /// row context (the per-row install progress + the global premium / busy /
-    /// gaming flips, all already on the UI thread), the linked-mods child
-    /// (reload when its link flow finishes), and localization (culture
-    /// refresh), then loads the current profile's mods. The premium read lives
-    /// in the row context (fire-and-forget at its construction).
+    /// completed check), the download queue (the per-row morph + appended-row
+    /// projection, and the UpdatesApplied reload after each completed
+    /// update install), the row context (the global premium / gaming flips,
+    /// already on the UI thread), the linked-mods child (reload when its link
+    /// flow finishes), and localization (culture refresh), then loads the
+    /// current profile's mods. The premium read lives in the row context
+    /// (fire-and-forget at its construction).
     /// </summary>
     public ModListViewModel(
         IProfileService profiles,
@@ -173,6 +188,8 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         LinkedModsViewModel linkedMods,
         IExternalLauncher externalLauncher,
         INxmRegistrationState nxmRegistration,
+        IModDownloadQueue downloadQueue,
+        ModUpdateEnqueuer updateEnqueuer,
         ILogger<ModListViewModel> logger)
         : base(localization)
     {
@@ -189,20 +206,18 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _externalLauncher = externalLauncher ?? throw new ArgumentNullException(nameof(externalLauncher));
         _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
+        _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
+        _updateEnqueuer = updateEnqueuer ?? throw new ArgumentNullException(nameof(updateEnqueuer));
 
         _session.PropertyChanged += OnSessionPropertyChanged;
-        // The runner surfaces both update-family completions on the UI thread
-        // (the re-raised check-completed + the automatic batch's
-        // updates-applied); this VM does no marshaling of its own.
+        // The runner surfaces the check completion on the UI thread (the
+        // re-raised check-completed); this VM does no marshaling of its own.
         _updateCheckRunner.CheckCompleted += OnUpdateCheckCompleted;
-        _updateCheckRunner.UpdatesApplied += OnAutomaticUpdatesApplied;
         // The refresh gate is runner-owned + fed by every check result; this
         // VM renders its state (the gate marshals the event to the UI thread).
         _updateCheckRunner.RefreshGate.StateChanged += OnRefreshGateStateChanged;
-        // The row context's per-container install progress drives the matching
-        // row's spinner; its global flips (premium / busy / gaming) re-fire
-        // this VM's forwarding names + fan out to the live rows.
-        RowContext.ModUpdateProgress += OnModUpdateProgress;
+        // The row context's global flips (premium / gaming) re-fire this VM's
+        // forwarding names + fan out to the live rows.
         RowContext.PropertyChanged += OnRowContextChanged;
         ImportWorkflow.ItemImported += OnItemImported;
         // The Add split button's enabled state combines the workflow's activity
@@ -220,52 +235,36 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         IsNxmRegistered = _nxmRegistration.IsRegistered;
         _nxmRegistration.Changed += OnNxmRegistrationChanged;
 
+        // The download fan-in: ONE pair of subscriptions on this VM (both
+        // already marshaled to the UI thread by the queue) drives every
+        // download rendering decision: the per-row morph assignments, the
+        // appended DownloadRows projection, and the empty-state suppression.
+        // Rows + wrappers never subscribe to the queue themselves, so rows
+        // dropped by a reload cannot leak against it.
+        _downloadQueue.Items.CollectionChanged += OnDownloadItemsChanged;
+        _downloadQueue.ItemChanged += OnDownloadItemChanged;
+        // A completed UpdateInstall (manual click or automatic batch; the
+        // queue raises it after its acknowledge) reloads this list + flags the
+        // session pending: the new version + cleared flag show. Already
+        // marshaled to the UI thread by the queue.
+        _downloadQueue.UpdatesApplied += OnUpdatesApplied;
+
         Reload();
     }
 
     /// <summary>
-    /// The automatic-update service finished a batch with at least one
-    /// successful install. Mark the active profile as having staged changes (the
-    /// batch changed one or more mod versions) and reload so the new versions +
-    /// cleared flags show. The runner re-raises the event on the UI thread.
+    /// A queued update install completed (manual click or automatic batch; the
+    /// queue raises it on the UI thread after acknowledging the install).
+    /// Mark the active profile as having staged changes (the install changed
+    /// one or more mod versions) and reload so the new versions + cleared
+    /// flags show. The reload re-reads whatever profile is active (an
+    /// in-flight item completing after a profile switch reloads the truth of
+    /// the list being shown).
     /// </summary>
-    private void OnAutomaticUpdatesApplied(object? sender, EventArgs e)
+    private void OnUpdatesApplied(object? sender, EventArgs e)
     {
         _session.HasPendingChanges = true;
         Reload();
-    }
-
-    /// <summary>
-    /// The row context reports per-install progress (a container's install
-    /// attempt started or finished, for BOTH the manual Premium path and the
-    /// automatic batch; already on the UI thread). Find the row by ContainerId
-    /// and set its <see cref="ModItemViewModel.IsUpdating"/> so the row-level
-    /// spinner (left of the Nexus badge) tracks the currently installing mod.
-    /// An event for a row no longer present (after a profile switch / reload)
-    /// is ignored, so a switch mid-batch never leaves a stale spinner on a
-    /// now-absent row.
-    /// </summary>
-    private void OnModUpdateProgress(object? sender, ModUpdateProgressEventArgs e) =>
-        ApplyModUpdateProgress(e.ContainerId, e.IsActive);
-
-    /// <summary>
-    /// Applies a per-mod install progress signal to the matching row. Finds the
-    /// row by ContainerId; sets its <see cref="ModItemViewModel.IsUpdating"/>
-    /// to <paramref name="isActive"/>. Ignores a container id with no matching
-    /// row (the row may have been removed by a profile switch / reload between
-    /// the event + this UI-thread callback).
-    /// </summary>
-    private void ApplyModUpdateProgress(Guid containerId, bool isActive)
-    {
-        var row = Mods.FirstOrDefault(m => m.ContainerId == containerId);
-        if (row is null)
-        {
-            // The row is gone (profile switch / reload). Ignore: no stale
-            // spinner is left on a now-absent row.
-            return;
-        }
-
-        row.IsUpdating = isActive;
     }
 
     /// <summary>The active profile's mod rows, in load order (lower first).</summary>
@@ -292,6 +291,43 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// </summary>
     [ObservableProperty]
     private bool _hasVisibleMods;
+
+    /// <summary>
+    /// The appended download rows: the queue items with no in-place host
+    /// (fresh mods, cross-profile targets, filtered-hidden targets, null
+    /// container ids), in admission order. Rendered by the dedicated
+    /// ItemsControl below the profile rows inside the same scroll region.
+    /// Never intersects <see cref="VisibleMods"/> or <see cref="Mods"/> (the
+    /// items are <see cref="DownloadRowViewModel"/>s, not profile rows), so
+    /// download rows can never enter the reorder planner's inputs, the drag
+    /// gesture's container math, or the move commands. Rebuilt by
+    /// <see cref="RebuildDownloadRows"/>.
+    /// </summary>
+    public ObservableCollection<DownloadRowViewModel> DownloadRows { get; } = new();
+
+    /// <summary>
+    /// Whether any appended download row exists (drives the appended
+    /// ItemsControl's visibility + <see cref="HasListContent"/>).
+    /// </summary>
+    [ObservableProperty]
+    private bool _hasDownloadRows;
+
+    /// <summary>
+    /// Whether any non-terminal download item exists in the coordinator
+    /// (queued, downloading, or importing; Failed corpses do not count).
+    /// Suppresses the no-mods/add-hints empty state: an active download
+    /// above "no mods yet" reads as a contradiction.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowAddModsHint))]
+    private bool _hasActiveDownloads;
+
+    /// <summary>
+    /// Whether the scroll region has any content to show: visible profile
+    /// rows OR appended download rows (an empty profile with a live download
+    /// still shows the scroll region, hosting the appended rows).
+    /// </summary>
+    public bool HasListContent => HasVisibleMods || HasDownloadRows;
 
     /// <summary>
     /// Whether disabled mods are hidden from the row list (the toolbar's
@@ -446,16 +482,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     public bool IsPremiumUser => RowContext.IsPremiumUser;
 
     /// <summary>
-    /// Whether the mod-update installer reports an install in flight (manual or
-    /// automatic; the coordinator-backed busy flag). Forwarded from
-    /// <see cref="RowContext"/>; rows read the same flag through their own
-    /// forwarding property, so the per-row enabled state reflects the global
-    /// "one install at a time" coordination without a parent walk.
-    /// </summary>
-    public bool AnyRowUpdating => RowContext.AnyRowUpdating;
-
-    /// <summary>
-    /// A row-affecting global (premium / install-busy / gaming) flipped on the
+    /// A row-affecting global (premium / gaming) flipped on the
     /// shared row context (already on the UI thread). Re-fires this VM's
     /// forwarding properties (the names match the context's exactly) and fans
     /// the notification out to the live rows, whose derived enabled states +
@@ -516,13 +543,17 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// Whether the no-mods / DMF-only "add a mod" hint should show: an active
     /// profile with zero or one mod (so a freshly-onboarded DMF-only profile
-    /// still invites the user to add their own mods alongside the framework)
-    /// and NO active filter/search (an empty visible set under an active
+    /// still invites the user to add their own mods alongside the framework),
+    /// NO active filter/search (an empty visible set under an active
     /// filter/search is the no-matches state, not the add-a-mod state; the two
-    /// are mutually exclusive). A dedicated derived property because the view
-    /// cannot express the conjunction in a single Avalonia compiled binding.
+    /// are mutually exclusive), and NO active download (a queued or in-flight
+    /// download renders as a row, and an active download above "no mods yet"
+    /// reads as a contradiction; terminal Failed corpses do not suppress).
+    /// A dedicated derived property because the view cannot express the
+    /// conjunction in a single Avalonia compiled binding.
     /// </summary>
-    public bool ShowAddModsHint => HasActiveProfile && ModCount <= 1 && !IsFilterOrSearchActive;
+    public bool ShowAddModsHint =>
+        HasActiveProfile && ModCount <= 1 && !IsFilterOrSearchActive && !HasActiveDownloads;
 
     /// <summary>
     /// The Add split button's current mode (which action the primary click runs).
@@ -776,7 +807,8 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// The non-list culture work: re-resolve the localized refresh-gate
     /// renderings so the rate-limit + throttle tooltips pick up the new
     /// culture immediately (the gate's own state is unchanged; the raw values
-    /// are re-read), + refresh each row's localized text.
+    /// are re-read), refresh each row's localized text, and refresh each
+    /// live download wrapper's localized status/label/tooltip strings.
     /// </summary>
     protected override void OnCultureChanged()
     {
@@ -784,6 +816,11 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         foreach (var row in Mods)
         {
             row.Refresh();
+        }
+
+        foreach (var wrapper in _downloadRows.Values)
+        {
+            wrapper.Refresh();
         }
     }
 
@@ -1106,6 +1143,130 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         HasVisibleMods = VisibleMods.Count > 0;
         ApplyMoveAvailability();
         OnPropertyChanged(nameof(ShowNoMatchesMessage));
+        OnPropertyChanged(nameof(HasListContent));
+        // A row entering or leaving the visible set can move a download
+        // between its two hosts (in-place morph vs. appended); the hosting
+        // projection is defined over the current visible set, so it is
+        // recomputed on every projection change too.
+        RebuildDownloadRows();
+    }
+
+    // ---- download rows (the hosting projection) ----------------------------
+
+    /// <summary>
+    /// The coordinator's collection changed (an item admitted or removed;
+    /// already on the UI thread). Enqueue returns before its add post
+    /// executes, so this, not the enqueue caller, is the first place a new
+    /// item is ever observed. Rebuilds the wrapper cache + the projection.
+    /// </summary>
+    private void OnDownloadItemsChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+        RebuildDownloadRows();
+
+    /// <summary>
+    /// The coordinator announced an item (admission, resolve, or terminal;
+    /// already on the UI thread). A resolve (a container id landing on a
+    /// previously unknown item) or a terminal transition can move the item
+    /// between hosts, so the projection is recomputed. Byte and phase
+    /// progress does not raise this (only the item's own property
+    /// notifications, which the wrapper renders directly), so this rebuild
+    /// never runs per progress tick.
+    /// </summary>
+    private void OnDownloadItemChanged(DownloadItem item) => RebuildDownloadRows();
+
+    /// <summary>
+    /// Recomputes the download hosting projection: one pass over the
+    /// coordinator's items (admission order) assigning each item exactly one
+    /// render slot. An item whose <see cref="DownloadItem.ContainerId"/> is
+    /// referenced by the active profile's CURRENT row set AND realized in
+    /// <see cref="VisibleMods"/> morphs that row in place (first matching
+    /// item in admission order wins the row; a second item with the same
+    /// container renders appended, which is how a Failed corpse and a fresh
+    /// live attempt for the same mod coexist as two rows). Every other item
+    /// appends to <see cref="DownloadRows"/>. No placement state is stored:
+    /// the assignment is re-derived from the item's container id against the
+    /// current rows on every coordinator collection/state change, every
+    /// Reload, every filter/search change, and every profile switch (the
+    /// switch reloads + clears filters, both of which land here).
+    /// </summary>
+    /// <remarks>
+    /// The morph assignment compares by reference before writing, so an
+    /// unchanged host never re-fires (a filter keystroke or unrelated item
+    /// change cannot churn a morphed row's content). Download rows ignore
+    /// search and hide-disabled entirely: that is exactly what the appended
+    /// fallback expresses (a filtered-out target is appended, not hidden).
+    /// </remarks>
+    private void RebuildDownloadRows()
+    {
+        var items = _downloadQueue.Items;
+
+        // Sync the wrapper cache with the collection: prune wrappers whose
+        // item left, create wrappers for new items.
+        if (_downloadRows.Count > 0)
+        {
+            var live = new HashSet<DownloadItem>(items);
+            foreach (var stale in _downloadRows.Keys.Where(k => !live.Contains(k)).ToArray())
+            {
+                _downloadRows.Remove(stale);
+            }
+        }
+
+        foreach (var item in items)
+        {
+            if (!_downloadRows.TryGetValue(item, out var wrapper))
+            {
+                wrapper = new DownloadRowViewModel(_localization, _downloadQueue, item);
+                _downloadRows[item] = wrapper;
+            }
+        }
+
+        // Resolve the in-place hosts first: the FIRST item per container id
+        // that finds a visible row wins the morph; later items with the same
+        // container append. The morph winner is tracked per ITEM (not per
+        // container) so a non-winner sharing the container still appends.
+        var morphByContainer = new Dictionary<Guid, DownloadRowViewModel>();
+        var morphedItems = new HashSet<DownloadItem>();
+        foreach (var item in items)
+        {
+            if (item.ContainerId is not { } containerId || morphByContainer.ContainsKey(containerId))
+            {
+                continue;
+            }
+
+            if (VisibleMods.FirstOrDefault(row => row.ContainerId == containerId) is { } host)
+            {
+                morphByContainer[containerId] = _downloadRows[item];
+                morphedItems.Add(item);
+            }
+        }
+
+        // Apply the morph to the live rows (reference-guarded: an unchanged
+        // assignment, including the null-to-null steady state, never fires).
+        foreach (var row in Mods)
+        {
+            var target = morphByContainer.TryGetValue(row.ContainerId, out var wrapper) ? wrapper : null;
+            if (!ReferenceEquals(row.ActiveDownload, target))
+            {
+                row.ActiveDownload = target;
+            }
+        }
+
+        // Everything not hosted in place appends, in admission order. The
+        // membership test is per item (the morph winner), so a second item
+        // sharing a morphed container still renders.
+        DownloadRows.Clear();
+        foreach (var item in items)
+        {
+            if (morphedItems.Contains(item))
+            {
+                continue;
+            }
+
+            DownloadRows.Add(_downloadRows[item]);
+        }
+
+        HasDownloadRows = DownloadRows.Count > 0;
+        HasActiveDownloads = items.Any(item => !item.IsTerminal);
+        OnPropertyChanged(nameof(HasListContent));
     }
 
     // ---- reorder (up / down / drag) ----------------------------------------
@@ -1459,38 +1620,38 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
 
     /// <summary>
     /// The stable per-row update action. Branches on the verified Premium state:
-    /// <b>Premium</b> installs the mod's latest MAIN release in-app via
-    /// <see cref="IModUpdateInstaller.TryInstallLatestAsync"/> (the shared
-    /// install path: coordinator-gated one-install-at-a-time, in-gate
-    /// eligibility revalidation, acknowledge-on-success, per-row progress; works
-    /// identically inside Gaming Mode); <b>regular / unknown</b> opens the mod's
-    /// Nexus files page in the user's browser via the injectable
-    /// external-launcher seam, surfacing a fallback alert on launch failure,
-    /// except inside a Steam Deck Gaming Mode session where the browser flow
-    /// cannot complete and Desktop Mode guidance is shown instead.
+    /// <b>Premium</b> resolves the mod's latest MAIN release + enqueues one
+    /// in-app UpdateInstall download via the shared enqueue front (the queue's
+    /// serial worker owns the acquisition, the acknowledge-on-success, and the
+    /// reload signal; the row morphs into a download row while the item is
+    /// live; works identically inside Gaming Mode); <b>regular / unknown</b>
+    /// opens the mod's Nexus files page in the user's browser via the
+    /// injectable external-launcher seam, surfacing a fallback alert on launch
+    /// failure, except inside a Steam Deck Gaming Mode session where the
+    /// browser flow cannot complete and Desktop Mode guidance is shown
+    /// instead.
     /// </summary>
     /// <remarks>
     /// <para><b>Defense.</b> No-op when: there is no active profile; the row is
     /// not Nexus+Latest (<see cref="ModItemViewModel.IsNexusLatest"/>); no update
     /// is flagged (<see cref="ModItemViewModel.UpdateAvailable"/>); or the row
-    /// has no <see cref="ModItemViewModel.NexusModId"/>. The Premium install path
-    /// additionally no-ops when the installer reports another install in flight
-    /// (one install at a time, shared with the automatic batch).</para>
-    /// <para><b>One install at a time, globally.</b> The installer's shared
-    /// coordinator is the single mutual-exclusion point across the manual click
-    /// + the automatic batch. Its busy flag drives
-    /// <see cref="AnyRowUpdating"/> (pushed to rows), which disables other
-    /// Premium rows' actions while an install runs; its progress events drive
-    /// this row's spinner (<see cref="ModItemViewModel.IsUpdating"/>).</para>
+    /// has no <see cref="ModItemViewModel.NexusModId"/>.</para>
+    /// <para><b>One engine.</b> The download queue's serial worker is the single
+    /// mutual-exclusion point across the manual click, the automatic batch, and
+    /// nxm downloads: a click for a file already live in the queue joins the
+    /// existing item (dedupe + pulse) instead of starting a second
+    /// acquisition.</para>
     /// <para><b>Transactional extraction.</b> The mod repository's
     /// <c>AddVersion</c> extracts into a sibling temp + atomically swaps on
-    /// success, so a mid-update failure leaves the existing version intact (the
-    /// user keeps the version they had). On Premium-install failure the command
-    /// surfaces a user-facing alert with the exception's message.</para>
+    /// success, so a mid-download failure leaves the existing version intact
+    /// (the user keeps the version they had). A head-resolve failure (the API
+    /// call before any queue item exists) surfaces a user-facing alert with
+    /// the exception's message; once enqueued, failures render inline on the
+    /// morphed row.</para>
     /// <para><b>No ConfigureAwait(false)</b> on the Premium path: the continuation
-    /// must stay on the UI thread so Reload + ShowAlertAsync run on the UI thread
-    /// (the UI-layer convention). The installer's own I/O runs on the threadpool
-    /// internally; awaiting it does not block the UI thread.</para>
+    /// must stay on the UI thread so the failure-path ShowAlertAsync runs on
+    /// the UI thread (the UI-layer convention). The resolve's I/O runs on the
+    /// threadpool internally; awaiting it does not block the UI thread.</para>
     /// </remarks>
     [RelayCommand]
     private async Task Update(ModItemViewModel? row)
@@ -1528,67 +1689,57 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     }
 
     /// <summary>
-    /// The Premium install branch of the update action: hands the install to
-    /// the shared installer (a Busy outcome when another install is in flight is
-    /// a silent no-op) and renders the outcome. On <see cref="ModInstallStatus.Installed"/>
-    /// the installer has already acquired the latest release + acknowledged the
-    /// flag, so this marks the session pending + reloads (the new version + the
-    /// cleared flag show). On <see cref="ModInstallStatus.Failed"/> the localized
-    /// alert carries the exception's message. Busy + NotEligible are silent (a
-    /// second click while busy is a no-op; an ineligible target means the flag
-    /// was stale + the next hydration clears it). Cancellation propagates out of
-    /// the installer + is swallowed here (not a failure).
+    /// The Premium branch of the update action: resolves the mod's head
+    /// release + admits one UpdateInstall item onto the download queue through
+    /// the shared enqueue front. The queue owns the rest under its serial
+    /// worker: the row morphs while the item is live (the morph hides the
+    /// update-action cell, the double-click guard), the dequeue-time
+    /// eligibility revalidation makes a stale flag a silent no-op, and the
+    /// completion acknowledges once + raises the applied event (which marks
+    /// the session pending + reloads this list). A resolve failure (the API
+    /// call before any item exists) surfaces the localized failure alert;
+    /// cancellation is swallowed (not a failure).
     /// </summary>
     private async Task UpdatePremiumAsync(Guid profileId, ModItemViewModel row, int modId)
     {
-        ModInstallOutcome outcome;
+        // A row with no resolved version cannot carry the eligibility version
+        // rule's input (the enqueue requires it); treat it like a stale flag:
+        // a silent no-op.
+        if (string.IsNullOrWhiteSpace(row.ActualVersion))
+        {
+            return;
+        }
+
         try
         {
             // No ConfigureAwait(false): the continuation must stay on the UI
-            // thread so Reload + the failure-path ShowAlertAsync below run on
-            // the UI thread (the UI-layer convention). The expected version is
-            // the row's resolved version (what the row was built from); the
-            // installer revalidates it against the container's current state
-            // inside the gate. The candidates are the entries the last Reload
-            // loaded.
-            outcome = await RowContext.InstallLatestAsync(
-                profileId,
-                row.ContainerId,
-                modId,
-                row.ActualVersion,
-                _loadedEntries.ToCandidates());
+            // thread so the failure-path ShowAlertAsync below runs on the UI
+            // thread (the UI-layer convention). The expected version is the
+            // row's resolved version (what the row was built from); the queue
+            // revalidates it against the container's current state at dequeue.
+            await _updateEnqueuer.EnqueueLatestAsync(
+                modId, row.ContainerId, row.Name, row.ActualVersion, profileId);
+            _logger.LogInformation(
+                "Enqueued the update install for mod {Container} (mod id {Mod}).",
+                row.ContainerId, modId);
         }
         catch (OperationCanceledException)
         {
             // Cancellation is not a failure: the user (or shutdown) cancelled;
             // no alert. Re-throwing would surface as an unobserved exception on
             // the fire-and-forget AsyncRelayCommand, so swallow instead.
-            _logger.LogInformation("Update of mod {Container} was cancelled.", row.ContainerId);
-            return;
+            _logger.LogInformation("Update enqueue for mod {Container} was cancelled.", row.ContainerId);
         }
-
-        switch (outcome.Status)
+        catch (Exception ex)
         {
-            case ModInstallStatus.Installed:
-                _session.HasPendingChanges = true;
-                Reload();
-                _logger.LogInformation("Updated mod {Container} to the latest Nexus release.", row.ContainerId);
-                break;
-
-            case ModInstallStatus.Failed:
-                _logger.LogError(
-                    outcome.Exception, "Update of mod {Container} failed.", row.ContainerId);
-                await _dialogs.ShowAlertAsync(
-                    _localization["Update_FailedTitle"],
-                    _localization.Format("Update_FailedMessage", row.Name) + " "
-                        + (outcome.Exception?.Message ?? outcome.Reason));
-                break;
-
-            default:
-                // Busy (another install is in flight: a clean no-op) +
-                // NotEligible (a stale flag; the installer logged the reason +
-                // the next hydration self-heals it out). Silent.
-                break;
+            // The head resolve failed (API down, no MAIN files): nothing was
+            // enqueued, so there is no row to host the failure. Surface the
+            // localized alert carrying the exception's message.
+            _logger.LogError(
+                ex, "Resolving the latest release of mod {Container} failed.", row.ContainerId);
+            await _dialogs.ShowAlertAsync(
+                _localization["Update_FailedTitle"],
+                _localization.Format("Update_FailedMessage", row.Name) + " " + ex.Message);
         }
     }
 

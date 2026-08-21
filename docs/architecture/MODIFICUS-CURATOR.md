@@ -238,8 +238,11 @@ for the full contract (env-var table, logging, the hook-ready handshake).
   isn't mandatory, so the prompt is an offer, not a requirement; decline is
   respected). DMF is sourced from Nexus Mods (mod 8). Two cases: DMF already
   in the repo but not in the profile -> instant add (no download); DMF not in
-  the repo -> on confirm, premium users get the in-app API download under a
-  spinner + add; everyone else (no auth, regular, or unknown premium state)
+  the repo -> on confirm, premium users get the download enqueued onto the
+  shared download queue (DMF's head file is resolved first so the queue's
+  dedupe key is real; the download row owns progress and the queue's
+  completion owns the add + reload; a resolve failure surfaces the localized
+  alert); everyone else (no auth, regular, or unknown premium state)
   gets their browser opened at DMF's Nexus files page regardless of whether
   Curator owns the `nxm://` handler (when Curator owns it, the user clicks
   Download on the page and the handler picks up the URL + adds DMF to the
@@ -283,7 +286,14 @@ The container directory is **UUID-named (opaque)**, and its path is **derived**
 Each version is a subfolder with an **opaque unique ID**; the raw version tag
 lives only in the manifest (for display + pin resolution), never as a folder
 name. **`isLatest` is a flag on one version entry**, not a duplicate folder:
-moving latest is a one-field manifest edit, and profiles resolve dynamically at
+the repository re-evaluates the flag on every add/remove with the
+**effective-timestamp key** (`remoteUploadedAt` when the remote source
+published the file, else the import time, with the import time breaking exact
+ties), so importing an older remote file never flips latest. Each version
+entry also records the remote file id it was acquired from (`FileId`, the
+exact identity the download queue's repository hit check keys on; null for
+manual imports, self-healing on re-acquisition). Moving latest is a one-field
+manifest edit, and profiles resolve dynamically at
 stage time (no rescanning profiles, no disk duplication).
 
 Each profile entry carries a **version policy**: **pinned** (frozen to a specific
@@ -356,7 +366,8 @@ untouched. The validated base folder is **preserved** under
 contents; the archive is validated to have a single top-level folder before
 extraction). Container dedup: Untracked by name, Nexus by mod id. Version dedup:
 re-importing the same tag reuses its folder (refreshed); a new tag creates a new
-version + flips `isLatest`. The service returns `(containerId, versionId)`,
+version, and the repository re-evaluates `isLatest` over all versions with its
+effective-timestamp key. The service returns `(containerId, versionId)`,
 where `versionId` is the imported version's opaque on-disk folder id (a
 `ModVersion.Folder` value); the display tag (`ModVersion.VersionString`) is
 recorded in the container manifest and is not returned. The caller then adds
@@ -442,8 +453,9 @@ location on the next start.
 - **DMF specifically** -- the new-profile prompt offers to add it (most mods
   depend on it, so this is the common case; DMF isn't mandatory, so the prompt
   is an offer, not a requirement). DMF is sourced from Nexus Mods (mod 8); the
-  prompt's download path branches on the user's premium state (premium: in-app
-  API download; non-premium, unknown, or no auth: the browser opens at DMF's
+  prompt's download path branches on the user's premium state (premium: the
+  download is enqueued onto Curator's download queue and renders as a row on
+  the mod list; non-premium, unknown, or no auth: the browser opens at DMF's
   Nexus files page regardless of nxm setup). Bundling DMF with Curator is
   rejected (modding-community norms + Nexus rules). (See
   [Profiles](#profiles).)
@@ -455,8 +467,13 @@ location on the next start.
 The `nxm://` URL scheme is how the "Mod manager download" button on a Nexus
 Mods file page reaches Curator. Curator registers a tiny native-AOT handler exe
 that the OS invokes on each `nxm://` click; it forwards the raw URL over a
-named pipe to the running app (or cold-starts Curator and retries), where the URL
-is parsed, classified, and dispatched to a pluggable handler. Single-instance is
+named pipe to the running app (or cold-starts Curator and retries; an
+advisory process pre-check skips the duplicate launch when a burst of clicks
+already started one), where the URL
+is parsed, classified, and dispatched to a pluggable handler. The mod-download
+handler is an enqueue adapter: it gates the link and admits it onto the
+serial download queue, returning promptly so the IPC accept loop never blocks
+on a download (see [Mod acquisition](#mod-acquisition)). Single-instance is
 enforced by process enumeration before the pipe bind, and the pipe bind is a
 separate, non-fatal check that degrades gracefully; the OS handler registration
 is an explicit user action from the Nexus destination (Curator only handles
@@ -484,23 +501,37 @@ is in [integrations reference](../reference/integrations.md).
 
 When a user clicks "Mod manager download" on Nexus, the
 [nxm handler](nxm-scheme-handler.md) relays the URL and the
-`NxmModDownloadHandler` orchestrates the download and import into the active
-profile. The reusable core is `IModAcquisitionService` (Integrations): it
-resolves the CDN download links, fetches mod metadata, downloads to a
-`.zip`-named temp file, and imports via `IModImportService`. The same
+`NxmModDownloadHandler` gates the link (Darktide-only, auth, active profile)
+and enqueues it onto the serial download queue. The queue owns the download
+end to end: a dequeue-time auth recheck, a repository hit check (an exact
+file-id match completes with no network), the acquisition through the
+reusable `IModAcquisitionService` (Integrations: it resolves the CDN download
+links, fetches mod metadata, downloads to a
+temp file, and imports via `IModImportService`), the profile registration,
+and the reload. Premium update installs and the DMF download run through the
+same queue (one download engine, one download at a time, deduplicated by
+game domain + mod id + file id). Downloads render as rows in the mod list: a
+download whose target row is visible morphs it in place, and everything else
+appends below the list; cancel and retry are inline on the row. The policy
+rule is head-relative on both the hit and the acquired path: a head file
+registers `LatestPolicy`, a non-head file pins to the clicked version (an
+existing membership is rewritten through `SetModPolicy`, since `AddMod` is
+policy-idempotent). The same
 `GetModInfoAsync` call that resolves the mod name also carries the display
 metadata (`Summary`, `PictureUrl`, `ContainsAdultContent`); it is normalized
 once through the shared `ModDisplayMetadataMapper` and forwarded into
 `Import`/`AddVersion`, so it lands on the container in the same manifest
-update as the version mutation at no extra Nexus call. The handler (in the
-UI assembly, not Integrations, because it coordinates UI-only services) checks
-the link is for Darktide, checks auth and an active profile, calls the service,
-registers the mod with `LatestPolicy`, refreshes the mod list, and surfaces
-errors via `ShowAlertAsync`. The per-mod update button calls the same service.
-Full detail (the acquisition flow, the handler checks, the UI-assembly
+update as the version mutation at no extra Nexus call; the matched file's id
+is recorded on the version as `FileId` (the identity the queue's hit check
+keys on). The handler (in the
+UI assembly, not Integrations, because it coordinates UI-only services)
+returns within milliseconds after the gates + enqueue, so the nxm IPC accept
+loop never blocks on a download. Full detail (the queue, the acquisition
+flow, the handler checks, the UI-assembly
 placement, and OS registration) is in
 [mod acquisition architecture](mod-acquisition.md); the public surface is in
-[integrations reference](../reference/integrations.md).
+[integrations reference](../reference/integrations.md) + the
+[ui reference](../reference/ui.md#the-download-queue).
 
 ## Update check
 
@@ -555,8 +586,9 @@ candidate pull: each fire reads the profile's mod list through
 dependency and an unreadable profile surfaces at the pull (logged + skipped,
 never a failed check). The service itself has no
 UI; the mod-list UI consumes `LastResult` / `CheckCompleted` to render per-row
-"update available" badges + the per-mod Update button (which calls
-`IModAcquisitionService`). The public surface is in
+"update available" badges + the per-mod Update button (whose Premium branch
+resolves the head release + enqueues an update install onto the download
+queue). The public surface is in
 [integrations reference](../reference/integrations.md).
 
 ## App self-update
@@ -594,6 +626,17 @@ is in [UI reference](../reference/ui.md).
   notification: it is not dismissible, shows exactly while the manager is
   active, and gates nothing (reorder/lock controls stay fully functional;
   Curator's order still rules the staging + `mods.lst` projection).
+- **Download rows.** Nexus downloads render as rows in the mod list, never
+  popups: a download whose target mod's row is visible morphs that row in
+  place (progress, cancel, retry inline; the policy editor and update action
+  suppress while morphed), and everything else (a brand-new mod, a
+  cross-profile target, a filtered-hidden target) appends below the list,
+  labeled with its target profile. One shared status template hosts all
+  three surfaces (the Compact morph slot, the Detailed morph slot, the
+  appended row). Download rows are activity, not mod rows: they never enter
+  the reorder machinery (see [Mod acquisition](#mod-acquisition) for the
+  queue; the row hosting is in
+  [UI architecture](ui-architecture.md#download-rows)).
 - **Row density.** The list has a persisted Compact/Detailed density: Detailed
   is the default (the multi-line row with summary + thumbnail), and an absent
   or unknown value normalizes to it; Compact is the dense one-line variant,

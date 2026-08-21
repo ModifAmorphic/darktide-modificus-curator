@@ -29,29 +29,35 @@ namespace Modificus.Curator.UI.Session;
 /// destinations and is consumed only on a real navigation into Mods; a second
 /// create before the entry drains replaces it (the newest created id is the
 /// relevant one). After the prompt finishes (accepted, declined, or skipped),
-/// the coordinator reloads the mod list itself so an accepted existing/Premium
-/// DMF add is visible immediately; a declined or no-op prompt reloads the same
-/// authoritative state.</para>
+/// the coordinator reloads the mod list itself so an accepted existing-DMF add
+/// (case 1) is visible immediately, and a declined or no-op prompt reloads the
+/// same authoritative state; an accepted premium download needs no reload here
+/// because the download queue's completion owns the add and reloads (the
+/// target is the active profile, so the reload always fires).</para>
 /// <para>
 /// <b>The two DMF cases.</b> On the trigger, the coordinator looks up DMF by
 /// source (<c>new NexusSource { ModId = <see cref="DmfModId"/> }</c>) and checks
 /// the active profile's mod list. (1) DMF in the repo but not in the profile:
 /// a Yes/No confirm, On Yes adds it instantly (no download). (2) DMF not in the
-/// repo: a Yes/No confirm. On Yes, premium users get the in-app API download
-/// under a spinner (the Nexus <c>download_link</c> endpoint is premium-only)
-/// plus the add; everyone else gets the DMF files page opened in their browser
-/// (the user downloads DMF there, and either clicks Download if Curator owns
-/// the <c>nxm://</c> handler, or imports the archive manually). Inside a Steam
+/// repo: a Yes/No confirm. On Yes, premium users (the Nexus
+/// <c>download_link</c> endpoint is premium-only) get the download enqueued
+/// onto the shared download queue: the concrete head file is resolved first
+/// so the queue's dedupe key is real and the download fetches the exact file
+/// the user was offered at confirm, then the download row owns progress and
+/// the queue's completion owns the add + reload; everyone else gets the DMF
+/// files page opened in their browser (the user downloads DMF there, and
+/// either clicks Download if Curator owns the <c>nxm://</c> handler, or
+/// imports the archive manually). Inside a Steam
 /// Deck Gaming Mode session the browser branch cannot complete, so Premium
-/// users still get the confirm + in-app download while everyone else gets an
-/// informational Desktop Mode guidance alert.</para>
+/// users still get the confirm + enqueued download while everyone else gets
+/// an informational Desktop Mode guidance alert.</para>
 /// <para>
 /// <b>No auth trigger.</b> Configuring Nexus auth no longer surfaces a DMF
 /// prompt on its own; the one-time Nexus setup offer lives in the first-run
 /// Welcome flow instead. The coordinator never opens the Nexus
 /// destination and never stops at an informational dead-end: on a confirmed
-/// download it either downloads in-app (premium) or opens the browser (everyone
-/// else).</para>
+/// download it either enqueues the in-app download (premium) or opens the
+/// browser (everyone else).</para>
 /// <para>
 /// <b>Lives in the UI assembly.</b> Mirrors <see cref="UpdateCheckRunner"/>:
 /// the coordinator observes UI-layer singletons (<see cref="IProfileSession"/>,
@@ -86,10 +92,18 @@ public sealed class DmfPromptService
     /// </summary>
     private const string DmfFilesUrl = "https://www.nexusmods.com/" + NexusGameIdentity.DarktideDomain + "/mods/8?tab=files";
 
+    /// <summary>
+    /// The row name for the enqueued DMF download. DMF is not in the
+    /// repository on this path (no container to peek), so the well-known name
+    /// carries the row until the acquisition swaps in the name Nexus reports.
+    /// </summary>
+    private const string DmfDisplayName = "Darktide Mod Framework";
+
     private readonly IProfileService _profiles;
     private readonly IProfileSession _session;
     private readonly IModRepository _repo;
     private readonly IModAcquisitionService _acquisition;
+    private readonly IModDownloadQueue _downloadQueue;
     private readonly INexusAuthService _auth;
     private readonly IDialogService _dialogs;
     private readonly LocalizationService _localization;
@@ -105,6 +119,7 @@ public sealed class DmfPromptService
         IProfileSession session,
         IModRepository repo,
         IModAcquisitionService acquisition,
+        IModDownloadQueue downloadQueue,
         INexusAuthService auth,
         IDialogService dialogs,
         LocalizationService localization,
@@ -119,6 +134,7 @@ public sealed class DmfPromptService
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _repo = repo ?? throw new ArgumentNullException(nameof(repo));
         _acquisition = acquisition ?? throw new ArgumentNullException(nameof(acquisition));
+        _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
         _auth = auth ?? throw new ArgumentNullException(nameof(auth));
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
         _localization = localization ?? throw new ArgumentNullException(nameof(localization));
@@ -243,15 +259,16 @@ public sealed class DmfPromptService
         }
 
         // Case 2: DMF not in the repo. Always offer the download (regardless of
-        // Nexus auth): on confirm, premium users get the in-app API download;
-        // everyone else gets the DMF files page opened in the browser. The
-        // confirm message is tailored to whether Curator owns the nxm handler
-        // so the user knows whether to click Download on Nexus (manager path)
-        // or download the archive and import it manually. Inside a Gaming Mode
+        // Nexus auth): on confirm, premium users get the download enqueued onto
+        // the shared download queue; everyone else gets the DMF files page
+        // opened in the browser. The confirm message is tailored to whether
+        // Curator owns the nxm handler so the user knows whether to click
+        // Download on Nexus (manager path) or download the archive and import
+        // it manually. Inside a Gaming Mode
         // session the browser branch cannot complete (the Gaming Mode browser
         // does not hand nxm:// links to Curator, and manual import needs
         // Desktop Mode), so the premium state is resolved up front: Premium
-        // keeps the ordinary confirm + in-app download flow, while everyone
+        // keeps the ordinary confirm + enqueued download flow, while everyone
         // else gets an informational Desktop Mode guidance alert (no Yes/No
         // confirm: there is no action that could run inside Gaming Mode to
         // confirm). No nxm registration probe happens on either path.
@@ -282,7 +299,7 @@ public sealed class DmfPromptService
         var state = await _auth.GetCurrentStateAsync();
         if (state?.IsPremium == true)
         {
-            await DownloadAndAddAsync(profileId);
+            await EnqueueLatestDmfAsync(profileId);
         }
         else
         {
@@ -331,42 +348,41 @@ public sealed class DmfPromptService
     }
 
     /// <summary>
-    /// Downloads the latest DMF MAIN release via the acquisition service, then
-    /// adds it to the profile. The download runs under a modal spinner
-    /// (<see cref="IDialogService.ShowProgressAsync{T}"/>) so the user sees the
-    /// operation is in flight (the acquisition takes a few seconds). Errors are
-    /// surfaced as an alert (the user can retry via the normal add flow).
+    /// Enqueues the latest DMF MAIN release onto the download queue targeting
+    /// the profile. The concrete head file is resolved first (one file-listing
+    /// call, no download) so the queue's dedupe key is real and the download
+    /// fetches exactly the file the user was offered at confirm; from here the
+    /// download row owns progress and the queue's completion owns the profile
+    /// add + the reload (the target is the active profile, so the reload
+    /// always fires). A resolve failure (API down, no MAIN files) surfaces the
+    /// localized failure alert and enqueues nothing (there is no row to host
+    /// it on yet).
     /// </summary>
-    private async Task DownloadAndAddAsync(Guid profileId)
+    private async Task EnqueueLatestDmfAsync(Guid profileId)
     {
-        Guid containerId;
         try
         {
-            var (id, _) = await _dialogs.ShowProgressAsync(
-                _localization["Dmf_Downloading"],
-                _localization["Dmf_DownloadingMessage"],
-                () => _acquisition.AcquireLatestNexusAsync(NexusGameIdentity.DarktideDomain, DmfModId));
-            containerId = id;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "DMF download failed.");
-            await _dialogs.ShowAlertAsync(
-                _localization["Dmf_DownloadFailedTitle"],
-                _localization.Format("Dmf_DownloadFailedMessage", ex.Message));
-            return;
-        }
-
-        try
-        {
-            _profiles.AddMod(profileId, containerId, ModVersionPolicy.Latest);
+            // The resolved release tag is not carried on the request; the row
+            // shows the version the queue itself resolves, matching every
+            // other enqueue path.
+            var (fileId, _) = await _acquisition.ResolveLatestNexusAsync(
+                NexusGameIdentity.DarktideDomain, DmfModId);
+            var profileName = _profiles.GetProfile(profileId).Name;
+            _downloadQueue.Enqueue(new ModDownloadRequest(
+                NexusGameIdentity.DarktideDomain, DmfModId, fileId,
+                DownloadPurpose.ProfileAdd,
+                ContainerId: null, DmfDisplayName, profileId, profileName));
             _logger.LogInformation(
-                "Downloaded + added DMF container {Container} to profile {Profile} via the DMF prompt.",
-                containerId, profileId);
+                "Enqueued the DMF download of file {File} for profile {Profile}.",
+                fileId, profileId);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "DMF AddMod failed after a successful download.");
+            // A resolve failure (API down, no MAIN files), a profile that
+            // vanished mid-prompt, or an admission failure: nothing was
+            // enqueued, so the failure is gate-shaped and surfaces as today's
+            // localized alert (the user can retry via the normal add flow).
+            _logger.LogError(ex, "Failed to enqueue the DMF download.");
             await _dialogs.ShowAlertAsync(
                 _localization["Dmf_DownloadFailedTitle"],
                 _localization.Format("Dmf_DownloadFailedMessage", ex.Message));

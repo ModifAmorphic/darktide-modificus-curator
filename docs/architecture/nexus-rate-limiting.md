@@ -166,11 +166,16 @@ Only authenticated calls to `api.nexusmods.com` count. Per operation:
   (`DownloadLinksAsync` + `GetModInfoAsync` + `ListModFilesAsync`). This is
   parity with Vortex, which Nexus's help article cites at 3 calls per download.
   This covers the manual per-row Premium update, the automatic Premium
-  installer (one download per flagged mod, when opted in), and the `nxm://`
-  handler's downloads. The automatic installer chains after an authoritative
+  batch (one download per flagged mod, when opted in), the DMF prompt's
+  premium branch, and the `nxm://` handler's downloads, all through the serial
+  download queue. The premium update paths (manual row action, automatic
+  batch, DMF) resolve the head file first through
+  `ResolveLatestNexusAsync` (one extra `ListModFilesAsync` call) so the
+  queue's dedupe key is a concrete file id before any item exists. The
+  automatic batch chains after an authoritative
   check that found updates, so its downloads ride on a check that already ran
   (no separate check call per install).
-- **Premium verification (automatic installer):** the automatic-update service
+- **Premium verification (automatic batch):** the automatic-update service
   makes one `GetCurrentStateAsync` call per batch, ONLY when an authoritative
   check found updates AND `AutomaticUpdatesEnabled` is on. An empty result or a
   disabled setting costs no extra call. The DMF prompt makes a similar

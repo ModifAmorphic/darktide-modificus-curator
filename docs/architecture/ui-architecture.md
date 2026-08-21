@@ -87,7 +87,7 @@ a UI-layer singleton that the shell (and other view models) inject:
   │   │   │                             thumbnail hydration)
   │   │   │
   │   │   ├── ModRowContext ──── the shared observable row-affecting globals
-  │   │   │                     (premium / install-busy / gaming), passed once
+  │   │   │                     (premium / gaming), passed once
   │   │   │                     to every row
   │   │   │
   │   │   └── ModItemViewModel  one row; carries state only (no service calls)
@@ -101,8 +101,14 @@ a UI-layer singleton that the shell (and other view models) inject:
   ├── UpdateCheckRunner ─────── fires IUpdateCheckService on profile load,
   │                             active-profile switch, a periodic timer, and
   │                             the manual "check now" affordance; re-raises
-  │                             CheckCompleted + UpdatesApplied on the UI
-  │                             thread for the mod list
+  │                             CheckCompleted on the UI thread for the mod
+  │                             list (install completions surface through
+  │                             the download queue's own UpdatesApplied event)
+  │
+  ├── ModDownloadQueue ──────── the serial Nexus download queue (one
+  │                             worker, FIFO, deduped by domain+mod+file): the nxm click,
+  │                             premium update installs, and the DMF download all run through
+  │                             it; downloads render as rows in the mod list
   │
   ├── IAppUpdateService ─────── Curator's own self-update (Velopack-packaged
   │                             Windows installer and Linux AppImage);
@@ -708,22 +714,17 @@ by both the list VM and the child.
 
 ### The shared row context (`ModRowContext`)
 
-The three row-affecting globals live on one shared observable
+The two row-affecting globals live on one shared observable
 `ModRowContext`, created once in composition and passed to every row at
 construction (no per-flag value pushes):
 
 - `IsPremiumUser`: the one-shot construction-time Nexus premium read
   (fire-and-forget; no mid-session refresh).
-- `AnyRowUpdating`: the installer's coordinator-backed busy flag, mirrored on
-  the UI thread.
 - `IsGamingMode`: constant for the process lifetime.
-- `ModUpdateProgress`: the installer's per-container install progress,
-  re-raised on the UI thread; the list VM finds the row and drives its
-  spinner.
-- `InstallLatestAsync`: the manual Premium install front over the shared
-  `IModUpdateInstaller` (the same installer whose busy + progress state the
-  context carries), so the list VM's install action + its row-rendered state
-  share one seam.
+
+Install-busy state is deliberately not here: an update in flight is a queue
+item, and the row renders it as the download morph (`row.ActiveDownload`); a
+global busy flag would duplicate the queue's own serial-worker gate.
 
 Rows keep their public property names as context-forwarding reads
 (`row.IsPremiumUser` and friends bind exactly as before). The list VM holds
@@ -754,8 +755,10 @@ contentless checkbox).
 Each row is a `ModItemViewModel`: container id (immutable, the join key
 against `IModRepository`), display name, source, resolved version tag,
 enabled, order, policy, and the per-row policy-edit state. The row also
-carries the shared `ModRowContext` (its premium / busy / gaming halves are
-context-forwarding reads), optional display metadata
+carries the shared `ModRowContext` (its premium / gaming halves are
+context-forwarding reads), the optional active download morphing it in place
+(`ActiveDownload`, assigned exclusively by the parent's hosting projection;
+see [Download rows](#download-rows)), optional display metadata
 (`ModDisplayMetadata`: summary, thumbnail URL, adult flag, joined from the
 container on reload), the decoded `Thumbnail` image, and an `IsDetailed`
 projection pushed down by the density coordinator. The row never talks to
@@ -765,6 +768,46 @@ code-behind handlers calling the parent's commands with the row as the
 `CommandParameter` (the linked badge routes to the `LinkedModsViewModel`
 child). This per-row code-behind pattern keeps each row a passive state
 holder while the parent owns the service boundary.
+
+### Download rows
+
+Downloads render as rows in the mod list, never popups or flyouts. One shared
+download status template (a DataTemplate resource in `ModListView.axaml`) is
+hosted by three surfaces: the Compact row's morph slot, the Detailed row's
+morph slot, and the appended row below the profile rows. The coordinator
+(`IModDownloadQueue`, `ui/Session/ModDownloadQueue.cs`) owns every download:
+one serial worker, FIFO, deduped by (game domain, mod id, file id); a second
+click on a live item joins and pulses the row. The queue's item collection and
+events are marshaled to the UI thread through the standard `Action<Action>`
+seam, and `ModListViewModel` holds the only subscription pair that drives
+every rendering decision (rows and wrappers never subscribe to the queue
+themselves, so rows dropped by a reload cannot leak).
+
+The hosting projection is re-derived on every coordinator change, reload,
+filter/search change, and profile switch: an item whose container is
+referenced by the active profile's current row set AND realized in
+`VisibleMods` morphs that row in place (`row.ActiveDownload`, reference-guarded
+so an unchanged assignment never re-fires); every other item (fresh mods,
+cross-profile targets, filtered-hidden targets, null container ids) appends
+below the list in admission order, always labeled with its target profile.
+While a row is morphed, the summary/metadata area and the action strip swap
+to the download content, the policy editor and the update-action cell
+suppress (the morphing download is about to write the policy itself; hiding
+the button is the double-click guard), and the structural controls (grip,
+lock, move, remove, enabled) stay functional: position and membership are
+profile metadata staged at launch. The projection is structurally separate
+from the mod rows: the appended collection is an
+`ObservableCollection<DownloadRowViewModel>` that never intersects
+`VisibleMods`, so download rows can never enter the reorder planner's inputs,
+the drag gesture's container math, or the move commands.
+
+`DownloadRowViewModel` is the passive projection of one queue item: phase
+flags, determinate percent + MB/MB with a known total, the localized status
+word, the failure text, the automation string, the join-pulse flash, and
+Cancel / Dismiss / Retry commands that forward straight to the queue. An
+active download suppresses the no-mods/add-hints empty state (an active
+download above "no mods yet" reads as a contradiction); terminal failed
+corpses do not.
 
 ## Compact / Detailed rows (`DetailedModRowsViewModel`)
 
@@ -921,23 +964,22 @@ to in-app install).
 
 `Update(row)` branches on the verified Premium state:
 
-- **Premium:** `UpdatePremiumAsync` hands the install to the shared
-  `IModUpdateInstaller.TryInstallLatestAsync` (Integrations; the single install
-  path for both the manual action and the automatic batch). The installer
-  acquires the global `UpdateCoordinator` (one install at a time; a second
-  click while an install runs returns a Busy outcome, a clean no-op),
-  revalidates eligibility inside the gate, calls
-  `IModAcquisitionService.AcquireLatestNexusAsync(gameDomain, modId)` (the
-  premium / auth-only path), acknowledges the install on success
+- **Premium:** `UpdatePremiumAsync` resolves the mod's head release and admits
+  one in-app update install through the shared enqueue front
+  (`ModUpdateEnqueuer.EnqueueLatestAsync`, over
+  `IModAcquisitionService.ResolveLatestNexusAsync` + the download queue). The
+  queue's serial worker owns the rest: the dequeue-time eligibility
+  revalidation (a stale flag is a silent no-op), the acquisition (the premium
+  / auth-only path) with the cancel token, the acknowledge on success
   (`IUpdateStateStore.AcknowledgeInstall`, clearing the persisted known-update
-  entry immediately, with no extra API check), and raises per-row progress
-  (active=true/false bracketing the attempt) that drives `row.IsUpdating`. The
-  repository's `AddVersion` extracts into a sibling temp and atomically swaps
-  on success, so a mid-update failure leaves the existing version intact. The
-  VM renders the outcome: Installed reloads + flags the session pending,
-  Failed surfaces the localized alert carrying the exception's message, Busy +
-  NotEligible are silent no-ops, and cancellation is swallowed (not a
-  failure).
+  entry immediately, with no extra API check), and the applied event that
+  marks the session pending + reloads this list. The row morphs into a
+  download row while the item is live (the morph is the busy surface and the
+  double-click guard). A resolve failure (the one step with no row to host it
+  on) surfaces the localized alert carrying the exception's message;
+  cancellation is swallowed (not a failure). The repository's `AddVersion`
+  extracts into a sibling temp and atomically swaps on success, so a
+  mid-download failure leaves the existing version intact.
 - **Regular / unknown:** `OpenFilesPage` opens the mod's Nexus files page in
   the user's browser via the shared `IExternalLauncher`. A launch failure
   surfaces a user-facing fallback alert (with the URL for manual copy) rather
@@ -947,17 +989,24 @@ Defense: no-op when there is no active profile, the row is not Nexus plus
 Latest (`IsNexusLatest`), no update is flagged (`UpdateAvailable`), or the row
 has no `NexusModId`.
 
-### The mod-update installer
+### The download queue (one engine)
 
-`IModUpdateInstaller` (Integrations) is the single Premium install path: it
-owns the shared `UpdateCoordinator` (the global one-install-at-a-time gate),
-the in-gate eligibility revalidation via `UpdateEligibility` (a stale flag
-yields a NotEligible outcome + reason, nothing installed), the acquire (the
-latest MAIN release over `IModAcquisitionService`), the acknowledge-on-success
-(exactly once), and the per-attempt progress events
-(`ModUpdateProgressEventArgs`) that drive the row spinner for BOTH the manual
-and the automatic paths. Cancellation propagates rather than becoming an
-outcome, so each caller keeps its own cancellation posture.
+There is no separate mod-update installer. The serial download queue
+(`ModDownloadQueue`, `ui/Session/`) is the single one-download-at-a-time gate
+across the manual update action, the automatic Premium batch, the `nxm://`
+click, and the DMF prompt's premium branch; a click for a file already live
+in the queue joins the existing item and pulses its row. The queue owns the
+per-item pipeline: the dequeue-time auth recheck, the UpdateInstall
+eligibility revalidation (`UpdateEligibility`, the same four rules the
+state store's hydration enforces), the repository hit check (an exact
+`FileId` match completes with no network), the acquisition with progress, and
+the per-purpose completion (profile registration for a ProfileAdd,
+acknowledge + the applied event for an UpdateInstall). Cancellation is
+token-authoritative: the token is cancelled synchronously and honored at
+dequeue and mid-acquisition, so no phase-write race can resurrect a cancelled
+download. Full detail is in the
+[ui reference](../reference/ui.md#the-download-queue) and the
+[mod acquisition architecture](mod-acquisition.md).
 
 ### The automatic-update service
 
@@ -967,14 +1016,15 @@ raced `LastResult`). It runs only when the result's outcome is authoritative
 `Success` with updates, `NexusConfig.AutomaticUpdatesEnabled` is on, the active
 profile still matches, and a fresh `GetCurrentStateAsync` returns
 `IsPremium == true` (the Premium request fires ONLY when the gates pass). It
-owns only the gates + the sequential batch + the feedback: each iteration
-re-checks the active profile + re-pulls the candidates, then calls
-`installer.InstallLatestAsync` (the awaiting semantics: the batch waits its
-turn behind a manual install under the shared gate). A profile switch stops
-the batch, per-mod failures are isolated and aggregated into one alert, and a
-fully successful batch is silent beyond the installer's per-row progress. The
-VM reloads after the batch via the runner's UI-thread re-raise of the
-service's `UpdatesApplied` event.
+owns only the gates + the enqueue batch + the feedback: each iteration
+re-checks the active profile (a switch stops scheduling further entries and
+cancels the still-queued items admitted for the left profile) + resolves the
+head file + admits one UpdateInstall item through `ModUpdateEnqueuer`. A
+download failure renders inline on its row (the queue's Failed phase with
+retry), so only resolve failures (no row exists to host them) surface here,
+as one aggregated localized alert; a fully successful batch is silent beyond
+the download rows. The reload signal is the queue's own `UpdatesApplied`
+event, which `ModListViewModel` consumes directly.
 
 ### The manual "check now" affordance
 
@@ -982,10 +1032,11 @@ service's `UpdatesApplied` event.
 runner stays the single owner of "fire a check" logic and uses the thorough
 path (`IUpdateCheckService.CheckThoroughAsync`). `IsCheckingNow` is set before
 the await and cleared in the finally block; it drives the header refresh
-button's enabled state and an indeterminate `ProgressBar`. The await now also
-covers the chained `IAutomaticUpdateService` batch, so the manual spinner stays
-active through the installations. The existing `CheckCompleted` subscription
-re-hydrates from the store when the result lands.
+button's enabled state and an indeterminate `ProgressBar`. The await also
+covers the chained `IAutomaticUpdateService` enqueue batch, so the manual
+spinner stays active through the head resolves + enqueues (the installs
+themselves run on the download queue afterward). The existing `CheckCompleted`
+subscription re-hydrates from the store when the result lands.
 
 ### View affordances
 
@@ -1049,28 +1100,26 @@ re-hydrates from the store when the result lands.
   fallback alert on failure); broken (the external folder is missing) shows a
   non-clickable "Folder unavailable" text in the caution brush. The broken
   state is pushed from `IModRepository.IsExternalAvailable` at Reload
-  (`IsExternalBroken`); there is no watcher, so availability is re-read on the
-  next reload. Immediately
-  left of the badge, an indeterminate `ProgressBar` (visible only while the
-  row's `IsUpdating` is true) shows per-row update activity in the former
-  update-status area.
+  (`IsExternalBroken`); there is no watcher, so availability is re-read on
+  the next reload.
 - The stable update-action cell is a fixed-width `Panel` reserved on every row
   so later controls never shift. For Nexus + Latest rows it holds the
   update-action button; for Pinned Nexus, Untracked, and linked rows the cell
   stays reserved but empty (linked mods get no update check). The policy
   ComboBox is disabled for linked rows (a linked container has no versions to
   pin). The button shows for Nexus + Latest rows regardless
-  of account tier and regardless of whether an update is available, and it
-  stays visible while a row is updating (disabled via `UpdateActionEnabled`,
-  which includes `!IsUpdating`); the progress affordance lives in the
-  source-badge area, so the action cell never shifts during start/end of an
-  update. No update: disabled, neutral download arrow, "Up to date" tooltip.
+  of account tier and regardless of whether an update is available. While a
+  download morphs the row the whole cell is not rendered: the morph's progress
+  owns the row's progress surface, and hiding the button is the double-click
+  guard (a Premium click whose install is already live joins the queue item
+  anyway). No update: disabled, neutral download arrow, "Up to date" tooltip.
   Update available: enabled, accent-blue download arrow, with the tooltip
   distinguishing Premium install vs. open files page. The button's `IsVisible`
-  binds to the row's `CanShowUpdateAction` (`IsNexusLatest`) and `IsEnabled` to
-  `UpdateActionEnabled` (`UpdateAvailable && !IsUpdating && (!IsPremiumUser ||
-  !AnyRowUpdating)`), both computed on the row so no parent-walk MultiBinding
-  is needed.
+  binds to the row's `CanShowUpdateAction` (`IsNexusLatest`) and `IsEnabled`
+  to `UpdateActionEnabled` (an update is flagged; no other coordination
+  applies, since a Premium click joins a live item and a regular click merely
+  opens a page), both computed on the row so no parent-walk MultiBinding is
+  needed.
 
 ## The app self-update UI
 
@@ -1107,8 +1156,8 @@ already landed during construction. The event fires on a threadpool thread
 the UI thread through the same injected `Action<Action>` seam
 (`Dispatcher.UIThread.Post` in production, a synchronous pass-through in
 tests) that the update-family services also use for their off-thread events
-(the runner re-raises `CheckCompleted` / `UpdatesApplied`, and the
-`ModRowContext` mirrors the installer's busy flag + progress, already on the
+(the runner re-raises `CheckCompleted`, and the download queue publishes its
+item + applied events, already on the
 UI thread when the list VM sees them). The view
 models use no `ConfigureAwait(false)` (the project rule); their network calls
 run inside `Task.Run`. Download failures surface an alert and never proceed to
@@ -1165,8 +1214,13 @@ list:
 2. **DMF not in the repo**: a Yes/No confirm (the message tailors to whether
    Curator owns the `nxm://` handler: the manager-download path when it does,
    manual-import guidance when it does not). On Yes, premium users get the
-   in-app API download under a modal spinner (the Nexus `download_link`
-   endpoint is premium-only) plus the add. Everyone else (no auth, regular, or
+   download enqueued onto the shared download queue (the Nexus `download_link`
+   endpoint is premium-only): DMF's concrete head file is resolved first (one
+   file-listing call, no download) so the queue's dedupe key is real and the
+   download fetches the exact file the user was offered at confirm, then the
+   download row owns progress and the queue's completion owns the add +
+   reload; a resolve failure (no row exists to host it) surfaces the localized
+   alert. Everyone else (no auth, regular, or
    unknown premium) gets the DMF Nexus files page opened in the default browser
    regardless of `nxm://` setup, so the user is never left at an informational
    dead-end. On a browser-open failure, a fallback alert carries the files-page
@@ -1219,13 +1273,15 @@ public interface IDialogService
     Task<bool> ShowDiscoveryEscapeHatchAsync(IReadOnlyList<string> missingFields);
     Task ShowAlertAsync(string title, string message);
     Task<UnsavedChangesChoice> ShowUnsavedChangesAsync(string title, string message, bool canSave);
+    Task<GameDirConflictChoice> ShowGameDirConflictAsync(string title, string message);
     Task<T> ShowProgressAsync<T>(string title, string message, Func<Task<T>> work);
 }
 ```
 
-Six true-modal methods: the first-run Welcome, a binary confirm, the launch
+Seven true-modal methods: the first-run Welcome, a binary confirm, the launch
 discovery escape hatch, a single-button alert, an unsaved-changes three-choice
-prompt, and a non-dismissable progress spinner. Copied local-import failures
+prompt, the game-dir conflict prompt, and a non-dismissable progress spinner.
+Copied local-import failures
 (no longer modal) surface inline in the `ImportWorkflowView` card; the
 linked-folder flow continues using `ShowAlertAsync` for its failures.
 
