@@ -1,10 +1,10 @@
 using Modificus.Curator.Config;
 using Modificus.Curator.General;
 using Modificus.Curator.Integrations;
-using Modificus.Curator.Mods;
 using Modificus.Curator.Profiles;
 using Modificus.Curator.UI.Dialogs;
 using Modificus.Curator.UI.Localization;
+using System.ComponentModel;
 using Microsoft.Extensions.Logging;
 
 namespace Modificus.Curator.UI.Session;
@@ -12,19 +12,25 @@ namespace Modificus.Curator.UI.Session;
 /// <summary>
 /// Default <see cref="IAutomaticUpdateService"/>. Registered as a singleton.
 /// See the interface remarks for the gating, batch, isolation, and feedback
-/// rules. The installs themselves route through <see cref="IModUpdateInstaller"/>
-/// (which owns the coordinator, the eligibility revalidation, the
-/// acknowledgement, and the per-row progress events); this service owns only
-/// the gates + the sequential batch + the aggregated failure alert.
+/// rules. The installs themselves are UpdateInstall items admitted onto the
+/// download queue through <see cref="ModUpdateEnqueuer"/> (the queue's serial
+/// worker owns the eligibility revalidation, the acquisition, the
+/// acknowledgement, the per-row progress, and the
+/// <see cref="IModDownloadQueue.UpdatesApplied"/> reload signal); this service
+/// owns only the gates, the enqueue batch, the stop/cancel-on-profile-switch
+/// policy, and the aggregated resolve-failure alert.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>No UI-thread affinity required.</b> Invoked by the runner after it returns
-/// to the UI context; the service's awaits (the Premium check, the per-mod
-/// installs) yield without blocking the UI thread, and the aggregated alert +
-/// the <see cref="UpdatesApplied"/> event fire on the UI thread (the runner's
-/// context). No <c>ConfigureAwait(false)</c> is used (UI-layer convention: stay
-/// on the captured context).</para>
+/// <b>No UI-thread affinity required, but single-threaded state.</b> Invoked
+/// by the runner after it returns to the UI context; the service's awaits
+/// (the Premium check, the per-mod resolves) yield without blocking the UI
+/// thread. The outstanding-item tracking + the aggregated alert run on the UI
+/// thread: <c>RunAfterCheckAsync</c>, the session's
+/// <see cref="INotifyPropertyChanged.PropertyChanged"/>, and the queue's
+/// <see cref="IModDownloadQueue.ItemChanged"/> all arrive there. No
+/// <c>ConfigureAwait(false)</c> is used (UI-layer convention: stay on the
+/// captured context).</para>
 /// <para>
 /// <b>The fresh Premium check is conditional.</b> It fires only when the
 /// gating passed (authoritative success with updates + auto-update enabled +
@@ -34,18 +40,26 @@ namespace Modificus.Curator.UI.Session;
 internal sealed class AutomaticUpdateService : IAutomaticUpdateService
 {
     private readonly IProfileSession _session;
-    private readonly IProfileService _profiles;
-    private readonly IModUpdateInstaller _installer;
+    private readonly ModUpdateEnqueuer _enqueuer;
+    private readonly IModDownloadQueue _queue;
     private readonly INexusAuthService _auth;
     private readonly IConfigLoader _configLoader;
     private readonly IDialogService _dialogs;
     private readonly LocalizationService _localization;
     private readonly ILogger<AutomaticUpdateService> _logger;
 
+    /// <summary>
+    /// The outstanding batch items (admitted, not yet terminal). Lets the
+    /// session watcher cancel the not-yet-started ones when the active
+    /// profile changes away from an item's target. UI-thread only (see the
+    /// class remarks).
+    /// </summary>
+    private readonly List<DownloadItem> _outstanding = new();
+
     public AutomaticUpdateService(
         IProfileSession session,
-        IProfileService profiles,
-        IModUpdateInstaller installer,
+        ModUpdateEnqueuer enqueuer,
+        IModDownloadQueue queue,
         INexusAuthService auth,
         IConfigLoader configLoader,
         IDialogService dialogs,
@@ -53,17 +67,73 @@ internal sealed class AutomaticUpdateService : IAutomaticUpdateService
         ILogger<AutomaticUpdateService> logger)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
-        _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
-        _installer = installer ?? throw new ArgumentNullException(nameof(installer));
+        _enqueuer = enqueuer ?? throw new ArgumentNullException(nameof(enqueuer));
+        _queue = queue ?? throw new ArgumentNullException(nameof(queue));
         _auth = auth ?? throw new ArgumentNullException(nameof(auth));
         _configLoader = configLoader ?? throw new ArgumentNullException(nameof(configLoader));
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
         _localization = localization ?? throw new ArgumentNullException(nameof(localization));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
+        // Application-lifetime singletons; the subscriptions are never undone
+        // (the established session-subscription pattern).
+        _session.PropertyChanged += OnSessionPropertyChanged;
+        _queue.ItemChanged += OnQueueItemChanged;
     }
 
-    /// <inheritdoc />
-    public event EventHandler? UpdatesApplied;
+    /// <summary>
+    /// Prunes terminal items from the outstanding set (both application-
+    /// lifetime singletons raise this on the UI thread). A Failed row is
+    /// terminal for the batch too: its failure renders on the row + the user
+    /// dismisses or retries it there.
+    /// </summary>
+    private void OnQueueItemChanged(DownloadItem item)
+    {
+        if (item.IsTerminal)
+        {
+            _outstanding.RemoveAll(tracked => ReferenceEquals(tracked, item));
+        }
+    }
+
+    /// <summary>
+    /// The stop-on-profile-switch policy: when the session's active profile
+    /// changes, every outstanding batch item still WAITING for the worker and
+    /// targeting a profile other than the new active one is cancelled (queued
+    /// cancel semantics: the row leaves, nothing was downloaded). An item the
+    /// worker already started completes under its own rules (its completion
+    /// acknowledges against its captured target profile; the applied event
+    /// reloads whatever list is showing).
+    /// </summary>
+    private void OnSessionPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(IProfileSession.ActiveProfileId))
+        {
+            return;
+        }
+
+        foreach (var item in _outstanding.ToArray())
+        {
+            CancelIfStillQueued(item, _session.ActiveProfileId);
+        }
+    }
+
+    /// <summary>
+    /// Cancels <paramref name="item"/> when it is still waiting for the worker
+    /// (queued cancel semantics) + its target is no longer the active profile.
+    /// An item already started by the worker is left to complete under the
+    /// queue's own rules.
+    /// </summary>
+    private void CancelIfStillQueued(DownloadItem item, Guid? activeProfileId)
+    {
+        if (!item.IsTerminal && item.Phase == DownloadPhase.Queued
+            && item.TargetProfileId != activeProfileId)
+        {
+            _logger.LogInformation(
+                "Cancelling the queued automatic update of mod {Mod} (target profile {Profile} is no longer active).",
+                item.ModId, item.TargetProfileId);
+            _queue.Cancel(item);
+        }
+    }
 
     /// <inheritdoc />
     public async Task RunAfterCheckAsync(UpdateCheckResult result, Guid profileId, CancellationToken ct = default)
@@ -117,15 +187,15 @@ internal sealed class AutomaticUpdateService : IAutomaticUpdateService
             return;
         }
 
-        // 5. The sequential install batch. The installer owns the coordinator,
-        //    the in-gate eligibility revalidation, the acknowledge-on-success,
-        //    and the per-row progress events; this loop owns the scheduling.
-        //    Per-iteration: re-check the active profile (a switch stops the
-        //    whole batch) + re-pull the candidates (the installer revalidates
-        //    against them). Per-mod failures are recorded; they do not abort
+        // 5. The enqueue batch. Each flagged candidate resolves its head file and
+        //    admits one UpdateInstall item through the shared enqueue front; the
+        //    queue's serial worker owns the rest (the dequeue-time eligibility
+        //    revalidation replaces the old per-iteration candidate re-pull). Per-
+        //    iteration: re-check the active profile so a switch mid-batch stops
+        //    scheduling further entries (the session watcher cancels the ones
+        //    already admitted). Per-mod failures are recorded, never aborting
         //    later mods.
-        var installed = 0;
-        var failed = new List<(ModUpdateInfo Info, string Error)>();
+        var resolveFailed = new List<string>();
         foreach (var info in result.Updates)
         {
             // Re-validate the active profile on every iteration: a switch mid-batch
@@ -137,81 +207,66 @@ internal sealed class AutomaticUpdateService : IAutomaticUpdateService
                 break;
             }
 
-            IReadOnlyList<ModListCandidate> candidates;
             try
             {
-                candidates = _profiles.GetModList(profileId).ToCandidates();
-            }
-            catch (KeyNotFoundException)
-            {
-                // The profile was deleted mid-batch; there is nowhere left to
-                // install. Stop the batch (the session's reconcile clears the
-                // active id, so the next iteration's profile gate would stop
-                // it too; this catches the gap).
-                _logger.LogInformation(
-                    "Automatic update batch stopped: profile {Profile} is gone.", profileId);
-                break;
-            }
+                var item = await _enqueuer.EnqueueLatestAsync(
+                    info.ModId, info.ContainerId, info.ModName, info.CurrentVersion, profileId, ct);
+                _outstanding.Add(item);
 
-            try
-            {
-                // The awaiting install semantics: the batch waits its turn
-                // behind a manual install under the shared gate, one mod at a
-                // time. Cancellation propagates (rethrown below).
-                var outcome = await _installer.InstallLatestAsync(
-                    profileId, info.ContainerId, info.ModId, info.CurrentVersion, candidates, ct);
-
-                switch (outcome.Status)
+                // A switch can land while the resolve was in flight (after the
+                // session watcher's event already fired): the item was just
+                // admitted for a profile the user left, so cancel it here (a
+                // no-op if the worker already started it) + stop scheduling.
+                if (_session.ActiveProfileId != profileId)
                 {
-                    case ModInstallStatus.Installed:
-                        installed++;
-                        break;
-                    case ModInstallStatus.NotEligible:
-                        // The installer already revalidated + logged the
-                        // reason; skipping one entry never stops the batch.
-                        break;
-                    case ModInstallStatus.Failed:
-                        failed.Add((info, outcome.Reason));
-                        _logger.LogError(
-                            "Automatic update of container {Container} (mod {Mod}) failed ({Reason}); continuing the batch.",
-                            info.ContainerId, info.ModId, outcome.Reason);
-                        break;
-                    default:
-                        // Busy cannot occur on the awaiting path (it waits its
-                        // turn); treat any unexpected shape as a skip so a
-                        // future status never wedges the batch.
-                        _logger.LogWarning(
-                            "Automatic update of container {Container} returned {Status}; continuing the batch.",
-                            info.ContainerId, outcome.Status);
-                        break;
+                    CancelIfStillQueued(item, _session.ActiveProfileId);
+                    break;
                 }
             }
             catch (OperationCanceledException)
             {
                 // Cancellation stops the batch (shutdown / user-driven). Do not
                 // surface it as a failure; re-raise so the caller (the runner)
-                // sees the cancellation.
+                // sees the cancellation. Already-admitted items run to their
+                // own completion under the queue.
                 _logger.LogInformation("Automatic update batch cancelled.");
                 throw;
             }
+            catch (KeyNotFoundException)
+            {
+                // The target profile was deleted mid-batch; there is nowhere left
+                // to install. Stop the batch quietly (the session watcher cancels
+                // anything already admitted for it).
+                _logger.LogInformation(
+                    "Automatic update batch stopped: profile {Profile} is gone.", profileId);
+                break;
+            }
+            catch (Exception ex)
+            {
+                // A resolve failure (API down, no MAIN files): nothing was
+                // enqueued, so there is no row to host the failure. Record the
+                // mod for the aggregated alert; later mods still enqueue.
+                _logger.LogError(ex,
+                    "Resolving the latest release of mod {Mod} ({Container}) failed; continuing the batch.",
+                    info.ModName, info.ContainerId);
+                resolveFailed.Add(info.ModName);
+            }
         }
 
-        // 6. Feedback. A successful batch is silent. One or more failures surface
-        //    a single aggregated, localized summary alert naming the failed mods.
-        if (failed.Count > 0)
+        // 6. Feedback. A fully successful batch is silent. A download failure
+        //    renders inline on its row (the queue's Failed phase with retry), so
+        //    it needs no alert here; only resolve failures (no row exists to
+        //    host them) surface, as one aggregated, localized summary alert
+        //    naming the mods.
+        if (resolveFailed.Count > 0)
         {
-            var names = string.Join(", ", failed.Select(f => f.Info.ModName));
+            var names = string.Join(", ", resolveFailed);
             _logger.LogWarning(
-                "Automatic update batch completed with {Failed} failure(s): {Names}.",
-                failed.Count, names);
+                "Automatic update batch completed with {Failed} resolve failure(s): {Names}.",
+                resolveFailed.Count, names);
             await _dialogs.ShowAlertAsync(
                 _localization["ModList_AutoUpdateFailedTitle"],
                 _localization.Format("ModList_AutoUpdateFailedSummary", names));
-        }
-
-        if (installed > 0)
-        {
-            UpdatesApplied?.Invoke(this, EventArgs.Empty);
         }
     }
 }

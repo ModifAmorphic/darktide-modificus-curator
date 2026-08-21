@@ -54,9 +54,8 @@
     </DataTemplate>
 
     <!--
-      The source-badge area: the per-row update spinner plus three
-      mutually-exclusive badge states driven by row-VM flags (only one visible
-      per row):
+      The source-badge area: three mutually-exclusive badge states driven by
+      row-VM flags (only one visible per row):
         - Nexus/Untracked badge (HyperlinkButton, NavigateUri=SourceUrl): for
           rows that are not linked. For Nexus the click opens the mod page; for
           Untracked the NavigateUri is null (no-op).
@@ -73,14 +72,6 @@
     -->
     <DataTemplate x:Key="ModRowBadgesTemplate" x:DataType="vm:ModItemViewModel">
       <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-        <!-- Indeterminate progress while a per-row update install runs.
-             Visible only for the row whose IsUpdating is true AND that is
-             not morphed into a download row (a morph suppresses the update
-             affordances entirely); sits left of the badge. -->
-        <ProgressBar Width="18" Height="18"
-                     IsIndeterminate="True"
-                     IsVisible="{Binding ShowUpdateSpinner}"
-                     VerticalAlignment="Center" />
         <!-- Nexus / Untracked badge (hidden for linked rows). -->
         <HyperlinkButton Classes="badge"
                          NavigateUri="{Binding SourceUrl}"
@@ -185,14 +176,11 @@
           EVERY row (so later controls never shift when the button
           appears/disappears). For Nexus + Latest rows it holds the update
           button; for Pinned Nexus and Untracked rows the cell stays reserved
-          but empty. The button stays visible even while a row is updating
-          (it is disabled via UpdateActionEnabled); the indeterminate progress
-          affordance lives in the badge area so this cell does not shift.
-          No update -> disabled, neutral/grey download arrow (the updateAction
-          :disabled style dims the whole button to 0.4 opacity); update
-          available -> enabled with the accent-blue arrow. Premium click runs
-          the in-app update; regular/unknown click opens the mod's Nexus files
-          page (the row VM carries the click behavior; the tooltip
+          but empty. No update -> disabled, neutral/grey download arrow (the
+          updateAction:disabled style dims the whole button to 0.4 opacity);
+          update available -> enabled with the accent-blue arrow. Premium click
+          enqueues the in-app update; regular/unknown click opens the mod's
+          Nexus files page (the row VM carries the click behavior; the tooltip
           distinguishes the cases).
           While a download morphs the row, the WHOLE cell is not rendered
           (the morph's progress owns the row's progress surface, and hiding

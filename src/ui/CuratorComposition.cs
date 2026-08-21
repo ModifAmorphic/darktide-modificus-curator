@@ -106,6 +106,17 @@ public static class CuratorComposition
             sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<ModDownloadQueue>>()));
 
+        // The enqueue front for premium mod-update installs: resolves the head
+        // release + admits an UpdateInstall item onto the queue above, so the
+        // manual per-row update action and the automatic Premium batch share
+        // one download engine with the nxm path (the queue's serial worker is
+        // the only install gate). Registered after the queue; both callers
+        // resolve it lazily through their own registrations below.
+        services.AddSingleton(sp => new ModUpdateEnqueuer(
+            sp.GetRequiredService<IModAcquisitionService>(),
+            sp.GetRequiredService<IModDownloadQueue>(),
+            sp.GetRequiredService<IProfileService>()));
+
         // Replace the no-op INxmModDownloadHandler (registered inside AddNxm)
         // with the real enqueue adapter. MS DI resolves the LAST registration
         // for an interface, so this AddSingleton supersedes the no-op. The
@@ -180,13 +191,13 @@ public static class CuratorComposition
             sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<NxmRegistrationState>>()));
         // The opt-in Premium automatic mod-update installer. Chained from the
-        // update-check runner after each check; each install routes through the
-        // shared IModUpdateInstaller (registered by AddIntegrations together
-        // with the UpdateCoordinator it holds, the global one-install-at-a-time
-        // gate shared with the manual per-row action). Independent of
+        // update-check runner after each check; each flagged candidate is
+        // enqueued as an UpdateInstall item onto the shared download queue
+        // through ModUpdateEnqueuer (the queue's serial worker owns the
+        // eligibility revalidation, the acquisition, the acknowledge, and the
+        // UpdatesApplied reload signal the mod list consumes). Independent of
         // ModListViewModel (to avoid the ModListViewModel ->
-        // UpdateCheckRunner dependency becoming circular) but raises
-        // UpdatesApplied so the list VM reloads after a batch.
+        // UpdateCheckRunner dependency becoming circular).
         services.AddSingleton<IAutomaticUpdateService, AutomaticUpdateService>();
 
         // The mod-thumbnail disk/in-memory cache + download orchestrator. A UI-
@@ -250,18 +261,15 @@ public static class CuratorComposition
             // side is gated by the Add split button).
             sp.GetRequiredService<IGamingModeState>(),
             sp.GetRequiredService<ILogger<LinkedModsViewModel>>()));
-        // The shared row context (premium / install-busy / gaming): created
-        // once before the mod-list VM, it reads the Nexus premium state at
-        // construction (fire-and-forget), mirrors the installer's busy flag +
-        // re-raises its per-container progress on the UI thread, and fronts
-        // the single install path for the manual Premium update action. The
-        // mod-list VM passes the same instance to every row; the rows read
-        // their global halves off it instead of receiving per-flag pushes.
+        // The shared row context (premium / gaming): created once before the
+        // mod-list VM, it reads the Nexus premium state at construction
+        // (fire-and-forget). The mod-list VM passes the same instance to every
+        // row; the rows read their global halves off it instead of receiving
+        // per-flag pushes. Install-busy state is not here: an update in flight
+        // is a queue item rendered as the row's download morph.
         services.AddSingleton(sp => new ModRowContext(
             sp.GetRequiredService<INexusAuthService>(),
-            sp.GetRequiredService<IModUpdateInstaller>(),
             sp.GetRequiredService<IGamingModeState>(),
-            sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<ModRowContext>>()));
 
         services.AddSingleton(sp => new ModListViewModel(
@@ -271,9 +279,9 @@ public static class CuratorComposition
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<IUpdateStateStore>(),
-            // The runner owns the refresh gate + surfaces both update-family
-            // completions (check completed + the automatic batch applied) on
-            // the UI thread; the VM renders its state + hydrates rows from it.
+            // The runner owns the refresh gate + surfaces the check completion
+            // on the UI thread; the VM renders its state + hydrates rows from
+            // it.
             sp.GetRequiredService<UpdateCheckRunner>(),
             sp.GetRequiredService<ModRowContext>(),
             sp.GetRequiredService<ImportWorkflowViewModel>(),
@@ -286,9 +294,13 @@ public static class CuratorComposition
             // empty-state Nexus hint; the mod list never probes the OS.
             sp.GetRequiredService<INxmRegistrationState>(),
             // The download queue feeds the mod list's download rows (the
-            // in-place morphs + the appended section). Constructing the
-            // queue here is safe: its refresh dependency is lazy.
+            // in-place morphs + the appended section) + raises the
+            // update-applied reload. Constructing the queue here is safe: its
+            // refresh dependency is lazy.
             sp.GetRequiredService<IModDownloadQueue>(),
+            // The premium update-action front: resolves the head release +
+            // admits the UpdateInstall item onto the queue above.
+            sp.GetRequiredService<ModUpdateEnqueuer>(),
             sp.GetRequiredService<ILogger<ModListViewModel>>()));
 
         // The hosted destination view models: singletons (one instance per page,

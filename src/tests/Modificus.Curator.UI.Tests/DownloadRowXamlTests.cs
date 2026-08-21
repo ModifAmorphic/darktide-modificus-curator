@@ -102,14 +102,14 @@ public sealed class DownloadRowXamlTests
         var xaml = LoadStrippedXaml("src/ui/Views/ModListView.axaml");
 
         // The update-action cell (the reserved Panel) is not rendered while
-        // morphed; the badge-area spinner follows the morph-aware projection.
+        // morphed; no per-row update spinner exists anywhere (the morph's own
+        // progress is the row's only progress surface while an update is in
+        // flight).
         var updateCell = Assert.Single(Elements(xaml.Root!, "Panel"),
             p => A(p, "Classes")?.Contains("updateCell") == true);
         Assert.Equal("{Binding !IsDownloadMorphed}", A(updateCell, "IsVisible"));
-
-        var spinner = Assert.Single(Elements(xaml.Root!, "ProgressBar"),
-            p => A(p, "IsVisible") == "{Binding ShowUpdateSpinner}");
-        Assert.NotNull(typeof(ModItemViewModel).GetProperty("ShowUpdateSpinner"));
+        Assert.DoesNotContain(Elements(xaml.Root!, "ProgressBar"), p =>
+            A(p, "IsVisible")?.Contains("UpdateSpinner") == true);
 
         // Both policy ComboBoxes disable through IsPolicyEditable (which the
         // morph widens).

@@ -15,12 +15,14 @@ namespace Modificus.Curator.UI.Tests;
 /// <summary>
 /// Exercises <see cref="ModDownloadQueue"/> (the serial download coordinator)
 /// against in-memory fakes: enqueue thread-safety + the marshal seam, dedupe
-/// join/pulse, FIFO serial non-overlap, the repository hit path (zero network,
-/// policy from the matched version), the miss path (acquisition with progress,
-/// name swap, policy from IsHeadFile), the ProfileAdd completion matrix (fresh
-/// AddMod / existing SetModPolicy / reload-only-when-active / profile-deleted
-/// inline failure / acknowledge failure non-fatal), the UpdateInstall
-/// completion (eligibility revalidation, acknowledge, the applied event), both
+/// join/pulse, FIFO serial non-overlap (nxm + update installs share the one
+/// worker), the repository hit path (zero network, policy from the matched
+/// version), the miss path (acquisition with progress, name swap, policy from
+/// IsHeadFile), the ProfileAdd completion matrix (fresh AddMod / existing
+/// SetModPolicy / reload-only-when-active / profile-deleted inline failure /
+/// acknowledge failure non-fatal), the UpdateInstall completion matrix
+/// (eligibility revalidation per rule, acknowledge, the applied event,
+/// failure/cancel without side effects, background-profile completion), both
 /// cancel phases, sign-out at dequeue, retry, and dismiss.
 /// </summary>
 /// <remarks>
@@ -691,6 +693,181 @@ public sealed class ModDownloadQueueTests
             Guid.NewGuid(), "Mod", profile.Id, profile.Name)));
     }
 
+    [Fact]
+    public void UpdateInstall_removed_candidate_is_a_silent_noop()
+    {
+        // The mod left the profile between the flag + the dequeue (the
+        // "removed" rule): nothing installs, acknowledges, or raises; the row
+        // resolves without a failure.
+        var harness = new QueueHarness();
+        var profile = harness.AddProfile();
+        var container = harness.SeedUpdateTargetMod();
+        var applied = 0;
+        harness.Queue.UpdatesApplied += (_, _) => applied++;
+
+        var item = harness.Queue.Enqueue(UpdateRequest(profile, container, KnownOldVersion));
+
+        Assert.True(WaitUntil(() => item.IsTerminal));
+        Assert.Equal(DownloadPhase.Completed, item.Phase);
+        Assert.Empty(harness.Queue.Items);
+        Assert.Empty(harness.Acquisition.Calls);
+        Assert.Empty(harness.UpdateState.AcknowledgeCalls);
+        Assert.Equal(0, applied);
+    }
+
+    [Fact]
+    public void UpdateInstall_repinned_candidate_is_a_silent_noop()
+    {
+        // The user re-pinned the mod between the flag + the dequeue (the
+        // "re-pinned" rule): same silent no-op as a removed candidate.
+        var harness = new QueueHarness();
+        var profile = harness.AddProfile();
+        var container = harness.SeedUpdateTargetMod();
+        var pinnedFolder = container.Versions.Single(v => v.VersionString == KnownOldVersion).Folder;
+        harness.Profiles.WithMods(profile.Id, new ModListEntry
+        {
+            ContainerId = container.Id,
+            Enabled = true,
+            Policy = new PinnedPolicy(pinnedFolder),
+        });
+        var applied = 0;
+        harness.Queue.UpdatesApplied += (_, _) => applied++;
+
+        var item = harness.Queue.Enqueue(UpdateRequest(profile, container, KnownOldVersion));
+
+        Assert.True(WaitUntil(() => item.IsTerminal));
+        Assert.Equal(DownloadPhase.Completed, item.Phase);
+        Assert.Empty(harness.Acquisition.Calls);
+        Assert.Empty(harness.UpdateState.AcknowledgeCalls);
+        Assert.Equal(0, applied);
+    }
+
+    [Fact]
+    public void UpdateInstall_acquisition_failure_fails_the_row_without_acknowledging()
+    {
+        // A download failure is row-hosted (the Failed phase with dismiss +
+        // retry); it never acknowledges + never raises the applied event.
+        var harness = new QueueHarness();
+        var profile = harness.AddProfile();
+        var container = harness.SeedUpdateTargetMod();
+        harness.Profiles.WithMods(profile.Id, new ModListEntry
+        {
+            ContainerId = container.Id,
+            Enabled = true,
+            Policy = ModVersionPolicy.Latest,
+        });
+        harness.Acquisition.Steps.Enqueue(
+            new ScriptedStep { Throw = new InvalidOperationException("network down") });
+        var applied = 0;
+        harness.Queue.UpdatesApplied += (_, _) => applied++;
+
+        var item = harness.Queue.Enqueue(UpdateRequest(profile, container, KnownOldVersion));
+
+        Assert.True(WaitUntil(() => item.Phase == DownloadPhase.Failed));
+        Assert.Equal("network down", item.ErrorMessage);
+        Assert.Contains(item, harness.Queue.Items); // the row stays for retry
+        Assert.Empty(harness.UpdateState.AcknowledgeCalls);
+        Assert.Equal(0, applied);
+    }
+
+    [Fact]
+    public void UpdateInstall_cancel_active_propagates_to_the_acquisition_with_no_side_effects()
+    {
+        var harness = new QueueHarness();
+        var profile = harness.AddProfile();
+        var container = harness.SeedUpdateTargetMod();
+        harness.Profiles.WithMods(profile.Id, new ModListEntry
+        {
+            ContainerId = container.Id,
+            Enabled = true,
+            Policy = ModVersionPolicy.Latest,
+        });
+        HoldNext(harness);
+        var applied = 0;
+        harness.Queue.UpdatesApplied += (_, _) => applied++;
+
+        var item = harness.Queue.Enqueue(UpdateRequest(profile, container, KnownOldVersion));
+        Assert.True(WaitUntil(() => harness.Acquisition.InFlight == 1));
+
+        harness.Queue.Cancel(item);
+        Assert.True(WaitUntil(() => item.IsTerminal));
+
+        Assert.Equal(DownloadPhase.Canceled, item.Phase);
+        Assert.Empty(harness.Queue.Items);
+        Assert.Null(item.ErrorMessage);
+        Assert.Empty(harness.UpdateState.AcknowledgeCalls);
+        Assert.Equal(0, applied);
+        Assert.Equal(0, harness.Refresh.Reloads);
+    }
+
+    [Fact]
+    public void UpdateInstall_completion_for_a_background_profile_still_acknowledges_and_raises()
+    {
+        // An in-flight item completing after a profile switch (or enqueued for
+        // any non-active target) observes ITS captured profile: the
+        // acknowledge lands on the target's persisted entry + the applied
+        // event fires (the list VM reloads whatever profile is showing).
+        var harness = new QueueHarness();
+        var active = harness.AddProfile("Active");
+        var background = harness.AddProfile("Background");
+        var container = harness.SeedUpdateTargetMod();
+        harness.Profiles.WithMods(background.Id, new ModListEntry
+        {
+            ContainerId = container.Id,
+            Enabled = true,
+            Policy = ModVersionPolicy.Latest,
+        });
+        harness.Session.ActiveProfileId = active.Id;
+        var applied = 0;
+        harness.Queue.UpdatesApplied += (_, _) => applied++;
+
+        var item = harness.Queue.Enqueue(UpdateRequest(background, container, KnownOldVersion));
+
+        Assert.True(WaitUntil(() => item.IsTerminal));
+        Assert.Equal(DownloadPhase.Completed, item.Phase);
+        var acknowledge = Assert.Single(harness.UpdateState.AcknowledgeCalls);
+        Assert.Equal(background.Id, acknowledge.ProfileId);
+        Assert.True(WaitUntil(() => applied == 1));
+        // The applied event (not a direct reload) is the signal; the target is
+        // not the active profile, so the queue itself reloaded nothing.
+        Assert.Equal(0, harness.Refresh.Reloads);
+    }
+
+    [Fact]
+    public void Mixed_nxm_and_update_clicks_share_the_serial_worker_without_overlap()
+    {
+        // One engine: an nxm ProfileAdd download + a premium UpdateInstall
+        // (the automatic batch's admission shape) never hold two acquisitions
+        // at once; the queue's single worker is the only gate. The update
+        // targets a DIFFERENT mod than the nxm click, so neither item can
+        // make the other's dequeue-time eligibility stale.
+        var harness = new QueueHarness();
+        var profile = harness.AddProfile();
+        var updateMod = harness.Repo.CreateContainer(new NexusSource { ModId = 20 }, "Update Target");
+        harness.Repo.AddVersion(
+            updateMod.Id, KnownOldVersion, _ => { },
+            new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero), KnownOldFileId);
+        harness.Profiles.WithMods(profile.Id, new ModListEntry
+        {
+            ContainerId = updateMod.Id,
+            Enabled = true,
+            Policy = ModVersionPolicy.Latest,
+        });
+        HoldNext(harness);
+        harness.Acquisition.Steps.Enqueue(new ScriptedStep());
+
+        var nxm = harness.Queue.Enqueue(AddRequest(profile.Id, fileId: 999));
+        Assert.True(WaitUntil(() => harness.Acquisition.InFlight == 1));
+        var update = harness.Queue.Enqueue(UpdateRequest(profile, updateMod, KnownOldVersion, modId: 20));
+        Assert.Equal(DownloadPhase.Queued, update.Phase);
+
+        _gateLast.SetResult();
+        Assert.True(WaitUntil(() => update.IsTerminal));
+
+        Assert.Equal(1, harness.Acquisition.MaxInFlight);
+        Assert.Equal(new[] { 999, 300 }, harness.Acquisition.Calls.Select(c => c.FileId));
+    }
+
     // ---- events ---------------------------------------------------------------
 
     [Fact]
@@ -754,6 +931,18 @@ public sealed class ModDownloadQueueTests
             name ?? Localization.Format("Nxm_ModNameFallback", KnownModId),
             profileId, "Target",
             NxmKey: "KEY", NxmExpires: 123L);
+
+    /// <summary>
+    /// A premium update-install request: the update front's admission shape
+    /// (file 300 never exists in the seeded repo, so the item exercises the
+    /// acquisition path).
+    /// </summary>
+    private static ModDownloadRequest UpdateRequest(
+        ProfileSummary profile, ModContainer container, string expectedVersion, int modId = KnownModId) =>
+        new(
+            "warhammer40kdarktide", modId, 300, DownloadPurpose.UpdateInstall,
+            container.Id, container.Name, profile.Id, profile.Name,
+            ExpectedVersion: expectedVersion);
 
     /// <summary>
     /// The queue's in-memory dependencies: the scripted acquisition (with repo

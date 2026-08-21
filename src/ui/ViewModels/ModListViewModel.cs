@@ -131,6 +131,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     private readonly IExternalLauncher _externalLauncher;
     private readonly INxmRegistrationState _nxmRegistration;
     private readonly IModDownloadQueue _downloadQueue;
+    private readonly ModUpdateEnqueuer _updateEnqueuer;
 
     /// <summary>
     /// The live download-row wrappers, keyed by their coordinator item
@@ -165,12 +166,13 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// Creates the list VM, subscribes to the session (reload on
     /// active-profile change), the update-check runner (row hydration on every
-    /// completed check + reload after an automatic batch installs mods), the
-    /// row context (the per-row install progress + the global premium / busy /
-    /// gaming flips, all already on the UI thread), the linked-mods child
-    /// (reload when its link flow finishes), and localization (culture
-    /// refresh), then loads the current profile's mods. The premium read lives
-    /// in the row context (fire-and-forget at its construction).
+    /// completed check), the download queue (the per-row morph + appended-row
+    /// projection, and the UpdatesApplied reload after each completed
+    /// update install), the row context (the global premium / gaming flips,
+    /// already on the UI thread), the linked-mods child (reload when its link
+    /// flow finishes), and localization (culture refresh), then loads the
+    /// current profile's mods. The premium read lives in the row context
+    /// (fire-and-forget at its construction).
     /// </summary>
     public ModListViewModel(
         IProfileService profiles,
@@ -187,6 +189,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         IExternalLauncher externalLauncher,
         INxmRegistrationState nxmRegistration,
         IModDownloadQueue downloadQueue,
+        ModUpdateEnqueuer updateEnqueuer,
         ILogger<ModListViewModel> logger)
         : base(localization)
     {
@@ -204,20 +207,17 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         _externalLauncher = externalLauncher ?? throw new ArgumentNullException(nameof(externalLauncher));
         _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
         _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
+        _updateEnqueuer = updateEnqueuer ?? throw new ArgumentNullException(nameof(updateEnqueuer));
 
         _session.PropertyChanged += OnSessionPropertyChanged;
-        // The runner surfaces both update-family completions on the UI thread
-        // (the re-raised check-completed + the automatic batch's
-        // updates-applied); this VM does no marshaling of its own.
+        // The runner surfaces the check completion on the UI thread (the
+        // re-raised check-completed); this VM does no marshaling of its own.
         _updateCheckRunner.CheckCompleted += OnUpdateCheckCompleted;
-        _updateCheckRunner.UpdatesApplied += OnAutomaticUpdatesApplied;
         // The refresh gate is runner-owned + fed by every check result; this
         // VM renders its state (the gate marshals the event to the UI thread).
         _updateCheckRunner.RefreshGate.StateChanged += OnRefreshGateStateChanged;
-        // The row context's per-container install progress drives the matching
-        // row's spinner; its global flips (premium / busy / gaming) re-fire
-        // this VM's forwarding names + fan out to the live rows.
-        RowContext.ModUpdateProgress += OnModUpdateProgress;
+        // The row context's global flips (premium / gaming) re-fire this VM's
+        // forwarding names + fan out to the live rows.
         RowContext.PropertyChanged += OnRowContextChanged;
         ImportWorkflow.ItemImported += OnItemImported;
         // The Add split button's enabled state combines the workflow's activity
@@ -243,53 +243,28 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         // dropped by a reload cannot leak against it.
         _downloadQueue.Items.CollectionChanged += OnDownloadItemsChanged;
         _downloadQueue.ItemChanged += OnDownloadItemChanged;
+        // A completed UpdateInstall (manual click or automatic batch; the
+        // queue raises it after its acknowledge) reloads this list + flags the
+        // session pending: the new version + cleared flag show. Already
+        // marshaled to the UI thread by the queue.
+        _downloadQueue.UpdatesApplied += OnUpdatesApplied;
 
         Reload();
     }
 
     /// <summary>
-    /// The automatic-update service finished a batch with at least one
-    /// successful install. Mark the active profile as having staged changes (the
-    /// batch changed one or more mod versions) and reload so the new versions +
-    /// cleared flags show. The runner re-raises the event on the UI thread.
+    /// A queued update install completed (manual click or automatic batch; the
+    /// queue raises it on the UI thread after acknowledging the install).
+    /// Mark the active profile as having staged changes (the install changed
+    /// one or more mod versions) and reload so the new versions + cleared
+    /// flags show. The reload re-reads whatever profile is active (an
+    /// in-flight item completing after a profile switch reloads the truth of
+    /// the list being shown).
     /// </summary>
-    private void OnAutomaticUpdatesApplied(object? sender, EventArgs e)
+    private void OnUpdatesApplied(object? sender, EventArgs e)
     {
         _session.HasPendingChanges = true;
         Reload();
-    }
-
-    /// <summary>
-    /// The row context reports per-install progress (a container's install
-    /// attempt started or finished, for BOTH the manual Premium path and the
-    /// automatic batch; already on the UI thread). Find the row by ContainerId
-    /// and set its <see cref="ModItemViewModel.IsUpdating"/> so the row-level
-    /// spinner (left of the Nexus badge) tracks the currently installing mod.
-    /// An event for a row no longer present (after a profile switch / reload)
-    /// is ignored, so a switch mid-batch never leaves a stale spinner on a
-    /// now-absent row.
-    /// </summary>
-    private void OnModUpdateProgress(object? sender, ModUpdateProgressEventArgs e) =>
-        ApplyModUpdateProgress(e.ContainerId, e.IsActive);
-
-    /// <summary>
-    /// Applies a per-mod install progress signal to the matching row. Finds the
-    /// row by ContainerId; sets its <see cref="ModItemViewModel.IsUpdating"/>
-    /// to <paramref name="isActive"/>. Ignores a container id with no matching
-    /// row (the row may have been removed by a profile switch / reload between
-    /// the event + this UI-thread callback).
-    /// </summary>
-    private void ApplyModUpdateProgress(Guid containerId, bool isActive)
-    {
-        var row = Mods.FirstOrDefault(m => m.ContainerId == containerId);
-        if (row is null)
-        {
-            // The row is gone (profile switch / reload). Ignore: no stale
-            // spinner is left on a now-absent row.
-            return;
-        }
-
-        row.IsUpdating = isActive;
     }
 
     /// <summary>The active profile's mod rows, in load order (lower first).</summary>
@@ -507,16 +482,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     public bool IsPremiumUser => RowContext.IsPremiumUser;
 
     /// <summary>
-    /// Whether the mod-update installer reports an install in flight (manual or
-    /// automatic; the coordinator-backed busy flag). Forwarded from
-    /// <see cref="RowContext"/>; rows read the same flag through their own
-    /// forwarding property, so the per-row enabled state reflects the global
-    /// "one install at a time" coordination without a parent walk.
-    /// </summary>
-    public bool AnyRowUpdating => RowContext.AnyRowUpdating;
-
-    /// <summary>
-    /// A row-affecting global (premium / install-busy / gaming) flipped on the
+    /// A row-affecting global (premium / gaming) flipped on the
     /// shared row context (already on the UI thread). Re-fires this VM's
     /// forwarding properties (the names match the context's exactly) and fans
     /// the notification out to the live rows, whose derived enabled states +
@@ -1654,38 +1620,38 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
 
     /// <summary>
     /// The stable per-row update action. Branches on the verified Premium state:
-    /// <b>Premium</b> installs the mod's latest MAIN release in-app via
-    /// <see cref="IModUpdateInstaller.TryInstallLatestAsync"/> (the shared
-    /// install path: coordinator-gated one-install-at-a-time, in-gate
-    /// eligibility revalidation, acknowledge-on-success, per-row progress; works
-    /// identically inside Gaming Mode); <b>regular / unknown</b> opens the mod's
-    /// Nexus files page in the user's browser via the injectable
-    /// external-launcher seam, surfacing a fallback alert on launch failure,
-    /// except inside a Steam Deck Gaming Mode session where the browser flow
-    /// cannot complete and Desktop Mode guidance is shown instead.
+    /// <b>Premium</b> resolves the mod's latest MAIN release + enqueues one
+    /// in-app UpdateInstall download via the shared enqueue front (the queue's
+    /// serial worker owns the acquisition, the acknowledge-on-success, and the
+    /// reload signal; the row morphs into a download row while the item is
+    /// live; works identically inside Gaming Mode); <b>regular / unknown</b>
+    /// opens the mod's Nexus files page in the user's browser via the
+    /// injectable external-launcher seam, surfacing a fallback alert on launch
+    /// failure, except inside a Steam Deck Gaming Mode session where the
+    /// browser flow cannot complete and Desktop Mode guidance is shown
+    /// instead.
     /// </summary>
     /// <remarks>
     /// <para><b>Defense.</b> No-op when: there is no active profile; the row is
     /// not Nexus+Latest (<see cref="ModItemViewModel.IsNexusLatest"/>); no update
     /// is flagged (<see cref="ModItemViewModel.UpdateAvailable"/>); or the row
-    /// has no <see cref="ModItemViewModel.NexusModId"/>. The Premium install path
-    /// additionally no-ops when the installer reports another install in flight
-    /// (one install at a time, shared with the automatic batch).</para>
-    /// <para><b>One install at a time, globally.</b> The installer's shared
-    /// coordinator is the single mutual-exclusion point across the manual click
-    /// + the automatic batch. Its busy flag drives
-    /// <see cref="AnyRowUpdating"/> (pushed to rows), which disables other
-    /// Premium rows' actions while an install runs; its progress events drive
-    /// this row's spinner (<see cref="ModItemViewModel.IsUpdating"/>).</para>
+    /// has no <see cref="ModItemViewModel.NexusModId"/>.</para>
+    /// <para><b>One engine.</b> The download queue's serial worker is the single
+    /// mutual-exclusion point across the manual click, the automatic batch, and
+    /// nxm downloads: a click for a file already live in the queue joins the
+    /// existing item (dedupe + pulse) instead of starting a second
+    /// acquisition.</para>
     /// <para><b>Transactional extraction.</b> The mod repository's
     /// <c>AddVersion</c> extracts into a sibling temp + atomically swaps on
-    /// success, so a mid-update failure leaves the existing version intact (the
-    /// user keeps the version they had). On Premium-install failure the command
-    /// surfaces a user-facing alert with the exception's message.</para>
+    /// success, so a mid-download failure leaves the existing version intact
+    /// (the user keeps the version they had). A head-resolve failure (the API
+    /// call before any queue item exists) surfaces a user-facing alert with
+    /// the exception's message; once enqueued, failures render inline on the
+    /// morphed row.</para>
     /// <para><b>No ConfigureAwait(false)</b> on the Premium path: the continuation
-    /// must stay on the UI thread so Reload + ShowAlertAsync run on the UI thread
-    /// (the UI-layer convention). The installer's own I/O runs on the threadpool
-    /// internally; awaiting it does not block the UI thread.</para>
+    /// must stay on the UI thread so the failure-path ShowAlertAsync runs on
+    /// the UI thread (the UI-layer convention). The resolve's I/O runs on the
+    /// threadpool internally; awaiting it does not block the UI thread.</para>
     /// </remarks>
     [RelayCommand]
     private async Task Update(ModItemViewModel? row)
@@ -1723,67 +1689,57 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     }
 
     /// <summary>
-    /// The Premium install branch of the update action: hands the install to
-    /// the shared installer (a Busy outcome when another install is in flight is
-    /// a silent no-op) and renders the outcome. On <see cref="ModInstallStatus.Installed"/>
-    /// the installer has already acquired the latest release + acknowledged the
-    /// flag, so this marks the session pending + reloads (the new version + the
-    /// cleared flag show). On <see cref="ModInstallStatus.Failed"/> the localized
-    /// alert carries the exception's message. Busy + NotEligible are silent (a
-    /// second click while busy is a no-op; an ineligible target means the flag
-    /// was stale + the next hydration clears it). Cancellation propagates out of
-    /// the installer + is swallowed here (not a failure).
+    /// The Premium branch of the update action: resolves the mod's head
+    /// release + admits one UpdateInstall item onto the download queue through
+    /// the shared enqueue front. The queue owns the rest under its serial
+    /// worker: the row morphs while the item is live (the morph hides the
+    /// update-action cell, the double-click guard), the dequeue-time
+    /// eligibility revalidation makes a stale flag a silent no-op, and the
+    /// completion acknowledges once + raises the applied event (which marks
+    /// the session pending + reloads this list). A resolve failure (the API
+    /// call before any item exists) surfaces the localized failure alert;
+    /// cancellation is swallowed (not a failure).
     /// </summary>
     private async Task UpdatePremiumAsync(Guid profileId, ModItemViewModel row, int modId)
     {
-        ModInstallOutcome outcome;
+        // A row with no resolved version cannot carry the eligibility version
+        // rule's input (the enqueue requires it); treat it like a stale flag:
+        // a silent no-op.
+        if (string.IsNullOrWhiteSpace(row.ActualVersion))
+        {
+            return;
+        }
+
         try
         {
             // No ConfigureAwait(false): the continuation must stay on the UI
-            // thread so Reload + the failure-path ShowAlertAsync below run on
-            // the UI thread (the UI-layer convention). The expected version is
-            // the row's resolved version (what the row was built from); the
-            // installer revalidates it against the container's current state
-            // inside the gate. The candidates are the entries the last Reload
-            // loaded.
-            outcome = await RowContext.InstallLatestAsync(
-                profileId,
-                row.ContainerId,
-                modId,
-                row.ActualVersion,
-                _loadedEntries.ToCandidates());
+            // thread so the failure-path ShowAlertAsync below runs on the UI
+            // thread (the UI-layer convention). The expected version is the
+            // row's resolved version (what the row was built from); the queue
+            // revalidates it against the container's current state at dequeue.
+            await _updateEnqueuer.EnqueueLatestAsync(
+                modId, row.ContainerId, row.Name, row.ActualVersion, profileId);
+            _logger.LogInformation(
+                "Enqueued the update install for mod {Container} (mod id {Mod}).",
+                row.ContainerId, modId);
         }
         catch (OperationCanceledException)
         {
             // Cancellation is not a failure: the user (or shutdown) cancelled;
             // no alert. Re-throwing would surface as an unobserved exception on
             // the fire-and-forget AsyncRelayCommand, so swallow instead.
-            _logger.LogInformation("Update of mod {Container} was cancelled.", row.ContainerId);
-            return;
+            _logger.LogInformation("Update enqueue for mod {Container} was cancelled.", row.ContainerId);
         }
-
-        switch (outcome.Status)
+        catch (Exception ex)
         {
-            case ModInstallStatus.Installed:
-                _session.HasPendingChanges = true;
-                Reload();
-                _logger.LogInformation("Updated mod {Container} to the latest Nexus release.", row.ContainerId);
-                break;
-
-            case ModInstallStatus.Failed:
-                _logger.LogError(
-                    outcome.Exception, "Update of mod {Container} failed.", row.ContainerId);
-                await _dialogs.ShowAlertAsync(
-                    _localization["Update_FailedTitle"],
-                    _localization.Format("Update_FailedMessage", row.Name) + " "
-                        + (outcome.Exception?.Message ?? outcome.Reason));
-                break;
-
-            default:
-                // Busy (another install is in flight: a clean no-op) +
-                // NotEligible (a stale flag; the installer logged the reason +
-                // the next hydration self-heals it out). Silent.
-                break;
+            // The head resolve failed (API down, no MAIN files): nothing was
+            // enqueued, so there is no row to host the failure. Surface the
+            // localized alert carrying the exception's message.
+            _logger.LogError(
+                ex, "Resolving the latest release of mod {Container} failed.", row.ContainerId);
+            await _dialogs.ShowAlertAsync(
+                _localization["Update_FailedTitle"],
+                _localization.Format("Update_FailedMessage", row.Name) + " " + ex.Message);
         }
     }
 

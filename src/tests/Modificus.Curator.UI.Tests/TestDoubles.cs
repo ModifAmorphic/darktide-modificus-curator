@@ -32,20 +32,16 @@ internal static class TestDoubles
     /// <summary>
     /// Builds a <see cref="ModRowContext"/> over the supplied (or default)
     /// fakes with a pass-through UI-thread seam: the premium read resolves
-    /// synchronously (the fake auth returns completed tasks), the installer's
-    /// busy + progress events flow through immediately, and the gaming flag is
-    /// readable off the context the moment it is built.
+    /// synchronously (the fake auth returns completed tasks) and the gaming
+    /// flag is readable off the context the moment it is built.
     /// </summary>
     public static ModRowContext RowContext(
         FakeNexusAuthService? auth = null,
-        FakeModUpdateInstaller? installer = null,
         IGamingModeState? gamingMode = null)
     {
         return new ModRowContext(
             auth ?? new FakeNexusAuthService(),
-            installer ?? new FakeModUpdateInstaller(),
             gamingMode ?? new GamingModeState(false),
-            static action => action(),
             NullLogger<ModRowContext>.Instance);
     }
 
@@ -140,7 +136,7 @@ internal static class TestDoubles
         FakeDialogService? dialogs = null,
         LocalizationService? localization = null,
         FakeUpdateCheckService? updateCheck = null,
-        FakeModUpdateInstaller? installer = null,
+        FakeModAcquisitionService? acquisition = null,
         FakeNexusAuthService? auth = null,
         FakeConfigLoader? configLoader = null,
         FakeAppStateStore? appState = null,
@@ -165,7 +161,7 @@ internal static class TestDoubles
         localization ??= new LocalizationService();
         updateCheck ??= new FakeUpdateCheckService();
         updateState ??= new FakeUpdateStateStore(repo);
-        installer ??= new FakeModUpdateInstaller { StateStore = updateState };
+        acquisition ??= new FakeModAcquisitionService();
         auth ??= new FakeNexusAuthService();
         configLoader ??= new FakeConfigLoader();
         appState ??= new FakeAppStateStore();
@@ -209,7 +205,8 @@ internal static class TestDoubles
         gamingMode ??= new GamingModeState(false);
         // The download-queue fake: empty by default so existing tests see no
         // download rows; the download-row tests drive its collection + events
-        // directly (no worker, no real pipeline).
+        // directly (no worker, no real pipeline), and the update-flow tests
+        // exercise the real enqueue front over it (admission + dedupe only).
         downloadQueue ??= new FakeModDownloadQueue();
 
         // The link-external-folder child: constructed over the SAME
@@ -229,14 +226,11 @@ internal static class TestDoubles
             gamingMode,
             NullLogger<LinkedModsViewModel>.Instance);
 
-        // The shared row context: the SAME installer/auth/gaming fakes the
-        // test drives (premium reads resolve synchronously off the fake auth;
-        // the installer's busy + progress events flow through the context).
+        // The shared row context: the SAME auth/gaming fakes the test drives
+        // (premium reads resolve synchronously off the fake auth).
         var rowContext = new ModRowContext(
             auth,
-            installer,
             gamingMode,
-            invokeOnUi ?? (static action => action()),
             NullLogger<ModRowContext>.Instance);
         // Wire the state store + a record-profile-id tracker into the fake
         // update-check service so RaiseCheckCompleted / CheckAsync record the
@@ -289,6 +283,10 @@ internal static class TestDoubles
             launcher,
             nxmRegistration,
             downloadQueue,
+            // The real enqueue front over the acquisition + queue fakes, so
+            // the update-action tests exercise the resolve->admit contract
+            // exactly as production wires it.
+            new ModUpdateEnqueuer(acquisition, downloadQueue, profiles),
             NullLogger<ModListViewModel>.Instance);
     }
 
@@ -1169,129 +1167,18 @@ internal sealed class FakeUpdateStateStore : IUpdateStateStore
 /// <summary>
 /// No-op <see cref="IAutomaticUpdateService"/> for the UI tests. Records
 /// <see cref="RunAfterCheckAsync"/> calls so the runner tests can assert the
-/// service was chained after a check; raises <see cref="UpdatesApplied"/> only
-/// when a test calls <see cref="RaiseUpdatesApplied"/>. Never installs anything
-/// (per-row progress comes from the <see cref="FakeModUpdateInstaller"/>).
+/// service was chained after a check. Never enqueues anything (the real
+/// service's enqueue batch is covered by its own test suite over the real
+/// front + queue fakes).
 /// </summary>
 internal sealed class FakeAutomaticUpdateService : IAutomaticUpdateService
 {
     public IReadOnlyList<(UpdateCheckResult Result, Guid ProfileId)> Calls { get; } = new List<(UpdateCheckResult, Guid)>();
 
-    public event EventHandler? UpdatesApplied;
-
     public Task RunAfterCheckAsync(UpdateCheckResult result, Guid profileId, CancellationToken ct = default)
     {
         ((List<(UpdateCheckResult, Guid)>)Calls).Add((result, profileId));
         return Task.CompletedTask;
-    }
-
-    public void RaiseUpdatesApplied() => UpdatesApplied?.Invoke(this, EventArgs.Empty);
-}
-
-/// <summary>
-/// Configurable <see cref="IModUpdateInstaller"/> for the UI tests. Records
-/// every install call (both the Try + awaiting shapes) with its arguments;
-/// answers with the configured outcome (Installed by default, acknowledging
-/// through the wired state store like the real installer), a settable busy
-/// refusal for the Try shape, or a thrown exception (cancellation posture).
-/// Raises progress active/inactive around each simulated attempt + exposes
-/// <see cref="RaiseBusyChanged"/> for the busy push-down tests.
-/// </summary>
-internal sealed class FakeModUpdateInstaller : IModUpdateInstaller
-{
-    /// <summary>The install calls made through either method, in order
-    /// (profileId, containerId, modId, expectedVersion, method).</summary>
-    public IReadOnlyList<(Guid ProfileId, Guid ContainerId, int ModId, string ExpectedVersion, string Method)> Calls { get; }
-        = new List<(Guid, Guid, int, string, string)>();
-
-    /// <summary>The outcome returned by the next non-busy install call.
-    /// Default <see cref="ModInstallStatus.Installed"/>. Per-call overrides:
-    /// <see cref="OutcomeQueue"/>.</summary>
-    public ModInstallOutcome NextOutcome { get; set; } = new(ModInstallStatus.Installed);
-
-    /// <summary>Outcomes returned one per install call, in order (dequeued
-    /// before falling back to <see cref="NextOutcome"/>), so a test can script
-    /// a batch where specific entries fail + others succeed.</summary>
-    public Queue<ModInstallOutcome> OutcomeQueue { get; } = new();
-
-    /// <summary>When true, the next <see cref="TryInstallLatestAsync"/> call
-    /// answers <see cref="ModInstallStatus.Busy"/> without recording progress
-    /// or acknowledging (the manual no-op).</summary>
-    public bool NextTryIsBusy { get; set; }
-
-    /// <summary>When set, thrown from the next install attempt (after progress
-    /// active=true), so a test can drive the caller-side cancellation or
-    /// exception posture.</summary>
-    public Exception? ThrowNext { get; set; }
-
-    /// <summary>
-    /// Optional state store acknowledged on an Installed outcome, mirroring the
-    /// real installer's acknowledge-on-success so the VM-level flag-clearing
-    /// assertions observe the persisted state the way production does.
-    /// </summary>
-    public IUpdateStateStore? StateStore { get; set; }
-
-    /// <summary>The value reported by <see cref="IsBusy"/>; settable so a test
-    /// can simulate an install in flight without holding a real gate.</summary>
-    public bool IsBusy { get; set; }
-
-    public event EventHandler? BusyChanged;
-    public event EventHandler<ModUpdateProgressEventArgs>? ModUpdateProgress;
-
-    /// <summary>Raises <see cref="BusyChanged"/> (an installer's busy flag
-    /// flipped somewhere else).</summary>
-    public void RaiseBusyChanged() => BusyChanged?.Invoke(this, EventArgs.Empty);
-
-    /// <summary>
-    /// Raises <see cref="ModUpdateProgress"/> for <paramref name="containerId"/>
-    /// with the given <paramref name="isActive"/> state, simulating the
-    /// installer's per-attempt progress signal.
-    /// </summary>
-    public void RaiseModUpdateProgress(Guid containerId, bool isActive) =>
-        ModUpdateProgress?.Invoke(this, new ModUpdateProgressEventArgs(containerId, isActive));
-
-    public async Task<ModInstallOutcome> TryInstallLatestAsync(
-        Guid profileId, Guid containerId, int modId, string expectedVersion,
-        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default)
-    {
-        ((List<(Guid, Guid, int, string, string)>)Calls).Add(
-            (profileId, containerId, modId, expectedVersion, nameof(TryInstallLatestAsync)));
-        if (NextTryIsBusy)
-        {
-            return new ModInstallOutcome(ModInstallStatus.Busy);
-        }
-        return await RunAsync(profileId, containerId);
-    }
-
-    public async Task<ModInstallOutcome> InstallLatestAsync(
-        Guid profileId, Guid containerId, int modId, string expectedVersion,
-        IReadOnlyList<ModListCandidate> candidates, CancellationToken ct = default)
-    {
-        ((List<(Guid, Guid, int, string, string)>)Calls).Add(
-            (profileId, containerId, modId, expectedVersion, nameof(InstallLatestAsync)));
-        return await RunAsync(profileId, containerId);
-    }
-
-    private async Task<ModInstallOutcome> RunAsync(Guid profileId, Guid containerId)
-    {
-        RaiseModUpdateProgress(containerId, isActive: true);
-        try
-        {
-            if (ThrowNext is not null)
-            {
-                await Task.FromException(ThrowNext);
-            }
-            var outcome = OutcomeQueue.Count > 0 ? OutcomeQueue.Dequeue() : NextOutcome;
-            if (outcome.Status == ModInstallStatus.Installed)
-            {
-                StateStore?.AcknowledgeInstall(profileId, containerId);
-            }
-            return outcome;
-        }
-        finally
-        {
-            RaiseModUpdateProgress(containerId, isActive: false);
-        }
     }
 }
 
@@ -2189,15 +2076,16 @@ internal sealed class RefreshRecorder : IModListRefresh
 }
 
 /// <summary>
-/// In-memory <see cref="IModDownloadQueue"/> for the download-row tests: the
-/// item collection is driven DIRECTLY (no worker, no pipeline), so a test
-/// controls exactly what the row UI observes. Admitting an item through
-/// <see cref="Add"/> mirrors the real coordinator's posted pair (the
-/// collection add + the ItemChanged admission announcement); mutating an
-/// item's state in place and calling <see cref="Publish"/> mirrors a resolve
-/// or terminal announcement. Cancel / Dismiss / Retry are recorded (the row
-/// commands route through them); Enqueue is deliberately unsupported (the
-/// admission path belongs to the real queue's own tests).
+/// In-memory <see cref="IModDownloadQueue"/> for the mod-list tests: the item
+/// collection is driven DIRECTLY (no worker, no pipeline), so a test controls
+/// exactly what the row UI observes. <see cref="Enqueue"/> mirrors only the
+/// real coordinator's admission contract (record the request, admit the item
+/// with the collection add + the ItemChanged announcement, and join + pulse a
+/// live item with the same dedupe key) so the enqueue-front paths are
+/// observable; the completion pipeline belongs to the real queue's own tests.
+/// Mutating an item's state in place and calling <see cref="Publish"/> mirrors
+/// a resolve or terminal announcement. Cancel / Dismiss / Retry are recorded
+/// (the row commands route through them).
 /// </summary>
 internal sealed class FakeModDownloadQueue : IModDownloadQueue
 {
@@ -2205,6 +2093,10 @@ internal sealed class FakeModDownloadQueue : IModDownloadQueue
 
     public event Action<DownloadItem>? ItemChanged;
     public event EventHandler? UpdatesApplied;
+
+    /// <summary>The requests passed to Enqueue, in order (including ones that
+    /// joined a live item).</summary>
+    public List<ModDownloadRequest> Requests { get; } = new();
 
     /// <summary>The items passed to Cancel, in order.</summary>
     public List<DownloadItem> CancelCalls { get; } = new();
@@ -2215,8 +2107,30 @@ internal sealed class FakeModDownloadQueue : IModDownloadQueue
     /// <summary>The items passed to Retry, in order.</summary>
     public List<DownloadItem> RetryCalls { get; } = new();
 
-    public DownloadItem Enqueue(ModDownloadRequest request) =>
-        throw new NotSupportedException("The row-UI tests drive the collection directly.");
+    public DownloadItem Enqueue(ModDownloadRequest request)
+    {
+        Requests.Add(request);
+        // The real coordinator's dedupe: a live item with the same
+        // (domain case-insensitive, mod, file) key is joined + pulsed, never
+        // duplicated.
+        var joined = Items.FirstOrDefault(i =>
+            !i.IsTerminal &&
+            string.Equals(i.GameDomain, request.GameDomain, StringComparison.OrdinalIgnoreCase) &&
+            i.ModId == request.ModId &&
+            i.FileId == request.FileId);
+        if (joined is not null)
+        {
+            joined.Pulse++;
+            return joined;
+        }
+
+        return Add(new DownloadItem(request)
+        {
+            DisplayName = request.DisplayName,
+            ContainerId = request.ContainerId,
+            Phase = DownloadPhase.Queued,
+        });
+    }
 
     public void Cancel(DownloadItem item) => CancelCalls.Add(item);
 
@@ -2453,13 +2367,15 @@ internal sealed class FakeUpdateCheckService : IUpdateCheckService
 
 /// <summary>
 /// Recording <see cref="IModAcquisitionService"/> for the mod-list VM tests.
-/// Captures each <see cref="IModAcquisitionService.AcquireLatestNexusAsync"/>
-/// call + optionally throws to simulate a failed update. The base
-/// <see cref="IModAcquisitionService.AcquireFromNexusAsync"/> is wired to the
-/// same recorder (tests assert on the unified call list).
-/// <see cref="ResolveLatestNexusAsync"/> records into its own list (the DMF
-/// prompt's pre-enqueue head resolution), returning
-/// <see cref="NextResolve"/> or throwing <see cref="ThrowOnResolve"/>.
+/// <see cref="ResolveLatestNexusAsync"/> (the update-enqueue front's head
+/// resolution + the DMF prompt's pre-enqueue resolve) records into its own
+/// list, returning <see cref="NextResolve"/> or throwing
+/// <see cref="ThrowOnResolve"/> / the next one-shot
+/// <see cref="ResolveThrowQueue"/> entry, optionally held on a per-call
+/// <see cref="ResolveGates"/> source first (so a test can act while a specific
+/// resolve is in flight). <see cref="AcquireFromNexusAsync"/> +
+/// <see cref="AcquireLatestNexusAsync"/> record into their own call lists +
+/// return <see cref="NextResult"/>.
 /// </summary>
 internal sealed class FakeModAcquisitionService : IModAcquisitionService
 {
@@ -2467,6 +2383,10 @@ internal sealed class FakeModAcquisitionService : IModAcquisitionService
     public NexusAcquisitionResult NextResult { get; set; } =
         new(Guid.NewGuid(), Guid.NewGuid().ToString("N"), "1.0", IsHeadFile: true);
     public Exception? ThrowNext { get; set; }
+
+    /// <summary>The calls made to <see cref="AcquireFromNexusAsync"/>, in
+    /// order (the queue's per-file acquisition path).</summary>
+    public List<(string GameDomain, int ModId, int FileId)> FileCalls { get; } = new();
 
     /// <summary>The calls made to <see cref="ResolveLatestNexusAsync"/>, in order.</summary>
     public List<(string GameDomain, int ModId)> ResolveLatestCalls { get; } = new();
@@ -2478,11 +2398,30 @@ internal sealed class FakeModAcquisitionService : IModAcquisitionService
     /// <see cref="ResolveLatestNexusAsync"/> call (after it is recorded).</summary>
     public Exception? ThrowOnResolve { get; set; }
 
+    /// <summary>One-shot resolve failures: each entry is thrown by one
+    /// resolve call (in order) instead of returning
+    /// <see cref="NextResolve"/>; consumed before
+    /// <see cref="ThrowOnResolve"/> is consulted.</summary>
+    public Queue<Exception?> ResolveThrowQueue { get; } = new();
+
+    /// <summary>Per-resolve hold gates: each resolve call consumes one entry
+    /// (null = run freely; a source = await it before answering), so a test
+    /// can hold a specific call while earlier ones complete (a mid-batch
+    /// profile switch). Calls beyond the queue's length run freely.</summary>
+    public Queue<TaskCompletionSource?> ResolveGates { get; } = new();
+
     public Task<NexusAcquisitionResult> AcquireFromNexusAsync(
         string gameDomain, int modId, int fileId,
         string? nxmKey = null, long? nxmExpires = null,
-        IProgress<(long Received, long? Total)>? progress = null, CancellationToken ct = default) =>
-        throw new NotImplementedException("AcquireFromNexusAsync is not exercised by the mod-list VM tests");
+        IProgress<(long Received, long? Total)>? progress = null, CancellationToken ct = default)
+    {
+        FileCalls.Add((gameDomain, modId, fileId));
+        if (ThrowNext is not null)
+        {
+            return Task.FromException<NexusAcquisitionResult>(ThrowNext);
+        }
+        return Task.FromResult(NextResult);
+    }
 
     public Task<NexusAcquisitionResult> AcquireLatestNexusAsync(
         string gameDomain, int modId,
@@ -2496,15 +2435,23 @@ internal sealed class FakeModAcquisitionService : IModAcquisitionService
         return Task.FromResult(NextResult);
     }
 
-    public Task<(int FileId, string Version)> ResolveLatestNexusAsync(
+    public async Task<(int FileId, string Version)> ResolveLatestNexusAsync(
         string gameDomain, int modId, CancellationToken ct = default)
     {
         ResolveLatestCalls.Add((gameDomain, modId));
+        if (ResolveGates.Count > 0 && ResolveGates.Dequeue() is { } gate)
+        {
+            await gate.Task;
+        }
+        if (ResolveThrowQueue.Count > 0 && ResolveThrowQueue.Dequeue() is { } oneShot)
+        {
+            throw oneShot;
+        }
         if (ThrowOnResolve is not null)
         {
-            return Task.FromException<(int FileId, string Version)>(ThrowOnResolve);
+            throw ThrowOnResolve;
         }
-        return Task.FromResult(NextResolve);
+        return NextResolve;
     }
 }
 

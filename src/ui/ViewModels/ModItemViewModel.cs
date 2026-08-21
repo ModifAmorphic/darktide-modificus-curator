@@ -114,13 +114,12 @@ public partial class ModItemViewModel : ObservableObject
     /// <remarks>
     /// The wrapper, not the row, holds the download state (phase, bytes,
     /// failure); the row exposes only the morph decision members
-    /// (<see cref="IsDownloadMorphed"/>, <see cref="ShowUpdateSpinner"/>, the
-    /// widened <see cref="IsPolicyEditable"/>) the templates bind against.
+    /// (<see cref="IsDownloadMorphed"/>, the widened
+    /// <see cref="IsPolicyEditable"/>) the templates bind against.
     /// </remarks>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsDownloadMorphed))]
     [NotifyPropertyChangedFor(nameof(IsPolicyEditable))]
-    [NotifyPropertyChangedFor(nameof(ShowUpdateSpinner))]
     private DownloadRowViewModel? _activeDownload;
 
     /// <summary>
@@ -129,14 +128,6 @@ public partial class ModItemViewModel : ObservableObject
     /// the action strip's Cancel affordance).
     /// </summary>
     public bool IsDownloadMorphed => ActiveDownload is not null;
-
-    /// <summary>
-    /// Whether the per-row update spinner in the badge area should render:
-    /// an install in flight AND not morphed (a download morph suppresses the
-    /// update affordances entirely; the download's own progress owns the
-    /// row's progress surface).
-    /// </summary>
-    public bool ShowUpdateSpinner => IsUpdating && !IsDownloadMorphed;
 
     /// <summary>
     /// Position within the load order (lower loads first). Drives the display sort
@@ -244,24 +235,10 @@ public partial class ModItemViewModel : ObservableObject
     private bool _updateAvailable;
 
     /// <summary>
-    /// Whether the row is currently running an update install (the parent's
-    /// <c>UpdateCommand</c> set it + the global coordinator's busy flag). While
-    /// true, the row shows an indeterminate progress affordance in the
-    /// source-badge area (immediately left of the badge), and the update-action
-    /// button is disabled via <see cref="UpdateActionEnabled"/>. The button
-    /// itself stays visible in its fixed cell. Cleared when the install
-    /// completes (success or failure).
-    /// </summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(UpdateActionEnabled))]
-    [NotifyPropertyChangedFor(nameof(ShowUpdateSpinner))]
-    private bool _isUpdating;
-
-    /// <summary>
-    /// The shared row context (premium / install-busy / gaming) this row reads
-    /// its global halves from. Passed once at construction by the parent; the
-    /// parent's single context subscription fans change notifications into the
-    /// live rows (via <see cref="OnRowContextChanged"/>), so a row never
+    /// The shared row context (premium / gaming) this row reads its global
+    /// halves from. Passed once at construction by the parent; the parent's
+    /// single context subscription fans change notifications into the live
+    /// rows (via <see cref="OnRowContextChanged"/>), so a row never
     /// subscribes to the application-lifetime context itself.
     /// </summary>
     public ModRowContext RowContext { get; }
@@ -275,17 +252,6 @@ public partial class ModItemViewModel : ObservableObject
     /// the click behavior + tooltip differ.
     /// </summary>
     public bool IsPremiumUser => RowContext.IsPremiumUser;
-
-    /// <summary>
-    /// Whether any row (or the automatic updater) is currently running an
-    /// install: forwarded from <see cref="RowContext"/> (the installer's
-    /// coordinator-gated busy flag), so the per-row enabled state reflects the
-    /// global "one install at a time" coordination without a parent walk in
-    /// the binding. Premium clicks are disabled while this is true (the
-    /// coordinator would reject a second concurrent install); regular/unknown
-    /// clicks (which open a files page, no install) stay enabled.
-    /// </summary>
-    public bool AnyRowUpdating => RowContext.AnyRowUpdating;
 
     /// <summary>
     /// Whether a linked row's external folder is missing at the last reload.
@@ -330,11 +296,6 @@ public partial class ModItemViewModel : ObservableObject
                 OnPropertyChanged(nameof(IsPremiumUser));
                 OnPropertyChanged(nameof(UpdateActionEnabled));
                 OnPropertyChanged(nameof(UpdateActionTooltip));
-                break;
-
-            case nameof(ModRowContext.AnyRowUpdating):
-                OnPropertyChanged(nameof(AnyRowUpdating));
-                OnPropertyChanged(nameof(UpdateActionEnabled));
                 break;
 
             case nameof(ModRowContext.IsGamingMode):
@@ -443,22 +404,19 @@ public partial class ModItemViewModel : ObservableObject
     /// Whether the stable update-action button should show for this row: the row
     /// is Nexus-sourced AND on the <see cref="LatestPolicy"/>. Pinned Nexus and
     /// Untracked rows do not show the button (their reserved update-action cell
-    /// stays fixed-width but empty). The button stays visible while a row is
-    /// updating (it is disabled via <see cref="UpdateActionEnabled"/>, which
-    /// includes <c>!IsUpdating</c>); the indeterminate progress affordance shows
-    /// in the source-badge area, not in the action cell.
+    /// stays fixed-width but empty). While a download morphs the row the whole
+    /// cell is not rendered (the morph's progress owns the row's progress
+    /// surface, and hiding the button is the double-click guard).
     /// </summary>
     public bool CanShowUpdateAction => IsNexusLatest;
 
     /// <summary>
-    /// Whether the stable update-action button is enabled. A Premium user's
-    /// button is enabled only when an update is available and no other install is
-    /// running globally (one install at a time). A regular/unknown user's button
-    /// is enabled whenever an update is available (the click opens the Nexus
-    /// files page, which needs no install coordination). No update -> disabled.
+    /// Whether the stable update-action button is enabled: an update is
+    /// flagged. No other coordination applies: a Premium click whose install
+    /// is already live joins the queue item (dedupe + pulse), and a
+    /// regular/unknown click merely opens the Nexus files page.
     /// </summary>
-    public bool UpdateActionEnabled =>
-        UpdateAvailable && !IsUpdating && (!IsPremiumUser || !AnyRowUpdating);
+    public bool UpdateActionEnabled => UpdateAvailable;
 
     /// <summary>
     /// The localized tooltip for the stable update-action button, distinguished by
@@ -682,10 +640,9 @@ public partial class ModItemViewModel : ObservableObject
     /// <summary>
     /// Whether the row is both Nexus-sourced AND on the <see cref="LatestPolicy"/>
     /// (the conjunction the update check requires). The stable update-action
-    /// button's visibility binds to <see cref="CanShowUpdateAction"/> (which adds
-    /// <c>!IsUpdating</c>); Pinned / Untracked rows are always <c>false</c>, so
-    /// the button never shows for them (their reserved cell stays fixed-width but
-    /// empty).
+    /// button's visibility binds to <see cref="CanShowUpdateAction"/>;
+    /// Pinned / Untracked rows are always <c>false</c>, so the button never
+    /// shows for them (their reserved cell stays fixed-width but empty).
     /// </summary>
     public bool IsNexusLatest => Source is NexusSource && Policy is LatestPolicy;
 

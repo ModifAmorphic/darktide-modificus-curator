@@ -337,15 +337,10 @@ public sealed class ModListDownloadRowsTests
         var vm = Build(profiles, session, repo, queue);
         var a = Row(vm, "A");
 
-        // An install in flight alone lights the badge spinner.
-        a.IsUpdating = true;
-        Assert.True(a.ShowUpdateSpinner);
-
         queue.Add(Item(a.ContainerId));
 
         Assert.True(a.IsDownloadMorphed);
         Assert.False(a.IsPolicyEditable);
-        Assert.False(a.ShowUpdateSpinner); // the morph suppresses it
         // Structural controls stay functional: the grip follows the lock
         // only, and the move availability is the ordinary projection.
         Assert.True(a.IsGripEnabled);
@@ -361,7 +356,6 @@ public sealed class ModListDownloadRowsTests
 
         Assert.False(a.IsDownloadMorphed);
         Assert.True(a.IsPolicyEditable);
-        Assert.True(a.ShowUpdateSpinner);
     }
 
     [Fact]
