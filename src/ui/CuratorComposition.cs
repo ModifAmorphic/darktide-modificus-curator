@@ -309,7 +309,9 @@ public static class CuratorComposition
         // subscribed coordinator, which enqueues its prompt onto the
         // shell-owned modal queue; the shell drains the queue after the next
         // real navigation into Mods, and the coordinator's own post-prompt
-        // reload surfaces an accepted existing / Premium DMF add.
+        // reload surfaces an accepted existing-DMF add (a premium download
+        // lands on the download queue, whose completion owns its add +
+        // reload).
         services.AddSingleton<ProfilesViewModel>(sp => new ProfilesViewModel(
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IProfileSession>(),
@@ -360,11 +362,13 @@ public static class CuratorComposition
         // destination switch + enter effects: the DMF prompt runs as the
         // topmost modal with Mods already selected underneath, and the
         // coordinator's own post-prompt reload surfaces an accepted
-        // existing/Premium DMF add. Takes the shared nxm registration state so
+        // existing-DMF add. Takes the shared nxm registration state so
         // the download confirm can tailor its message to the last-known handler
         // ownership (manager-download vs. manual-import guidance; no probe),
         // and the Gaming Mode state so the case-2 browser branch can divert to
-        // Desktop Mode guidance there (Premium keeps the in-app download).
+        // Desktop Mode guidance there (Premium keeps the in-app download path,
+        // now the shared download queue: the premium branch resolves the head
+        // file + enqueues, and the queue's completion owns the add + reload).
         // Nothing depends on the coordinator (the shell no longer knows it
         // exists), so it is resolved once eagerly after the provider is built
         // to establish the subscription before any profile can be created.
@@ -373,6 +377,7 @@ public static class CuratorComposition
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IModRepository>(),
             sp.GetRequiredService<IModAcquisitionService>(),
+            sp.GetRequiredService<IModDownloadQueue>(),
             sp.GetRequiredService<INexusAuthService>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),

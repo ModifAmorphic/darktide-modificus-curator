@@ -72,6 +72,7 @@ internal static class TestDoubles
             FakeProfileSession? session = null,
             FakeModRepository? repo = null,
             FakeModAcquisitionService? acquisition = null,
+            RecordingDownloadQueue? downloadQueue = null,
             FakeNexusAuthService? auth = null,
             FakeDialogService? dialogs = null,
             LocalizationService? localization = null,
@@ -84,6 +85,7 @@ internal static class TestDoubles
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
         repo ??= new FakeModRepository();
         acquisition ??= new FakeModAcquisitionService();
+        downloadQueue ??= new RecordingDownloadQueue();
         auth ??= new FakeNexusAuthService();
         dialogs ??= new FakeDialogService();
         localization ??= new LocalizationService();
@@ -100,6 +102,7 @@ internal static class TestDoubles
             session,
             repo,
             acquisition,
+            downloadQueue,
             auth,
             dialogs,
             localization,
@@ -2254,6 +2257,46 @@ internal sealed class FakeModDownloadQueue : IModDownloadQueue
 }
 
 /// <summary>
+/// A recording <see cref="IModDownloadQueue"/> double: captures each Enqueue
+/// request (an enqueue adapter's whole downstream surface) + hosts a minimal
+/// item collection so the adapter contract is observable without the real
+/// worker (used by the nxm handler tests + the DMF prompt's premium branch).
+/// </summary>
+internal sealed class RecordingDownloadQueue : IModDownloadQueue
+{
+    /// <summary>The requests passed to Enqueue, in order.</summary>
+    public List<ModDownloadRequest> Requests { get; } = new();
+
+    public ObservableCollection<DownloadItem> Items { get; } = new();
+
+    public event Action<DownloadItem>? ItemChanged { add { } remove { } }
+    public event EventHandler? UpdatesApplied { add { } remove { } }
+
+    public DownloadItem Enqueue(ModDownloadRequest request)
+    {
+        Requests.Add(request);
+        var item = new DownloadItem(request)
+        {
+            DisplayName = request.DisplayName,
+            ContainerId = request.ContainerId,
+            Phase = DownloadPhase.Queued,
+        };
+        Items.Add(item);
+        return item;
+    }
+
+    public void Cancel(DownloadItem item)
+    {
+    }
+
+    public void Dismiss(DownloadItem item)
+    {
+    }
+
+    public DownloadItem Retry(DownloadItem item) => item;
+}
+
+/// <summary>
 /// Configurable <see cref="IUpdateCheckService"/> shared by the runner tests
 /// (call recording) + the mod-list VM tests (settable LastResult +
 /// <see cref="RaiseCheckCompleted"/>). <see cref="CheckAsync"/> records the
@@ -2414,6 +2457,9 @@ internal sealed class FakeUpdateCheckService : IUpdateCheckService
 /// call + optionally throws to simulate a failed update. The base
 /// <see cref="IModAcquisitionService.AcquireFromNexusAsync"/> is wired to the
 /// same recorder (tests assert on the unified call list).
+/// <see cref="ResolveLatestNexusAsync"/> records into its own list (the DMF
+/// prompt's pre-enqueue head resolution), returning
+/// <see cref="NextResolve"/> or throwing <see cref="ThrowOnResolve"/>.
 /// </summary>
 internal sealed class FakeModAcquisitionService : IModAcquisitionService
 {
@@ -2421,6 +2467,16 @@ internal sealed class FakeModAcquisitionService : IModAcquisitionService
     public NexusAcquisitionResult NextResult { get; set; } =
         new(Guid.NewGuid(), Guid.NewGuid().ToString("N"), "1.0", IsHeadFile: true);
     public Exception? ThrowNext { get; set; }
+
+    /// <summary>The calls made to <see cref="ResolveLatestNexusAsync"/>, in order.</summary>
+    public List<(string GameDomain, int ModId)> ResolveLatestCalls { get; } = new();
+
+    /// <summary>The head (file id, release tag) the next resolve call returns.</summary>
+    public (int FileId, string Version) NextResolve { get; set; } = (5820, "1.0");
+
+    /// <summary>When set, thrown by the next
+    /// <see cref="ResolveLatestNexusAsync"/> call (after it is recorded).</summary>
+    public Exception? ThrowOnResolve { get; set; }
 
     public Task<NexusAcquisitionResult> AcquireFromNexusAsync(
         string gameDomain, int modId, int fileId,
@@ -2441,8 +2497,15 @@ internal sealed class FakeModAcquisitionService : IModAcquisitionService
     }
 
     public Task<(int FileId, string Version)> ResolveLatestNexusAsync(
-        string gameDomain, int modId, CancellationToken ct = default) =>
-        throw new NotImplementedException();
+        string gameDomain, int modId, CancellationToken ct = default)
+    {
+        ResolveLatestCalls.Add((gameDomain, modId));
+        if (ThrowOnResolve is not null)
+        {
+            return Task.FromException<(int FileId, string Version)>(ThrowOnResolve);
+        }
+        return Task.FromResult(NextResolve);
+    }
 }
 
 /// <summary>
