@@ -28,15 +28,16 @@ converter_ignore fences so it never reaches the page.
 Source code and releases: [Curator GitHub repository](https://github.com/ModifAmorphic/darktide-modificus-curator).
 
 Curator loads mods into Darktide via dll injection with [Mod Relay](https://github.com/ModifAmorphic/darktide-mod-relay). 
-It does this without altering any Darktide files. Nothing is added or modified inside the game
-directory, no patching, unpatching required. Mods are stored outside the game directory as well. To run vanilla Darktide, 
+It does this without altering any Darktide files. No patching or unpatching required. To run vanilla Darktide, 
 launch the game from Steam. To play modded, launch from Curator.
+
+**\*\*IMPORTANT\*\* Requires an unpatched, vanilla Darktide installation**
 
 ![Curator mod list, detailed view](https://staticdelivery.nexusmods.com/mods/4943/images/1196/1196-1786929470-1554360530.png)
 
 ## Installation
 
-Modificus Curator can be installed on Windows, Linux or Steam Deck.  Instructions below for installers. For alternative options see the Curator [README.md](https://github.com/ModifAmorphic/darktide-modificus-curator/blob/main/README.md)
+Modificus Curator can be installed on Windows, Linux or Steam Deck. Instructions below for installers. For alternative options see the Curator [README.md](https://github.com/ModifAmorphic/darktide-modificus-curator/blob/main/README.md)
 
 ### Windows
 
@@ -48,11 +49,20 @@ Modificus Curator can be installed on Windows, Linux or Steam Deck.  Instruction
 
 ### Linux
 
+#### Install
+
 - Run the AppImage installer script
-```sh
-curl https://raw.githubusercontent.com/ModifAmorphic/darktide-modificus-curator/main/scripts/install.sh | sh
-```
+  ```sh
+  curl https://raw.githubusercontent.com/ModifAmorphic/darktide-modificus-curator/main/scripts/install.sh | sh
+  ```
 - To run, find or search for **Modificus Curator** in your App Launcher. 
+
+#### Uninstall
+
+- Run the AppImage uninstaller script
+  ```sh
+  curl https://raw.githubusercontent.com/ModifAmorphic/darktide-modificus-curator/main/scripts/uninstall.sh | sh
+  ```
 
 ### Steam Deck
 

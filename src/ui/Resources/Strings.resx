@@ -440,9 +440,17 @@
     <value>Show disabled mods</value>
     <comment>Tooltip + accessibility name on the visibility filter toggle while disabled mods are hidden (the click shows them again).</comment>
   </data>
+  <data name="ModList_ShowUpdatesOnlyTooltip" xml:space="preserve">
+    <value>Show only mods with updates</value>
+    <comment>Tooltip + accessibility name on the updates-only filter toggle while all rows are shown (the click filters the list to flagged rows).</comment>
+  </data>
+  <data name="ModList_ShowAllModsTooltip" xml:space="preserve">
+    <value>Show all mods</value>
+    <comment>Tooltip + accessibility name on the updates-only filter toggle while the filter is active (the click shows every row again).</comment>
+  </data>
   <data name="ModList_NoMatches" xml:space="preserve">
     <value>No mods match the current search or filter.</value>
-    <comment>Inline message shown when the active profile has mods but the search box or hide-disabled filter excludes every row.</comment>
+    <comment>Inline message shown when the active profile has mods but the search box or an active filter (hide-disabled, updates-only) excludes every row.</comment>
   </data>
   <data name="ModList_ModManagerBanner" xml:space="preserve">
     <value>{0} is managing ordering of mods. Changes to mod order in Curator will not be reflected in game.</value>
@@ -550,7 +558,7 @@
     <comment>Tooltip on the stable update-action button for a Premium user when an update is available (click installs directly).</comment>
   </data>
   <data name="ModRow_UpdateTooltipOpenFiles" xml:space="preserve">
-    <value>An update is available. Open the Nexus files page to download it</value>
+    <value>Newer version available. Open the Nexus files page to download</value>
     <comment>Tooltip on the stable update-action button for a regular or unknown Premium user when an update is available (click opens the files page; Premium is required for a direct install).</comment>
   </data>
   <data name="ModRow_UpdateTooltipNoUpdate" xml:space="preserve">

@@ -590,15 +590,19 @@ The command set:
 ### Filter / search projection
 
 `Mods` stays the authoritative full list; the row list renders
-`VisibleMods`, the projection under two session-transient controls on the
+`VisibleMods`, the projection under three session-transient controls on the
 toolbar: `SearchText` (the search box, a case-insensitive ordinal substring
 match on the row display name, applied keystroke-live; empty or whitespace
-matches everything) and `HideDisabledMods` (the hide-disabled visibility
-toggle). One
-`RebuildVisibleMods` rebuilds the projection at the end of every `Reload`, on
-every filter/search state change, and after an enable toggle (a row disabled
-under an active hide-filter leaves the visible set), and recomputes per-row
-move availability over the visible unlocked rows.
+matches everything), `HideDisabledMods` (the hide-disabled visibility
+toggle), and `ShowUpdatesOnly` (the updates-only toggle, keeping only rows
+flagged `UpdateAvailable`). One
+`RebuildVisibleMods` rebuilds the projection at the end of every `Reload`
+(after the known-update-flag hydration, so the updates-only filter sees
+hydrated flags), on every filter/search state change, after an enable toggle
+(a row disabled under an active hide-filter leaves the visible set), and
+when a check lands (its flag changes reproject an active updates-only
+filter), and recomputes per-row move availability over the visible unlocked
+rows.
 
 The state is view-only: never persisted, surviving reloads and navigation,
 cleared on an active-profile change (a filter belongs to the profile the user
@@ -1042,7 +1046,8 @@ subscription re-hydrates from the store when the result lands.
 
 - **The Mods toolbar.** Refresh + an indeterminate spinner (the manual "check
   now" affordance), the rate-limit notice pill, the search box, the
-  Compact/Detailed density selector with the hide-disabled filter toggle, and
+  Compact/Detailed density selector with the hide-disabled + updates-only
+  filter toggles, and
   the Add split button, in that order.
   The rate-limit pill occupies the toolbar's single flexible (`*`) column with
   `HorizontalAlignment=Left`: at normal and wide widths it keeps its content
@@ -1063,7 +1068,11 @@ subscription re-hydrates from the store when the result lands.
   guard), so the buttons stay enabled. The hide-disabled toggle is a third
   button in the same group (same `icon density` chrome, `selected` while
   hiding, drawn `visibility` / `visibility_off` paths, dynamic hide/show
-  tooltip + automation name) bound to `ToggleHideDisabledCommand`.
+  tooltip + automation name) bound to `ToggleHideDisabledCommand`. The
+  updates-only toggle is a fourth button in the same group (same chrome, one
+  stable drawn Material `update` glyph since updates-only has no natural
+  crossed-out variant, `selected` while filtering, dynamic filter/show-all
+  tooltip + automation name) bound to `ToggleUpdatesOnlyCommand`.
 - **Row roots.** One row, two mutually exclusive roots selected by the row's
   `IsDetailed` projection: the existing Compact `Grid` (eight columns: name,
   badge area, enabled, policy, update-action cell, up, down, remove) and a

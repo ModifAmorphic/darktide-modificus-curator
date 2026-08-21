@@ -72,7 +72,8 @@ public enum ModAddMode
 /// <para><b>Filter / search projection:</b> <see cref="Mods"/> stays the
 /// authoritative full list; the row list renders <see cref="VisibleMods"/>, the
 /// projection under the session-transient hide-disabled filter
-/// (<see cref="HideDisabledMods"/>) and name search (<see cref="SearchText"/>,
+/// (<see cref="HideDisabledMods"/>), updates-only filter
+/// (<see cref="ShowUpdatesOnly"/>), and name search (<see cref="SearchText"/>,
 /// case-insensitive ordinal substring). The projection state is view-only: it
 /// is never persisted, survives reloads and navigation, and clears on an
 /// active-profile change. Reordering works through the projection: move and
@@ -273,7 +274,8 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// The visible projection of <see cref="Mods"/> the row list renders: the
     /// full order minus rows excluded by the session-transient hide-disabled
-    /// filter and the name search. Rebuilt from <see cref="Mods"/> by
+    /// filter, the updates-only filter, and the name search. Rebuilt from
+    /// <see cref="Mods"/> by
     /// <see cref="RebuildVisibleMods"/> (end of every <see cref="Reload"/>, on
     /// every filter/search state change, and after an enable toggle under an
     /// active filter). <see cref="Mods"/> stays authoritative: everything that
@@ -342,6 +344,20 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     private bool _hideDisabledMods;
 
     /// <summary>
+    /// Whether only rows flagged with an available update are shown (the
+    /// toolbar's updates-only filter toggle). Session-transient view state:
+    /// never persisted, survives reloads and navigation, and clears on an
+    /// active-profile change. Changing it rebuilds <see cref="VisibleMods"/>.
+    /// The filter keeps only rows whose
+    /// <see cref="ModItemViewModel.UpdateAvailable"/> is true.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsFilterOrSearchActive))]
+    [NotifyPropertyChangedFor(nameof(ShowAddModsHint))]
+    [NotifyPropertyChangedFor(nameof(ShowNoMatchesMessage))]
+    private bool _showUpdatesOnly;
+
+    /// <summary>
     /// The search box text, filtering <see cref="VisibleMods"/> by row display
     /// name (case-insensitive ordinal substring; empty or whitespace matches
     /// everything). Two-way bound to the toolbar TextBox and applied
@@ -364,13 +380,14 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     public bool HasSearchText => !string.IsNullOrEmpty(SearchText);
 
     /// <summary>
-    /// Whether the hide-disabled filter or a non-whitespace search is active.
-    /// Drives the no-matches state and suppresses the ordinary no-mods / add
-    /// hints (the two empty states are mutually exclusive: while a filter or
-    /// search is active, an empty visible set reads as "no matches", not as
-    /// "add a mod").
+    /// Whether the hide-disabled filter, the updates-only filter, or a
+    /// non-whitespace search is active. Drives the no-matches state and
+    /// suppresses the ordinary no-mods / add hints (the two empty states are
+    /// mutually exclusive: while a filter or search is active, an empty
+    /// visible set reads as "no matches", not as "add a mod").
     /// </summary>
-    public bool IsFilterOrSearchActive => HideDisabledMods || !string.IsNullOrWhiteSpace(SearchText);
+    public bool IsFilterOrSearchActive =>
+        HideDisabledMods || ShowUpdatesOnly || !string.IsNullOrWhiteSpace(SearchText);
 
     /// <summary>
     /// The localized tooltip + automation name for the hide-disabled filter
@@ -380,6 +397,15 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     public string HideDisabledTooltip => HideDisabledMods
         ? _localization["ModList_ShowDisabledTooltip"]
         : _localization["ModList_HideDisabledTooltip"];
+
+    /// <summary>
+    /// The localized tooltip + automation name for the updates-only filter
+    /// toggle, describing the action the click will perform (filter to
+    /// flagged rows vs. show all). Re-fires on a culture change.
+    /// </summary>
+    public string UpdatesOnlyTooltip => ShowUpdatesOnly
+        ? _localization["ModList_ShowAllModsTooltip"]
+        : _localization["ModList_ShowUpdatesOnlyTooltip"];
 
     /// <summary>
     /// The localized no-matches message shown when the full list is non-empty
@@ -404,6 +430,11 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// derived flags; the rebuild here covers the collection + move buttons.
     /// </summary>
     partial void OnHideDisabledModsChanged(bool value) => RebuildVisibleMods();
+
+    /// <summary>Updates-only counterpart of
+    /// <see cref="OnHideDisabledModsChanged"/>: the toggle rebuilds the
+    /// projection.</summary>
+    partial void OnShowUpdatesOnlyChanged(bool value) => RebuildVisibleMods();
 
     /// <summary>Search counterpart of <see cref="OnHideDisabledModsChanged"/>:
     /// each keystroke rebuilds the projection.</summary>
@@ -778,6 +809,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         {
             SearchText = string.Empty;
             HideDisabledMods = false;
+            ShowUpdatesOnly = false;
             Reload();
         }
     }
@@ -799,6 +831,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         nameof(ManualRefreshTooltip),
         nameof(AddButtonTooltip),
         nameof(HideDisabledTooltip),
+        nameof(UpdatesOnlyTooltip),
         nameof(NoMatchesText),
         nameof(ModManagerBannerText),
     };
@@ -869,11 +902,10 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// Applies a just-landed check: refreshes the rate-limit notice from the
     /// result, refreshes in-place row names when the check renamed any container
-    /// (the name-sync piggybacks on the batch query), and re-hydrates the per-row
-    /// update flags from the profile-scoped known-update store. Called on
-    /// <see cref="IUpdateCheckService.CheckCompleted"/> + at the end of
-    /// <see cref="Reload"/> (so a freshly rebuilt list picks up the persisted
-    /// state without waiting for the next check).
+    /// (the name-sync piggybacks on the batch query), re-hydrates the per-row
+    /// update flags from the profile-scoped known-update store, and rebuilds
+    /// the visible projection (the updates-only filter reads those flags).
+    /// Called on <see cref="IUpdateCheckService.CheckCompleted"/>.
     /// </summary>
     private void ApplyCheckLanded(UpdateCheckResult? result)
     {
@@ -904,6 +936,11 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         }
 
         ApplyKnownUpdateState();
+
+        // A landed check can change per-row UpdateAvailable flags, and the
+        // updates-only filter's projection depends on them, so rebuild the
+        // projection (cheap + idempotent).
+        RebuildVisibleMods();
     }
 
     /// <summary>
@@ -1027,19 +1064,21 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         OnPropertyChanged(nameof(IsModManagerActive));
         OnPropertyChanged(nameof(ModManagerBannerText));
 
-        // Rebuild the visible projection (which also recomputes per-row move
-        // availability over the visible unlocked rows): the projection is
-        // defined over the freshly built full list, so it is rebuilt at the
-        // end of every reload, not only on a filter change.
-        RebuildVisibleMods();
-
         // The freshly built rows default UpdateAvailable=false; their premium /
         // busy / gaming halves read the shared row context (passed at
         // construction), so no global push happens here. Re-apply the persisted
         // known-update state (profile-scoped) so a profile switch (or a
         // post-edit reload, or a restart) reflects the recorded flags without
-        // waiting for the next check.
+        // waiting for the next check. This runs BEFORE the projection rebuild
+        // below so the updates-only filter (which reads UpdateAvailable) sees
+        // the hydrated flags, not the all-false defaults.
         ApplyKnownUpdateState();
+
+        // Rebuild the visible projection (which also recomputes per-row move
+        // availability over the visible unlocked rows): the projection is
+        // defined over the freshly built full list, so it is rebuilt at the
+        // end of every reload, not only on a filter change.
+        RebuildVisibleMods();
 
         // Hand the final row snapshot to the density coordinator so it can push
         // the current density, clear thumbnails on Compact, or start thumbnail
@@ -1108,12 +1147,21 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     private void ToggleHideDisabled() => HideDisabledMods = !HideDisabledMods;
 
     /// <summary>
+    /// Toggles the updates-only filter (the toolbar flagged-rows toggle; the
+    /// property change rebuilds the projection).
+    /// </summary>
+    [RelayCommand]
+    private void ToggleUpdatesOnly() => ShowUpdatesOnly = !ShowUpdatesOnly;
+
+    /// <summary>
     /// Rebuilds <see cref="VisibleMods"/> from <see cref="Mods"/> under the
     /// current filter/search: a row is visible when it is enabled or the
-    /// hide-disabled filter is off, AND its display name contains the search
-    /// text (case-insensitive ordinal substring; an empty or whitespace search
-    /// matches everything). Called at the end of every <see cref="Reload"/>, on
-    /// every filter/search state change, and after an enable toggle. Also
+    /// hide-disabled filter is off, AND it is flagged with an available
+    /// update or the updates-only filter is off, AND its display name
+    /// contains the search text (case-insensitive ordinal substring; an
+    /// empty or whitespace search matches everything). Called at the end of
+    /// every <see cref="Reload"/>, on every filter/search state change, and
+    /// after an enable toggle. Also
     /// recomputes per-row move availability over the visible unlocked rows (a
     /// hidden row has no visible neighbors to cross) and re-fires the
     /// derived empty-state projections. Never touches the density coordinator:
@@ -1128,6 +1176,11 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         foreach (var row in Mods)
         {
             if (HideDisabledMods && !row.Enabled)
+            {
+                continue;
+            }
+
+            if (ShowUpdatesOnly && !row.UpdateAvailable)
             {
                 continue;
             }
@@ -1192,7 +1245,8 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// The morph assignment compares by reference before writing, so an
     /// unchanged host never re-fires (a filter keystroke or unrelated item
     /// change cannot churn a morphed row's content). Download rows ignore
-    /// search and hide-disabled entirely: that is exactly what the appended
+    /// the search and every filter (hide-disabled, updates-only) entirely:
+    /// that is exactly what the appended
     /// fallback expresses (a filtered-out target is appended, not hidden).
     /// </remarks>
     private void RebuildDownloadRows()

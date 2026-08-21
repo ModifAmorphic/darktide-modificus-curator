@@ -1488,21 +1488,24 @@ public DetailedModRowsViewModel DetailedRows { get; }
 
 ### `ModListViewModel` filter / search projection
 
-The mod list renders a projection of the authoritative `Mods` list under two
+The mod list renders a projection of the authoritative `Mods` list under three
 session-transient controls. The new public surface:
 
 | Member | Meaning |
 | --- | --- |
-| `ObservableCollection<ModItemViewModel> VisibleMods` | The rendered projection: `Mods` minus rows hidden by the filter/search. Rebuilt by one private `RebuildVisibleMods` at the end of every `Reload`, on every filter/search state change, and after an enable toggle under an active filter. `Mods` stays authoritative (update hydration, the row-context fan-out, and the density coordinator's snapshot all still read the full list, so a filter change never re-triggers thumbnail/metadata hydration). |
+| `ObservableCollection<ModItemViewModel> VisibleMods` | The rendered projection: `Mods` minus rows hidden by the filter/search. Rebuilt by one private `RebuildVisibleMods` at the end of every `Reload` (after the known-update-flag hydration, so the updates-only filter sees hydrated flags), on every filter/search state change, and after an enable toggle under an active filter. `Mods` stays authoritative (update hydration, the row-context fan-out, and the density coordinator's snapshot all still read the full list, so a filter change never re-triggers thumbnail/metadata hydration). |
 | `bool HasVisibleMods` | Whether the projection holds at least one row. Drives the row-list ScrollViewer visibility (it collapses when a filter empties the visible set). |
 | `bool HideDisabledMods` | The hide-disabled visibility toggle (session-transient; never persisted, survives reloads + navigation, cleared on an active-profile change). Changing it rebuilds the projection. |
+| `bool ShowUpdatesOnly` | The updates-only filter toggle (same transient lifecycle as the hide flag). The filter keeps only rows whose `UpdateAvailable` is true; changing it rebuilds the projection. A landed check also reprojects, since it can change the flags. |
 | `string SearchText` | The search box text (keystroke-live TwoWay; case-insensitive ordinal substring on the row name; empty or whitespace matches everything; same transient lifecycle as the flag). |
 | `bool HasSearchText` | Whether any text is typed (drives the inner clear affordance). Distinct from `IsFilterOrSearchActive`: whitespace-only text shows the clear button but filters nothing. |
-| `bool IsFilterOrSearchActive` | Whether the hide filter or a non-whitespace search is active. Suppresses the add-hints empty state. |
+| `bool IsFilterOrSearchActive` | Whether the hide filter, the updates-only filter, or a non-whitespace search is active. Suppresses the add-hints empty state. |
 | `string HideDisabledTooltip` | Localized hide/show tooltip + automation name for the toggle (describes the action the click performs). Re-fires on a culture change. |
+| `string UpdatesOnlyTooltip` | Localized filter/show-all tooltip + automation name for the updates-only toggle (describes the action the click performs). Re-fires on a culture change. |
 | `string NoMatchesText` | Localized no-matches message. Re-fires on a culture change. |
 | `bool ShowNoMatchesMessage` | Derived: an active profile with a non-empty full list whose projection is empty while a filter/search is active. Exclusive with `ShowAddModsHint` (which now also gates on `!IsFilterOrSearchActive`). |
 | `ToggleHideDisabledCommand` | Flips `HideDisabledMods`. |
+| `ToggleUpdatesOnlyCommand` | Flips `ShowUpdatesOnly`. |
 
 Move availability (`CanMoveUp` / `CanMoveDown`) is computed over the VISIBLE
 unlocked rows: Move Up / Move Down cross to the adjacent visible unlocked row,
@@ -1617,7 +1620,11 @@ feature).
   group: `selected` bound to `HideDisabledMods`, drawn
   `visibility_off`/`visibility` paths swapped by the flag, bound to
   `ToggleHideDisabledCommand`, with the dynamic hide/show tooltip +
-  automation name.
+  automation name. The updates-only toggle is a fourth `icon density` button
+  in the same group: one stable drawn Material `update` glyph (updates-only
+  has no natural crossed-out variant to swap), `selected` bound to
+  `ShowUpdatesOnly`, bound to `ToggleUpdatesOnlyCommand`, with the dynamic
+  filter/show-all tooltip + automation name.
 - **Manager banner.** A full-width caution `Border` in the page grid's row 2,
   between the inline import card (row 1) and the row list (row 3):
   `IsVisible` bound to `IsModManagerActive`, a `CuratorCautionBackgroundBrush`
@@ -2257,7 +2264,11 @@ No backend library references the UI (the dependency direction is one-way).
   substring, whitespace-only matches everything but still counts as typed
   text), clearing restores, projection mirrors the full list with no filter,
   survives a reload, clears on a profile switch, `ToggleEnabled` under the
-  hide-filter, the no-matches vs add-hint exclusivity matrix, move availability
+  hide-filter, the no-matches vs add-hint exclusivity matrix, the
+  updates-only filter (flagged-rows projection incl. the reload
+  hydration-ordering regression, AND-composition with the other filters, a
+  landed check reprojecting the live filter, session-transient lifecycle,
+  empty-state exclusivity, tooltip locality), move availability
   over visible unlocked neighbors, and reorder-through-filter (Move Up / Down +
   `CommitReorder` with hidden rows keeping relative order + one `SetModOrder`
   call + locked rows keeping indices, no-op / hidden-source / out-of-range

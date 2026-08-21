@@ -10,13 +10,14 @@ using Modificus.Curator.UI.ViewModels;
 namespace Modificus.Curator.UI.Tests;
 
 /// <summary>
-/// The mod list's filter/search projection: the hide-disabled toggle and the
-/// name search rebuild <see cref="ModListViewModel.VisibleMods"/> from the
-/// authoritative <see cref="ModListViewModel.Mods"/> (which stays the full
-/// list), the state is session-transient (surviving reloads, cleared on a
-/// profile switch), the no-matches state is exclusive with the add-hints empty
-/// state, and reordering works THROUGH the projection (move + drag targets in
-/// visible space, committed to the stored order with hidden rows keeping their
+/// The mod list's filter/search projection: the hide-disabled toggle, the
+/// updates-only toggle, and the name search rebuild
+/// <see cref="ModListViewModel.VisibleMods"/> from the authoritative
+/// <see cref="ModListViewModel.Mods"/> (which stays the full list), the state
+/// is session-transient (surviving reloads, cleared on a profile switch), the
+/// no-matches state is exclusive with the add-hints empty state, and
+/// reordering works THROUGH the projection (move + drag targets in visible
+/// space, committed to the stored order with hidden rows keeping their
 /// relative order and exactly one SetModOrder call on a real change).
 /// </summary>
 public sealed class ModListFilterTests
@@ -67,6 +68,37 @@ public sealed class ModListFilterTests
     private static ModListViewModel BuildView(
         FakeProfileService profiles, ProfileSummary profile, FakeModRepository repo)
         => Build(profiles, new FakeProfileSession { ActiveProfileId = profile.Id }, repo);
+
+    /// <summary>Builds the VM with explicit update-check + update-state seams
+    /// so the updates-only tests can seed persisted known-update flags before
+    /// construction (the construction-Reload hydrates them) and raise completed
+    /// checks after.</summary>
+    private static ModListViewModel BuildWithUpdates(
+        FakeProfileService profiles, FakeProfileSession session, FakeModRepository repo,
+        FakeUpdateCheckService? updateCheck = null, FakeUpdateStateStore? updateState = null)
+        => TestDoubles.BuildModList(profiles, session, repo,
+            new FakeModImportService(repo), dialogs: null, localization: Localization,
+            updateCheck: updateCheck, updateState: updateState);
+
+    /// <summary>A successful check result flagging exactly the given
+    /// mods.</summary>
+    private static UpdateCheckResult SuccessResult(params ModUpdateInfo[] updates) =>
+        new(updates, DateTimeOffset.UtcNow, RateLimited: false, Thorough: false,
+            Outcome: CheckOutcome.Success);
+
+    /// <summary>A store with the given containers recorded as the profile's
+    /// flagged set (a successful result's Updates become the flagged ids).</summary>
+    private static FakeUpdateStateStore FlaggedStore(
+        FakeModRepository repo, Guid profileId, params Guid[] containerIds)
+    {
+        var store = new FakeUpdateStateStore(repo);
+        store.RecordResult(profileId, SuccessResult(
+            containerIds.Select(id => new ModUpdateInfo(id, 0, "", "1.0", DateTimeOffset.UtcNow)).ToArray()));
+        return store;
+    }
+
+    private static Guid ContainerId(FakeModRepository repo, string name) =>
+        repo.FindUntrackedByName(name)!.Id;
 
     // ---- projection: filter + search ----------------------------------------
 
@@ -272,6 +304,145 @@ public sealed class ModListFilterTests
 
         Assert.False(vm.ShowNoMatchesMessage);
         Assert.Empty(vm.VisibleMods);
+    }
+
+    // ---- updates-only filter ---------------------------------------------------
+
+    [Fact]
+    public void ShowUpdatesOnly_keeps_flagged_rows_in_the_projection_only()
+    {
+        var (profiles, profile, repo) = SeedProfile(["A", "B", "C", "D"]);
+        var updateState = FlaggedStore(repo, profile.Id,
+            ContainerId(repo, "A"), ContainerId(repo, "C"));
+        var vm = BuildWithUpdates(profiles,
+            new FakeProfileSession { ActiveProfileId = profile.Id }, repo,
+            updateState: updateState);
+
+        vm.ShowUpdatesOnly = true;
+
+        Assert.Equal(["A", "C"], vm.VisibleMods.Select(m => m.Name));
+        // The full list is untouched: the projection is view state over the
+        // authoritative order.
+        Assert.Equal(4, vm.Mods.Count);
+        Assert.True(vm.HasVisibleMods);
+
+        // ORDERING regression: a Reload under the active filter must hydrate
+        // the known-update flags BEFORE rebuilding the projection, or the
+        // freshly built rows' all-false flags empty VisibleMods.
+        vm.Reload();
+        Assert.True(vm.ShowUpdatesOnly);
+        Assert.Equal(["A", "C"], vm.VisibleMods.Select(m => m.Name));
+    }
+
+    [Fact]
+    public void Updates_only_filter_and_search_combine_with_AND()
+    {
+        // Alpha/Beta/Delta enabled, Gamma disabled; Alpha/Gamma/Delta flagged.
+        var (profiles, profile, repo) = SeedProfile(["Alpha", "Beta", "Gamma", "Delta"],
+            enabled: [true, true, false, true]);
+        var updateState = FlaggedStore(repo, profile.Id,
+            ContainerId(repo, "Alpha"), ContainerId(repo, "Gamma"), ContainerId(repo, "Delta"));
+        var vm = BuildWithUpdates(profiles,
+            new FakeProfileSession { ActiveProfileId = profile.Id }, repo,
+            updateState: updateState);
+
+        vm.ShowUpdatesOnly = true;
+        Assert.Equal(["Alpha", "Gamma", "Delta"], vm.VisibleMods.Select(m => m.Name));
+
+        // The hide filter removes the disabled flagged row too.
+        vm.HideDisabledMods = true;
+        Assert.Equal(["Alpha", "Delta"], vm.VisibleMods.Select(m => m.Name));
+
+        // The search narrows to the intersection.
+        vm.SearchText = "al";
+        Assert.Equal(["Alpha"], vm.VisibleMods.Select(m => m.Name));
+    }
+
+    [Fact]
+    public void A_landed_check_reprojects_the_updates_only_filter_live()
+    {
+        var (profiles, profile, repo) = SeedProfile(["A", "B"]);
+        var updateCheck = new FakeUpdateCheckService();
+        var updateState = new FakeUpdateStateStore(repo);
+        var session = new FakeProfileSession { ActiveProfileId = profile.Id };
+        var vm = BuildWithUpdates(profiles, session, repo,
+            updateCheck: updateCheck, updateState: updateState);
+
+        // Zero flags: the filter empties the projection (the no-matches state).
+        vm.ShowUpdatesOnly = true;
+        Assert.Empty(vm.VisibleMods);
+        Assert.True(vm.ShowNoMatchesMessage);
+
+        // A check lands flagging A: the row appears without touching the filter.
+        updateCheck.RaiseCheckCompleted(SuccessResult(
+            new ModUpdateInfo(ContainerId(repo, "A"), 0, "A", "1.0", DateTimeOffset.UtcNow)),
+            profile.Id);
+        Assert.Equal(["A"], vm.VisibleMods.Select(m => m.Name));
+        Assert.False(vm.ShowNoMatchesMessage);
+
+        // A second check clears the updates: the projection empties again.
+        updateCheck.RaiseCheckCompleted(SuccessResult(), profile.Id);
+        Assert.Empty(vm.VisibleMods);
+        Assert.True(vm.ShowNoMatchesMessage);
+    }
+
+    [Fact]
+    public void The_updates_only_filter_survives_a_reload_and_clears_on_a_profile_switch()
+    {
+        var (profiles, profile, repo) = SeedProfile(["A", "B"]);
+        var updateState = FlaggedStore(repo, profile.Id, ContainerId(repo, "A"));
+        var session = new FakeProfileSession { ActiveProfileId = profile.Id };
+        var vm = BuildWithUpdates(profiles, session, repo, updateState: updateState);
+        vm.ShowUpdatesOnly = true;
+        Assert.Equal(["A"], vm.VisibleMods.Select(m => m.Name));
+
+        vm.Reload();
+        Assert.True(vm.ShowUpdatesOnly);
+        Assert.Equal(["A"], vm.VisibleMods.Select(m => m.Name));
+
+        var other = Profile("Beta");
+        profiles.WithProfile("Beta");
+        var otherContainer = repo.Seed(new UntrackedSource(), "OtherMod", "1.0");
+        profiles.WithMods(other.Id, new ModListEntry { ContainerId = otherContainer.Id, Order = 0 });
+        session.ActiveProfileId = other.Id;
+
+        Assert.False(vm.ShowUpdatesOnly);
+        // The new profile's rows are visible without a filter.
+        Assert.Equal(["OtherMod"], vm.VisibleMods.Select(m => m.Name));
+    }
+
+    [Fact]
+    public void Updates_only_with_zero_flags_is_the_no_matches_state_not_the_add_hint()
+    {
+        // One unflagged mod: the add hint shows for a zero-or-one-mod list;
+        // the active filter flips the empty state to no-matches (the two are
+        // mutually exclusive).
+        var (profiles, profile, repo) = SeedProfile(["A"]);
+        var vm = BuildWithUpdates(profiles,
+            new FakeProfileSession { ActiveProfileId = profile.Id }, repo,
+            updateState: new FakeUpdateStateStore(repo));
+        Assert.True(vm.ShowAddModsHint);
+
+        vm.ShowUpdatesOnly = true;
+
+        Assert.True(vm.ShowNoMatchesMessage);
+        Assert.False(vm.ShowAddModsHint);
+
+        vm.ShowUpdatesOnly = false;
+
+        Assert.False(vm.ShowNoMatchesMessage);
+        Assert.True(vm.ShowAddModsHint);
+    }
+
+    [Fact]
+    public void The_updates_only_tooltip_flips_with_the_toggle()
+    {
+        var (profiles, profile, repo) = SeedProfile(["A"]);
+        var vm = BuildView(profiles, profile, repo);
+
+        Assert.Equal(Localization["ModList_ShowUpdatesOnlyTooltip"], vm.UpdatesOnlyTooltip);
+        vm.ShowUpdatesOnly = true;
+        Assert.Equal(Localization["ModList_ShowAllModsTooltip"], vm.UpdatesOnlyTooltip);
     }
 
     // ---- move availability under the projection -------------------------------

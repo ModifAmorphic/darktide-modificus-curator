@@ -249,10 +249,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           sorting, and app restarts;
                            the Mods destination (`ModListViewModel` + `ModListView`):
                            the active profile's mod list (the dominant content area),
-                           with its own toolbar (refresh, rate-limit notice, the
-                           search box, the Compact/Detailed density selector with the
-                           hide-disabled filter toggle, the Add split button) shown
-                           only on Mods, and the
+                            with its own toolbar (refresh, rate-limit notice, the
+                            search box, the Compact/Detailed density selector with the
+                            hide-disabled + updates-only filter toggles, the Add split
+                            button) shown
+                            only on Mods, and the
                           inline import card (`ImportWorkflowViewModel` +
                           `ImportWorkflowView`, an application-lifetime singleton
                           child VM registered before `ModListViewModel`) directly
@@ -275,20 +276,27 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            conditional-class pattern, not a ToggleButton). Detailed is
                            the default; absent/unknown normalizes to Detailed, and
                            Compact survives only when persisted or selected.
-                           The toolbar also carries the view-projection pair: a
-                           fixed-width search box (keystroke-live TwoWay
-                           `SearchText`, case-insensitive ordinal substring on the
-                           row name, with an inner clear button built from the
-                           Fluent theme's own text-box clear-button chrome) and a
-                           hide-disabled visibility toggle (drawn
-                           visibility/visibility_off paths, `selected` while
-                           hiding). Both drive the VM's `VisibleMods` projection
-                           of the authoritative `Mods` list (rebuilt by one
-                           `RebuildVisibleMods` at the end of every Reload, on
-                           every filter/search change, and after an enable
-                           toggle under an active filter); the state is
-                           session-transient (never persisted, survives reloads
-                           + navigation, cleared on an active-profile change).
+                            The toolbar also carries the view-projection controls: a
+                            fixed-width search box (keystroke-live TwoWay
+                            `SearchText`, case-insensitive ordinal substring on the
+                            row name, with an inner clear button built from the
+                            Fluent theme's own text-box clear-button chrome), a
+                            hide-disabled visibility toggle (drawn
+                            visibility/visibility_off paths, `selected` while
+                            hiding), and an updates-only toggle (one stable drawn
+                            Material update glyph + `selected` while filtering,
+                            keeping only rows flagged `UpdateAvailable`). All
+                            compose with AND and drive the VM's `VisibleMods`
+                            projection
+                            of the authoritative `Mods` list (rebuilt by one
+                            `RebuildVisibleMods` at the end of every Reload (after
+                            the known-update-flag hydration, so the updates-only
+                            filter sees hydrated flags), on
+                            every filter/search change, and after an enable
+                            toggle under an active filter; a landed check also
+                            reprojects, since it can change the flags); the state is
+                            session-transient (never persisted, survives reloads
+                            + navigation, cleared on an active-profile change).
                            `DetailedModRowsViewModel.SetRowsAsync` keeps
                            receiving the FULL snapshot, so thumbnails + metadata
                            hydrate regardless of visibility and a filter change
@@ -1650,7 +1658,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             narrowing, clearing restores, projection survives
                                             reload + clears on profile switch, ToggleEnabled
                                             under the hide-filter, the no-matches vs add-hint
-                                            exclusivity, move availability over visible unlocked
+                                            exclusivity, the updates-only filter (flagged-rows
+                                            projection incl. the reload hydration-ordering
+                                            regression, AND-composition with the other filters,
+                                            a landed check reprojecting the live filter,
+                                            session-transient lifecycle, empty-state
+                                            exclusivity, tooltip locality), move availability
+                                            over visible unlocked
                                             neighbors, reorder-through-filter via Move Up/Down +
                                             CommitReorder with hidden rows keeping relative order +
                                             one SetModOrder call, locked rows keeping indices,
