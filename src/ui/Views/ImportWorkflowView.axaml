@@ -73,9 +73,10 @@
           and during the edit confirm stage. Conditional Nexus-only rows
           (Version, URL/ID, policy) collapse cleanly for Untracked; the policy
           row is batch-only (policy is a per-row profile setting, not part of a
-          container's import details). The name field is disabled in edit mode
+          container's import details). The name field is read-only in edit
+          mode
           for the Nexus choice (a Nexus mod's name comes from Nexus; the
-          update check's name-sync manages it) and always enabled in batch
+          update check's name-sync manages it) and always editable in batch
           mode; a downloaded container never opens the edit mode at all.
         -->
         <Grid IsVisible="{Binding IsFormVisible}"
@@ -84,14 +85,17 @@
               IsEnabled="{Binding IsEditing}">
 
           <!-- Row 0: Mod name (batch: always editable; edit mode: the
-               Untracked choice only). -->
+               Untracked choice only). Locked as READ-ONLY, never disabled:
+               read-only text renders at full contrast (the Fluent dark
+               theme's disabled text is near-invisible) + stays selectable,
+               so the user can always read the name being edited. -->
           <TextBlock Grid.Row="0" Grid.Column="0"
                      Text="{ReflectionBinding [Import_NameLabel], Source={StaticResource Loc}}"
                      VerticalAlignment="Center"
                      Margin="0,0,6,4" />
           <TextBox Grid.Row="0" Grid.Column="1"
                    Text="{Binding ModName, Mode=TwoWay}"
-                   IsEnabled="{Binding IsNameEditable}"
+                   IsReadOnly="{Binding !IsNameEditable}"
                    Margin="0,0,0,4" />
 
           <!-- Row 1: Source. -->

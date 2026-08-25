@@ -1674,6 +1674,13 @@ feature).
   has no natural crossed-out variant to swap), `selected` bound to
   `ShowUpdatesOnly`, bound to `ToggleUpdatesOnlyCommand`, with the dynamic
   filter/show-all tooltip + automation name.
+- **Edit-card name field.** In the edit mode the name TextBox locks as
+  read-only (`IsReadOnly` bound to `!IsNameEditable`), never disabled: the
+  Fluent dark theme renders disabled text near-invisibly, which read as an
+  empty field, while read-only text renders at full contrast and stays
+  selectable so the name being edited is always legible. It is the only
+  locked field on the card (the version/URL fields are never locked for a
+  container that can open it; a downloaded container never opens the card).
 - **Manager banner.** A full-width caution `Border` in the page grid's row 2,
   between the inline import card (row 1) and the row list (row 3):
   `IsVisible` bound to `IsModManagerActive`, a `CuratorCautionBackgroundBrush`
