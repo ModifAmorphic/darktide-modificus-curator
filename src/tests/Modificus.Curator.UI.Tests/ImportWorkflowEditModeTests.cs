@@ -278,7 +278,7 @@ public sealed class ImportWorkflowEditModeTests
     [InlineData(false)]   // RemoteUploadedAt-only shape (pre-FileId-persistence downloads)
     public void StartEdit_refuses_a_grounded_container(bool fileIdShape)
     {
-        // Defense in depth behind the disabled pencil: a version carrying a
+        // Defense in depth behind the hidden pencil: a version carrying a
         // FileId OR a RemoteUploadedAt grounds the container, and a grounded
         // container is not editable at all (no degraded fields, no card).
         var (vm, _, _, repo, _) = Build();

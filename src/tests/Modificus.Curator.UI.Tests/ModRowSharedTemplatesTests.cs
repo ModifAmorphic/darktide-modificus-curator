@@ -75,21 +75,29 @@ public sealed class ModRowSharedTemplatesTests
         Assert.Equal("{Binding EnabledLabel}", A(checkbox, "Content"));
         Assert.Equal("{Binding EnabledLabel}", A(checkbox, "AutomationProperties.Name"));
 
-        // The pencil contract: the edit-import-details button binds IsEnabled
-        // (never IsVisible) to CanEditImportDetails, the update-action-cell
-        // pattern of a stable position that goes inert rather than shifting
-        // the strip, and it precedes the Enabled checkbox in document order
-        // within the shared strip (between the source badge cell and the
-        // checkbox).
+        // The pencil contract: the edit-import-details button binds IsVisible
+        // (never IsEnabled) to CanEditImportDetails and lives inside a
+        // slot-preserving host Panel the strip always lays out (sized to the
+        // pencil's 28-DIP footprint, no IsVisible of its own), the
+        // update-action-cell pattern: a non-editable row shows empty space of
+        // the same width, so the Enabled checkbox never shifts, and the
+        // hidden button leaves the a11y tree + focus order naturally. The
+        // host precedes the checkbox in document order within the shared
+        // strip (between the source badge cell and the checkbox).
         var pencil = Assert.Single(
             Elements(xaml.Root!, "Button"),
             b => A(b, "Click") == "EditImportDetails_Click");
-        Assert.Equal("{Binding CanEditImportDetails}", A(pencil, "IsEnabled"));
-        Assert.Null(A(pencil, "IsVisible"));
-        Assert.Equal("WrapPanel", (pencil.Parent as XElement)?.Name.LocalName);
+        Assert.Equal("{Binding CanEditImportDetails}", A(pencil, "IsVisible"));
+        Assert.Null(A(pencil, "IsEnabled"));
+        var host = pencil.Parent as XElement;
+        Assert.NotNull(host);
+        Assert.Equal("Panel", host!.Name.LocalName);
+        Assert.Equal("28", A(host, "MinWidth"));
+        Assert.Null(A(host, "IsVisible"));
+        Assert.Equal("WrapPanel", (host.Parent as XElement)?.Name.LocalName);
         Assert.True(
-            pencil.IsBefore(checkbox),
-            "the pencil precedes the Enabled checkbox in document order");
+            host.IsBefore(checkbox),
+            "the pencil slot precedes the Enabled checkbox in document order");
     }
 
     [Fact]
@@ -99,11 +107,11 @@ public sealed class ModRowSharedTemplatesTests
 
         // The Compact root carries the scoping class, and the page styles
         // supply the strip's compact margins (12 / 8 / 12 / 8 / 8 / 4 / 4 / 4:
-        // the pencil leads at 12, the Enabled checkbox follows at 8, then the
-        // policy cluster 12, update cell 8, move up 8, and 4 each for move
-        // down / order lock / remove) + zero item spacing. Without these
-        // styles the compact strip would fall back to the Detailed spacing, a
-        // silent visual change.
+        // the pencil's reserved slot leads at 12, the Enabled checkbox
+        // follows at 8, then the policy cluster 12, update cell 8, move up 8,
+        // and 4 each for move down / order lock / remove) + zero item spacing.
+        // Without these styles the compact strip would fall back to the
+        // Detailed spacing, a silent visual change.
         var compactRoot = Assert.Single(
             Elements(xaml.Root!, "Grid"),
             g => A(g, "Classes")?.Contains("compactRow") == true);
@@ -120,12 +128,13 @@ public sealed class ModRowSharedTemplatesTests
         Assert.Contains("Grid.compactRow WrapPanel.actionStrip > Button.moveDown", styles);
         Assert.Contains("Grid.compactRow WrapPanel.actionStrip > Button.orderLock", styles);
         Assert.Contains("Grid.compactRow WrapPanel.actionStrip > Button.remove", styles);
-        Assert.Contains("Grid.compactRow WrapPanel.actionStrip > Button.editDetails", styles);
+        Assert.Contains("Grid.compactRow WrapPanel.actionStrip > Panel.editCell", styles);
 
-        // The leading pair's margins are pinned (the pencil owns the leading
-        // 12 the checkbox used to carry; the checkbox drops to 8), so a
-        // reorder or margin edit that changes the strip rhythm is a red test.
-        AssertMargin(xaml, "Grid.compactRow WrapPanel.actionStrip > Button.editDetails", "12,0,0,0");
+        // The leading pair's margins are pinned (the pencil's reserved slot
+        // owns the leading 12 the checkbox used to carry; the checkbox drops
+        // to 8), so a reorder or margin edit that changes the strip rhythm is
+        // a red test.
+        AssertMargin(xaml, "Grid.compactRow WrapPanel.actionStrip > Panel.editCell", "12,0,0,0");
         AssertMargin(xaml, "Grid.compactRow WrapPanel.actionStrip > CheckBox", "8,0,0,0");
     }
 

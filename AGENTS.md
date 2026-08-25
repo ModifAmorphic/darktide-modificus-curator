@@ -63,7 +63,8 @@ game-binary constraints now live with the runtime, in
    a regular/unknown click opens the mod's Nexus files page. Every row also
    carries an edit-import-details action (a drawn-pencil button first in the
    shared action strip, between the source badge and the Enabled checkbox,
-   rendered on every row but disabled when not editable: linked,
+   shown only while the row is editable + hidden otherwise with its layout
+   slot preserved so the strip geometry never shifts: linked,
    download-morphed, and downloaded rows (any version carries a FileId or a
    RemoteUploadedAt), the update-action-cell pattern) starting the import
    card's edit mode, the universal correction surface for a container's
@@ -806,9 +807,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                             FIRST in the shared action strip, between the
                             source badge cell and the Enabled checkbox, ONE
                             definition in the shared templates so Compact +
-                            Detailed behave identically; rendered on every row
-                            but disabled when not editable, linked +
-                            download-morphed rows, the update-action-cell
+                            Detailed behave identically; the button shows
+                            only while the row is editable + hides otherwise
+                            inside its always-laid-out slot (the pencil's
+                            footprint) so the strip geometry never shifts,
+                            linked + download-morphed + downloaded rows, the
+                            update-action-cell
                             pattern) starting the import card's EDIT MODE
                             (the inline card below the toolbar, a hosted view
                             rather than a modal): the per-container
@@ -826,7 +830,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                             are not editable: a version carrying a FileId OR
                             a RemoteUploadedAt grounds the container (the
                             timestamp widens the evidence to pre-FileId
-                            downloads), the row's pencil is disabled, and
+                            downloads), the row's pencil is hidden (its slot
+                            preserved), and
                             both StartEdit and the primitive refuse (defense
                             in depth; no degraded fields, no card). The name
                             field is editable only for the Untracked choice

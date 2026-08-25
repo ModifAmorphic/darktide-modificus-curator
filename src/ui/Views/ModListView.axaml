@@ -124,27 +124,32 @@
           Edit import details (drawn pencil), first in the strip (between the
           source badge cell and the Enabled checkbox). The universal
           correction surface for the row's container: name, source
-          association, version tag. Rendered on EVERY row but disabled when
-          the row is not editable (linked rows: an external folder's identity
-          is its path; download-morphed rows: the morph's completion is about
-          to write the container; downloaded rows: a version carries a FileId
-          or a RemoteUploadedAt, so the details are Nexus-owned), the
-          update-action-cell pattern of a stable position that goes inert
-          rather than shifting the strip. The parent's command repeats the
-          guards.
+          association, version tag. The host cell is laid out on EVERY row
+          (the update-action-cell pattern), sized to the pencil's footprint,
+          and the button itself shows only while the row is editable (linked
+          rows: an external folder's identity is its path; download-morphed
+          rows: the morph's completion is about to write the container;
+          downloaded rows: a version carries a FileId or a RemoteUploadedAt,
+          so the details are Nexus-owned). A non-editable row shows empty
+          space of the same width, so the Enabled checkbox and the strip
+          geometry never shift; the hidden button leaves the accessibility
+          tree, focus order, and hit testing naturally. The parent's command
+          repeats the guards.
         -->
-        <Button Classes="icon editDetails"
-                IsEnabled="{Binding CanEditImportDetails}"
-                ToolTip.Tip="{ReflectionBinding [ModRow_EditImportDetailsTooltip], Source={StaticResource Loc}}"
-                AutomationProperties.Name="{ReflectionBinding [ModRow_EditImportDetailsTooltip], Source={StaticResource Loc}}"
-                Click="EditImportDetails_Click"
-                CommandParameter="{Binding}">
-          <!-- Material "edit" (24x24 source): pencil. -->
-          <Path Width="16" Height="16" Stretch="Uniform"
-                HorizontalAlignment="Center" VerticalAlignment="Center"
-                Fill="{Binding $parent[Button].Foreground}"
-                Data="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
-        </Button>
+        <Panel Classes="editCell" MinWidth="28" VerticalAlignment="Center">
+          <Button Classes="icon editDetails"
+                  IsVisible="{Binding CanEditImportDetails}"
+                  ToolTip.Tip="{ReflectionBinding [ModRow_EditImportDetailsTooltip], Source={StaticResource Loc}}"
+                  AutomationProperties.Name="{ReflectionBinding [ModRow_EditImportDetailsTooltip], Source={StaticResource Loc}}"
+                  Click="EditImportDetails_Click"
+                  CommandParameter="{Binding}">
+            <!-- Material "edit" (24x24 source): pencil. -->
+            <Path Width="16" Height="16" Stretch="Uniform"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  Fill="{Binding $parent[Button].Foreground}"
+                  Data="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+          </Button>
+        </Panel>
 
         <!--
           Enabled. In Detailed the localized label is the CheckBox content so
@@ -628,10 +633,10 @@
     <!--
       The Compact row's strip spacing: the same shared strip with the
       single-line row's tighter inter-control margins (12 / 8 / 12 / 8 / 8 /
-      4 / 4 / 4: the pencil leads at 12, the Enabled checkbox follows at 8,
-      then the policy cluster 12, update cell 8, move up 8, and 4 each for
-      move down / order lock / remove, with ItemSpacing 0 so the margins
-      alone define the gaps). Scoped
+      4 / 4 / 4: the pencil's reserved slot leads at 12, the Enabled checkbox
+      follows at 8, then the policy cluster 12, update cell 8, move up 8, and
+      4 each for move down / order lock / remove, with ItemSpacing 0 so the
+      margins alone define the gaps). Scoped
       under the Compact root's Grid.compactRow class so the Detailed card is
       untouched, and declared after the WrapPanel.actionStrip base so the
       override wins.
@@ -639,7 +644,7 @@
     <Style Selector="Grid.compactRow WrapPanel.actionStrip">
       <Setter Property="ItemSpacing" Value="0" />
     </Style>
-    <Style Selector="Grid.compactRow WrapPanel.actionStrip > Button.editDetails">
+    <Style Selector="Grid.compactRow WrapPanel.actionStrip > Panel.editCell">
       <Setter Property="Margin" Value="12,0,0,0" />
     </Style>
     <Style Selector="Grid.compactRow WrapPanel.actionStrip > CheckBox">

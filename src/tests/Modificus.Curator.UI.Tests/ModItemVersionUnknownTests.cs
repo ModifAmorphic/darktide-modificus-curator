@@ -223,8 +223,9 @@ public sealed class ModItemVersionUnknownTests
     [Fact]
     public void The_edit_action_offers_editable_rows_and_suppresses_linked_morphed_and_downloaded_rows()
     {
-        // Offered for an unknown row (and every ungrounded ordinary row);
-        // suppressed for linked rows, download-morphed rows, and downloaded
+        // Offered for an unknown row (and every ungrounded ordinary row; the
+        // pencil shows); hidden (its layout slot reserved) for linked rows,
+        // download-morphed rows, and downloaded
         // rows (any version carries download evidence: a FileId OR a
         // RemoteUploadedAt, both shapes).
         var unknown = Row(

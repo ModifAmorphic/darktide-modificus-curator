@@ -1871,8 +1871,9 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// and is never edited), download-morphed rows (the morph's completion
     /// is about to write the container), and downloaded rows (a version
     /// carries a FileId or a RemoteUploadedAt; a downloaded mod's details
-    /// are Nexus-owned) never offer the action (the pencil is disabled for
-    /// all three); this command repeats the guards as defense in depth, and
+    /// are Nexus-owned) never offer the action (the pencil is hidden for
+    /// all three, its layout slot reserved so the strip geometry never
+    /// shifts); this command repeats the guards as defense in depth, and
     /// the child's StartEdit repeats them again.
     /// </summary>
     [RelayCommand]

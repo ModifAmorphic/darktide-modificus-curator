@@ -1406,7 +1406,8 @@ fields, the same `ImportSourceValidator` rules):
    edit can never create a version-unknown state; switching to Untracked
    clears the version field); Cancel deactivates the card. Downloaded mods
    are not editable: a version carrying a FileId OR a RemoteUploadedAt
-   grounds the container, the row's pencil is disabled, and both `StartEdit`
+   grounds the container, the row's pencil is hidden (its always-laid-out
+   slot is preserved, so the strip geometry never shifts), and both `StartEdit`
    and the primitive refuse (defense in depth; no degraded fields, no card).
    The name field is editable only for the Untracked choice (the name is the
    identity for an untracked container; a Nexus mod's name comes from Nexus

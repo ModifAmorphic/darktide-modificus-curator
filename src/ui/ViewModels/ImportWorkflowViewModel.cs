@@ -41,7 +41,7 @@ namespace Modificus.Curator.UI.ViewModels;
 /// <para><b>Edit mode:</b> prefilled from the container's current facts
 /// (name, source choice, the bare mod id, the latest version's tag). A
 /// downloaded container never opens the card (any version carrying a FileId
-/// or a RemoteUploadedAt grounds it: the row's pencil is disabled and
+/// or a RemoteUploadedAt grounds it: the row's pencil is hidden and
 /// <c>StartEdit</c> refuses; the primitive enforces the same refusal). The
 /// policy picker hides (policy is per-row, not import details). The name
 /// field is editable only for the Untracked choice (a Nexus mod's name comes
@@ -715,7 +715,7 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
             return;
         }
 
-        // Downloaded mods are not editable (the row's pencil is disabled for
+        // Downloaded mods are not editable (the row's pencil is hidden for
         // a grounded container; this gate is defense in depth): a version
         // carrying a FileId OR a RemoteUploadedAt (only the download path
         // records either) grounds the whole container.
