@@ -2374,8 +2374,10 @@ public sealed class ModListViewModelTests
         Assert.False(vm.ImportWorkflow.IsActive);
 
         // Save with a rename: the event reaches the parent, which reloads, so
-        // the row shows the edited name.
+        // the row shows the edited name. The rename rides the switch to
+        // Untracked (the only destination that may change the name).
         vm.EditImportDetailsCommand.Execute(row);
+        vm.ImportWorkflow.SourceChoice = ImportSource.Untracked;
         vm.ImportWorkflow.ModName = "DMF Renamed";
         vm.ImportWorkflow.SaveEditCommand.Execute(null);
 

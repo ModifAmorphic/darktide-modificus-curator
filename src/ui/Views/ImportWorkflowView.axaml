@@ -58,22 +58,12 @@
       </Grid>
 
       <!--
-        The mode content (row 1): the FileId-grounding hint (edit mode only)
-        above the visibility-swapped pair of the editing form and the edit
-        mode's inline removal-confirm panel. The form is also hidden during
-        the terminal batch failure (only the failure message + Close show).
+        The mode content (row 1): the visibility-swapped pair of the editing
+        form and the edit mode's inline removal-confirm panel. The form is
+        also hidden during the terminal batch failure (only the failure
+        message + Close show).
       -->
       <StackPanel Grid.Row="1" Margin="0,0,0,8">
-
-        <!-- The grounding hint (edit mode): explains why the id + source (and,
-             when the installed copy came from a download, the version) fields
-             are inert. Collapses in batch mode and on ungrounded containers. -->
-        <TextBlock Text="{Binding FileIdLockHint}"
-                   IsVisible="{Binding FileIdLockHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                   FontSize="11"
-                   Opacity="0.7"
-                   TextWrapping="Wrap"
-                   Margin="0,0,0,8" />
 
         <!--
           Editing form: a vertical sequence of compact label/control rows over a
@@ -83,39 +73,41 @@
           and during the edit confirm stage. Conditional Nexus-only rows
           (Version, URL/ID, policy) collapse cleanly for Untracked; the policy
           row is batch-only (policy is a per-row profile setting, not part of a
-          container's import details).
+          container's import details). The name field is disabled in edit mode
+          for the Nexus choice (a Nexus mod's name comes from Nexus; the
+          update check's name-sync manages it) and always enabled in batch
+          mode; a downloaded container never opens the edit mode at all.
         -->
         <Grid IsVisible="{Binding IsFormVisible}"
               ColumnDefinitions="120,*"
               RowDefinitions="Auto,Auto,Auto,Auto,Auto"
               IsEnabled="{Binding IsEditing}">
 
-          <!-- Row 0: Mod name (always editable, either mode). -->
+          <!-- Row 0: Mod name (batch: always editable; edit mode: the
+               Untracked choice only). -->
           <TextBlock Grid.Row="0" Grid.Column="0"
                      Text="{ReflectionBinding [Import_NameLabel], Source={StaticResource Loc}}"
                      VerticalAlignment="Center"
                      Margin="0,0,6,4" />
           <TextBox Grid.Row="0" Grid.Column="1"
                    Text="{Binding ModName, Mode=TwoWay}"
+                   IsEnabled="{Binding IsNameEditable}"
                    Margin="0,0,0,4" />
 
-          <!-- Row 1: Source (disabled in edit mode while the identity is
-               FileId-grounded). -->
+          <!-- Row 1: Source. -->
           <TextBlock Grid.Row="1" Grid.Column="0"
                      Text="{ReflectionBinding [Import_SourceLabel], Source={StaticResource Loc}}"
                      VerticalAlignment="Center"
                      Margin="0,0,6,4" />
           <ComboBox Grid.Row="1" Grid.Column="1"
                     SelectedIndex="{Binding SourceChoiceIndex, Mode=TwoWay}"
-                    IsEnabled="{Binding IsSourceEditable}"
                     HorizontalAlignment="Stretch"
                     Margin="0,0,0,4">
             <ComboBoxItem Content="{ReflectionBinding [Import_SourceUntracked], Source={StaticResource Loc}}" />
             <ComboBoxItem Content="{ReflectionBinding [Import_SourceNexus], Source={StaticResource Loc}}" />
           </ComboBox>
 
-          <!-- Row 2: Version (Nexus only; edit mode locks it when the latest
-               record carries its own FileId). A vertical stack: TextBox then
+          <!-- Row 2: Version (Nexus only). A vertical stack: TextBox then
                its inline validation message, both under the same label.
                Collapses for Untracked. -->
           <TextBlock Grid.Row="2" Grid.Column="0"
@@ -128,7 +120,6 @@
                       Margin="0,0,0,4"
                       IsVisible="{Binding IsRemote}">
             <TextBox Text="{Binding Version, Mode=TwoWay}"
-                     IsEnabled="{Binding IsVersionEditable}"
                      PlaceholderText="{ReflectionBinding [Import_VersionRequired], Source={StaticResource Loc}}" />
             <TextBlock Text="{Binding VersionValidationMessage}"
                        FontSize="11"
@@ -137,9 +128,8 @@
                        IsVisible="{Binding VersionValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
           </StackPanel>
 
-          <!-- Row 3: Mod URL or ID (Nexus only; edit mode locks it while the
-               identity is FileId-grounded + prefills the bare id). Same
-               vertical-stack shape. -->
+          <!-- Row 3: Mod URL or ID (Nexus only; edit mode prefills the bare
+               id). Same vertical-stack shape. -->
           <TextBlock Grid.Row="3" Grid.Column="0"
                      Text="{Binding UrlLabel}"
                      VerticalAlignment="Top"
@@ -150,7 +140,6 @@
                       Margin="0,0,0,4"
                       IsVisible="{Binding IsRemote}">
             <TextBox Text="{Binding Url, Mode=TwoWay}"
-                     IsEnabled="{Binding IsIdEditable}"
                      PlaceholderText="{Binding UrlPlaceholder}" />
             <TextBlock Text="{Binding UrlValidationMessage}"
                        FontSize="11"

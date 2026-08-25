@@ -1395,28 +1395,32 @@ fields, the same `ImportSourceValidator` rules):
   and writes on the captured UI context). Emits `ItemImported(profileId)`; the
   mod list reloads when the captured profile is still active.
 - **Edit mode** (entered from a row's pencil button via
-  `ModListViewModel.EditImportDetailsCommand` -> `StartEdit(containerId)`): the
-  per-container correction surface for a mod's import details (name, source
-  association, release tag), applied through the repository's
-  `EditImportDetails` primitive. The card activates titled "Edit import
-  details", prefilled from the container (name, source choice, the bare mod
-  id, the latest version's tag); the policy picker hides (policy is per-row,
-  not import details); Save applies the primitive with the same validation
-  the batch form enforces (a version is required when saving as Nexus, so the
-  edit can never create a version-unknown state; switching to Untracked
-  clears the version field); Cancel deactivates the card. The FileId
-  grounding degrades the fields: any version's FileId disables the source
-  switch + id field with the localized "downloaded from Nexus" hint, the
-  latest record's own FileId additionally disables the version field (the
-  per-record tag lock), and the name is never locked. A multi-version
-  identity change swaps the form for an inline removal-confirm stage (never a
-  nested modal; the card is a hosted view), with the save-time state refresh
-  and the typed `RemovalConfirmationRequiredException` catch covering a
-  version landing while the card is open. Refused saves and disk failures
-  surface inline in the card's status area with the form still editable. A
-  successful save deactivates the card and raises
-  `ImportDetailsEdited(containerId)`, the mod list's reload signal (the
-  edited container's name, source, and version can all have changed).
+   `ModListViewModel.EditImportDetailsCommand` -> `StartEdit(containerId)`): the
+   per-container correction surface for a mod's import details (name, source
+   association, release tag), applied through the repository's
+   `EditImportDetails` primitive. The card activates titled "Edit import
+   details", prefilled from the container (name, source choice, the bare mod
+   id, the latest version's tag); the policy picker hides (policy is per-row,
+   not import details); Save applies the primitive with the same validation
+   the batch form enforces (a version is required when saving as Nexus, so the
+   edit can never create a version-unknown state; switching to Untracked
+   clears the version field); Cancel deactivates the card. Downloaded mods
+   are not editable: a version carrying a FileId OR a RemoteUploadedAt
+   grounds the container, the row's pencil is disabled, and both `StartEdit`
+   and the primitive refuse (defense in depth; no degraded fields, no card).
+   The name field is editable only for the Untracked choice (the name is the
+   identity for an untracked container; a Nexus mod's name comes from Nexus
+   and the update check's name-sync would revert a user-typed name); the id,
+   version, and source switch stay editable for an ungrounded container. A
+   multi-version
+   identity change swaps the form for an inline removal-confirm stage (never a
+   nested modal; the card is a hosted view), with the save-time state refresh
+   and the typed `RemovalConfirmationRequiredException` catch covering a
+   version landing while the card is open. Refused saves and disk failures
+   surface inline in the card's status area with the form still editable. A
+   successful save deactivates the card and raises
+   `ImportDetailsEdited(containerId)`, the mod list's reload signal (the
+   edited container's name, source, and version can all have changed).
 
 The modes are mutually exclusive: both entries (`StartBatch`, `StartEdit`)
 check the shared inactive gate first, so a batch cannot start over an edit or

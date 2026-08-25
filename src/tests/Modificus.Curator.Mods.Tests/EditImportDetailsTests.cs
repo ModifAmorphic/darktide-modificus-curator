@@ -8,8 +8,11 @@ namespace Modificus.Curator.Mods.Tests;
 /// <summary>
 /// <see cref="IModRepository.EditImportDetails"/>: every edit branch (rename,
 /// same-identity retag, Untracked to Nexus, the Nexus-unknown retag, the
-/// identity reset with older-version removal, Nexus to Untracked), the FileId
-/// lock, the removeOlderVersions guard, the tag-collision refusal, the
+/// identity reset with older-version removal, Nexus to Untracked), the
+/// downloaded-not-editable refusal (a version carrying a FileId OR a
+/// RemoteUploadedAt grounds the container; every edit refused, name-only
+/// included; both evidence shapes), the Untracked-only name rule, the
+/// removeOlderVersions guard, the tag-collision refusal, the
 /// duplicate-identity guard, and the untracked-name index coherence across an
 /// Untracked rename + a Nexus-to-Untracked swap. Resolves via DI (black-box)
 /// against a temp <c>ModsFolder</c>, the established repository test style.
@@ -18,9 +21,6 @@ public sealed class EditImportDetailsTests
 {
     private static readonly DateTimeOffset OldStamp =
         new(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
-
-    private static readonly DateTimeOffset NewStamp =
-        new(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
 
     // ---- lookup + argument guards -------------------------------------------
 
@@ -84,22 +84,56 @@ public sealed class EditImportDetailsTests
     // ---- same-identity edits --------------------------------------------------
 
     [Fact]
-    public void Rename_only_keeps_source_and_all_versions()
+    public void A_name_change_on_a_Nexus_container_is_refused()
+    {
+        // The name is Untracked-only: a Nexus mod's name comes from Nexus
+        // (the update check's name-sync renames the container when Nexus's
+        // name changes, so a user-typed name would be reverted). The refusal
+        // leaves nothing mutated.
+        using var fx = new RepoFixture();
+        var container = SeedNexus(fx, "1.0");
+
+        var ex = Assert.Throws<InvalidOperationException>(() => fx.Repo.EditImportDetails(
+            container.Id, "Renamed", new NexusSource { ModId = 8 }, "1.0",
+            removeOlderVersions: false));
+        Assert.Contains("managed by Nexus", ex.Message);
+
+        var unchanged = fx.Repo.Get(container.Id)!;
+        Assert.Equal("WT", unchanged.Name);
+        Assert.Single(unchanged.Versions);
+    }
+
+    [Fact]
+    public void An_unchanged_name_on_a_Nexus_edit_is_allowed()
     {
         using var fx = new RepoFixture();
         var container = SeedNexus(fx, "1.0");
-        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, NewStamp);
 
         var updated = fx.Repo.EditImportDetails(
-            container.Id, "Renamed", new NexusSource { ModId = 8 }, "2.0",
+            container.Id, "WT", new NexusSource { ModId = 8 }, "1.0-hotfix",
             removeOlderVersions: false);
 
         Assert.NotNull(updated);
-        Assert.Equal("Renamed", updated!.Name);
-        Assert.Equal(8, Assert.IsType<NexusSource>(updated.Source).ModId);
-        Assert.Equal(2, updated.Versions.Count);
-        Assert.Contains(updated.Versions, v => v.VersionString == "1.0");
-        Assert.Contains(updated.Versions, v => v.VersionString == "2.0");
+        Assert.Equal("WT", updated!.Name);
+        Assert.Equal("1.0-hotfix", Assert.Single(updated.Versions).VersionString);
+    }
+
+    [Fact]
+    public void A_rename_alongside_the_switch_to_Untracked_is_allowed()
+    {
+        // The name rule follows the DESTINATION: switching to Untracked makes
+        // the name the identity again, so a rename with the switch is legal.
+        using var fx = new RepoFixture();
+        var container = SeedNexus(fx, "1.0");
+
+        var updated = fx.Repo.EditImportDetails(
+            container.Id, "WT Local", new UntrackedSource(), "",
+            removeOlderVersions: false);
+
+        Assert.NotNull(updated);
+        Assert.Equal("WT Local", updated!.Name);
+        Assert.IsType<UntrackedSource>(updated.Source);
+        Assert.Equal(container.Id, fx.Repo.FindUntrackedByName("WT Local")!.Id);
     }
 
     [Fact]
@@ -122,7 +156,7 @@ public sealed class EditImportDetailsTests
     {
         using var fx = new RepoFixture();
         var container = SeedNexus(fx, "1.0");
-        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, NewStamp);
+        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate);
 
         var updated = fx.Repo.EditImportDetails(
             container.Id, "WT", new NexusSource { ModId = 8 }, "2.0-hotfix",
@@ -143,7 +177,7 @@ public sealed class EditImportDetailsTests
         // version on the same container already holds is the same conflict.
         using var fx = new RepoFixture();
         var container = SeedNexus(fx, "1.0");
-        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, NewStamp);
+        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate);
 
         Assert.Throws<InvalidOperationException>(() => fx.Repo.EditImportDetails(
             container.Id, "WT", new NexusSource { ModId = 8 }, "1.0",
@@ -157,7 +191,7 @@ public sealed class EditImportDetailsTests
     {
         using var fx = new RepoFixture();
         var container = fx.Repo.CreateContainer(new UntrackedSource(), "WT");
-        var stamped = fx.Repo.AddVersion(container.Id, "", EmptyPopulate, OldStamp);
+        var stamped = fx.Repo.AddVersion(container.Id, "", EmptyPopulate);
 
         var updated = fx.Repo.EditImportDetails(
             container.Id, "WT", new NexusSource { ModId = 123 }, "1.4",
@@ -226,136 +260,67 @@ public sealed class EditImportDetailsTests
         Assert.Equal("1.2", Assert.Single(updated!.Versions).VersionString);
     }
 
-    // ---- the FileId lock -------------------------------------------------------
+    // ---- downloaded mods are not editable --------------------------------------
 
     [Fact]
-    public void FileId_lock_blocks_a_different_Nexus_id()
+    public void A_FileId_grounded_container_refuses_every_edit_including_name_only()
     {
+        // Any version carrying a FileId grounds the whole container: there is
+        // no degraded editing surface for a downloaded mod, not even the name.
         using var fx = new RepoFixture();
         var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
         fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, OldStamp, remoteFileId: 9001);
 
+        // Name-only, same identity, unchanged tag: refused.
+        var ex = Assert.Throws<InvalidOperationException>(() => fx.Repo.EditImportDetails(
+            container.Id, "WT Fixed", new NexusSource { ModId = 8 }, "1.0",
+            removeOlderVersions: false));
+        Assert.Contains("downloaded from Nexus", ex.Message);
+
+        // An id change + a source switch are refused identically (the same
+        // guard; nothing was mutated by the first refusal).
         Assert.Throws<InvalidOperationException>(() => fx.Repo.EditImportDetails(
             container.Id, "WT", new NexusSource { ModId = 9 }, "1.0",
             removeOlderVersions: false));
-    }
-
-    [Fact]
-    public void FileId_lock_blocks_Nexus_to_Untracked()
-    {
-        using var fx = new RepoFixture();
-        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
-        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, OldStamp, remoteFileId: 9001);
-
         Assert.Throws<InvalidOperationException>(() => fx.Repo.EditImportDetails(
             container.Id, "WT", new UntrackedSource(), "",
             removeOlderVersions: false));
+
+        var unchanged = fx.Repo.Get(container.Id)!;
+        Assert.Equal("WT", unchanged.Name);
+        Assert.Equal(8, Assert.IsType<NexusSource>(unchanged.Source).ModId);
+        Assert.Single(unchanged.Versions);
     }
 
     [Fact]
-    public void FileId_on_any_version_blocks_even_when_latest_is_clean()
+    public void A_RemoteUploadedAt_grounded_container_refuses_identically()
     {
-        // The lock reads EVERY version: an older acquired version grounds the
-        // identity just as much as the latest.
+        // The legacy shape: downloads from before FileId persistence carry
+        // only the timestamp, and the timestamp is equally download evidence
+        // (only the download path ever records either fact).
         using var fx = new RepoFixture();
         var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
-        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, OldStamp, remoteFileId: 9001);
-        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, NewStamp);
-
-        Assert.Throws<InvalidOperationException>(() => fx.Repo.EditImportDetails(
-            container.Id, "WT", new NexusSource { ModId = 9 }, "2.0",
-            removeOlderVersions: true));
-    }
-
-    [Fact]
-    public void FileId_lock_allows_a_same_identity_name_edit_with_an_unchanged_tag()
-    {
-        using var fx = new RepoFixture();
-        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
-        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, OldStamp, remoteFileId: 9001);
-
-        var updated = fx.Repo.EditImportDetails(
-            container.Id, "WT Fixed", new NexusSource { ModId = 8 }, "1.0",
-            removeOlderVersions: false);
-
-        Assert.NotNull(updated);
-        Assert.Equal("WT Fixed", updated!.Name);
-        var version = Assert.Single(updated.Versions);
-        Assert.Equal("1.0", version.VersionString);
-        // Same identity + unchanged tag: the download facts survive the edit.
-        Assert.Equal(9001, version.FileId);
-    }
-
-    // ---- the per-record tag lock -----------------------------------------------
-
-    [Fact]
-    public void Tag_lock_blocks_a_tag_change_on_a_grounded_latest_record()
-    {
-        // The installed copy came from a download (the latest record carries
-        // its own FileId), so Nexus supplied its version: the tag is fixed.
-        using var fx = new RepoFixture();
-        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
-        fx.Repo.AddVersion(container.Id, "1.21", EmptyPopulate, OldStamp, remoteFileId: 9001);
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, remoteUploadedAt: OldStamp);
 
         var ex = Assert.Throws<InvalidOperationException>(() => fx.Repo.EditImportDetails(
-            container.Id, "WT", new NexusSource { ModId = 8 }, "1.22",
+            container.Id, "WT Fixed", new NexusSource { ModId = 8 }, "1.0",
             removeOlderVersions: false));
-        Assert.Contains("version tag is fixed", ex.Message);
+        Assert.Contains("downloaded from Nexus", ex.Message);
     }
 
     [Fact]
-    public void Tag_lock_allows_a_tag_change_when_the_latest_record_is_not_grounded()
+    public void An_older_grounded_version_refuses_even_when_the_latest_is_clean()
     {
-        // A hand-imported copy landed on a previously-downloaded container:
-        // the older version's FileId locks the identity container-wide, but
-        // the latest record carries no FileId of its own, so its tag stays
-        // editable (the migration dedupe's resolvable case).
+        // Grounding reads EVERY version: a hand-imported copy landing on a
+        // downloaded container does not un-ground it.
         using var fx = new RepoFixture();
         var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
         fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, OldStamp, remoteFileId: 9001);
-        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, NewStamp);
-
-        var updated = fx.Repo.EditImportDetails(
-            container.Id, "WT", new NexusSource { ModId = 8 }, "2.0-hotfix",
-            removeOlderVersions: false);
-
-        Assert.NotNull(updated);
-        Assert.Contains(updated!.Versions, v => v.VersionString == "2.0-hotfix" && v.IsLatest);
-        Assert.Null(updated.Versions.Single(v => v.IsLatest).FileId);
-    }
-
-    [Fact]
-    public void Tag_lock_allows_resolving_an_empty_tag_on_a_grounded_container()
-    {
-        // The grounded container's latest is an ungrounded empty-tag record
-        // (the derived version-unknown state landing on a downloaded mod):
-        // resolving the tag is exactly what must stay possible.
-        using var fx = new RepoFixture();
-        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
-        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, OldStamp, remoteFileId: 9001);
-        fx.Repo.AddVersion(container.Id, string.Empty, EmptyPopulate, NewStamp);
-
-        var updated = fx.Repo.EditImportDetails(
-            container.Id, "WT", new NexusSource { ModId = 8 }, "1.4",
-            removeOlderVersions: false);
-
-        Assert.NotNull(updated);
-        Assert.Equal("1.4", updated!.Versions.Single(v => v.IsLatest).VersionString);
-    }
-
-    [Fact]
-    public void Identity_lock_stays_container_wide_when_only_an_older_version_is_grounded()
-    {
-        // The tag lock is per-record, but the identity lock must not weaken
-        // with it: the older download still grounds the identity.
-        using var fx = new RepoFixture();
-        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
-        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, OldStamp, remoteFileId: 9001);
-        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, NewStamp);
+        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate);
 
         Assert.Throws<InvalidOperationException>(() => fx.Repo.EditImportDetails(
-            container.Id, "WT", new NexusSource { ModId = 9 }, "2.0",
-            removeOlderVersions: true));
+            container.Id, "WT", new NexusSource { ModId = 8 }, "2.0-hotfix",
+            removeOlderVersions: false));
     }
 
     // ---- the identity reset ------------------------------------------------------
@@ -379,13 +344,14 @@ public sealed class EditImportDetailsTests
     {
         // The latest-is-null branch: a container created but never given a
         // version edits its name + source cleanly; the tag has no version
-        // record to land on and none is fabricated.
+        // record to land on and none is fabricated. The Nexus destination
+        // keeps its name (the Untracked-only name rule).
         using var fx = new RepoFixture();
         var nexus = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
         var untracked = fx.Repo.CreateContainer(new UntrackedSource(), "Local");
 
         var updatedNexus = fx.Repo.EditImportDetails(
-            nexus.Id, "Renamed", new NexusSource { ModId = 9 }, "1.0",
+            nexus.Id, "WT", new NexusSource { ModId = 9 }, "1.0",
             removeOlderVersions: false);
         var updatedUntracked = fx.Repo.EditImportDetails(
             untracked.Id, "Local Renamed", new UntrackedSource(), "",
@@ -393,7 +359,7 @@ public sealed class EditImportDetailsTests
 
         Assert.NotNull(updatedNexus);
         Assert.Empty(updatedNexus!.Versions);
-        Assert.Equal("Renamed", updatedNexus.Name);
+        Assert.Equal("WT", updatedNexus.Name);
         Assert.Equal(9, Assert.IsType<NexusSource>(updatedNexus.Source).ModId);
         Assert.NotNull(updatedUntracked);
         Assert.Empty(updatedUntracked!.Versions);
@@ -407,7 +373,7 @@ public sealed class EditImportDetailsTests
     {
         using var fx = new RepoFixture();
         var container = SeedNexus(fx, "1.0");
-        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, NewStamp);
+        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate);
 
         // The typed guard: catchable specifically by programmatic callers
         // that want to recover onto a confirm flow (it derives from
@@ -427,8 +393,8 @@ public sealed class EditImportDetailsTests
     {
         using var fx = new RepoFixture();
         var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
-        var older = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, OldStamp);
-        var latest = fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, NewStamp);
+        var older = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate);
+        var latest = fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate);
         var olderFolder = older.Versions.Single(v => v.VersionString == "1.0").Folder;
         var latestVersion = latest.Versions.Single(v => v.VersionString == "2.0");
         var latestPath = fx.Repo.GetVersionFolderPath(container.Id, latestVersion.Folder);
@@ -459,12 +425,11 @@ public sealed class EditImportDetailsTests
     }
 
     [Fact]
-    public void Nexus_to_Untracked_clears_the_tag_and_remote_claims_on_a_single_version()
+    public void Nexus_to_Untracked_clears_the_tag_on_a_single_version()
     {
         using var fx = new RepoFixture();
         var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
-        var stamped = fx.Repo.AddVersion(
-            container.Id, "1.0", EmptyPopulate, remoteUploadedAt: OldStamp);
+        var stamped = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate);
 
         var updated = fx.Repo.EditImportDetails(
             container.Id, "WT", new UntrackedSource(), "",
@@ -474,9 +439,10 @@ public sealed class EditImportDetailsTests
         Assert.IsType<UntrackedSource>(updated!.Source);
         var version = Assert.Single(updated.Versions);
         Assert.Equal(string.Empty, version.VersionString);
+        // Local facts stay: same folder + import stamp; an ungrounded manual
+        // association never carried remote claims to clear.
         Assert.Null(version.FileId);
         Assert.Null(version.RemoteUploadedAt);
-        // Local facts stay: same folder + import stamp.
         Assert.Equal(stamped.Versions[0].Folder, version.Folder);
         Assert.Equal(stamped.Versions[0].ImportedAt, version.ImportedAt);
         // The untracked-name index now resolves the container by its name.
@@ -488,7 +454,7 @@ public sealed class EditImportDetailsTests
     {
         using var fx = new RepoFixture();
         var container = SeedNexus(fx, "1.0");
-        var head = fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, NewStamp);
+        var head = fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate);
         var headFolder = head.Versions.Single(v => v.VersionString == "2.0").Folder;
 
         Assert.Throws<RemovalConfirmationRequiredException>(() => fx.Repo.EditImportDetails(
@@ -512,6 +478,12 @@ public sealed class EditImportDetailsTests
         var container = fx.Repo.CreateContainer(new UntrackedSource(), "WT");
         fx.Repo.AddVersion(container.Id, "", EmptyPopulate);
 
+        // An untracked rename persists...
+        fx.Repo.EditImportDetails(
+            container.Id, "WT Renamed", new UntrackedSource(), "",
+            removeOlderVersions: false);
+        // ...and the follow-on Nexus association (same name: a Nexus
+        // destination cannot change it) persists the source + tag.
         fx.Repo.EditImportDetails(
             container.Id, "WT Renamed", new NexusSource { ModId = 55 }, "3.1",
             removeOlderVersions: false);
@@ -533,15 +505,15 @@ public sealed class EditImportDetailsTests
 
     /// <summary>
     /// Seeds a Nexus mod 8 container whose single version is
-    /// <paramref name="version"/> (no FileId: an inferred identity, the only
-    /// kind reachable for an identity change). Follow-on AddVersion calls with
-    /// a later remote stamp become the container's latest under the
-    /// effective-timestamp key.
+    /// <paramref name="version"/> with no download evidence (a manual
+    /// association: the only editable Nexus shape). Follow-on AddVersion calls
+    /// without remote facts order by import time, so a later call becomes the
+    /// container's latest under the effective-timestamp key.
     /// </summary>
     private static ModContainer SeedNexus(RepoFixture fx, string version)
     {
         var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
-        fx.Repo.AddVersion(container.Id, version, EmptyPopulate, OldStamp);
+        fx.Repo.AddVersion(container.Id, version, EmptyPopulate);
         return container;
     }
 

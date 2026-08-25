@@ -717,10 +717,6 @@
     <value>Edit import details</value>
     <comment>Header of the import card while the edit mode is active (the per-mod correction surface for name, source, and version tag).</comment>
   </data>
-  <data name="EditDetails_FileIdLockHint" xml:space="preserve">
-    <value>This mod was downloaded from Nexus, so its mod id is fixed. A version installed by that download also keeps its tag.</value>
-    <comment>Inline hint in the import card's edit mode while the container is grounded by a download: any version's file id locks the mod id + source; the latest record's own file id additionally locks the version field.</comment>
-  </data>
   <data name="EditDetails_SaveButton" xml:space="preserve">
     <value>Save</value>
     <comment>The accent Save button in the import card's edit mode. Disabled while the fields are invalid; applies the edit through the repository's EditImportDetails primitive.</comment>

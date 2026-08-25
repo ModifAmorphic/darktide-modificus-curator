@@ -39,12 +39,14 @@ namespace Modificus.Curator.UI.ViewModels;
 /// the shared inactive gate first), and the card being active at all gates
 /// the Add button + drag-and-drop for either mode.</para>
 /// <para><b>Edit mode:</b> prefilled from the container's current facts
-/// (name, source choice, the bare mod id, the latest version's tag). The
-/// policy picker hides (policy is per-row, not import details); a FileId
-/// grounds what it grounds: any version's FileId disables the id + source
-/// fields (the identity lock), the latest record's own FileId additionally
-/// disables the version field (the tag lock), with the localized
-/// "downloaded from Nexus" hint; the name is always editable. A multi-version
+/// (name, source choice, the bare mod id, the latest version's tag). A
+/// downloaded container never opens the card (any version carrying a FileId
+/// or a RemoteUploadedAt grounds it: the row's pencil is disabled and
+/// <c>StartEdit</c> refuses; the primitive enforces the same refusal). The
+/// policy picker hides (policy is per-row, not import details). The name
+/// field is editable only for the Untracked choice (a Nexus mod's name comes
+/// from Nexus and the update check's name-sync would revert a user-typed
+/// name); the id, version, and source switch stay editable. A multi-version
 /// identity change swaps the form for an inline removal confirm (never a
 /// nested modal), with the save-time state refresh + the typed
 /// <see cref="RemovalConfirmationRequiredException"/> recover path covering a
@@ -108,7 +110,7 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     // ---- edit-mode state (never touched by the batch path) ------------------
     //
     // The edit mode reuses the observable form fields above; these carry the
-    // container being edited + the grounding facts the field-locking reads.
+    // container being edited + the facts the removal-confirm decision reads.
     // All of it is cleared by Reset() alongside the batch state, so an
     // inactive card is mode-neutral.
 
@@ -123,12 +125,6 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     /// save attempt), driving the removal-confirm decision + its copy.
     /// </summary>
     private int _editVersionCount;
-
-    /// <summary>Whether ANY version carries a FileId (the identity lock).</summary>
-    private bool _editIdentityLocked;
-
-    /// <summary>Whether the LATEST record carries its own FileId (the tag lock).</summary>
-    private bool _editTagLocked;
 
     /// <summary>The edit mode's stage (form vs. the inline removal confirm).</summary>
     private EditStage _editStage = EditStage.Form;
@@ -221,6 +217,7 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     [NotifyPropertyChangedFor(nameof(IsRemote))]
     [NotifyPropertyChangedFor(nameof(IsVersionVisible))]
     [NotifyPropertyChangedFor(nameof(IsPolicyVisible))]
+    [NotifyPropertyChangedFor(nameof(IsNameEditable))]
     [NotifyPropertyChangedFor(nameof(SourceChoiceIndex))]
     [NotifyPropertyChangedFor(nameof(UrlLabel))]
     [NotifyPropertyChangedFor(nameof(UrlPlaceholder))]
@@ -436,41 +433,21 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     public bool IsPolicyVisible => IsRemote && !IsEdit;
 
     /// <summary>
-    /// Whether the source ComboBox accepts input. Disabled in edit mode while
-    /// the container's identity is FileId-grounded (any version carries a
-    /// download fact); always enabled in batch mode.
+    /// Whether the mod name field accepts input: always in batch mode; in
+    /// edit mode only for the Untracked CHOICE. The name is the identity for
+    /// an untracked container (rename is a real correction), while a Nexus
+    /// mod's name comes from Nexus and the update check's name-sync renames
+    /// the container when Nexus's name changes, so a user-typed name would be
+    /// reverted. The editability follows the chosen source: switching an
+    /// Untracked container's choice to Nexus disables the field mid-edit with
+    /// its in-memory value (the save keeps the name it had).
     /// </summary>
-    public bool IsSourceEditable => !IsEdit || !_editIdentityLocked;
-
-    /// <summary>
-    /// Whether the mod id/URL field accepts input. Locked like the source
-    /// switch when the identity is FileId-grounded; always enabled in batch
-    /// mode.
-    /// </summary>
-    public bool IsIdEditable => !IsEdit || !_editIdentityLocked;
-
-    /// <summary>
-    /// Whether the version field accepts input. Disabled in edit mode when the
-    /// LATEST version record carries its own FileId (the tag lock: Nexus
-    /// supplied that copy's version); always enabled in batch mode.
-    /// </summary>
-    public bool IsVersionEditable => !IsEdit || !_editTagLocked;
-
-    /// <summary>
-    /// The localized "downloaded from Nexus" hint shown in edit mode while the
-    /// identity is FileId-grounded (covering both grounded locks: the id is
-    /// fixed, and a version installed by that download keeps its tag). Empty
-    /// otherwise (batch mode included). Re-resolves on a culture change.
-    /// </summary>
-    public string FileIdLockHint => IsEdit && _editIdentityLocked
-        ? _localization["EditDetails_FileIdLockHint"]
-        : string.Empty;
+    public bool IsNameEditable => !IsEdit || SourceChoice == ImportSource.Untracked;
 
     /// <summary>
     /// Whether the edit form's identity (the source record) differs from the
     /// container's current one: a different Nexus id, or a Nexus/Untracked
-    /// swap in either direction. A rename or retag alone is not an identity
-    /// change.
+    /// swap in either direction. A retag alone is not an identity change.
     /// </summary>
     public bool IsEditIdentityChange
     {
@@ -489,8 +466,8 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
             else if (!ImportSourceValidator.TryParseUrl(SourceChoice, Url ?? string.Empty, out var parsed))
             {
                 // An unparsable id is not a saveable identity; treat it as a
-                // change so a locked multi-version confirm is never skipped on
-                // a technicality (CanImport blocks the save itself).
+                // change so a multi-version confirm is never skipped on a
+                // technicality (CanImport blocks the save itself).
                 return true;
             }
             else
@@ -700,11 +677,12 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     /// <summary>
     /// Starts an edit of one container's import details: the card activates in
     /// place, prefilled from the container's current facts (name, source
-    /// choice, the bare mod id when Nexus, the latest version's tag), with the
-    /// grounding locks read once (the save path re-reads them). Rejects
+    /// choice, the bare mod id when Nexus, the latest version's tag). Rejects
     /// (no-op) another activation while the card is active (a batch in any
-    /// state or an edit already open), for an unknown or linked container (a
-    /// linked container's identity is its external path and is never edited),
+    /// state or an edit already open), for an unknown, linked, or
+    /// download-grounded container (a grounded container is not editable at
+    /// all: any version carrying a FileId or a RemoteUploadedAt grounds it;
+    /// the row's pencil is already disabled, this gate is defense in depth),
     /// or with no active profile (the edited row lives in one). The parent's
     /// row command keeps its own linked/morphed guards; this gate is defense
     /// in depth.
@@ -737,6 +715,17 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
             return;
         }
 
+        // Downloaded mods are not editable (the row's pencil is disabled for
+        // a grounded container; this gate is defense in depth): a version
+        // carrying a FileId OR a RemoteUploadedAt (only the download path
+        // records either) grounds the whole container.
+        if (container.Versions.Any(v => v.FileId is not null || v.RemoteUploadedAt is not null))
+        {
+            _logger.LogWarning(
+                "Edit start rejected: container {Id} was downloaded from Nexus (a version carries download evidence).", id);
+            return;
+        }
+
         _kind = WorkflowKind.Edit;
         _editContainerId = id;
         _capturedProfileId = profileId;
@@ -759,11 +748,11 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     }
 
     /// <summary>
-    /// Re-reads the container's grounding facts (version count, the identity
-    /// lock, the latest record's tag lock) so the confirm decision, its copy,
-    /// and the field locks reflect the live container rather than the
-    /// activation-time snapshot (a download for this container completing
-    /// while the card is open adds a version the snapshot never saw).
+    /// Re-reads the container's version count so the removal-confirm decision
+    /// + its copy reflect the live container rather than the activation-time
+    /// snapshot (a download for this container completing while the card is
+    /// open adds a version the snapshot never saw; its save is then refused by
+    /// the primitive's grounding guard, surfaced inline).
     /// </summary>
     private void RefreshEditState()
     {
@@ -777,19 +766,13 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
         RefreshEditState(container);
     }
 
-    /// <summary>Applies a freshly read container's grounding facts.</summary>
+    /// <summary>Applies a freshly read container's confirm-decision facts.</summary>
     private void RefreshEditState(ModContainer container)
     {
         _editOriginalSource = container.Source;
         _editVersionCount = container.Versions.Count;
-        _editIdentityLocked = container.Versions.Any(v => v.FileId is not null);
-        _editTagLocked = container.Versions.FirstOrDefault(v => v.IsLatest)?.FileId is not null;
         OnPropertyChanged(nameof(ConfirmMessage));
         OnPropertyChanged(nameof(RequiresIdentityConfirm));
-        OnPropertyChanged(nameof(IsSourceEditable));
-        OnPropertyChanged(nameof(IsIdEditable));
-        OnPropertyChanged(nameof(IsVersionEditable));
-        OnPropertyChanged(nameof(FileIdLockHint));
     }
 
     /// <summary>
@@ -1226,7 +1209,6 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
         nameof(UrlValidationMessage),
         nameof(VersionValidationMessage),
         nameof(FailureMessage),
-        nameof(FileIdLockHint),
         nameof(ConfirmTitle),
         nameof(ConfirmMessage),
         nameof(EditFailureMessage),
@@ -1302,8 +1284,6 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
         _editContainerId = null;
         _editOriginalSource = new UntrackedSource();
         _editVersionCount = 0;
-        _editIdentityLocked = false;
-        _editTagLocked = false;
         _editStage = EditStage.Form;
         _editFailureDetail = null;
         SetState(WorkflowState.Inactive);
@@ -1330,10 +1310,7 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
         OnPropertyChanged(nameof(IsBatchEditing));
         OnPropertyChanged(nameof(IsFormVisible));
         OnPropertyChanged(nameof(IsPolicyVisible));
-        OnPropertyChanged(nameof(IsSourceEditable));
-        OnPropertyChanged(nameof(IsIdEditable));
-        OnPropertyChanged(nameof(IsVersionEditable));
-        OnPropertyChanged(nameof(FileIdLockHint));
+        OnPropertyChanged(nameof(IsNameEditable));
         OnPropertyChanged(nameof(CurrentNumber));
         OnPropertyChanged(nameof(TotalCount));
         OnPropertyChanged(nameof(CurrentPath));

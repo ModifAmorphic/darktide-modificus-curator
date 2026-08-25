@@ -63,8 +63,9 @@ game-binary constraints now live with the runtime, in
    a regular/unknown click opens the mod's Nexus files page. Every row also
    carries an edit-import-details action (a drawn-pencil button first in the
    shared action strip, between the source badge and the Enabled checkbox,
-   rendered on every row but disabled when not editable: linked +
-   download-morphed rows, the update-action-cell pattern) starting the import
+   rendered on every row but disabled when not editable: linked,
+   download-morphed, and downloaded rows (any version carries a FileId or a
+   RemoteUploadedAt), the update-action-cell pattern) starting the import
    card's edit mode, the universal correction surface for a container's
    name, source association, and release tag, applied through the repository's
    EditImportDetails primitive and reloaded on save. Premium users can
@@ -821,13 +822,20 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                             the same validation the batch form enforces (the
                             shared ImportSourceValidator; a version is
                             required when saving as Nexus so the edit can
-                            never create an unknown state); the FileId
-                            grounding degrades the fields (any version's
-                            FileId disables the id + source fields with the
-                            "downloaded from Nexus" hint; the latest record's
-                            own FileId additionally disables the version
-                            field, the per-record tag lock; the name is never
-                            locked); an identity change on a multi-version
+                            never create an unknown state). Downloaded mods
+                            are not editable: a version carrying a FileId OR
+                            a RemoteUploadedAt grounds the container (the
+                            timestamp widens the evidence to pre-FileId
+                            downloads), the row's pencil is disabled, and
+                            both StartEdit and the primitive refuse (defense
+                            in depth; no degraded fields, no card). The name
+                            field is editable only for the Untracked choice
+                            (the name is the identity for an untracked
+                            container; a Nexus mod's name comes from Nexus +
+                            the update check's name-sync would revert a
+                            user-typed name), while the id, version, and
+                            source switch stay editable; an identity change
+                            on a multi-version
                             container swaps the form for an inline
                             plain-language removal confirm (never a nested
                             modal; the save-time state refresh + the typed
@@ -1167,24 +1175,26 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         on-disk directory unchanged; keeps the untracked-name
                         index consistent for untracked containers),
                         EditImportDetails (the name + source + latest-tag
-                        correction primitive in one atomic manifest write:
-                        same-identity edits rename/retag without removal,
-                        the initial Untracked->Nexus association records
-                        identity + tag with no remote facts, Nexus->Untracked
-                        or a Nexus id change resets remote claims + keeps only
-                        the latest version's local facts behind an explicit
-                        removeOlderVersions confirm flag (refused with the
-                        typed RemovalConfirmationRequiredException, an
-                        InvalidOperationException subclass), a FileId on any
-                        version locks the identity container-wide while the
-                        tag lock is per-record (only the latest record's own
-                        FileId fixes its tag; a hand-imported latest on a
-                        grounded container stays resolvable), a duplicate
-                        Nexus identity + a non-empty tag with an Untracked
-                        destination are rejected, untracked-name + source
-                        indexes stay coherent, + the container Id never moves
-                        so every profile reference survives), PruneUnreferenced
-                        GC at startup, keeping a referenced linked container by
+                         correction primitive in one atomic manifest write:
+                         same-identity edits retag without removal,
+                         the initial Untracked->Nexus association records
+                         identity + tag with no remote facts, Nexus->Untracked
+                         or a Nexus id change resets remote claims + keeps only
+                         the latest version's local facts behind an explicit
+                         removeOlderVersions confirm flag (refused with the
+                         typed RemovalConfirmationRequiredException, an
+                         InvalidOperationException subclass), a downloaded
+                         container (any version carries a FileId OR a
+                         RemoteUploadedAt; only the download path records
+                         either) refuses every edit, name-only included, a
+                         name change is allowed only for an Untracked
+                         destination (a Nexus name is Nexus-owned), a
+                         duplicate
+                         Nexus identity + a non-empty tag with an Untracked
+                         destination are rejected, untracked-name + source
+                         indexes stay coherent, + the container Id never moves
+                         so every profile reference survives), PruneUnreferenced
+                         GC at startup, keeping a referenced linked container by
                         containerId sentinel) + the version-policy model (ModVersionPolicy:
                         PinnedPolicy/LatestPolicy; PinnedPolicy pins by VersionId, a foreign
                         key to ModVersion.Folder, so the repo is the sole source of truth for
@@ -1526,15 +1536,17 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                         remote file never flips latest, at add/remove/dedup)
                                         + FileId persistence on both AddVersion branches
                                         + TryInitializeDisplayMetadata atomic missing-only init
-                                        + EditImportDetailsTests: every primitive branch (rename,
-                                        same-identity retag, Untracked->Nexus incl. the empty-tag
+                                        + EditImportDetailsTests: every primitive branch (the
+                                        Untracked-only name rule incl. the rename-with-switch +
+                                        the Nexus name refusal, same-identity retag,
+                                        Untracked->Nexus incl. the empty-tag
                                         association path, the Nexus-unknown retag, the identity
                                         reset with older-version removal, Nexus->Untracked), the
-                                        FileId lock (any version, both directions, same-identity
-                                        allowed), the per-record tag lock (blocked on a grounded
-                                        latest, allowed on a hand-imported latest of a grounded
-                                        container + the empty-tag resolve, identity lock stays
-                                        container-wide), the removeOlderVersions guard, the
+                                        downloaded-not-editable refusal (a FileId OR a
+                                        RemoteUploadedAt on any version refuses every edit
+                                        name-only included, both evidence shapes + the
+                                        older-version-grounded case), the removeOlderVersions
+                                        guard, the
                                         tag-collision throw, the duplicate-identity guard, + the
                                         untracked-name index coherence
                                         + the manager archive shape: base/mod_manager.lua with an
@@ -1831,23 +1843,26 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                              activation + prefill, the batch/edit
                                              mutual exclusion incl. the
                                              mid-processing refusal + the Add
-                                             gating, the validation matrix over
-                                             the shared ImportSourceValidator
-                                             (Untracked/Nexus, version required,
-                                             bare id or URL parse), the FileId
-                                             degradations (identity lock + the
-                                             per-record tag lock on the version
-                                             field, defense-in-depth via the
-                                             primitive's refusal), the inline
-                                             identity-removal confirm step +
-                                             Back + both recover paths (the
-                                             save-time refresh + the typed
-                                             RemovalConfirmationRequiredException),
-                                             refused-save + disk-failure inline
-                                             surfacing + correction, the
-                                             untracked-name conflict, the save +
-                                             ImportDetailsEdited reload signal,
-                                             the unknown/linked screening;
+                                              gating, the validation matrix over
+                                              the shared ImportSourceValidator
+                                              (Untracked/Nexus, version required,
+                                              bare id or URL parse), the
+                                              downloaded-not-editable StartEdit
+                                              refusal (both grounding shapes:
+                                              FileId + RemoteUploadedAt-only),
+                                              the name field's choice-following
+                                              editability incl. the programmatic
+                                              Nexus-name refusal (defense in
+                                              depth via the primitive), the inline
+                                              identity-removal confirm step +
+                                              Back + both recover paths (the
+                                              save-time refresh + the typed
+                                              RemovalConfirmationRequiredException),
+                                              refused-save + disk-failure inline
+                                              surfacing + correction, the
+                                              untracked-name conflict, the save +
+                                              ImportDetailsEdited reload signal,
+                                              the unknown/linked screening;
                                              ImportSourceValidatorTests: the shared
                                              parse + remote-field rules both card
                                              modes consume) + the derived

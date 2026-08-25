@@ -1795,6 +1795,14 @@ internal class FakeModRepository : IModRepository
         {
             throw new InvalidOperationException("A linked container cannot be edited.");
         }
+        // Mirror production: a version record is download-grounded when it
+        // carries a FileId OR a RemoteUploadedAt; ANY grounded version
+        // refuses the whole edit, name-only included.
+        if (container.Versions.Any(v => v.FileId is not null || v.RemoteUploadedAt is not null))
+        {
+            throw new InvalidOperationException(
+                "This mod was downloaded from Nexus; its import details cannot be edited.");
+        }
         if (source is UntrackedSource && !string.IsNullOrEmpty(versionTag))
         {
             throw new ArgumentException(
@@ -1807,6 +1815,13 @@ internal class FakeModRepository : IModRepository
         {
             throw new InvalidOperationException($"Another container already tracks Nexus mod {incoming.ModId}.");
         }
+        // Mirror production: the name is Untracked-only (a Nexus mod's name
+        // comes from Nexus; the rule follows the destination).
+        if (source is NexusSource && !string.Equals(container.Name, name, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The name of a Nexus mod is managed by Nexus; it cannot be edited here.");
+        }
 
         var identityChanged = !((container.Source, source) switch
         {
@@ -1814,22 +1829,6 @@ internal class FakeModRepository : IModRepository
             (UntrackedSource, UntrackedSource) => true,
             _ => false,
         });
-        if (identityChanged && container.Versions.Any(v => v.FileId is not null))
-        {
-            throw new InvalidOperationException("The mod id is locked: this mod was downloaded from Nexus.");
-        }
-
-        // Mirror production: the tag lock is per-record (only the latest
-        // record's own FileId fixes its tag; an unchanged tag is a no-op).
-        var latestRecord = container.Versions.FirstOrDefault(v => v.IsLatest);
-        if (!identityChanged
-            && latestRecord is not null
-            && latestRecord.FileId is not null
-            && !string.Equals(latestRecord.VersionString, versionTag, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                "The version tag is fixed: this version was downloaded from Nexus.");
-        }
 
         if (identityChanged && container.Versions.Count > 1)
         {

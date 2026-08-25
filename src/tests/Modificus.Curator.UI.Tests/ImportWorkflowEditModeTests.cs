@@ -10,8 +10,10 @@ namespace Modificus.Curator.UI.Tests;
 /// <summary>
 /// The import card's edit mode (the correction surface for one container's
 /// import details): activation + prefill, mutual exclusion with the batch
-/// mode, the shared validation matrix, the FileId degradations (identity lock
-/// + the per-record tag lock), the inline identity-removal confirm + its
+/// mode, the shared validation matrix, the downloaded-not-editable StartEdit
+/// refusal + the choice-following name editability (a downloaded container
+/// never opens the card; a Nexus name is Nexus-owned), the inline
+/// identity-removal confirm + its
 /// recover paths, refused-save surfacing (guards, the untracked-name
 /// conflict, disk failures), the save + reload-notification flow, and the
 /// session reset. The batch lifecycle itself is covered by
@@ -25,8 +27,6 @@ public sealed class ImportWorkflowEditModeTests
     private static readonly DateTimeOffset OldStamp =
         new(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
-    private static readonly DateTimeOffset NewStamp =
-        new(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
 
     /// <summary>
     /// Builds the workflow VM over the production-shape fakes with one active
@@ -271,65 +271,95 @@ public sealed class ImportWorkflowEditModeTests
         Assert.True(vm.CanImport);
     }
 
-    // ---- the FileId degradations ------------------------------------------------------
+    // ---- downloaded mods never open the card --------------------------------------
 
-    [Fact]
-    public void A_grounded_identity_disables_the_source_and_id_fields_with_the_hint()
+    [Theory]
+    [InlineData(true)]    // FileId shape
+    [InlineData(false)]   // RemoteUploadedAt-only shape (pre-FileId-persistence downloads)
+    public void StartEdit_refuses_a_grounded_container(bool fileIdShape)
     {
+        // Defense in depth behind the disabled pencil: a version carrying a
+        // FileId OR a RemoteUploadedAt grounds the container, and a grounded
+        // container is not editable at all (no degraded fields, no card).
         var (vm, _, _, repo, _) = Build();
-        // An OLDER version grounds the identity; the latest is a clean
-        // hand-imported copy (the tag stays editable).
         var container = repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
-        repo.AddVersion(container.Id, "1.0", _ => { }, OldStamp, remoteFileId: 9001);
-        repo.AddVersion(container.Id, "2.0", _ => { }, NewStamp);
+        repo.AddVersion(container.Id, "1.0", _ => { }, OldStamp,
+            remoteFileId: fileIdShape ? 9001 : null);
 
         vm.StartEditCommand.Execute(container.Id);
 
-        Assert.False(vm.IsSourceEditable);
-        Assert.False(vm.IsIdEditable);
-        Assert.Equal(Localization["EditDetails_FileIdLockHint"], vm.FileIdLockHint);
-        // The latest record carries no FileId of its own: the tag lock does
-        // not apply (the migration dedupe's resolvable case).
-        Assert.True(vm.IsVersionEditable);
-        // A same-identity retag of the ungrounded latest saves cleanly.
-        vm.Version = "2.0-hotfix";
-        vm.SaveEditCommand.Execute(null);
         Assert.False(vm.IsActive);
-        Assert.Equal("2.0-hotfix", repo.Get(container.Id)!.Versions.Single(v => v.IsLatest).VersionString);
     }
 
     [Fact]
-    public void A_grounded_latest_additionally_locks_the_version_field()
+    public void The_name_field_follows_the_source_choice()
     {
-        var (vm, _, _, repo, _) = Build();
-        var container = repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
-        repo.AddVersion(container.Id, "1.21", _ => { }, OldStamp, remoteFileId: 9001);
-
-        vm.StartEditCommand.Execute(container.Id);
-
-        Assert.False(vm.IsSourceEditable);
-        Assert.False(vm.IsIdEditable);
-        Assert.False(vm.IsVersionEditable);
-        Assert.Equal(Localization["EditDetails_FileIdLockHint"], vm.FileIdLockHint);
-        // The name is never locked: an unchanged-tag rename saves cleanly.
-        vm.ModName = "WT Fixed";
-        vm.SaveEditCommand.Execute(null);
-        Assert.False(vm.IsActive);
-        Assert.Equal("WT Fixed", repo.Get(container.Id)!.Name);
-    }
-
-    [Fact]
-    public void An_ungrounded_container_has_no_degradation()
-    {
+        // The name is the identity for an untracked container (editable); a
+        // Nexus mod's name comes from Nexus and the update check's name-sync
+        // manages it (disabled). Switching the choice flips the field with
+        // its in-memory value; the save keeps the name it had.
         var (vm, _, _, repo, _) = Build();
         var container = SeedNexus(repo, "1.0");
 
         vm.StartEditCommand.Execute(container.Id);
+        Assert.True(vm.IsEdit);
+        Assert.False(vm.IsNameEditable); // a Nexus container
 
-        Assert.True(vm.IsSourceEditable);
-        Assert.True(vm.IsIdEditable);
-        Assert.True(vm.IsVersionEditable);
-        Assert.Equal(string.Empty, vm.FileIdLockHint);
+        vm.SourceChoice = ImportSource.Untracked;
+        Assert.True(vm.IsNameEditable); // the choice governs, not the origin
+
+        vm.SourceChoice = ImportSource.Nexus;
+        Assert.False(vm.IsNameEditable);
+
+        // The name the card was opened with survives a round trip (the
+        // Nexus-destination save keeps it; the field was merely inert).
+        vm.Url = "8";
+        vm.Version = "1.0";
+        vm.SaveEditCommand.Execute(null);
+        Assert.False(vm.IsActive);
+        Assert.Equal("WT", repo.Get(container.Id)!.Name);
+
+        // An untracked container starts with the field enabled + associating
+        // to Nexus disables it mid-edit. (A fresh mod id: the first container
+        // already tracks mod 8.)
+        var untracked = repo.Seed(new UntrackedSource(), "Local", string.Empty);
+        vm.StartEditCommand.Execute(untracked.Id);
+        Assert.True(vm.IsNameEditable);
+        vm.SourceChoice = ImportSource.Nexus;
+        vm.Url = "9";
+        vm.Version = "1.1";
+        Assert.False(vm.IsNameEditable);
+
+        // The association keeps the untracked name (Nexus will own it from
+        // here on; the name-sync renames it when Nexus's name changes).
+        vm.SaveEditCommand.Execute(null);
+        Assert.False(vm.IsActive);
+        Assert.Equal("Local", repo.Get(untracked.Id)!.Name);
+    }
+
+    [Fact]
+    public void A_programmatic_name_change_on_a_Nexus_destination_surfaces_the_refusal_inline()
+    {
+        // The name field is disabled for a Nexus choice, but the command is
+        // the source of truth: a programmatic Save with a changed name
+        // surfaces the primitive's refusal inline, never a crash.
+        var (vm, _, _, repo, _) = Build();
+        var container = SeedNexus(repo, "1.0");
+        vm.StartEditCommand.Execute(container.Id);
+
+        vm.ModName = "WT Forced";
+        vm.SaveEditCommand.Execute(null);
+
+        Assert.True(vm.IsEditForm);
+        Assert.Contains("managed by Nexus", vm.EditFailureMessage);
+        Assert.Equal("WT", repo.Get(container.Id)!.Name);
+
+        // Correcting back to the owned name saves.
+        vm.ModName = "WT";
+        vm.Version = "1.0-hotfix";
+        vm.SaveEditCommand.Execute(null);
+        Assert.False(vm.IsActive);
+        Assert.Equal("1.0-hotfix", repo.Get(container.Id)!.Versions.Single(v => v.IsLatest).VersionString);
     }
 
     // ---- save + failure surfacing ------------------------------------------------------
@@ -343,14 +373,15 @@ public sealed class ImportWorkflowEditModeTests
         Guid? edited = null;
         vm.ImportDetailsEdited += (_, id) => edited = id;
 
-        vm.ModName = "WT Renamed";
+        // A same-identity retag (a Nexus destination cannot change the name;
+        // the rename path is the Untracked destination's).
         vm.Version = "1.0-hotfix";
         vm.SaveEditCommand.Execute(null);
 
         Assert.False(vm.IsActive);
         Assert.Equal(container.Id, edited);
         var updated = repo.Get(container.Id)!;
-        Assert.Equal("WT Renamed", updated.Name);
+        Assert.Equal("WT", updated.Name);
         Assert.Equal("1.0-hotfix", Assert.Single(updated.Versions).VersionString);
     }
 
@@ -394,19 +425,19 @@ public sealed class ImportWorkflowEditModeTests
         var container = SeedNexus(repo, "1.0");
         vm.StartEditCommand.Execute(container.Id);
         repo.EditImportDetailsThrows = new IOException("disk full");
-        vm.ModName = "WT Fixed";
+        vm.Version = "1.0-hotfix";
 
         vm.SaveEditCommand.Execute(null);
 
         Assert.True(vm.IsActive);
         Assert.True(vm.IsEditForm);
         Assert.Contains("disk full", vm.EditFailureMessage);
-        Assert.Equal("WT", repo.Get(container.Id)!.Name);
+        Assert.Equal("1.0", repo.Get(container.Id)!.Versions.Single().VersionString);
 
         repo.EditImportDetailsThrows = null;
         vm.SaveEditCommand.Execute(null);
         Assert.False(vm.IsActive);
-        Assert.Equal("WT Fixed", repo.Get(container.Id)!.Name);
+        Assert.Equal("1.0-hotfix", repo.Get(container.Id)!.Versions.Single().VersionString);
     }
 
     [Fact]
@@ -473,26 +504,6 @@ public sealed class ImportWorkflowEditModeTests
         Assert.Equal(container.Id, repo.FindUntrackedByName("Local")!.Id);
     }
 
-    [Fact]
-    public void The_tag_lock_surfaces_inline_when_reached_programmatically()
-    {
-        // The version field is disabled for a grounded latest, but the command
-        // is the source of truth: a programmatic Save with a changed tag
-        // surfaces the primitive's refusal inline, never a crash.
-        var (vm, _, _, repo, _) = Build();
-        var container = repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
-        repo.AddVersion(container.Id, "1.21", _ => { }, OldStamp, remoteFileId: 9001);
-        vm.StartEditCommand.Execute(container.Id);
-        Assert.False(vm.IsVersionEditable);
-
-        vm.Version = "1.22";
-        vm.SaveEditCommand.Execute(null);
-
-        Assert.True(vm.IsEditForm);
-        Assert.Contains("version tag is fixed", vm.EditFailureMessage);
-        Assert.Equal("1.21", repo.Get(container.Id)!.Versions.Single().VersionString);
-    }
-
     // ---- the removal confirm + its recover paths -----------------------------------
 
     [Fact]
@@ -500,7 +511,7 @@ public sealed class ImportWorkflowEditModeTests
     {
         var (vm, _, _, repo, _) = Build();
         var container = SeedNexus(repo, "1.0");
-        repo.AddVersion(container.Id, "2.0", _ => { }, NewStamp);
+        repo.AddVersion(container.Id, "2.0", _ => { });
         vm.StartEditCommand.Execute(container.Id);
         vm.Url = "9";
         vm.Version = "9.1";
@@ -563,7 +574,7 @@ public sealed class ImportWorkflowEditModeTests
         vm.Version = "9.1";
         Assert.False(vm.RequiresIdentityConfirm);
 
-        repo.AddVersion(container.Id, "2.0", _ => { }, NewStamp);
+        repo.AddVersion(container.Id, "2.0", _ => { });
 
         vm.SaveEditCommand.Execute(null);
 
@@ -595,7 +606,7 @@ public sealed class ImportWorkflowEditModeTests
         Assert.Empty(vm.EditFailureMessage);
 
         repo.EditImportDetailsThrows = null;
-        repo.AddVersion(container.Id, "2.0", _ => { }, NewStamp);
+        repo.AddVersion(container.Id, "2.0", _ => { });
         vm.ConfirmEditSaveCommand.Execute(null);
         Assert.False(vm.IsActive);
     }
@@ -620,21 +631,29 @@ public sealed class ImportWorkflowEditModeTests
     public void The_version_tag_is_trimmed_and_the_url_is_parsed_to_an_id()
     {
         // ApplyEdit trims the typed name + tag and parses the id/URL field to
-        // the canonical identity; both behaviors are otherwise unpinned.
+        // the canonical identity; both behaviors are otherwise unpinned. The
+        // Nexus leg keeps the owned name; the Untracked leg exercises the
+        // name trim.
         var (vm, _, _, repo, _) = Build();
         var container = SeedNexus(repo, "1.0");
         vm.StartEditCommand.Execute(container.Id);
         vm.Url = "https://www.nexusmods.com/warhammer40kdarktide/mods/42";
         vm.Version = "  3.1  ";
-        vm.ModName = "  WT Renamed  ";
 
         vm.SaveEditCommand.Execute(null);
 
         Assert.False(vm.IsActive);
         var updated = repo.Get(container.Id)!;
         Assert.Equal(42, Assert.IsType<NexusSource>(updated.Source).ModId);
-        Assert.Equal("WT Renamed", updated.Name);
+        Assert.Equal("WT", updated.Name);
         Assert.Equal("3.1", Assert.Single(updated.Versions).VersionString);
+
+        var untracked = repo.Seed(new UntrackedSource(), "Local", string.Empty);
+        vm.StartEditCommand.Execute(untracked.Id);
+        vm.ModName = "  Local Renamed  ";
+        vm.SaveEditCommand.Execute(null);
+        Assert.False(vm.IsActive);
+        Assert.Equal("Local Renamed", repo.Get(untracked.Id)!.Name);
     }
 
     [Fact]
@@ -646,7 +665,7 @@ public sealed class ImportWorkflowEditModeTests
         // the stage; only Back or a successful save moves it).
         var (vm, _, _, repo, _) = Build();
         var container = SeedNexus(repo, "1.0");
-        repo.AddVersion(container.Id, "2.0", _ => { }, NewStamp);
+        repo.AddVersion(container.Id, "2.0", _ => { });
         repo.CreateContainer(new NexusSource { ModId = 9 }, "Owner");
         vm.StartEditCommand.Execute(container.Id);
         vm.Url = "9";

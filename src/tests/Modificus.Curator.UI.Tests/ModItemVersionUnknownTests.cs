@@ -20,13 +20,19 @@ public sealed class ModItemVersionUnknownTests
 {
     private static readonly LocalizationService Localization = new();
 
-    private static ModVersion Version(string tag, bool isLatest = false) => new()
-    {
-        Folder = "folder-" + tag,
-        VersionString = tag,
-        IsLatest = isLatest,
-        ImportedAt = DateTimeOffset.UtcNow,
-    };
+    private static ModVersion Version(
+        string tag,
+        bool isLatest = false,
+        int? fileId = null,
+        DateTimeOffset? remoteUploadedAt = null) => new()
+        {
+            Folder = "folder-" + tag,
+            VersionString = tag,
+            IsLatest = isLatest,
+            ImportedAt = DateTimeOffset.UtcNow,
+            FileId = fileId,
+            RemoteUploadedAt = remoteUploadedAt,
+        };
 
     private static ModItemViewModel Row(
         ModSource source,
@@ -215,10 +221,12 @@ public sealed class ModItemVersionUnknownTests
     // ---- the edit action -----------------------------------------------------------
 
     [Fact]
-    public void The_edit_action_offers_unknown_rows_and_suppresses_linked_and_morphed_rows()
+    public void The_edit_action_offers_editable_rows_and_suppresses_linked_morphed_and_downloaded_rows()
     {
-        // Offered for an unknown (and every ordinary) row; suppressed for
-        // linked rows + download-morphed rows.
+        // Offered for an unknown row (and every ungrounded ordinary row);
+        // suppressed for linked rows, download-morphed rows, and downloaded
+        // rows (any version carries download evidence: a FileId OR a
+        // RemoteUploadedAt, both shapes).
         var unknown = Row(
             new NexusSource { ModId = 8 },
             new[] { Version(string.Empty, isLatest: true) },
@@ -229,6 +237,24 @@ public sealed class ModItemVersionUnknownTests
             new LinkedSource { ExternalPath = "/tmp/x" },
             Array.Empty<ModVersion>());
         Assert.False(linked.CanEditImportDetails);
+
+        var downloadedByFileId = Row(
+            new NexusSource { ModId = 8 },
+            new[] { Version("1.0", isLatest: true, fileId: 9001) },
+            actualVersion: "1.0");
+        Assert.False(downloadedByFileId.CanEditImportDetails);
+        Assert.True(downloadedByFileId.IsDownloadGrounded);
+
+        var downloadedByTimestamp = Row(
+            new NexusSource { ModId = 8 },
+            new[]
+            {
+                Version("1.0", remoteUploadedAt: DateTimeOffset.UtcNow),
+                Version("2.0", isLatest: true),
+            },
+            actualVersion: "2.0");
+        Assert.False(downloadedByTimestamp.CanEditImportDetails);
+        Assert.True(downloadedByTimestamp.IsDownloadGrounded);
 
         var morphed = Row(
             new NexusSource { ModId = 8 },

@@ -37,7 +37,7 @@ public interface IModRepository
     ModContainer AddVersion(Guid containerId, string versionString, Action<string> populateFolder, DateTimeOffset? remoteUploadedAt = null, int? remoteFileId = null, ModDisplayMetadata? displayMetadata = null);
     bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata);   // atomic missing-only initialization
     ModContainer? RenameContainer(Guid containerId, string newName);   // display label only; Id unchanged, directory does not move
-    ModContainer? EditImportDetails(Guid containerId, string name, ModSource source, string versionTag, bool removeOlderVersions);  // name + source + latest-tag correction; FileId-locked, confirm-gated (RemovalConfirmationRequiredException)
+    ModContainer? EditImportDetails(Guid containerId, string name, ModSource source, string versionTag, bool removeOlderVersions);  // name + source + latest-tag correction; downloaded containers refused, Untracked-only names, confirm-gated (RemovalConfirmationRequiredException)
     void RemoveVersion(Guid containerId, string versionFolder);
     void PruneUnreferenced(IReadOnlySet<(Guid ContainerId, string VersionFolder)> referenced);
     string GetVersionFolderPath(Guid containerId, string versionFolder);  // derived, never stored
@@ -132,18 +132,20 @@ public interface IModRepository
   imports; `Id` never changes, so every profile reference (position, enabled,
   policy, lock) survives the edit. Returns `null` when the container id is
   unknown.
-  - **The FileId lock**: when any version carries a non-null `FileId` the
-    identity is grounded by a download; any identity change (a different
-    Nexus mod id, Nexus to Untracked, Untracked to Nexus) throws
-    `InvalidOperationException`. A same-identity edit is always
-    allowed. The lock is enforced at the primitive, not just the UI.
-  - **The tag lock is per-record**: changing the latest version record's tag
-    throws when THAT record carries its own `FileId` (the installed copy came
-    from a download, so Nexus supplied its version); an unchanged tag is an
-    allowed no-op. When the latest record has no `FileId` (a hand-imported
-    copy landed on a previously-downloaded container) its tag stays editable
-    even though the identity is locked container-wide, so a migration dedupe
-    landing an ungrounded latest can still be resolved.
+  - **Downloaded mods are not editable**: a version record is
+    download-grounded when it carries a `FileId` OR a `RemoteUploadedAt`
+    (only the download path ever records either fact; the timestamp widens
+    the evidence to downloads from before FileId persistence). When ANY
+    version on the container is grounded, every edit throws
+    `InvalidOperationException`, name-only included: there is no degraded
+    editing surface for a downloaded mod. The guard is enforced at the
+    primitive, not just the UI.
+  - **The name is Untracked-only**: a Nexus mod's name comes from Nexus (the
+    update check's name-sync renames the container when Nexus's name
+    changes, so a user-typed name would be reverted), so an edit whose
+    destination is a `NexusSource` throws when it changes the name. The rule
+    follows the destination: switching to Untracked may rename, associating
+    to Nexus keeps the name it had.
   - **Identity reset**: changing the identity keeps only the latest version's
     local facts (folder + `ImportedAt`; the tag, `FileId`, and
     `RemoteUploadedAt` are reset for the new identity) and REMOVES every

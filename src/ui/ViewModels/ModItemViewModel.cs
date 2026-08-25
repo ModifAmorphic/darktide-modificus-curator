@@ -662,14 +662,30 @@ public partial class ModItemViewModel : ObservableObject
     public bool IsPolicyEditable => !IsLinked && !IsDownloadMorphed;
 
     /// <summary>
-    /// Whether the row offers the edit-import-details action (the universal
-    /// correction surface for its container). Linked rows never offer it (an
-    /// external folder's identity is its path and is never edited), and a
-    /// download-morphed row suppresses it while a download writes the
-    /// container; every other row (Untracked, Nexus, not-found) does offer
-    /// it.
+    /// Whether any version on this row's container is download-grounded: the
+    /// version record carries a <see cref="ModVersion.FileId"/> OR a
+    /// <see cref="ModVersion.RemoteUploadedAt"/> (only the download path ever
+    /// records either fact; the timestamp widens the evidence to downloads
+    /// from before FileId persistence). Joined once at construction from the
+    /// container's versions, like <see cref="IsVersionUnknown"/>; constant for
+    /// a row's lifetime (a download landing triggers a reload, rebuilding the
+    /// row). Drives <see cref="CanEditImportDetails"/>: a downloaded mod is
+    /// not editable at all.
     /// </summary>
-    public bool CanEditImportDetails => !IsLinked && !IsDownloadMorphed;
+    public bool IsDownloadGrounded { get; }
+
+    /// <summary>
+    /// Whether the row offers the edit-import-details action (the universal
+    /// correction surface for its container). Never offered for: linked rows
+    /// (an external folder's identity is its path and is never edited),
+    /// download-morphed rows (the morph's completion is about to write the
+    /// container), and downloaded rows (<see cref="IsDownloadGrounded"/>: a
+    /// version carries download evidence, so the import details are Nexus's
+    /// facts, not editable ones). Every other row (Untracked, an ungrounded
+    /// Nexus association, not-found) does offer it.
+    /// </summary>
+    public bool CanEditImportDetails =>
+        !IsLinked && !IsDownloadMorphed && !IsDownloadGrounded;
 
     /// <summary>
     /// The external folder path for a linked row (the <c>LinkedSource.ExternalPath</c>),
@@ -784,6 +800,12 @@ public partial class ModItemViewModel : ObservableObject
         IsVersionUnknown = source is NexusSource
             && versions.FirstOrDefault(v => v.IsLatest) is { } latestVersion
             && string.IsNullOrEmpty(latestVersion.VersionString);
+
+        // The download-grounding read (the CanEditImportDetails gate): any
+        // version carrying download evidence (a FileId or a
+        // RemoteUploadedAt) makes the whole container non-editable.
+        IsDownloadGrounded = versions.Any(v =>
+            v.FileId is not null || v.RemoteUploadedAt is not null);
 
         // Build the dropdown source from the container's versions: each entry
         // pairs the readable tag (shown) with the opaque folder id (stored).

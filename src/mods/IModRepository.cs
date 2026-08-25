@@ -188,23 +188,23 @@ public interface IModRepository
     /// semantics (the untracked-name index is kept coherent for untracked
     /// containers). Must be non-whitespace.</para>
     /// <para>
-    /// <b>The FileId lock:</b> when ANY version on the container carries a
-    /// non-null <see cref="ModVersion.FileId"/> the mod's identity is grounded
-    /// by a download, and any identity change (a different Nexus mod id, Nexus
-    /// to Untracked, or Untracked to Nexus) throws
-    /// <see cref="InvalidOperationException"/>. A same-identity edit (rename
-    /// and/or retag) is always allowed. The lock is enforced here, not just in
-    /// the UI: programmatic callers get the same guard.</para>
+    /// <b>Downloaded mods are not editable:</b> a version record is
+    /// download-grounded when it carries a <see cref="ModVersion.FileId"/> OR
+    /// a <see cref="ModVersion.RemoteUploadedAt"/> (only the download path
+    /// ever records either fact; the timestamp widens the evidence to
+    /// downloads from before FileId persistence). When ANY version on the
+    /// container is grounded, every edit throws
+    /// <see cref="InvalidOperationException"/>, name-only included: there is
+    /// no degraded editing surface for a downloaded mod. The guard is
+    /// enforced here, not just in the UI: programmatic callers get the same
+    /// refusal.</para>
     /// <para>
-    /// <b>The tag lock is per-record:</b> changing the latest version record's
-    /// tag throws <see cref="InvalidOperationException"/> when THAT record
-    /// carries its own <see cref="ModVersion.FileId"/> (the installed copy
-    /// came from a download, so Nexus supplied its version); an unchanged tag
-    /// is an allowed no-op. When the latest record has no FileId (a
-    /// hand-imported copy landed on a previously-downloaded container) its tag
-    /// stays editable even though the identity is locked container-wide, so a
-    /// migration dedupe landing an ungrounded latest can still be
-    /// resolved.</para>
+    /// <b>The name is Untracked-only:</b> a Nexus mod's name comes from Nexus
+    /// (the update check's name-sync renames the container when Nexus's name
+    /// changes, so a user-typed name would be reverted), so an edit whose
+    /// destination is <see cref="NexusSource"/> throws when it changes the
+    /// name. The rule follows the destination: switching to Untracked may
+    /// rename, associating to Nexus keeps the name it had.</para>
     /// <para>
     /// <b>Identity reset:</b> changing the identity (a different Nexus id, or
     /// a switch between Nexus and Untracked) keeps only the latest version's
@@ -218,13 +218,13 @@ public interface IModRepository
     /// <see cref="RemovalConfirmationRequiredException"/> (an
     /// <see cref="InvalidOperationException"/> subclass, catchable
     /// specifically) so the primitive can never silently destroy versions.
-    /// The caller owns the confirm (the dialog shows an explicit removal
+    /// The caller owns the confirm (the edit card shows an explicit removal
     /// notice before passing <c>true</c>).</para>
     /// <para>
     /// <b>Retag:</b> a same-identity edit retags only the latest version
     /// record. <paramref name="versionTag"/> may be empty ONLY for the
     /// programmatic association path (an empty tag marks the derived
-    /// version-unknown state); the edit dialog always passes non-empty when
+    /// version-unknown state); the edit card always passes non-empty when
     /// saving as Nexus, and empty when saving as Untracked (a single-version
     /// identity change to Untracked clears the tag; a non-empty tag with an
     /// Untracked destination is rejected, since an untracked container is
@@ -265,9 +265,10 @@ public interface IModRepository
     /// <exception cref="RemovalConfirmationRequiredException">An identity
     /// change on a multi-version container was made without
     /// <paramref name="removeOlderVersions"/>.</exception>
-    /// <exception cref="InvalidOperationException">An identity change is
-    /// blocked by the FileId lock; a tag change is blocked by the latest
-    /// record's own FileId; the new tag collides with another
+    /// <exception cref="InvalidOperationException">The container is
+    /// download-grounded (any version carries a FileId or a
+    /// RemoteUploadedAt) and refuses every edit; a Nexus-destination edit
+    /// changes the name; the new tag collides with another
     /// surviving version's tag; the target container is linked; or another
     /// container already carries the new Nexus identity.</exception>
     ModContainer? EditImportDetails(

@@ -426,6 +426,18 @@ internal sealed class ModRepository : IModRepository
                     "A linked container's import details cannot be edited.");
             }
 
+            // Downloaded mods are not editable, period. A version record is
+            // download-grounded when it carries a FileId OR a
+            // RemoteUploadedAt (only the download path ever records either
+            // fact; the timestamp widens the evidence to downloads from
+            // before FileId persistence). ANY grounded version on the
+            // container refuses the whole edit, name-only included.
+            if (container.Versions.Any(v => v.FileId is not null || v.RemoteUploadedAt is not null))
+            {
+                throw new InvalidOperationException(
+                    "This mod was downloaded from Nexus; its import details cannot be edited.");
+            }
+
             // An untracked container is single-version by construction (the
             // empty tag is the AddVersion upsert key re-imports dedupe onto);
             // a non-empty tag would fabricate a version record the untracked
@@ -448,32 +460,19 @@ internal sealed class ModRepository : IModRepository
                     $"Another container already tracks Nexus mod {incoming.ModId}.");
             }
 
+            // The name is Untracked-only: a Nexus mod's name comes from Nexus
+            // (the update check's name-sync renames the container when
+            // Nexus's name changes, so a user-typed name would be reverted).
+            // The rule follows the DESTINATION: switching to Untracked may
+            // rename, associating to Nexus keeps the name it had.
+            if (source is NexusSource && !string.Equals(container.Name, name, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The name of a Nexus mod is managed by Nexus; it cannot be edited here.");
+            }
+
             var identityChanged = !SourceIdentityEquals(container.Source, source);
             var latest = container.Versions.FirstOrDefault(v => v.IsLatest);
-
-            // The FileId lock: a version acquired from a download grounds the
-            // mod's identity; any identity change (id change or source swap,
-            // either direction) is refused. A same-identity name edit is
-            // always allowed.
-            if (identityChanged && container.Versions.Any(v => v.FileId is not null))
-            {
-                throw new InvalidOperationException(
-                    "The mod id is locked: this mod was downloaded from Nexus.");
-            }
-
-            // The tag lock is per-record: only the latest record's OWN FileId
-            // fixes its tag (Nexus supplied that copy's version; a
-            // hand-imported copy landing on a grounded container carries no
-            // FileId of its own and stays resolvable). The identity lock above
-            // stays container-wide; an unchanged tag is always allowed.
-            if (!identityChanged
-                && latest is not null
-                && latest.FileId is not null
-                && !string.Equals(latest.VersionString, versionTag, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    "The version tag is fixed: this version was downloaded from Nexus.");
-            }
 
             // Identity reset: the older versions' tags + remote facts are
             // claims about the OLD identity, so only the latest version's
