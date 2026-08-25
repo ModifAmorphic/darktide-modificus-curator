@@ -1384,51 +1384,72 @@ configured `true` here.
 
 ## The inline import card
 
-The `ImportWorkflowViewModel` + `ImportWorkflowView` card, hosted below the
-Mods toolbar, owns two exclusive modes over one shared editing form (the same
-fields, the same `ImportSourceValidator` rules):
+The `ImportWorkflowViewModel` + `ImportWorkflowView` own two exclusive modes
+over one shared editing form (the same fields, the same
+`ImportSourceValidator` rules), rendered in two places:
 
-- **Batch mode**: the ordered import of picked/dropped paths. The per-item
-  form (name, source, conditional Nexus version/URL/policy), the three-state
-  lifecycle (editing, processing, terminal failure), and the per-item
-  orchestration (`GetBaseName` + `Import` on `Task.Run`; the profile queries
-  and writes on the captured UI context). Emits `ItemImported(profileId)`; the
-  mod list reloads when the captured profile is still active.
-- **Edit mode** (entered from a row's pencil button via
-   `ModListViewModel.EditImportDetailsCommand` -> `StartEdit(containerId)`): the
-   per-container correction surface for a mod's import details (name, source
-   association, release tag), applied through the repository's
-   `EditImportDetails` primitive. The card activates titled "Edit import
-   details", prefilled from the container (name, source choice, the bare mod
-   id, the latest version's tag); the policy picker hides (policy is per-row,
-   not import details); Save applies the primitive with the same validation
-   the batch form enforces (a version is required when saving as Nexus, so the
-   edit can never create a version-unknown state; switching to Untracked
-   clears the version field); Cancel deactivates the card. Downloaded mods
-   are not editable: a version carrying a FileId OR a RemoteUploadedAt
-   grounds the container, the row's pencil is hidden (its always-laid-out
-   slot is preserved, so the strip geometry never shifts), and both `StartEdit`
-   and the primitive refuse (defense in depth; no degraded fields, no card).
-   The name field is editable only for the Untracked choice (the name is the
-   identity for an untracked container; a Nexus mod's name comes from Nexus
-   and the update check's name-sync would revert a user-typed name); the id,
-   version, and source switch stay editable for an ungrounded container. A
-   multi-version
-   identity change swaps the form for an inline removal-confirm stage (never a
-   nested modal; the card is a hosted view), with the save-time state refresh
-   and the typed `RemovalConfirmationRequiredException` catch covering a
-   version landing while the card is open. Refused saves and disk failures
-   surface inline in the card's status area with the form still editable. A
-   successful save deactivates the card and raises
-   `ImportDetailsEdited(containerId)`, the mod list's reload signal (the
-   edited container's name, source, and version can all have changed).
+- **Batch mode** (the top card below the toolbar, gated by the workflow's
+  `IsBatchActive` projection): the ordered import of picked/dropped paths. The
+  per-item form (name, source, conditional Nexus version/URL/policy), the
+  three-state lifecycle (editing, processing, terminal failure), and the
+  per-item orchestration (`GetBaseName` + `Import` on `Task.Run`; the profile
+  queries and writes on the captured UI context). Emits
+  `ItemImported(profileId)`; the mod list reloads when the captured profile is
+  still active. A batch edits many mods, one item at a time, so it stays at
+  the top.
+- **Edit mode** (an in-row band on the edited row): the per-container
+  correction surface for a mod's import details (name, source association,
+  release tag), entered from a row's pencil button via
+  `ModListViewModel.EditImportDetailsCommand` -> `StartEdit(containerId)` and
+  applied through the repository's `EditImportDetails` primitive. The band is
+  a leading section inside the row template (an ItemsControl cannot host
+  injected elements between items, so "right above the row" lives in the row
+  markup): ONE shared `ContentControl` + `ModRowEditBandTemplate` precedes
+  both density roots, hosting the SAME `ImportWorkflowView` the top card
+  uses (the removal-confirm stage + the failure area ride inside it). The
+  band follows the `ActiveDownload` morph pattern: the parent assigns the
+  row's `IsEditTarget` flag + `EditBandContext` (the workflow VM) from the
+  workflow's `EditTargetContainerId` (the shared child subscription, the
+  `IsListToolingEnabled` propagation shape) on activation + on every reload,
+  so the form instantiates only on the editing row and a mid-edit reload
+  re-attaches the band to the rebuilt row instance for the same container.
+  Opening the band brings its row into view (the realized container's
+  `BringIntoView`, posted at Loaded priority). While the band is open the
+  row is anchored like an order-locked row (the grip is not hit-testable,
+  the move commands refuse, and other rows' drag math skips it as a
+  destination; the enabled toggle, policy, lock, and remove stay live), and
+  a download morph arriving on the edited container closes the edit
+  automatically (the container became downloaded = not editable; the morph
+  is the visible explanation). The form itself: prefilled from the container
+  (name, source choice, the bare mod id, the latest version's tag); the
+  policy picker hides (policy is per-row, not import details); Save applies
+  the primitive with the same validation the batch form enforces (a version
+  is required when saving as Nexus, so the edit can never create a
+  version-unknown state; switching to Untracked clears the version field);
+  Cancel deactivates the band. Downloaded mods are not editable: a version
+  carrying a FileId OR a RemoteUploadedAt grounds the container, the row's
+  pencil is hidden (its always-laid-out slot is preserved, so the strip
+  geometry never shifts), and both `StartEdit` and the primitive refuse
+  (defense in depth; no degraded fields, no band). The name field is
+  editable only for the Untracked choice, and locks as read-only (never
+  disabled) for the Nexus choice; the id, version, and source switch stay
+  editable for an ungrounded container. A multi-version identity change
+  swaps the form for the inline removal-confirm stage (never a nested modal),
+  with the save-time state refresh and the typed
+  `RemovalConfirmationRequiredException` catch covering a version landing
+  while the band is open. Refused saves and disk failures surface inline in
+  the band's status area with the form still editable. A successful save
+  deactivates the band and raises `ImportDetailsEdited(containerId)`, the
+  mod list's reload signal (the edited container's name, source, and version
+  can all have changed).
 
 The modes are mutually exclusive: both entries (`StartBatch`, `StartEdit`)
 check the shared inactive gate first, so a batch cannot start over an edit or
 vice versa, and the card being active at all (either mode) gates the Add
-split button and drag-and-drop acceptance. The card is an application-lifetime
-singleton child VM registered before `ModListViewModel`; navigating away from
-Mods preserves an in-flight card.
+split button, drag-and-drop acceptance, and the toolbar's projection controls
+(`IsListToolingEnabled`). The card is an application-lifetime singleton child
+VM registered before `ModListViewModel`; navigating away from Mods preserves
+an in-flight card.
 
 ## Mod list density / detailed rows
 

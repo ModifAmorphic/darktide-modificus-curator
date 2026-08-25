@@ -2490,4 +2490,150 @@ public sealed class ModListViewModelTests
         Assert.Equal(nexus.Id, call.ContainerId);
         Assert.Equal(row.Enabled, call.Enabled);
     }
+    // ---- the in-row edit band: target tracking + anchoring --------------------
+
+    /// <summary>Builds the VM with three profile mods (A, B, C), B
+    /// Nexus-sourced; returns the VM + the rows' container ids.</summary>
+    private static (ModListViewModel Vm, FakeProfileService Profiles, FakeModDownloadQueue Queue, Guid A, Guid B, Guid C)
+        BuildForEditBand()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var modA = repo.Seed(new UntrackedSource(), "A", "1.0");
+        var modB = repo.Seed(new NexusSource { ModId = 8 }, "B", "1.0");
+        var modC = repo.Seed(new UntrackedSource(), "C", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = modA.Id, Order = 0, Policy = ModVersionPolicy.Latest },
+            new ModListEntry { ContainerId = modB.Id, Order = 1, Policy = ModVersionPolicy.Latest },
+            new ModListEntry { ContainerId = modC.Id, Order = 2, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var queue = new FakeModDownloadQueue();
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            localization: Localization, downloadQueue: queue);
+        return (vm, profiles, queue, modA.Id, modB.Id, modC.Id);
+    }
+
+    [Fact]
+    public void StartEdit_marks_the_row_as_the_edit_target_with_the_band_context()
+    {
+        var (vm, _, _, _, bId, _) = BuildForEditBand();
+        var row = vm.Mods.Single(m => m.ContainerId == bId);
+        Assert.False(row.IsEditTarget);
+        Assert.Null(row.EditBandContext);
+
+        vm.EditImportDetailsCommand.Execute(row);
+
+        Assert.True(row.IsEditTarget);
+        Assert.Same(vm.ImportWorkflow, row.EditBandContext);
+        // Exactly one row carries the band.
+        Assert.Equal(1, vm.Mods.Count(m => m.IsEditTarget));
+        // The top card host is batch-only: the edit does not open it.
+        Assert.False(vm.ImportWorkflow.IsBatchActive);
+        Assert.True(vm.ImportWorkflow.IsEdit);
+    }
+
+    [Fact]
+    public void A_reload_mid_edit_reattaches_the_band_to_the_new_row_instance()
+    {
+        var (vm, _, _, _, bId, _) = BuildForEditBand();
+        var row = vm.Mods.Single(m => m.ContainerId == bId);
+        vm.EditImportDetailsCommand.Execute(row);
+
+        vm.Reload();
+
+        var rebuilt = vm.Mods.Single(m => m.ContainerId == bId);
+        Assert.False(ReferenceEquals(row, rebuilt));
+        Assert.True(rebuilt.IsEditTarget);
+        Assert.Same(vm.ImportWorkflow, rebuilt.EditBandContext);
+        Assert.True(vm.ImportWorkflow.IsEdit);
+    }
+
+    [Fact]
+    public void Save_and_cancel_clear_the_edit_target()
+    {
+        var (vm, _, _, _, bId, _) = BuildForEditBand();
+        var row = vm.Mods.Single(m => m.ContainerId == bId);
+
+        // Cancel.
+        vm.EditImportDetailsCommand.Execute(row);
+        vm.ImportWorkflow.CancelBatchCommand.Execute(null);
+        var afterCancel = vm.Mods.Single(m => m.ContainerId == bId);
+        Assert.False(afterCancel.IsEditTarget);
+        Assert.Null(afterCancel.EditBandContext);
+
+        // Save (an unchanged-name retag).
+        vm.EditImportDetailsCommand.Execute(row);
+        vm.ImportWorkflow.Version = "1.0-hotfix";
+        vm.ImportWorkflow.SaveEditCommand.Execute(null);
+        Assert.False(vm.ImportWorkflow.IsActive);
+        var afterSave = vm.Mods.Single(m => m.ContainerId == bId);
+        Assert.False(afterSave.IsEditTarget);
+        Assert.Null(afterSave.EditBandContext);
+    }
+
+    [Fact]
+    public void A_morph_arriving_on_the_edited_container_closes_the_edit()
+    {
+        // The container just became downloaded (not editable by rule) and the
+        // morph itself is the visible explanation in the row; the band closes
+        // at once.
+        var (vm, _, queue, _, bId, _) = BuildForEditBand();
+        var row = vm.Mods.Single(m => m.ContainerId == bId);
+        vm.EditImportDetailsCommand.Execute(row);
+        Assert.True(row.IsEditTarget);
+
+        queue.Enqueue(new ModDownloadRequest(
+            "warhammer40kdarktide", 8, 100, DownloadPurpose.ProfileAdd,
+            bId, "B", Guid.NewGuid(), "Target"));
+
+        Assert.True(row.IsDownloadMorphed);
+        Assert.False(vm.ImportWorkflow.IsActive);
+        Assert.False(row.IsEditTarget);
+        Assert.Null(row.EditBandContext);
+    }
+
+    [Fact]
+    public void Move_commands_refuse_for_the_editing_row_but_work_for_others()
+    {
+        // [A, B, C] with B being edited: B is anchored (its band is open), so
+        // B's moves are no-ops while C still moves over the anchored row.
+        var (vm, profiles, _, aId, bId, cId) = BuildForEditBand();
+        var b = vm.Mods.Single(m => m.ContainerId == bId);
+        var c = vm.Mods.Single(m => m.ContainerId == cId);
+        vm.EditImportDetailsCommand.Execute(b);
+
+        // The editing row's move buttons are inert + its grip is not
+        // hit-testable.
+        Assert.False(b.CanMoveUp);
+        Assert.False(b.CanMoveDown);
+        Assert.False(b.IsGripEnabled);
+        Assert.True(c.IsGripEnabled);
+
+        vm.MoveUpCommand.Execute(b);
+        vm.MoveDownCommand.Execute(b);
+        Assert.Empty(profiles.SetModOrderCalls);
+
+        // Another row still moves + the anchored row keeps its exact index.
+        vm.MoveUpCommand.Execute(c);
+        var order = Assert.Single(profiles.SetModOrderCalls);
+        Assert.Equal([cId, bId, aId], order); // B anchored at index 1
+
+        // A drag commit naming the anchored row as source is refused too
+        // (the planner's anchored-source rejection over the combined flag).
+        vm.CommitReorderCommand.Execute(new ReorderRequest(bId, 0));
+        Assert.Single(profiles.SetModOrderCalls);
+    }
+
+    [Fact]
+    public void The_batch_still_uses_the_top_card_and_no_row_carries_a_band()
+    {
+        var (vm, _, _, aId, _, _) = BuildForEditBand();
+
+        vm.ImportWorkflow.StartBatchCommand.Execute(new[] { "/tmp/some-mod" });
+
+        Assert.True(vm.ImportWorkflow.IsBatchActive);
+        Assert.All(vm.Mods, m => Assert.False(m.IsEditTarget));
+        Assert.All(vm.Mods, m => Assert.Null(m.EditBandContext));
+    }
 }

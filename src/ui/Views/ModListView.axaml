@@ -430,6 +430,17 @@
         </StackPanel>
       </StackPanel>
     </DataTemplate>
+    <!--
+      The edit band's content: the SAME workflow view the top card hosts
+      (batch + edit share the form fields; only the placement differs). The
+      band ContentControl assigns this template with the workflow VM as the
+      content, so the form is instantiated only on the editing row. The
+      removal-confirm panel + the edit failure area ride inside the view, so
+      they move into the band with it.
+    -->
+    <DataTemplate x:Key="ModRowEditBandTemplate" x:DataType="vm:ImportWorkflowViewModel">
+      <views:ImportWorkflowView />
+    </DataTemplate>
   </UserControl.Resources>
 
   <UserControl.Styles>
@@ -1036,15 +1047,17 @@
     </Grid>
 
     <!--
-      Inline import card (ImportWorkflowView). Visible only while the workflow
-      is active (editing, processing, or failure). Hosted directly below the
-      toolbar with the same 20px left/right inset. DataContext is the workflow
-      child VM (reached through ModListViewModel.ImportWorkflow); the visibility
-      binding stays on the wrapper Panel so it resolves against the mod-list VM's
-      context, not the workflow VM's.
+      The BATCH-mode card host (the inline import card). Visible only while a
+      batch is active (editing, processing, or failure); the EDIT mode never
+      uses the top card, it renders as an in-row band on the edited row inside
+      the row list below (a batch edits many mods, one row at a time up here;
+      an edit is about exactly one row, so its editor lives at that row).
+      DataContext is the workflow child VM (reached through the mod-list VM's
+      context); the visibility binding stays on the wrapper Panel so it
+      resolves against the mod-list VM's context, not the workflow VM's.
     -->
     <Panel Grid.Row="1"
-           IsVisible="{Binding ImportWorkflow.IsActive}"
+           IsVisible="{Binding ImportWorkflow.IsBatchActive}"
            Margin="20,0,20,4">
       <views:ImportWorkflowView DataContext="{Binding ImportWorkflow}" />
     </Panel>
@@ -1171,7 +1184,8 @@
             <ItemsControl.ItemTemplate>
             <DataTemplate x:DataType="vm:ModItemViewModel">
               <!--
-                One row, two mutually exclusive roots selected by the row's
+                One row: an optional leading edit band above exactly one of
+                two mutually exclusive roots selected by the row's
                 IsDetailed projection (pushed down by the detailed-rows
                 coordinator): the Compact Grid + the Detailed card. The
                 grip, badge cluster, and action strip are the shared
@@ -1179,13 +1193,34 @@
                 placement, margins, and density). Both roots bind the exact
                 same per-row state + route to the exact same code-behind
                 handlers, so no action behavior forks between modes. The
-                Panel root only hosts the two alternatives (it carries no
-                margin of its own); exactly one is visible at a time, and
-                each visible root owns its own row spacing (the Compact Grid
-                keeps Margin="0,3"; the Detailed Border carries its own
+                StackPanel root hosts the band + the two alternatives in one
+                vertical flow (an ItemsControl cannot inject elements between
+                items, so "right above the row" lives inside the row template
+                itself); exactly one root is visible at a time, and each
+                visible root owns its own row spacing (the Compact Grid keeps
+                Margin="0,3"; the Detailed Border carries its own
                 Margin="0,3").
               -->
-              <Panel>
+              <StackPanel>
+              <!--
+                The edit band: the import card's EDIT mode rendered inside the
+                row being edited, a leading section above the row's content.
+                ONE definition serves both densities + both breakpoints (it
+                precedes whichever root is visible; the shared workflow view
+                carries the form, the removal-confirm panel, and the failure
+                area). The band follows the ActiveDownload morph pattern: the
+                parent assigns the row's EditBandContext together with
+                IsEditTarget (on the workflow's target change + on every
+                Reload), so the form is instantiated only on the editing row
+                and a mid-edit reload re-attaches it to the rebuilt row
+                instance for the same container. While the band is open the
+                row is anchored (grip inert + move commands refuse).
+              -->
+              <ContentControl Classes="editBand"
+                              Margin="0,3"
+                              IsVisible="{Binding IsEditTarget}"
+                              Content="{Binding EditBandContext}"
+                              ContentTemplate="{StaticResource ModRowEditBandTemplate}" />
               <!--
                 Compact row layout (4 columns): grip | Name | badges | action
                 strip. The drag grip is column 0 and is the ONLY surface that
@@ -1442,7 +1477,7 @@
                           Background="{DynamicResource SystemControlForegroundAccentBrush}" />
                    </Panel>
                  </Border>
-              </Panel>
+              </StackPanel>
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>

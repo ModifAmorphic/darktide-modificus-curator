@@ -271,7 +271,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            `ImportWorkflowView`, an application-lifetime singleton
                            child VM registered before `ModListViewModel`) directly
                            below the toolbar: the card owns two exclusive modes
-                           over one editing form. The batch mode owns the state
+                           over one editing form, and the two modes render in
+                           two places. The batch mode (the top card below the
+                           toolbar, gated by `IsBatchActive`) owns the state
                            machine (editing, processing, terminal failure), the
                            per-item editing form (name + source + conditional
                            Nexus version/URL/policy + live validation), and the
@@ -280,8 +282,29 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            the collision check + `AddMod` run on the captured UI
                            context). The edit mode (started by a row's pencil
                            button through `StartEdit`) reuses the same fields
-                           as the per-container correction surface (see the row
-                           description below). The Add split button +
+                           as the per-container correction surface but renders
+                           as an IN-ROW BAND: a leading section inside the
+                           edited row's template (the row list's items cannot
+                           host injected elements between items, so the band
+                           lives in the row markup; one shared definition
+                           leading both density roots). The parent tracks the
+                           edit target by CONTAINER ID (`EditTargetContainerId`
+                           through the shared child subscription, the
+                           IsListToolingEnabled propagation shape) + assigns
+                           each row's `IsEditTarget` + band context (the
+                           ActiveDownload morph pattern, so the form
+                           instantiates only on the editing row) on activation
+                           + on every Reload: a mid-edit reload re-attaches the
+                           band to the rebuilt row instance. Opening the band
+                           brings its row into view (posted at Loaded
+                           priority). While a row's band is open the row is
+                           ANCHORED like a locked row (grip not hit-testable +
+                           move commands refuse; the enabled toggle, policy,
+                           lock, and remove stay live), and a download morph
+                           arriving on the edited container CLOSES the edit
+                           automatically (the container became downloaded =
+                           not editable; the morph is the visible
+                           explanation). The Add split button +
                            drag-and-drop forward paths to the workflow's
                            `StartBatchCommand`; while the workflow is active
                            (either mode) the Add button disables and drops are
@@ -290,7 +313,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            updates-only filter toggles, the density selector,
                            the check-now refresh; `IsListToolingEnabled`) also
                            disable so no filter change can hide the row being
-                           edited under its open editor (row-level controls
+                           edited under its open band (row-level controls
                            stay live); a batch cannot start over an edit or vice
                            versa (both entries check the shared inactive gate).
                            Copied
@@ -820,10 +843,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                             linked + download-morphed + downloaded rows, the
                             update-action-cell
                             pattern) starting the import card's EDIT MODE
-                            (the inline card below the toolbar, a hosted view
+                            (an in-row band on the edited row, a hosted view
                             rather than a modal): the per-container
                             correction surface for name, source association,
-                            and release tag. The card activates in place
+                            and release tag. The band activates in place
                             titled "Edit import details", prefilled from the
                             container (name, source choice, the bare mod id,
                             the latest version's tag); the policy picker
@@ -854,7 +877,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                             cover a version landing while the card is open);
                             refused saves + disk failures surface inline with
                             the form still editable; a successful save
-                            deactivates the card + raises
+                            deactivates the band + raises
                             ImportDetailsEdited, the mod list's reload
                             signal. The edit mode + the batch are mutually
                             exclusive (both entries check the shared inactive
@@ -1895,6 +1918,16 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                               untracked-name conflict, the save +
                                               ImportDetailsEdited reload signal,
                                               the unknown/linked screening;
+                                              the in-row band's target
+                                              tracking (ModListViewModelTests:
+                                              IsEditTarget + band-context
+                                              assignment on start, re-attachment
+                                              after a mid-edit reload, save +
+                                              cancel clearing, the morph-close
+                                              rule, the editing row's anchored
+                                              grip/moves while others still
+                                              move, the batch keeping the top
+                                              card + no band);
                                              ImportSourceValidatorTests: the shared
                                              parse + remote-field rules both card
                                              modes consume) + the derived

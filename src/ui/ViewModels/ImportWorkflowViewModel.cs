@@ -400,6 +400,28 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     public bool IsEdit => _kind == WorkflowKind.Edit;
 
     /// <summary>
+    /// Whether the top-of-page card hosts the workflow: true only while a
+    /// BATCH is active (editing, processing, or terminal failure). The edit
+    /// mode never uses the top card: it renders as an in-row band on the
+    /// edited row (the mod list's edit-target projection, keyed on
+    /// <see cref="EditTargetContainerId"/>), so the top host binds this
+    /// batch-only projection.
+    /// </summary>
+    public bool IsBatchActive => IsActive && !IsEdit;
+
+    /// <summary>
+    /// The container being edited while the edit mode is active, else null.
+    /// The mod list's edit-target projection (which row carries the in-row
+    /// band) reads this through the shared property-change subscription (the
+    /// <c>IsListToolingEnabled</c> propagation shape): re-fired by
+    /// <c>SetState</c> on every activation + reset, so a save, cancel, or
+    /// profile-switch reset clears it and the parent re-assigns the row flags
+    /// at once. A mid-edit reload keeps the target (it is a container id, not
+    /// a row instance) and the parent re-attaches the band to the rebuilt row.
+    /// </summary>
+    public Guid? EditTargetContainerId => IsEdit ? _editContainerId : null;
+
+    /// <summary>
     /// Whether the edit mode is on its inline removal-confirm stage (the
     /// visibility-swapped second step; the form hides while it shows).
     /// </summary>
@@ -1305,6 +1327,8 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
         OnPropertyChanged(nameof(IsProcessing));
         OnPropertyChanged(nameof(IsFailure));
         OnPropertyChanged(nameof(IsEdit));
+        OnPropertyChanged(nameof(IsBatchActive));
+        OnPropertyChanged(nameof(EditTargetContainerId));
         OnPropertyChanged(nameof(IsEditConfirm));
         OnPropertyChanged(nameof(IsEditForm));
         OnPropertyChanged(nameof(IsBatchEditing));

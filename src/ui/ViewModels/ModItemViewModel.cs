@@ -172,9 +172,36 @@ public partial class ModItemViewModel : ObservableObject
     /// <summary>
     /// Whether the drag-reorder grip is enabled for this row: an unlocked row can
     /// initiate a reorder drag; a locked row's grip is disabled and falls through
-    /// to touch scrolling. The grip stays visually present in both states.
+    /// to touch scrolling. The grip stays visually present in both states. The
+    /// edit target is anchored like a locked row: its band is open in place, so
+    /// its grip is disabled for the duration (the row must not move under its
+    /// own editor).
     /// </summary>
-    public bool IsGripEnabled => !OrderLocked;
+    public bool IsGripEnabled => !OrderLocked && !IsEditTarget;
+
+    /// <summary>
+    /// Whether this row is the import card's current edit target: the edit
+    /// mode's band renders inside this row, above its content. Assigned
+    /// exclusively by the parent (on the workflow's target change + on every
+    /// Reload, the <see cref="ActiveDownload"/> projection pattern): the
+    /// target is tracked by container id, so a mid-edit reload re-attaches
+    /// the band to the new row instance for the same container. While set
+    /// the row is anchored (the grip is not hit-testable + the move commands
+    /// refuse); the enabled toggle, policy, lock, and remove stay live.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsGripEnabled))]
+    private bool _isEditTarget;
+
+    /// <summary>
+    /// The workflow VM the row's edit band renders while this row is the edit
+    /// target (the <see cref="ActiveDownload"/> morph pattern: the parent
+    /// assigns the band context together with the flag, so the band's form is
+    /// instantiated only on the editing row, never on every row). Null
+    /// otherwise.
+    /// </summary>
+    [ObservableProperty]
+    private ImportWorkflowViewModel? _editBandContext;
 
     /// <summary>
     /// Whether the accent insertion marker should render just above this row's top

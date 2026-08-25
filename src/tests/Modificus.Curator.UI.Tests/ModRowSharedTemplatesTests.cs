@@ -164,6 +164,42 @@ public sealed class ModRowSharedTemplatesTests
         Assert.Contains("Path.detailedPlaceholder", selectors);
     }
 
+    [Fact]
+    public void The_edit_band_is_one_definition_leading_both_row_roots()
+    {
+        var xaml = LoadStrippedXaml("src/ui/Views/ModListView.axaml");
+
+        // The band content template exists once: it hosts the SAME workflow
+        // view the top card uses (batch + edit share the form; the
+        // removal-confirm panel + failure area ride inside it).
+        var bandTemplate = Assert.Single(
+            Elements(xaml.Root!, "DataTemplate"),
+            d => (string?)d.Attribute("{http://schemas.microsoft.com/winfx/2006/xaml}Key") == "ModRowEditBandTemplate");
+        Assert.Single(bandTemplate.Descendants(), e => e.Name.LocalName == "ImportWorkflowView");
+
+        // The band host: exactly one ContentControl in the row template,
+        // content + visibility bound to the row's edit-band projection (the
+        // ActiveDownload morph pattern: the parent assigns the context, so
+        // the form instantiates only on the editing row).
+        var band = Assert.Single(
+            Elements(xaml.Root!, "ContentControl"),
+            c => A(c, "ContentTemplate") == "{StaticResource ModRowEditBandTemplate}");
+        Assert.Equal("{Binding EditBandContext}", A(band, "Content"));
+        Assert.Equal("{Binding IsEditTarget}", A(band, "IsVisible"));
+
+        // The band precedes BOTH row roots in document order (the leading
+        // section above whichever root is visible), so one definition serves
+        // Compact + Detailed + both breakpoints.
+        var compactRoot = Assert.Single(
+            Elements(xaml.Root!, "Grid"),
+            g => A(g, "Classes")?.Contains("compactRow") == true);
+        var detailedRoot = Assert.Single(
+            Elements(xaml.Root!, "Border"),
+            b => A(b, "Classes")?.Contains("detailedRow") == true);
+        Assert.True(band.IsBefore(compactRoot), "the band precedes the Compact root");
+        Assert.True(band.IsBefore(detailedRoot), "the band precedes the Detailed root");
+    }
+
     // ---- required source lookup (the GamingModeGatingXamlTests pattern) ----
 
     /// <summary>

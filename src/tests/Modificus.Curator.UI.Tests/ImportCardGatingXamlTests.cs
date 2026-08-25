@@ -110,6 +110,23 @@ public sealed class ImportCardGatingXamlTests
         Assert.NotNull(typeof(ImportWorkflowViewModel).GetProperty("IsNameEditable"));
     }
 
+    [Fact]
+    public void The_top_card_host_is_batch_only()
+    {
+        // The edit mode renders as an in-row band (never the top card); the
+        // top host's visibility binds the workflow's batch-only projection.
+        var xaml = LoadXaml("src/ui/Views/ModListView.axaml");
+
+        var topHost = Assert.Single(
+            Elements(xaml.Root!, "Panel"),
+            p => A(p, "IsVisible") == "{Binding ImportWorkflow.IsBatchActive}");
+        Assert.Single(topHost.Descendants(), e => e.Name.LocalName == "ImportWorkflowView");
+
+        // Binding validity: the projection resolves on the workflow VM.
+        Assert.NotNull(typeof(ImportWorkflowViewModel).GetProperty("IsBatchActive"));
+        Assert.NotNull(typeof(ImportWorkflowViewModel).GetProperty("EditTargetContainerId"));
+    }
+
     // ---- required source lookup (the GamingModeGatingXamlTests pattern) ----
 
     private static string RequireSourceFile(string relativeFromRepo)
