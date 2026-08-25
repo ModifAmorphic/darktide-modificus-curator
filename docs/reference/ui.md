@@ -458,17 +458,17 @@ public interface IDialogService
     Task ShowAlertAsync(string title, string message);
     Task<UnsavedChangesChoice> ShowUnsavedChangesAsync(string title, string message, bool canSave);
     Task<GameDirConflictChoice> ShowGameDirConflictAsync(string title, string message);
-    Task<bool> ShowEditImportDetailsAsync(Guid containerId);
     Task<T> ShowProgressAsync<T>(string title, string message, Func<Task<T>> work);
 }
 ```
 
-Eight true-modal methods: the first-run Welcome, a binary confirm, the launch
+Seven true-modal methods: the first-run Welcome, a binary confirm, the launch
 discovery escape hatch, a single-button alert, an unsaved-changes three-choice
-prompt, the game-dir conflict prompt, the edit-import-details editor, and a
-non-dismissable progress spinner. Copied local-import failures
-surface inline in the `ImportWorkflowView` card (not through this seam); the
-linked-folder flow continues using `ShowAlertAsync` for its failures.
+prompt, the game-dir conflict prompt, and a non-dismissable
+progress spinner. Copied local-import failures + the edit-import-details
+correction surface live inline in the `ImportWorkflowView` card (not through
+this seam); the linked-folder flow continues using `ShowAlertAsync` for its
+failures.
 
 - `ShowWelcomeAsync()`: the first-run Welcome modal. Returns the user's typed
   `WelcomeChoice` (`Continue` or `SetUpNexus`). ESC, title-bar close, and
@@ -509,18 +509,6 @@ linked-folder flow continues using `ShowAlertAsync` for its failures.
   close, and a window close behave like the explicit Cancel button. Caller-
   side semantics: Rename performs `IGameDirModsHost.TakeOver` (whose return
   value drives the rename notice) + one retry, Cancel aborts.
-- `ShowEditImportDetailsAsync(containerId)`: the edit-import-details modal for
-  one mod container, the universal correction surface for its import details
-  (name, source association, release tag; applied through the repository's
-  `EditImportDetails` primitive). The VM is built by the narrow
-  `IEditImportDetailsFactory`; a null VM (unknown or linked container) skips
-  the modal. Returns true when the user saved (the caller reloads whatever it
-  shows), false when they cancelled (ESC / title-bar close / window close /
-  Cancel button; no writes). The dialog enforces the shared
-  `ImportSourceValidator` rules (a version is required when saving as Nexus,
-  so it can never create a version-unknown state), degrades to name-only when
-  any version carries a `FileId`, and swaps to an inline removal confirm for
-  an identity change on a multi-version container (never a nested modal).
 - `ShowProgressAsync<T>(title, message, work)`: a buttonless, non-closeable
   modal spinner over the supplied async work. The user cannot dismiss the
   spinner: the work runs to completion and the caller surfaces its result.
@@ -533,20 +521,16 @@ linked-folder flow continues using `ShowAlertAsync` for its failures.
 ```csharp
 public sealed class DialogService : IDialogService
 {
-    public DialogService(
-        Window owner,
-        LocalizationService localization,
-        IDiscoveryEscapeHatchFactory escapeHatchFactory,
-        IEditImportDetailsFactory editImportDetailsFactory);
+    public DialogService(Window owner, LocalizationService localization, IDiscoveryEscapeHatchFactory escapeHatchFactory);
 }
 ```
 
 The concrete implementation. `owner` is the main window (a singleton; resolved
 by the desktop lifetime and by `DialogService` for modal parenting).
-`localization` is handed to the Welcome title. The two per-dialog factories
-build the dialog VMs with service dependencies (the discovery escape hatch +
-edit import details; see their sections below), so the service constructs no
-view models itself. `DisableOwnerForModal` is the nesting-safe owner-
+`localization` is handed to the Welcome title. `escapeHatchFactory` builds the
+one dialog VM with service dependencies (the discovery escape hatch; see
+`IDiscoveryEscapeHatchFactory` below), so the service constructs no view
+models itself. `DisableOwnerForModal` is the nesting-safe owner-
 disable workaround (a reference count tracks overlapping modals; the owner
 re-enables only when the outermost modal closes).
 
@@ -567,22 +551,6 @@ the escape-hatch VM needs the live `IConfigLoader`, `ISteamService`,
 result lives on the VM and the VM-to-Window pairing belongs to the code that
 shows the Window. Deliberately not a generalized all-dialogs factory: the
 other dialogs need no VM dependencies.
-
-### `IEditImportDetailsFactory`
-
-```csharp
-public interface IEditImportDetailsFactory
-{
-    EditImportDetailsViewModel? Create(Guid containerId);
-}
-```
-
-The second narrow per-dialog factory (the same shape as the escape hatch's):
-the edit-import-details VM needs the `IModRepository` + `LocalizationService`,
-which the `DialogService` otherwise has no reason to hold. `Create` returns
-`null` when the container no longer exists or is linked (never editable), so
-`ShowEditImportDetailsAsync` skips the modal entirely. Registered in
-`CuratorComposition`.
 
 ## Preferences service
 
@@ -1414,6 +1382,49 @@ being off never disables automatic installation (startup + switch + manual
 checks still drive it), and changing the periodic-check toggle never clears a
 configured `true` here.
 
+## The inline import card
+
+The `ImportWorkflowViewModel` + `ImportWorkflowView` card, hosted below the
+Mods toolbar, owns two exclusive modes over one shared editing form (the same
+fields, the same `ImportSourceValidator` rules):
+
+- **Batch mode**: the ordered import of picked/dropped paths. The per-item
+  form (name, source, conditional Nexus version/URL/policy), the three-state
+  lifecycle (editing, processing, terminal failure), and the per-item
+  orchestration (`GetBaseName` + `Import` on `Task.Run`; the profile queries
+  and writes on the captured UI context). Emits `ItemImported(profileId)`; the
+  mod list reloads when the captured profile is still active.
+- **Edit mode** (entered from a row's pencil button via
+  `ModListViewModel.EditImportDetailsCommand` -> `StartEdit(containerId)`): the
+  per-container correction surface for a mod's import details (name, source
+  association, release tag), applied through the repository's
+  `EditImportDetails` primitive. The card activates titled "Edit import
+  details", prefilled from the container (name, source choice, the bare mod
+  id, the latest version's tag); the policy picker hides (policy is per-row,
+  not import details); Save applies the primitive with the same validation
+  the batch form enforces (a version is required when saving as Nexus, so the
+  edit can never create a version-unknown state; switching to Untracked
+  clears the version field); Cancel deactivates the card. The FileId
+  grounding degrades the fields: any version's FileId disables the source
+  switch + id field with the localized "downloaded from Nexus" hint, the
+  latest record's own FileId additionally disables the version field (the
+  per-record tag lock), and the name is never locked. A multi-version
+  identity change swaps the form for an inline removal-confirm stage (never a
+  nested modal; the card is a hosted view), with the save-time state refresh
+  and the typed `RemovalConfirmationRequiredException` catch covering a
+  version landing while the card is open. Refused saves and disk failures
+  surface inline in the card's status area with the form still editable. A
+  successful save deactivates the card and raises
+  `ImportDetailsEdited(containerId)`, the mod list's reload signal (the
+  edited container's name, source, and version can all have changed).
+
+The modes are mutually exclusive: both entries (`StartBatch`, `StartEdit`)
+check the shared inactive gate first, so a batch cannot start over an edit or
+vice versa, and the card being active at all (either mode) gates the Add
+split button and drag-and-drop acceptance. The card is an application-lifetime
+singleton child VM registered before `ModListViewModel`; navigating away from
+Mods preserves an in-flight card.
+
 ## Mod list density / detailed rows
 
 The Compact/Detailed row-density choice for the Mods destination. Detailed is
@@ -2032,8 +2043,7 @@ services.AddSingleton(sp => new DmfPromptService(/* … incl. IShellModalQueue +
 services.AddSingleton(sp => new ShellViewModel(/* … all five page VMs, IAppUpdateService, IShellModalQueue, Action<Action> */,
                                               sp.GetRequiredService<INxmRegistrationState>()));
 services.AddSingleton<IDiscoveryEscapeHatchFactory>(sp => new DiscoveryEscapeHatchFactory(/* config, steam, loc, gaming */));
-services.AddSingleton<IEditImportDetailsFactory>(sp => new EditImportDetailsFactory(/* repo, loc */));
-services.AddSingleton<IDialogService>(sp => new DialogService(/* owner, localization, both factories */));
+services.AddSingleton<IDialogService>(sp => new DialogService(/* owner, localization, factory */));
 services.AddSingleton(sp => new UpdateCheckRunner(/* … incl. IAutomaticUpdateService, StartUpdateCheckPolling */));
 #if CURATOR_VELOPACK
 services.AddSingleton<IAppUpdateService>(sp => new VelopackAppUpdateService(

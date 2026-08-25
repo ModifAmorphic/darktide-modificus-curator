@@ -10,12 +10,12 @@ namespace Modificus.Curator.UI.Dialogs;
 /// <c>Window</c>/<c>ShowDialog</c> wiring so view models never construct windows
 /// directly. Each method shows exactly one true modal over the owning main
 /// window (Welcome, confirm, discovery escape hatch, alert, unsaved changes,
-/// game-dir conflict, edit import details, progress). This is the only place
-/// the app brings up a dialog window; everything else flows through the
-/// <see cref="IDialogService"/> seam, which tests replace with a fake. The two
-/// dialogs whose view models carry service dependencies (the escape hatch +
-/// edit import details) build those VMs through their narrow per-dialog
-/// factories; this service never constructs view models itself.
+/// game-dir conflict, progress). This is the only place the app brings up a
+/// dialog window; everything else flows through the <see cref="IDialogService"/>
+/// seam, which tests replace with a fake. The one dialog whose view model
+/// carries service dependencies (the escape hatch) builds that VM through the
+/// narrow <see cref="IDiscoveryEscapeHatchFactory"/>; this service never
+/// constructs view models itself.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -39,7 +39,6 @@ public sealed class DialogService : IDialogService
     private readonly Window _owner;
     private readonly LocalizationService _localization;
     private readonly IDiscoveryEscapeHatchFactory _escapeHatchFactory;
-    private readonly IEditImportDetailsFactory _editImportDetailsFactory;
 
     /// <param name="owner">The window dialog parents are shown over (the main
     /// window).</param>
@@ -49,21 +48,15 @@ public sealed class DialogService : IDialogService
     /// model (the one dialog VM with service dependencies: the live config
     /// reader/writer, the Steam discovery service, and the Gaming Mode
     /// state).</param>
-    /// <param name="editImportDetailsFactory">Builds the edit-import-details
-    /// dialog's view model from a container id (its repository dependency
-    /// stays behind the factory).</param>
     public DialogService(
         Window owner,
         LocalizationService localization,
-        IDiscoveryEscapeHatchFactory escapeHatchFactory,
-        IEditImportDetailsFactory editImportDetailsFactory)
+        IDiscoveryEscapeHatchFactory escapeHatchFactory)
     {
         _owner = owner;
         _localization = localization;
         _escapeHatchFactory = escapeHatchFactory
             ?? throw new ArgumentNullException(nameof(escapeHatchFactory));
-        _editImportDetailsFactory = editImportDetailsFactory
-            ?? throw new ArgumentNullException(nameof(editImportDetailsFactory));
     }
 
     /// <summary>
@@ -199,30 +192,6 @@ public sealed class DialogService : IDialogService
 
         using var _ = DisableOwnerForModal();
         await dialog.ShowDialog(_owner);
-    }
-
-    /// <inheritdoc />
-    /// <remarks>
-    /// The VM is built through the narrow <see cref="IEditImportDetailsFactory"/>
-    /// so this service carries no repository dependency; a null VM (unknown or
-    /// linked container) skips the modal entirely and reports a cancel.
-    /// </remarks>
-    public async Task<bool> ShowEditImportDetailsAsync(Guid containerId)
-    {
-        var viewModel = _editImportDetailsFactory.Create(containerId);
-        if (viewModel is null)
-        {
-            return false;
-        }
-
-        var window = new EditImportDetailsDialog
-        {
-            DataContext = viewModel,
-        };
-
-        using var _ = DisableOwnerForModal();
-        await window.ShowDialog(_owner);
-        return viewModel.Result;
     }
 
     /// <inheritdoc />

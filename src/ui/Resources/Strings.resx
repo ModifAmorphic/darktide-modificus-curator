@@ -722,8 +722,8 @@
     <comment>Header of the edit-import-details modal, explaining what survives the edit (everything the profiles reference).</comment>
   </data>
   <data name="EditDetails_FileIdLockHint" xml:space="preserve">
-    <value>This mod was downloaded from Nexus, so its mod id is fixed. Only the name can be changed.</value>
-    <comment>Inline hint in the edit-import-details modal while the identity is locked by a download (any version carries a Nexus file id). The id field and source switch are disabled.</comment>
+    <value>This mod was downloaded from Nexus, so its mod id is fixed. A version installed by that download also keeps its tag.</value>
+    <comment>Inline hint in the import card's edit mode while the container is grounded by a download: any version's file id locks the mod id + source; the latest record's own file id additionally locks the version field.</comment>
   </data>
   <data name="EditDetails_SaveButton" xml:space="preserve">
     <value>Save</value>

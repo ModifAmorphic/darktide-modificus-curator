@@ -221,6 +221,10 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         // forwarding names + fan out to the live rows.
         RowContext.PropertyChanged += OnRowContextChanged;
         ImportWorkflow.ItemImported += OnItemImported;
+        // The edit-mode sibling: a saved import-details edit reloads the list
+        // (the edited row's name/badge/version re-join from the repository).
+        // Application-lifetime singletons; never undone.
+        ImportWorkflow.ImportDetailsEdited += OnImportDetailsEdited;
         // The Add split button's enabled state combines the workflow's activity
         // with the Gaming Mode gate, so the workflow's own IsActive flips must
         // re-fire it. Both VMs are application-lifetime singletons; the
@@ -1857,30 +1861,38 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     // ---- edit import details (the universal correction surface) -------------
 
     /// <summary>
-    /// Opens the edit-import-details modal for a row's container (the
+    /// Starts the import card's edit mode for a row's container (the
     /// correction surface for a wrong or incomplete import: rename, source
-    /// association, version tag). The dialog owns every edit; on a saved
-    /// result (true) the list reloads, because the container's name, source,
-    /// and version can all have changed (the row's badge, identity, and
-    /// derived state re-join from the repository). A cancelled dialog changes
-    /// nothing. Linked rows (an external folder's identity is its path and is
-    /// never edited) and download-morphed rows (the morph's completion is
-    /// about to write the container) never offer the action; the command
-    /// repeats both guards as defense in depth.
+    /// association, version tag). The child workflow VM owns the card, the
+    /// fields, and the save; this VM reloads when the child's
+    /// <see cref="ImportWorkflowViewModel.ImportDetailsEdited"/> event reports
+    /// a successful save (the container's name, source, and version can all
+    /// have changed). Linked rows (an external folder's identity is its path
+    /// and is never edited) and download-morphed rows (the morph's completion
+    /// is about to write the container) never offer the action (the pencil is
+    /// disabled for both); this command repeats both guards as defense in
+    /// depth, and the child's StartEdit repeats them again.
     /// </summary>
     [RelayCommand]
-    private async Task EditImportDetails(ModItemViewModel? row)
+    private void EditImportDetails(ModItemViewModel? row)
     {
         if (row is null || row.IsLinked || row.IsDownloadMorphed)
         {
             return;
         }
 
-        if (await _dialogs.ShowEditImportDetailsAsync(row.ContainerId))
-        {
-            Reload();
-        }
+        ImportWorkflow.StartEditCommand.Execute(row.ContainerId);
     }
+
+    /// <summary>
+    /// The import card finished an edit-mode save (the container's import
+    /// details changed). Reload so the edited row's name, badge, and derived
+    /// state re-join from the repository. Unconditional by design: the edit is
+    /// a repository-level mutation and a reload over a profile that no longer
+    /// holds the container is a harmless re-join (a mid-edit profile switch
+    /// resets the card before a save can land).
+    /// </summary>
+    private void OnImportDetailsEdited(object? sender, Guid containerId) => Reload();
 
     /// <summary>
     /// The command behind the "Add Nexus Mods" flyout item + the face button's

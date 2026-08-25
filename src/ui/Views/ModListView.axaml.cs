@@ -599,10 +599,11 @@ public partial class ModListView : UserControl
 
     /// <summary>
     /// Routes a row's edit-import-details button click to the parent's
-    /// <c>EditImportDetailsCommand</c>, which opens the correction modal over
-    /// the row's container and reloads on a saved result. The command owns
-    /// the linked / download-morphed guards (the button is hidden for both,
-    /// but the command repeats them); the view is pure mechanics.
+    /// <c>EditImportDetailsCommand</c>, which starts the import card's edit
+    /// mode for the row's container (the child workflow VM owns the card +
+    /// the save; the parent reloads on the child's edited event). The command
+    /// owns the linked / download-morphed guards (the button is disabled for
+    /// both, the update-action-cell pattern); the view is pure mechanics.
     /// </summary>
     private void EditImportDetails_Click(object? sender, RoutedEventArgs e)
     {

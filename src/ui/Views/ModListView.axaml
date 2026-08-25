@@ -121,6 +121,30 @@
                  Orientation="Horizontal"
                  ItemsAlignment="End">
         <!--
+          Edit import details (drawn pencil), first in the strip (between the
+          source badge cell and the Enabled checkbox). The universal
+          correction surface for the row's container: name, source
+          association, version tag. Rendered on EVERY row but disabled when
+          the row is not editable (linked rows: an external folder's identity
+          is its path; download-morphed rows: the morph's completion is about
+          to write the container), the update-action-cell pattern of a stable
+          position that goes inert rather than shifting the strip. The
+          parent's command repeats both guards.
+        -->
+        <Button Classes="icon editDetails"
+                IsEnabled="{Binding CanEditImportDetails}"
+                ToolTip.Tip="{ReflectionBinding [ModRow_EditImportDetailsTooltip], Source={StaticResource Loc}}"
+                AutomationProperties.Name="{ReflectionBinding [ModRow_EditImportDetailsTooltip], Source={StaticResource Loc}}"
+                Click="EditImportDetails_Click"
+                CommandParameter="{Binding}">
+          <!-- Material "edit" (24x24 source): pencil. -->
+          <Path Width="16" Height="16" Stretch="Uniform"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                Fill="{Binding $parent[Button].Foreground}"
+                Data="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+        </Button>
+
+        <!--
           Enabled. In Detailed the localized label is the CheckBox content so
           the whole label is part of the click hit target, with an explicit
           automation name; in Compact EnabledLabel is null, the exact
@@ -317,27 +341,6 @@
                 HorizontalAlignment="Center" VerticalAlignment="Center"
                 Fill="{Binding $parent[Button].Foreground}"
                 Data="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
-        </Button>
-
-        <!--
-          Edit import details (drawn pencil), at the end of the strip. The
-          universal correction surface for the row's container: name, source
-          association, version tag. Never offered for linked rows (an
-          external folder's identity is its path) or download-morphed rows
-          (the morph's completion is about to write the container); the
-          parent's command repeats both guards.
-        -->
-        <Button Classes="icon editDetails"
-                IsVisible="{Binding CanEditImportDetails}"
-                ToolTip.Tip="{ReflectionBinding [ModRow_EditImportDetailsTooltip], Source={StaticResource Loc}}"
-                AutomationProperties.Name="{ReflectionBinding [ModRow_EditImportDetailsTooltip], Source={StaticResource Loc}}"
-                Click="EditImportDetails_Click"
-                CommandParameter="{Binding}">
-          <!-- Material "edit" (24x24 source): pencil. -->
-          <Path Width="16" Height="16" Stretch="Uniform"
-                HorizontalAlignment="Center" VerticalAlignment="Center"
-                Fill="{Binding $parent[Button].Foreground}"
-                Data="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
         </Button>
       </WrapPanel>
     </DataTemplate>
@@ -631,8 +634,11 @@
     <Style Selector="Grid.compactRow WrapPanel.actionStrip">
       <Setter Property="ItemSpacing" Value="0" />
     </Style>
-    <Style Selector="Grid.compactRow WrapPanel.actionStrip > CheckBox">
+    <Style Selector="Grid.compactRow WrapPanel.actionStrip > Button.editDetails">
       <Setter Property="Margin" Value="12,0,0,0" />
+    </Style>
+    <Style Selector="Grid.compactRow WrapPanel.actionStrip > CheckBox">
+      <Setter Property="Margin" Value="8,0,0,0" />
     </Style>
     <Style Selector="Grid.compactRow WrapPanel.actionStrip > StackPanel">
       <Setter Property="Margin" Value="12,0,0,0" />
@@ -650,9 +656,6 @@
       <Setter Property="Margin" Value="4,0,0,0" />
     </Style>
     <Style Selector="Grid.compactRow WrapPanel.actionStrip > Button.remove">
-      <Setter Property="Margin" Value="4,0,0,0" />
-    </Style>
-    <Style Selector="Grid.compactRow WrapPanel.actionStrip > Button.editDetails">
       <Setter Property="Margin" Value="4,0,0,0" />
     </Style>
     <!--

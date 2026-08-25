@@ -1334,22 +1334,6 @@ internal sealed class FakeDialogService : IDialogService
     }
 
     /// <summary>
-    /// The result returned by the next edit-import-details call: <c>true</c> =
-    /// saved, <c>false</c> = cancelled / skipped. Default <c>false</c>.
-    /// </summary>
-    public bool EditImportDetailsResult { get; set; }
-
-    /// <summary>The container ids the caller asked the edit-details modal to
-    /// show, in call order.</summary>
-    public IReadOnlyList<Guid> EditImportDetailsCalls { get; } = new List<Guid>();
-
-    public Task<bool> ShowEditImportDetailsAsync(Guid containerId)
-    {
-        ((List<Guid>)EditImportDetailsCalls).Add(containerId);
-        return Task.FromResult(EditImportDetailsResult);
-    }
-
-    /// <summary>
     /// The work passed to <see cref="ShowProgressAsync{T}"/>, in call order.
     /// Tests assert on this to verify the DMF download path was driven through
     /// the spinner. Each entry is invoked (awaited) so the work's result /

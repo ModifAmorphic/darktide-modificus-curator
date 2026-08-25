@@ -34,7 +34,6 @@ public sealed class LocalizedViewModelRegistrationTests
         "PreferencesViewModel",
         "ProfilesViewModel",
         "ImportWorkflowViewModel",
-        "EditImportDetailsViewModel",
         "DiscoveryEscapeHatchViewModel",
         "DiscoveryFieldRowViewModel",
         "ThemeOption",

@@ -60,12 +60,14 @@ game-binary constraints now live with the runtime, in
   in-app install that renders as the row's download morph (for a version-unknown
   row, the resolution install carrying an empty ExpectedVersion that the
   dequeue-time revalidation matches against the empty installed tag),
-  a regular/unknown click opens the mod's Nexus files page. Every non-linked,
-  non-morphed row also carries an edit-import-details action (a drawn-pencil
-  button at the end of the shared action strip) opening the
-  edit-import-details modal, the universal correction surface for a container's
-  name, source association, and release tag, applied through the repository's
-  EditImportDetails primitive and reloaded on save. Premium users can
+   a regular/unknown click opens the mod's Nexus files page. Every row also
+   carries an edit-import-details action (a drawn-pencil button first in the
+   shared action strip, between the source badge and the Enabled checkbox,
+   rendered on every row but disabled when not editable: linked +
+   download-morphed rows, the update-action-cell pattern) starting the import
+   card's edit mode, the universal correction surface for a container's
+   name, source association, and release tag, applied through the repository's
+   EditImportDetails primitive and reloaded on save. Premium users can
   additionally opt into automatic flagged-update installation after each check
   (each flagged mod is enqueued onto the same download queue; version-unknown
   rows are excluded from the batch, manual click only).
@@ -263,22 +265,30 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                             hide-disabled + updates-only filter toggles, the Add split
                             button) shown
                             only on Mods, and the
-                          inline import card (`ImportWorkflowViewModel` +
-                          `ImportWorkflowView`, an application-lifetime singleton
-                          child VM registered before `ModListViewModel`) directly
-                          below the toolbar: the card owns the batch state machine
-                          (editing, processing, terminal failure), the per-item
-                          editing form (name + source + conditional Nexus version/
-                          URL/policy + live validation), and the per-item import
-                          orchestration (only `GetBaseName` + `Import` run on
-                          `Task.Run`; `FindExistingContainer` + the collision check
-                          + `AddMod` run on the captured UI context). The Add split
-                          button + drag-and-drop forward paths to the workflow's
-                          `StartBatchCommand`; while the workflow is active the Add
-                          button disables and drops are rejected. Copied
-                          local-import failures surface inline (not via modal
-                          alert); the linked-folder flow keeps its modal alerts.
-                          The toolbar's density selector is two drawn-icon buttons
+                           inline import card (`ImportWorkflowViewModel` +
+                           `ImportWorkflowView`, an application-lifetime singleton
+                           child VM registered before `ModListViewModel`) directly
+                           below the toolbar: the card owns two exclusive modes
+                           over one editing form. The batch mode owns the state
+                           machine (editing, processing, terminal failure), the
+                           per-item editing form (name + source + conditional
+                           Nexus version/URL/policy + live validation), and the
+                           per-item import orchestration (only `GetBaseName` +
+                           `Import` run on `Task.Run`; `FindExistingContainer` +
+                           the collision check + `AddMod` run on the captured UI
+                           context). The edit mode (started by a row's pencil
+                           button through `StartEdit`) reuses the same fields
+                           as the per-container correction surface (see the row
+                           description below). The Add split button +
+                           drag-and-drop forward paths to the workflow's
+                           `StartBatchCommand`; while the workflow is active
+                           (either mode) the Add button disables and drops are
+                           rejected; a batch cannot start over an edit or vice
+                           versa (both entries check the shared inactive gate).
+                           Copied
+                           local-import failures surface inline (not via modal
+                           alert); the linked-folder flow keeps its modal alerts.
+                           The toolbar's density selector is two drawn-icon buttons
                           (view_headline for Compact, view_agenda for Detailed)
                           bound to `DetailedModRowsViewModel.SetDensityCommand`;
                            the active one carries the `selected` class (the shell's
@@ -567,18 +577,14 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           list + re-reads the startup-check toggle + refreshes the
                           app-update notice;
                            `IDialogService` is narrowed to true modals only (the
-                           eight methods: `ShowWelcomeAsync`, `ConfirmAsync`,
+                           seven methods: `ShowWelcomeAsync`, `ConfirmAsync`,
                            `ShowDiscoveryEscapeHatchAsync`, `ShowAlertAsync`,
                            `ShowUnsavedChangesAsync`,
-                           `ShowGameDirConflictAsync`,
-                           `ShowEditImportDetailsAsync`,
-                           `ShowProgressAsync<T>`;
-                           the escape-hatch + edit-import-details dialog VMs are
-                           built by their narrow per-dialog factories
-                           (`IDiscoveryEscapeHatchFactory`,
-                           `IEditImportDetailsFactory`), so DialogService
-                           carries no Steam/config/repo dependencies +
-                           constructs no view models);
+                           `ShowGameDirConflictAsync`, `ShowProgressAsync<T>`;
+                           the escape-hatch dialog VM is built by the narrow
+                           per-dialog `IDiscoveryEscapeHatchFactory`, so
+                           DialogService carries no Steam/config/gaming
+                           dependencies + constructs no view models);
                           hosted
                           destinations are not modals and never flow through it;
                           the inline import card is a hosted `UserControl`
@@ -794,26 +800,47 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                             rows, the pin dropdown is suppressed (nothing to
                             pin to; the Pinned choice is disabled), and the
                             automatic-update batch excludes them (manual click
-                            only). Every non-linked, non-morphed row also
-                            carries an edit-import-details action (a
-                            drawn-pencil button at the end of the shared action
-                            strip, ONE definition in the shared templates so
-                            Compact + Detailed behave identically) opening the
-                            edit-import-details modal through
-                            `IDialogService.ShowEditImportDetailsAsync`: the
-                            per-container correction surface for name, source
-                            association, and release tag (fields validated by
-                            the shared ImportSourceValidator the import card
-                            also consumes; a version is required when saving as
-                            Nexus so the dialog can never create an unknown
-                            state; when any version carries a FileId the
-                            dialog degrades to name-only with a "downloaded
-                            from Nexus" hint; an identity change on a
-                            multi-version container swaps to an inline
-                            plain-language removal confirm, never a nested
-                            modal; refused saves surface inline) applied through
-                            the repository's EditImportDetails primitive, with
-                            the mod list reloading on save. The
+                            only). Every row also carries an
+                            edit-import-details action (a drawn-pencil button
+                            FIRST in the shared action strip, between the
+                            source badge cell and the Enabled checkbox, ONE
+                            definition in the shared templates so Compact +
+                            Detailed behave identically; rendered on every row
+                            but disabled when not editable, linked +
+                            download-morphed rows, the update-action-cell
+                            pattern) starting the import card's EDIT MODE
+                            (the inline card below the toolbar, a hosted view
+                            rather than a modal): the per-container
+                            correction surface for name, source association,
+                            and release tag. The card activates in place
+                            titled "Edit import details", prefilled from the
+                            container (name, source choice, the bare mod id,
+                            the latest version's tag); the policy picker
+                            hides; the primary button reads Save and applies
+                            the repository's EditImportDetails primitive with
+                            the same validation the batch form enforces (the
+                            shared ImportSourceValidator; a version is
+                            required when saving as Nexus so the edit can
+                            never create an unknown state); the FileId
+                            grounding degrades the fields (any version's
+                            FileId disables the id + source fields with the
+                            "downloaded from Nexus" hint; the latest record's
+                            own FileId additionally disables the version
+                            field, the per-record tag lock; the name is never
+                            locked); an identity change on a multi-version
+                            container swaps the form for an inline
+                            plain-language removal confirm (never a nested
+                            modal; the save-time state refresh + the typed
+                            RemovalConfirmationRequiredException recover path
+                            cover a version landing while the card is open);
+                            refused saves + disk failures surface inline with
+                            the form still editable; a successful save
+                            deactivates the card + raises
+                            ImportDetailsEdited, the mod list's reload
+                            signal. The edit mode + the batch are mutually
+                            exclusive (both entries check the shared inactive
+                            gate) and the active card gates Add + drops for
+                            either mode.
                             rate-limit notice sits in the Mods toolbar. While
                            the active profile has an enabled alternate mod
                            manager mod, a full-width non-dismissible caution
@@ -1798,28 +1825,42 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             row markup (every shared control exists
                                             once, both roots host the templates, the
                                             compact spacing styles, the 680-DIP
-                                            breakpoint); + the edit-import-details
-                                            surface (EditImportDetailsViewModelTests:
-                                            the load-from-facts, the validation matrix
-                                            over the shared ImportSourceValidator
-                                            (Untracked/Nexus, version required, bare id
-                                            or URL parse), the FileId degradation to
-                                            name-only, the inline identity-removal
-                                            confirm step + Back, refused-save inline
-                                            failures + correction, the factory's
-                                            unknown/linked screening;
-                                            ImportSourceValidatorTests: the shared
-                                            parse + remote-field rules both surfaces
-                                            consume) + the derived version-unknown
-                                            row state (ModItemVersionUnknownTests:
-                                            the truth + its negatives, the badge's
-                                            no-dangling-separator guard, the
-                                            update-action enable + every tooltip
-                                            variant with gaming precedence, the pin
-                                            suppression, the edit action's linked/
-                                            morphed suppression; the filter tests
-                                            cover unknown rows kept under
-                                            updates-only); Settings/escape-hatch browse gating
+                                             breakpoint); + the edit-import-details
+                                             surface (ImportWorkflowEditModeTests,
+                                             the import card's edit mode:
+                                             activation + prefill, the batch/edit
+                                             mutual exclusion incl. the
+                                             mid-processing refusal + the Add
+                                             gating, the validation matrix over
+                                             the shared ImportSourceValidator
+                                             (Untracked/Nexus, version required,
+                                             bare id or URL parse), the FileId
+                                             degradations (identity lock + the
+                                             per-record tag lock on the version
+                                             field, defense-in-depth via the
+                                             primitive's refusal), the inline
+                                             identity-removal confirm step +
+                                             Back + both recover paths (the
+                                             save-time refresh + the typed
+                                             RemovalConfirmationRequiredException),
+                                             refused-save + disk-failure inline
+                                             surfacing + correction, the
+                                             untracked-name conflict, the save +
+                                             ImportDetailsEdited reload signal,
+                                             the unknown/linked screening;
+                                             ImportSourceValidatorTests: the shared
+                                             parse + remote-field rules both card
+                                             modes consume) + the derived
+                                             version-unknown
+                                             row state (ModItemVersionUnknownTests:
+                                             the truth + its negatives, the badge's
+                                             no-dangling-separator guard, the
+                                             update-action enable + every tooltip
+                                             variant with gaming precedence, the pin
+                                             suppression, the edit action's linked/
+                                             morphed suppression; the filter tests
+                                             cover unknown rows kept under
+                                             updates-only); Settings/escape-hatch browse gating
                                             with manual submission preserved; the
                                             PreferencesService theme mapping
                                             ResolveThemeVariant + the stored-System

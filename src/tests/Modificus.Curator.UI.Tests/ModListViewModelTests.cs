@@ -2346,8 +2346,11 @@ public sealed class ModListViewModelTests
     // ---- edit import details ---------------------------------------------------
 
     [Fact]
-    public async Task EditImportDetails_opens_the_dialog_and_reloads_only_on_a_save()
+    public void EditImportDetails_starts_the_card_edit_mode_and_reloads_on_the_edited_event()
     {
+        // The pencil routes through the list VM into the import card's edit
+        // mode; the child's ImportDetailsEdited event (raised after a saved
+        // edit) is the reload trigger, so an applied rename shows on the row.
         var a = Profile("Alpha");
         var profiles = TestDoubles.Profiles(a);
         var repo = new FakeModRepository();
@@ -2355,28 +2358,34 @@ public sealed class ModListViewModelTests
         profiles.WithMods(a.Id,
             new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
         var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService();
         var vm = TestDoubles.BuildModList(profiles, session, repo,
-            dialogs: dialogs, localization: Localization);
+            localization: Localization);
         var row = vm.Mods.Single(m => m.ContainerId == nexus.Id);
 
-        // A cancelled dialog: no reload (nothing changed).
-        dialogs.EditImportDetailsResult = false;
-        await vm.EditImportDetailsCommand.ExecuteAsync(row);
-        Assert.Equal([nexus.Id], dialogs.EditImportDetailsCalls);
+        // Start: the card activates in edit mode over the row's container,
+        // prefilled from its facts.
+        vm.EditImportDetailsCommand.Execute(row);
+        Assert.True(vm.ImportWorkflow.IsEdit);
+        Assert.Equal("DMF", vm.ImportWorkflow.ModName);
         Assert.Equal("DMF", vm.Mods.Single(m => m.ContainerId == nexus.Id).Name);
 
-        // A saved dialog: the reload re-joins the row from the repository, so
-        // an applied rename shows.
-        repo.RenameContainer(nexus.Id, "DMF Renamed");
-        dialogs.EditImportDetailsResult = true;
-        await vm.EditImportDetailsCommand.ExecuteAsync(row);
-        Assert.Equal(2, dialogs.EditImportDetailsCalls.Count);
+        // Cancel: the card deactivates + nothing changed.
+        vm.ImportWorkflow.CancelBatchCommand.Execute(null);
+        Assert.False(vm.ImportWorkflow.IsActive);
+
+        // Save with a rename: the event reaches the parent, which reloads, so
+        // the row shows the edited name.
+        vm.EditImportDetailsCommand.Execute(row);
+        vm.ImportWorkflow.ModName = "DMF Renamed";
+        vm.ImportWorkflow.SaveEditCommand.Execute(null);
+
+        Assert.False(vm.ImportWorkflow.IsActive);
+        Assert.Equal("DMF Renamed", repo.Get(nexus.Id)!.Name);
         Assert.Equal("DMF Renamed", vm.Mods.Single(m => m.ContainerId == nexus.Id).Name);
     }
 
     [Fact]
-    public async Task EditImportDetails_is_a_noop_for_linked_null_and_morphed_rows()
+    public void EditImportDetails_is_a_noop_for_linked_null_and_morphed_rows()
     {
         var a = Profile("Alpha");
         var profiles = TestDoubles.Profiles(a);
@@ -2385,27 +2394,26 @@ public sealed class ModListViewModelTests
         profiles.WithMods(a.Id,
             new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
         var session = new FakeProfileSession { ActiveProfileId = a.Id };
-        var dialogs = new FakeDialogService();
         var queue = new FakeModDownloadQueue();
         var vm = TestDoubles.BuildModList(profiles, session, repo,
-            dialogs: dialogs, downloadQueue: queue, localization: Localization);
+            downloadQueue: queue, localization: Localization);
 
         var linkedRow = new ModItemViewModel(Localization, TestDoubles.RowContext(), Guid.NewGuid(), "Linked",
             new LinkedSource { ExternalPath = "/tmp/x" }, "", true, 0, ModVersionPolicy.Latest,
             Array.Empty<ModVersion>(), found: true);
-        await vm.EditImportDetailsCommand.ExecuteAsync(linkedRow);
-        await vm.EditImportDetailsCommand.ExecuteAsync(null);
-        Assert.Empty(dialogs.EditImportDetailsCalls);
+        vm.EditImportDetailsCommand.Execute(linkedRow);
+        vm.EditImportDetailsCommand.Execute(null);
+        Assert.False(vm.ImportWorkflow.IsActive);
 
         // A download-morphed row: a live queue item targeting the row's
-        // container morphs it in place; the edit action never offers.
+        // container morphs it in place; the edit never starts.
         var row = vm.Mods.Single(m => m.ContainerId == nexus.Id);
         queue.Enqueue(new ModDownloadRequest(
             "warhammer40kdarktide", 8, 100, DownloadPurpose.ProfileAdd,
             nexus.Id, "DMF", a.Id, a.Name));
         Assert.True(row.IsDownloadMorphed);
 
-        await vm.EditImportDetailsCommand.ExecuteAsync(row);
-        Assert.Empty(dialogs.EditImportDetailsCalls);
+        vm.EditImportDetailsCommand.Execute(row);
+        Assert.False(vm.ImportWorkflow.IsActive);
     }
 }

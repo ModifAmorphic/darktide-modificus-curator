@@ -10,52 +10,82 @@ using Modificus.Curator.UI.Session;
 namespace Modificus.Curator.UI.ViewModels;
 
 /// <summary>
-/// The focused, application-lifetime child VM behind the inline local-import
-/// card under the Mods toolbar. Owns the ordered batch of picked/dropped
-/// paths, the editing form for the current item, the three-state workflow
-/// (editing, processing, terminal failure), the per-item import orchestration,
-/// and the active-profile-change contract. Emits a narrow
-/// <see cref="ItemImported"/> event carrying the captured target profile id so
-/// the mod list can reload when relevant.
+/// The focused, application-lifetime child VM behind the inline import card
+/// under the Mods toolbar. Owns two exclusive modes over one editing form:
+/// the ordered batch import of picked/dropped paths (the per-item editing
+/// form, the three-state workflow, the per-item import orchestration) and the
+/// single-container edit mode (the universal correction surface for a mod's
+/// import details: name, source association, release tag, applied through
+/// <see cref="IModRepository.EditImportDetails"/>). Emits the narrow
+/// <see cref="ItemImported"/> event (carrying the captured target profile id)
+/// and <see cref="ImportDetailsEdited"/> (carrying the edited container id)
+/// so the mod list can reload when relevant.
 /// </summary>
 /// <remarks>
-/// <para><b>Focused child VM:</b> the import workflow is a distinct concern
-/// from the mod list itself, so it lives in its own VM rather than more members
-/// on the already large <see cref="ModListViewModel"/>. Constructed once
-/// (application-lifetime) and reused across batches; navigating away from Mods
-/// preserves an in-flight card because the VM is not tied to the view.</para>
+/// <para><b>Focused child VM:</b> the card is a distinct concern from the mod
+/// list itself, so it lives in its own VM rather than more members on the
+/// already large <see cref="ModListViewModel"/>. Constructed once
+/// (application-lifetime) and reused across batches + edits; navigating away
+/// from Mods preserves an in-flight card because the VM is not tied to the
+/// view.</para>
+/// <para><b>One form, two kinds:</b> batch + edit share the editing fields
+/// and their validation (the shared <see cref="ImportSourceValidator"/>), but
+/// never their lifecycle: a <c>WorkflowKind</c> flag selects the mode at
+/// activation and the batch-only members (the path queue, the current index,
+/// the processing hop, the terminal failure state) are unreachable in edit
+/// mode, whose save is synchronous and whose refusals surface inline while
+/// the form stays editable. The two modes are mutually exclusive: a batch
+/// cannot start while an edit is active and vice versa (both entries check
+/// the shared inactive gate first), and the card being active at all gates
+/// the Add button + drag-and-drop for either mode.</para>
+/// <para><b>Edit mode:</b> prefilled from the container's current facts
+/// (name, source choice, the bare mod id, the latest version's tag). The
+/// policy picker hides (policy is per-row, not import details); a FileId
+/// grounds what it grounds: any version's FileId disables the id + source
+/// fields (the identity lock), the latest record's own FileId additionally
+/// disables the version field (the tag lock), with the localized
+/// "downloaded from Nexus" hint; the name is always editable. A multi-version
+/// identity change swaps the form for an inline removal confirm (never a
+/// nested modal), with the save-time state refresh + the typed
+/// <see cref="RemovalConfirmationRequiredException"/> recover path covering a
+/// version landing while the card is open.</para>
 /// <para><b>States:</b> inactive (no card shown), editing (the current item's
-/// metadata form), processing (filesystem work in flight; all fields and
-/// actions disabled), and failure (a terminal inline error with a Close
-/// action). A second batch cannot start while the workflow is active.</para>
-/// <para><b>Cancellation boundary:</b> Cancel is available only while editing.
-/// Once Import is clicked, the current synchronous atomic backend operation
-/// finishes; there is no mid-extraction token. Darktide mods are normally too
-/// small for mid-extraction cancellation to be useful, and widening the
-/// synchronous backend contract for a token that is never honored in practice
-/// would be misleading.</para>
-/// <para><b>Profile capture:</b> a batch captures the active profile id at
-/// <see cref="StartBatch"/> time. If the active profile changes while editing
-/// or showing a failure, the workflow resets immediately. If it changes while
-/// an item is processing, the confirmed item finishes against the captured
-/// profile (an imported repository version must keep its profile reference and
-/// a confirmed item is never silently redirected), then the remaining queue is
-/// aborted and the workflow resets. A success or a failure (expected or
-/// unexpected) that lands after the active profile changed resets rather than
-/// showing a failure card or a pending indicator over the newly active
-/// profile.</para>
+/// metadata form), processing (batch filesystem work in flight; all fields
+/// and actions disabled), and failure (a terminal batch error with a Close
+/// action). A second batch or an edit cannot start while the card is
+/// active.</para>
+/// <para><b>Cancellation boundary:</b> Cancel is available only while
+/// editing. Once Import is clicked, the current synchronous atomic backend
+/// operation finishes; there is no mid-extraction token. Darktide mods are
+/// normally too small for mid-extraction cancellation to be useful, and
+/// widening the synchronous backend contract for a token that is never
+/// honored in practice would be misleading.</para>
+/// <para><b>Profile capture:</b> an activated card captures the active
+/// profile id at start. If the active profile changes while the card is
+/// editing or showing a failure, it resets immediately. If it changes while
+/// a batch item is processing, the confirmed item finishes against the
+/// captured profile (an imported repository version must keep its profile
+/// reference and a confirmed item is never silently redirected), then the
+/// remaining queue is aborted and the card resets. A success or a failure
+/// (expected or unexpected) that lands after the active profile changed
+/// resets rather than showing a failure card or a pending indicator over the
+/// newly active profile.</para>
 /// <para><b>Threads:</b> only the filesystem-heavy <c>GetBaseName</c> and
-/// <c>Import</c> calls run via <see cref="Task.Run"/>; the continuation resumes
-/// the captured UI context between them so <c>FindExistingContainer</c>,
-/// <c>GetBaseNameCollision</c>, the repository lookup, and the profile mutation
-/// (which carry a single-UI-thread assumption) never run on a worker. No
-/// <c>ConfigureAwait(false)</c>.</para>
-/// <para><b>Recovery:</b> every exception path after processing begins ends in
+/// <c>Import</c> calls run via <see cref="Task.Run"/>; the continuation
+/// resumes the captured UI context between them so <c>FindExistingContainer</c>,
+/// <c>GetBaseNameCollision</c>, the repository lookup, and the profile
+/// mutation (which carry a single-UI-thread assumption) never run on a
+/// worker. The edit-mode save is synchronous (manifest-level repository
+/// work). No <c>ConfigureAwait(false)</c>.</para>
+/// <para><b>Recovery:</b> every batch path after processing begins ends in
 /// editing (the next item), inactive (closed/reset), or failure. Expected
 /// import/validation failures and collisions show an inline failure card with
 /// the actionable detail; an unexpected exception from a dependency shows a
-/// generic inline message (technical details are logged, not exposed). No path
-/// strands processing or crashes through the command's calling context.</para>
+/// generic inline message (technical details are logged, not exposed). Edit
+/// refusals (the primitive's guards, the untracked-name conflict, disk
+/// failures) surface as inline edit failures with the form still editable;
+/// no path strands processing or crashes through a command's calling
+/// context.</para>
 /// </remarks>
 public partial class ImportWorkflowViewModel : LocalizedViewModel
 {
@@ -66,6 +96,7 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     private readonly ILogger<ImportWorkflowViewModel> _logger;
 
     private WorkflowState _state = WorkflowState.Inactive;
+    private WorkflowKind _kind = WorkflowKind.None;
     private IReadOnlyList<string> _paths = Array.Empty<string>();
     private int _currentIndex;
     private Guid? _capturedProfileId;
@@ -73,6 +104,41 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     // finishes against the captured profile, then the workflow resets instead
     // of advancing, and the new active profile is never marked pending.
     private bool _abortAfterCurrent;
+
+    // ---- edit-mode state (never touched by the batch path) ------------------
+    //
+    // The edit mode reuses the observable form fields above; these carry the
+    // container being edited + the grounding facts the field-locking reads.
+    // All of it is cleared by Reset() alongside the batch state, so an
+    // inactive card is mode-neutral.
+
+    /// <summary>The container being edited (null outside edit mode).</summary>
+    private Guid? _editContainerId;
+
+    /// <summary>The container's source at activation, for identity-change detection.</summary>
+    private ModSource _editOriginalSource = new UntrackedSource();
+
+    /// <summary>
+    /// The container's version count at the last refresh (activation + each
+    /// save attempt), driving the removal-confirm decision + its copy.
+    /// </summary>
+    private int _editVersionCount;
+
+    /// <summary>Whether ANY version carries a FileId (the identity lock).</summary>
+    private bool _editIdentityLocked;
+
+    /// <summary>Whether the LATEST record carries its own FileId (the tag lock).</summary>
+    private bool _editTagLocked;
+
+    /// <summary>The edit mode's stage (form vs. the inline removal confirm).</summary>
+    private EditStage _editStage = EditStage.Form;
+
+    /// <summary>
+    /// The raw failure detail of the last refused edit save, or null. The
+    /// localized <see cref="EditFailureMessage"/> derives from it on every
+    /// access so a culture change truly re-resolves it.
+    /// </summary>
+    private string? _editFailureDetail;
 
     /// <summary>
     /// Creates the workflow VM, inactive, and subscribes to the session (reset
@@ -115,55 +181,88 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     /// <summary>Internal lifecycle state driving the observable projections.</summary>
     private enum WorkflowState { Inactive, Editing, Processing, Failure }
 
+    /// <summary>
+    /// Which mode the active card is in: the batch import (the path queue +
+    /// per-item orchestration) or the single-container edit (the correction
+    /// surface). None while inactive. The modes share the editing fields but
+    /// never their lifecycle (see the class remarks).
+    /// </summary>
+    private enum WorkflowKind { None, Batch, Edit }
+
+    /// <summary>
+    /// The edit mode's two visibility-swapped stages: the editing form and
+    /// the inline identity-removal confirm (never a nested modal; the card is
+    /// a hosted view, not a window).
+    /// </summary>
+    private enum EditStage { Form, Confirm }
+
     // ---- observable editing fields -----------------------------------------
 
     /// <summary>
-    /// The mod name (editable; pre-filled from the folder/archive stem). The
+    /// The mod name (editable; pre-filled from the folder/archive stem in a
+    /// batch, from the container's display name in edit mode). The
     /// mod-store key and on-disk folder name; an edited name becomes the
-    /// canonical key (the import service upserts).
+    /// canonical key (the import service upserts; the edit primitive renames).
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanImport))]
     [NotifyCanExecuteChangedFor(nameof(ImportCurrentCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SaveEditCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ConfirmEditSaveCommand))]
     private string _modName = string.Empty;
 
     /// <summary>
     /// The chosen source. Drives which conditional fields show (Nexus: Version
     /// + URL; Untracked: nothing) and which validation applies. Defaults to
-    /// Nexus for each new item (most Darktide mods ship on Nexus).
+    /// Nexus for each new batch item (most Darktide mods ship on Nexus); an
+    /// edit starts from the container's current source.
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsRemote))]
     [NotifyPropertyChangedFor(nameof(IsVersionVisible))]
+    [NotifyPropertyChangedFor(nameof(IsPolicyVisible))]
     [NotifyPropertyChangedFor(nameof(SourceChoiceIndex))]
     [NotifyPropertyChangedFor(nameof(UrlLabel))]
     [NotifyPropertyChangedFor(nameof(UrlPlaceholder))]
     [NotifyPropertyChangedFor(nameof(CanImport))]
     [NotifyPropertyChangedFor(nameof(UrlValidationMessage))]
     [NotifyPropertyChangedFor(nameof(VersionValidationMessage))]
+    [NotifyPropertyChangedFor(nameof(RequiresIdentityConfirm))]
     [NotifyCanExecuteChangedFor(nameof(ImportCurrentCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SaveEditCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ConfirmEditSaveCommand))]
     private ImportSource _sourceChoice = ImportSource.Nexus;
 
     /// <summary>
     /// The raw release tag string (e.g. <c>"1.2"</c>). Required for Nexus (the
     /// user supplies the tag; the workflow does not fetch it from the remote);
-    /// recorded as empty for Untracked. Never parsed or normalized here.
+    /// recorded as empty for Untracked. Never parsed or normalized here. In
+    /// edit mode this is the latest version's tag; when the latest record
+    /// carries its own FileId the field is locked (the tag lock).
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanImport))]
     [NotifyPropertyChangedFor(nameof(IsVersionVisible))]
     [NotifyPropertyChangedFor(nameof(VersionValidationMessage))]
+    [NotifyPropertyChangedFor(nameof(RequiresIdentityConfirm))]
     [NotifyCanExecuteChangedFor(nameof(ImportCurrentCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SaveEditCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ConfirmEditSaveCommand))]
     private string _version = string.Empty;
 
     /// <summary>
     /// The remote source URL or bare mod id (shown for Nexus). Parsed to
-    /// canonical identity on confirm. Ignored for Untracked.
+    /// canonical identity on confirm. Ignored for Untracked. Edit mode
+    /// prefills the bare id form and locks the field when the identity is
+    /// FileId-grounded.
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanImport))]
     [NotifyPropertyChangedFor(nameof(UrlValidationMessage))]
+    [NotifyPropertyChangedFor(nameof(RequiresIdentityConfirm))]
     [NotifyCanExecuteChangedFor(nameof(ImportCurrentCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SaveEditCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ConfirmEditSaveCommand))]
     private string _url = string.Empty;
 
     /// <summary>
@@ -287,11 +386,157 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     /// Whether Import may be enabled. The mod name must be non-empty; a remote
     /// source additionally needs a non-empty Version + a URL that parses (the
     /// shared <see cref="ImportSourceValidator"/> rules). Untracked needs only
-    /// the name.
+    /// the name. The edit-mode Save uses the same conjunction: both modes
+    /// validate identically by design.
     /// </summary>
     public bool CanImport =>
         !string.IsNullOrWhiteSpace(ModName)
         && ImportSourceValidator.IsRemoteSourceValid(SourceChoice, Url ?? string.Empty, Version ?? string.Empty);
+
+    // ---- mode + edit-mode projections ---------------------------------------
+
+    /// <summary>
+    /// Whether the active card is in edit mode (the correction surface for one
+    /// container's import details) rather than a batch import. False while
+    /// inactive (the kind resets with the card).
+    /// </summary>
+    public bool IsEdit => _kind == WorkflowKind.Edit;
+
+    /// <summary>
+    /// Whether the edit mode is on its inline removal-confirm stage (the
+    /// visibility-swapped second step; the form hides while it shows).
+    /// </summary>
+    public bool IsEditConfirm => IsEdit && _editStage == EditStage.Confirm;
+
+    /// <summary>
+    /// Whether the edit mode's editing form is showing (vs. its confirm
+    /// stage). Drives the Save + Cancel buttons' visibility.
+    /// </summary>
+    public bool IsEditForm => IsEdit && !IsEditConfirm;
+
+    /// <summary>
+    /// Whether the batch editing form is showing (the per-item form + Cancel
+    /// batch + Import). Drives the batch buttons' visibility; always false in
+    /// edit mode.
+    /// </summary>
+    public bool IsBatchEditing => IsEditing && !IsEdit;
+
+    /// <summary>
+    /// Whether the editing form grid shows at all: not during the terminal
+    /// batch failure, and not while the edit mode's confirm stage owns the
+    /// card (the visibility swap).
+    /// </summary>
+    public bool IsFormVisible => !IsFailure && !IsEditConfirm;
+
+    /// <summary>
+    /// Whether the policy picker row shows: Nexus chosen AND batch mode. In
+    /// edit mode the picker hides (policy is a per-row profile setting, not
+    /// part of a container's import details).
+    /// </summary>
+    public bool IsPolicyVisible => IsRemote && !IsEdit;
+
+    /// <summary>
+    /// Whether the source ComboBox accepts input. Disabled in edit mode while
+    /// the container's identity is FileId-grounded (any version carries a
+    /// download fact); always enabled in batch mode.
+    /// </summary>
+    public bool IsSourceEditable => !IsEdit || !_editIdentityLocked;
+
+    /// <summary>
+    /// Whether the mod id/URL field accepts input. Locked like the source
+    /// switch when the identity is FileId-grounded; always enabled in batch
+    /// mode.
+    /// </summary>
+    public bool IsIdEditable => !IsEdit || !_editIdentityLocked;
+
+    /// <summary>
+    /// Whether the version field accepts input. Disabled in edit mode when the
+    /// LATEST version record carries its own FileId (the tag lock: Nexus
+    /// supplied that copy's version); always enabled in batch mode.
+    /// </summary>
+    public bool IsVersionEditable => !IsEdit || !_editTagLocked;
+
+    /// <summary>
+    /// The localized "downloaded from Nexus" hint shown in edit mode while the
+    /// identity is FileId-grounded (covering both grounded locks: the id is
+    /// fixed, and a version installed by that download keeps its tag). Empty
+    /// otherwise (batch mode included). Re-resolves on a culture change.
+    /// </summary>
+    public string FileIdLockHint => IsEdit && _editIdentityLocked
+        ? _localization["EditDetails_FileIdLockHint"]
+        : string.Empty;
+
+    /// <summary>
+    /// Whether the edit form's identity (the source record) differs from the
+    /// container's current one: a different Nexus id, or a Nexus/Untracked
+    /// swap in either direction. A rename or retag alone is not an identity
+    /// change.
+    /// </summary>
+    public bool IsEditIdentityChange
+    {
+        get
+        {
+            if (!IsEdit)
+            {
+                return false;
+            }
+
+            ModSource current;
+            if (SourceChoice == ImportSource.Untracked)
+            {
+                current = new UntrackedSource();
+            }
+            else if (!ImportSourceValidator.TryParseUrl(SourceChoice, Url ?? string.Empty, out var parsed))
+            {
+                // An unparsable id is not a saveable identity; treat it as a
+                // change so a locked multi-version confirm is never skipped on
+                // a technicality (CanImport blocks the save itself).
+                return true;
+            }
+            else
+            {
+                current = parsed;
+            }
+
+            return (_editOriginalSource, current) switch
+            {
+                (NexusSource a, NexusSource b) => a.ModId != b.ModId,
+                (UntrackedSource, UntrackedSource) => false,
+                _ => true,
+            };
+        }
+    }
+
+    /// <summary>
+    /// Whether saving the edit form requires the explicit removal confirm:
+    /// an identity change on a container with more than one version (the
+    /// older versions are claims about the old identity and are removed).
+    /// </summary>
+    public bool RequiresIdentityConfirm => IsEditIdentityChange && _editVersionCount > 1;
+
+    /// <summary>The localized title of the inline removal-confirm stage.</summary>
+    public string ConfirmTitle => _localization["EditDetails_ConfirmTitle"];
+
+    /// <summary>
+    /// The localized plain-language removal notice, formatted with the number
+    /// of older versions the identity change removes. Re-fires on the
+    /// save-time state refresh (a version landing while the card is open
+    /// changes the count).
+    /// </summary>
+    public string ConfirmMessage => _localization.Format(
+        "EditDetails_ConfirmMessage", Math.Max(0, _editVersionCount - 1));
+
+    /// <summary>
+    /// The localized inline failure of the last refused edit save: the framing
+    /// plus the actionable detail (the primitive's guards, the untracked-name
+    /// conflict, the disk failure families). Empty when the last attempt
+    /// succeeded or none ran; the form stays editable for correction. Re-fires
+    /// on a culture change (the detail is stored raw, the framing resolves
+    /// live).
+    /// </summary>
+    public string EditFailureMessage => _editFailureDetail is null
+        ? string.Empty
+        : _localization["EditDetails_FailedMessage"] + " " + _editFailureDetail;
 
     // ---- state projections -------------------------------------------------
 
@@ -334,13 +579,24 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
             : string.Empty;
 
     /// <summary>
-    /// The localized header text: "Import mod {current} of {total}". Empty when
+    /// The localized header text: "Edit import details" while the edit mode
+    /// owns the card, "Import mod {current} of {total}" in a batch. Empty when
     /// inactive. Re-resolves on a culture change.
     /// </summary>
-    public string HeaderText =>
-        _state == WorkflowState.Inactive
-            ? string.Empty
-            : _localization.Format("ImportWorkflow_Header", CurrentNumber, TotalCount);
+    public string HeaderText
+    {
+        get
+        {
+            if (_state == WorkflowState.Inactive)
+            {
+                return string.Empty;
+            }
+
+            return IsEdit
+                ? _localization["EditDetails_Title"]
+                : _localization.Format("ImportWorkflow_Header", CurrentNumber, TotalCount);
+        }
+    }
 
     /// <summary>
     /// The localized status text shown beside the progress bar while
@@ -390,16 +646,26 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     /// </summary>
     public event EventHandler<Guid>? ItemImported;
 
+    /// <summary>
+    /// Raised after a successful edit-mode save, carrying the edited container
+    /// id. The mod list reloads from it (the container's name, source, and
+    /// version can all have changed). Narrow by design, the
+    /// <see cref="ItemImported"/> shape: a notification, not a lifecycle
+    /// interface.
+    /// </summary>
+    public event EventHandler<Guid>? ImportDetailsEdited;
+
     // ---- start batch -------------------------------------------------------
 
     /// <summary>
     /// Starts a new batch from the picker/drop paths. Captures an ordered copy
     /// of the paths and the active profile id, loads the first item into the
-    /// editing form, and transitions to editing. Rejects (no-op) a second batch
-    /// while the workflow is active (the view gates the Add button and drop
-    /// acceptance, but the VM repeats the gate so a programmatic call or a
-    /// late-returning picker cannot start a second batch). No-op with no active
-    /// profile or an empty path list.
+    /// editing form, and transitions to editing. Rejects (no-op) a second
+    /// activation while the card is active (a batch, an edit, a processing
+    /// item, or a failure; the view gates the Add button and drop acceptance,
+    /// but the VM repeats the gate so a programmatic call or a late-returning
+    /// picker cannot start over an active card). No-op with no active profile
+    /// or an empty path list.
     /// </summary>
     [RelayCommand]
     private void StartBatch(IReadOnlyList<string>? paths)
@@ -425,7 +691,276 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
         _currentIndex = 0;
         _capturedProfileId = profileId;
         _abortAfterCurrent = false;
+        _kind = WorkflowKind.Batch;
         LoadCurrentItem();
+    }
+
+    // ---- edit mode (the correction surface) ---------------------------------
+
+    /// <summary>
+    /// Starts an edit of one container's import details: the card activates in
+    /// place, prefilled from the container's current facts (name, source
+    /// choice, the bare mod id when Nexus, the latest version's tag), with the
+    /// grounding locks read once (the save path re-reads them). Rejects
+    /// (no-op) another activation while the card is active (a batch in any
+    /// state or an edit already open), for an unknown or linked container (a
+    /// linked container's identity is its external path and is never edited),
+    /// or with no active profile (the edited row lives in one). The parent's
+    /// row command keeps its own linked/morphed guards; this gate is defense
+    /// in depth.
+    /// </summary>
+    [RelayCommand]
+    private void StartEdit(Guid? containerId)
+    {
+        if (_state != WorkflowState.Inactive)
+        {
+            _logger.LogWarning(
+                "Edit start rejected: the import card is already active ({State}).", _state);
+            return;
+        }
+
+        if (containerId is not Guid id)
+        {
+            return;
+        }
+
+        if (_session.ActiveProfileId is not Guid profileId)
+        {
+            _logger.LogWarning("Edit start rejected: no active profile.");
+            return;
+        }
+
+        var container = _repo.Get(id);
+        if (container is null || container.Source is LinkedSource)
+        {
+            _logger.LogWarning("Edit start rejected: container {Id} is missing or linked.", id);
+            return;
+        }
+
+        _kind = WorkflowKind.Edit;
+        _editContainerId = id;
+        _capturedProfileId = profileId;
+        _editStage = EditStage.Form;
+        _editFailureDetail = null;
+        RefreshEditState(container);
+
+        // Prefill the shared form. Source first (switching to Untracked
+        // clears Version), then the tag; the URL field carries the bare id
+        // form, not the URL.
+        ModName = container.Name;
+        SourceChoice = container.Source is NexusSource nexus
+            ? ImportSource.Nexus
+            : ImportSource.Untracked;
+        Url = container.Source is NexusSource n ? n.ModId.ToString() : string.Empty;
+        Version = container.Versions.FirstOrDefault(v => v.IsLatest)?.VersionString ?? string.Empty;
+        PolicyChoice = ImportPolicyChoice.Latest;
+        SetState(WorkflowState.Editing);
+        _logger.LogInformation("Started editing the import details of container {Id}.", id);
+    }
+
+    /// <summary>
+    /// Re-reads the container's grounding facts (version count, the identity
+    /// lock, the latest record's tag lock) so the confirm decision, its copy,
+    /// and the field locks reflect the live container rather than the
+    /// activation-time snapshot (a download for this container completing
+    /// while the card is open adds a version the snapshot never saw).
+    /// </summary>
+    private void RefreshEditState()
+    {
+        if (_editContainerId is not Guid id || _repo.Get(id) is not { } container)
+        {
+            // A vanished container surfaces through the save (ContainerGone);
+            // the projections keep their last values.
+            return;
+        }
+
+        RefreshEditState(container);
+    }
+
+    /// <summary>Applies a freshly read container's grounding facts.</summary>
+    private void RefreshEditState(ModContainer container)
+    {
+        _editOriginalSource = container.Source;
+        _editVersionCount = container.Versions.Count;
+        _editIdentityLocked = container.Versions.Any(v => v.FileId is not null);
+        _editTagLocked = container.Versions.FirstOrDefault(v => v.IsLatest)?.FileId is not null;
+        OnPropertyChanged(nameof(ConfirmMessage));
+        OnPropertyChanged(nameof(RequiresIdentityConfirm));
+        OnPropertyChanged(nameof(IsSourceEditable));
+        OnPropertyChanged(nameof(IsIdEditable));
+        OnPropertyChanged(nameof(IsVersionEditable));
+        OnPropertyChanged(nameof(FileIdLockHint));
+    }
+
+    /// <summary>
+    /// Save (edit mode). When the fields require the removal confirm (an
+    /// identity change on a multi-version container) the first click swaps the
+    /// form for the inline confirm panel instead of applying; the confirm
+    /// decision re-reads the live container first (a version may have landed
+    /// while the card was open). No-op when the fields are invalid
+    /// (<see cref="CanImport"/>).
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanSaveEdit))]
+    private void SaveEdit()
+    {
+        if (!IsEditForm || !CanImport)
+        {
+            return;
+        }
+
+        RefreshEditState();
+
+        if (RequiresIdentityConfirm && _editStage == EditStage.Form)
+        {
+            _editStage = EditStage.Confirm;
+            FireEditStage();
+            return;
+        }
+
+        // A single-version identity change removes nothing (there are no
+        // older versions), so the confirm flag stays false on this path.
+        ApplyEdit(removeOlderVersions: _editStage == EditStage.Confirm && RequiresIdentityConfirm);
+    }
+
+    private bool CanSaveEdit => IsEditForm && CanImport;
+
+    /// <summary>
+    /// The confirm panel's explicit proceed: applies the save with
+    /// older-version removal (the plain-language notice was shown + acted on).
+    /// No-op when the fields are invalid.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanConfirmEditSave))]
+    private void ConfirmEditSave()
+    {
+        if (!IsEditConfirm || !CanImport)
+        {
+            return;
+        }
+
+        ApplyEdit(removeOlderVersions: true);
+    }
+
+    private bool CanConfirmEditSave => IsEditConfirm && CanImport;
+
+    /// <summary>Back from the confirm panel to the editing form (no save).</summary>
+    [RelayCommand]
+    private void BackFromEditConfirm()
+    {
+        if (!IsEditConfirm)
+        {
+            return;
+        }
+
+        _editStage = EditStage.Form;
+        FireEditStage();
+    }
+
+    /// <summary>
+    /// Applies the edited facts through the repository primitive. Builds the
+    /// canonical source from the validated fields (Untracked records an empty
+    /// tag; Nexus parses the id/URL), calls
+    /// <see cref="IModRepository.EditImportDetails"/>, and on success resets
+    /// the card + raises <see cref="ImportDetailsEdited"/> so the mod list
+    /// reloads. Refused saves surface as the inline edit failure with the form
+    /// still editable: the primitive's guards, the untracked-name conflict
+    /// check, and the disk failure families (<see cref="IOException"/>,
+    /// <see cref="UnauthorizedAccessException"/>; a full disk or an AV lock
+    /// mid-save) are all caught the same way, never a crash through the
+    /// command's calling context. The typed
+    /// <see cref="RemovalConfirmationRequiredException"/> recover path swaps
+    /// to the confirm stage over re-read state (the read-to-call race of the
+    /// save-time refresh).
+    /// </summary>
+    private void ApplyEdit(bool removeOlderVersions)
+    {
+        if (_editContainerId is not Guid containerId)
+        {
+            return;
+        }
+
+        _editFailureDetail = null;
+        OnPropertyChanged(nameof(EditFailureMessage));
+
+        ModSource source;
+        string tag;
+        if (SourceChoice == ImportSource.Untracked)
+        {
+            source = new UntrackedSource();
+            tag = string.Empty;
+        }
+        else
+        {
+            ImportSourceValidator.TryParseUrl(SourceChoice, Url ?? string.Empty, out source);
+            tag = (Version ?? string.Empty).Trim();
+        }
+
+        var name = (ModName ?? string.Empty).Trim();
+
+        // The untracked-name dedupe index is the identity for untracked
+        // containers: saving under another untracked container's exact name
+        // would silently shadow it in the index (later folder imports of that
+        // mod would dedupe onto this one). Refuse inline.
+        if (source is UntrackedSource
+            && _repo.FindUntrackedByName(name)?.Id is { } conflicting
+            && conflicting != containerId)
+        {
+            _editFailureDetail = _localization.Format("EditDetails_UntrackedNameConflict", name);
+            OnPropertyChanged(nameof(EditFailureMessage));
+            return;
+        }
+
+        try
+        {
+            var updated = _repo.EditImportDetails(
+                containerId, name, source, tag, removeOlderVersions);
+            if (updated is null)
+            {
+                // The container vanished between opening the card + saving.
+                _editFailureDetail = _localization["EditDetails_ContainerGone"];
+                OnPropertyChanged(nameof(EditFailureMessage));
+                return;
+            }
+        }
+        catch (RemovalConfirmationRequiredException)
+        {
+            // The version count went stale between the save-time refresh and
+            // the primitive (a download for this container landed mid-save):
+            // recover onto the confirm step over the fresh state instead of a
+            // terminal inline failure the user cannot act on.
+            RefreshEditState();
+            _editStage = EditStage.Confirm;
+            FireEditStage();
+            return;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException
+            or IOException or UnauthorizedAccessException)
+        {
+            // A refused or failed save (the guards' messages are
+            // user-actionable; the IO failures are transient disk state): show
+            // the localized framing + the detail inline; the card stays open
+            // for correction or cancel.
+            _editFailureDetail = ex.Message;
+            OnPropertyChanged(nameof(EditFailureMessage));
+            return;
+        }
+
+        Reset();
+        _logger.LogInformation(
+            "Edited the import details of container {Id}.", containerId);
+        ImportDetailsEdited?.Invoke(this, containerId);
+    }
+
+    /// <summary>
+    /// Re-fires the stage-driven projections + the edit commands' CanExecute
+    /// after an edit-stage transition (the visibility swap).
+    /// </summary>
+    private void FireEditStage()
+    {
+        OnPropertyChanged(nameof(IsEditConfirm));
+        OnPropertyChanged(nameof(IsEditForm));
+        OnPropertyChanged(nameof(IsFormVisible));
+        SaveEditCommand.NotifyCanExecuteChanged();
+        ConfirmEditSaveCommand.NotifyCanExecuteChanged();
     }
 
     // ---- import current ----------------------------------------------------
@@ -672,8 +1207,9 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
 
     /// <summary>
     /// Culture changed: re-fire the localized derived strings (header, status,
-    /// URL label/placeholder, validation messages, failure message) without
-    /// mutating the editing fields or the queue position.
+    /// URL label/placeholder, validation messages, failure messages, the edit
+    /// mode's hint + confirm copy) without mutating the editing fields or the
+    /// queue position.
     /// </summary>
     protected override IReadOnlyList<string> LocalizedProperties { get; } = new[]
     {
@@ -684,15 +1220,34 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
         nameof(UrlValidationMessage),
         nameof(VersionValidationMessage),
         nameof(FailureMessage),
+        nameof(FileIdLockHint),
+        nameof(ConfirmTitle),
+        nameof(ConfirmMessage),
+        nameof(EditFailureMessage),
     };
 
     // ---- helpers -----------------------------------------------------------
 
     /// <summary>
+    /// Switching to Untracked clears the version field in either mode: an
+    /// untracked mod carries no release tag (the field is hidden + the save
+    /// records the empty tag), and ImportCurrentAsync forces the empty tag for
+    /// Untracked regardless, so clearing is consistency, not behavior change.
+    /// </summary>
+    partial void OnSourceChoiceChanged(ImportSource value)
+    {
+        if (value == ImportSource.Untracked)
+        {
+            Version = string.Empty;
+        }
+    }
+
+    /// <summary>
     /// Loads the current path into the editing form with fresh defaults (the
     /// derived name, Nexus, empty Version/URL, Latest) and transitions to
     /// editing. Called from <see cref="StartBatch"/> (first item) and
-    /// <see cref="AdvanceOrClose"/> (next item).
+    /// <see cref="AdvanceOrClose"/> (next item); the mode flag is Batch by the
+    /// time this runs.
     /// </summary>
     private void LoadCurrentItem()
     {
@@ -723,10 +1278,12 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     }
 
     /// <summary>
-    /// Resets the workflow to inactive: clears the paths, index, capture, and
-    /// abort flag, and re-fires all state projections. Editing fields are left
-    /// as-is (the card is hidden), so the next batch resets them in
-    /// <see cref="LoadCurrentItem"/>.
+    /// Resets the card to inactive: clears the batch state (paths, index,
+    /// capture, abort flag), the edit state (container, grounding facts,
+    /// stage, failure detail), and the mode flag, then re-fires all state
+    /// projections. Editing fields are left as-is (the card is hidden), so the
+    /// next activation prefills them (batch in <see cref="LoadCurrentItem"/>,
+    /// edit in <see cref="StartEdit"/>).
     /// </summary>
     private void Reset()
     {
@@ -735,15 +1292,24 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
         _capturedProfileId = null;
         _abortAfterCurrent = false;
         _failure = null;
+        _kind = WorkflowKind.None;
+        _editContainerId = null;
+        _editOriginalSource = new UntrackedSource();
+        _editVersionCount = 0;
+        _editIdentityLocked = false;
+        _editTagLocked = false;
+        _editStage = EditStage.Form;
+        _editFailureDetail = null;
         SetState(WorkflowState.Inactive);
     }
 
     /// <summary>
-    /// Sets the state and re-fires the state projections, the current-item info
-    /// (position/path/header), and the commands' CanExecute so the view and any
-    /// programmatic caller reflect the new state at once. Also re-fires
-    /// <see cref="FailureMessage"/> so the derived getter re-reads the
-    /// descriptor after it changes.
+    /// Sets the state and re-fires the state projections, the mode/stage
+    /// projections, the current-item info (position/path/header), and the
+    /// commands' CanExecute so the view and any programmatic caller reflect
+    /// the new state at once. Also re-fires <see cref="FailureMessage"/> and
+    /// <see cref="EditFailureMessage"/> so the derived getters re-read their
+    /// descriptors after they change.
     /// </summary>
     private void SetState(WorkflowState newState)
     {
@@ -752,14 +1318,27 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
         OnPropertyChanged(nameof(IsEditing));
         OnPropertyChanged(nameof(IsProcessing));
         OnPropertyChanged(nameof(IsFailure));
+        OnPropertyChanged(nameof(IsEdit));
+        OnPropertyChanged(nameof(IsEditConfirm));
+        OnPropertyChanged(nameof(IsEditForm));
+        OnPropertyChanged(nameof(IsBatchEditing));
+        OnPropertyChanged(nameof(IsFormVisible));
+        OnPropertyChanged(nameof(IsPolicyVisible));
+        OnPropertyChanged(nameof(IsSourceEditable));
+        OnPropertyChanged(nameof(IsIdEditable));
+        OnPropertyChanged(nameof(IsVersionEditable));
+        OnPropertyChanged(nameof(FileIdLockHint));
         OnPropertyChanged(nameof(CurrentNumber));
         OnPropertyChanged(nameof(TotalCount));
         OnPropertyChanged(nameof(CurrentPath));
         OnPropertyChanged(nameof(HeaderText));
         OnPropertyChanged(nameof(FailureMessage));
+        OnPropertyChanged(nameof(EditFailureMessage));
         ImportCurrentCommand.NotifyCanExecuteChanged();
         CancelBatchCommand.NotifyCanExecuteChanged();
         CloseFailureCommand.NotifyCanExecuteChanged();
+        SaveEditCommand.NotifyCanExecuteChanged();
+        ConfirmEditSaveCommand.NotifyCanExecuteChanged();
     }
 
     // ---- failure recording -------------------------------------------------
