@@ -1146,9 +1146,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         identity + tag with no remote facts, Nexus->Untracked
                         or a Nexus id change resets remote claims + keeps only
                         the latest version's local facts behind an explicit
-                        removeOlderVersions confirm flag, a FileId on any
+                        removeOlderVersions confirm flag (refused with the
+                        typed RemovalConfirmationRequiredException, an
+                        InvalidOperationException subclass), a FileId on any
                         version locks the identity, a duplicate Nexus identity
-                        is rejected, untracked-name + source indexes stay
+                        + a non-empty tag with an Untracked destination are
+                        rejected, untracked-name + source indexes stay
                         coherent, + the container Id never moves so every
                         profile reference survives), PruneUnreferenced
                         GC at startup, keeping a referenced linked container by

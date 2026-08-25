@@ -204,18 +204,22 @@ public interface IModRepository
     /// identity) and REMOVES every older version (manifest entry + on-disk
     /// folder). Because removal destroys data, a multi-version identity change
     /// requires <paramref name="removeOlderVersions"/> = <c>true</c>; with
-    /// <c>false</c> it throws <see cref="InvalidOperationException"/> so the
-    /// primitive can never silently destroy versions. The caller owns the
-    /// confirm (the dialog shows an explicit removal notice before passing
-    /// <c>true</c>).</para>
+    /// <c>false</c> it throws
+    /// <see cref="RemovalConfirmationRequiredException"/> (an
+    /// <see cref="InvalidOperationException"/> subclass, catchable
+    /// specifically) so the primitive can never silently destroy versions.
+    /// The caller owns the confirm (the dialog shows an explicit removal
+    /// notice before passing <c>true</c>).</para>
     /// <para>
     /// <b>Retag:</b> a same-identity edit retags only the latest version
     /// record. <paramref name="versionTag"/> may be empty ONLY for the
     /// programmatic association path (an empty tag marks the derived
     /// version-unknown state); the edit dialog always passes non-empty when
     /// saving as Nexus, and empty when saving as Untracked (a single-version
-    /// identity change to Untracked clears the tag). A tag colliding with
-    /// another surviving version's tag on the same container throws
+    /// identity change to Untracked clears the tag; a non-empty tag with an
+    /// Untracked destination is rejected, since an untracked container is
+    /// single-version by construction). A tag colliding with another
+    /// surviving version's tag on the same container throws
     /// <see cref="InvalidOperationException"/> (the same upsert-key conflict
     /// <see cref="AddVersion"/> would hit).</para>
     /// <para>
@@ -236,7 +240,8 @@ public interface IModRepository
     /// <see cref="LinkedSource"/> is rejected).</param>
     /// <param name="versionTag">The release tag to record on the latest
     /// version. Empty is valid only for the programmatic association path
-    /// (Nexus) and the Untracked destination.</param>
+    /// (Nexus) and required for the Untracked destination; a non-empty tag
+    /// with an Untracked destination throws.</param>
     /// <param name="removeOlderVersions">Whether a multi-version identity
     /// change may remove the older versions. Ignored unless the identity
     /// changes; required <c>true</c> then when more than one version
@@ -244,14 +249,16 @@ public interface IModRepository
     /// <returns>The updated container, or <c>null</c> when the container id is
     /// unknown (mirroring <see cref="RenameContainer"/>).</returns>
     /// <exception cref="ArgumentException"><paramref name="name"/> is null or
-    /// whitespace, or <paramref name="source"/> is a
-    /// <see cref="LinkedSource"/>.</exception>
+    /// whitespace, <paramref name="source"/> is a
+    /// <see cref="LinkedSource"/>, or <paramref name="versionTag"/> is
+    /// non-empty with an Untracked destination.</exception>
+    /// <exception cref="RemovalConfirmationRequiredException">An identity
+    /// change on a multi-version container was made without
+    /// <paramref name="removeOlderVersions"/>.</exception>
     /// <exception cref="InvalidOperationException">An identity change is
-    /// blocked by the FileId lock; a multi-version identity change was made
-    /// without <paramref name="removeOlderVersions"/>; the new tag collides
-    /// with another surviving version's tag; the target container is linked;
-    /// or another container already carries the new Nexus
-    /// identity.</exception>
+    /// blocked by the FileId lock; the new tag collides with another
+    /// surviving version's tag; the target container is linked; or another
+    /// container already carries the new Nexus identity.</exception>
     ModContainer? EditImportDetails(
         Guid containerId,
         string name,

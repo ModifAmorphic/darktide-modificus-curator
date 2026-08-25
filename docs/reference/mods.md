@@ -37,7 +37,7 @@ public interface IModRepository
     ModContainer AddVersion(Guid containerId, string versionString, Action<string> populateFolder, DateTimeOffset? remoteUploadedAt = null, int? remoteFileId = null, ModDisplayMetadata? displayMetadata = null);
     bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata);   // atomic missing-only initialization
     ModContainer? RenameContainer(Guid containerId, string newName);   // display label only; Id unchanged, directory does not move
-    ModContainer? EditImportDetails(Guid containerId, string name, ModSource source, string versionTag, bool removeOlderVersions);  // name + source + latest-tag correction; FileId-locked, confirm-gated
+    ModContainer? EditImportDetails(Guid containerId, string name, ModSource source, string versionTag, bool removeOlderVersions);  // name + source + latest-tag correction; FileId-locked, confirm-gated (RemovalConfirmationRequiredException)
     void RemoveVersion(Guid containerId, string versionFolder);
     void PruneUnreferenced(IReadOnlySet<(Guid ContainerId, string VersionFolder)> referenced);
     string GetVersionFolderPath(Guid containerId, string versionFolder);  // derived, never stored
@@ -141,20 +141,25 @@ public interface IModRepository
     local facts (folder + `ImportedAt`; the tag, `FileId`, and
     `RemoteUploadedAt` are reset for the new identity) and REMOVES every
     older version (manifest entry + folder). A multi-version identity change
-    requires `removeOlderVersions = true` or it throws (the primitive never
-    silently destroys versions; the caller owns the confirm). The initial
-    Untracked to Nexus association touches nothing but the tag: prior
-    version facts stay as they were.
+    requires `removeOlderVersions = true` or it throws
+    `RemovalConfirmationRequiredException` (an `InvalidOperationException`
+    subclass, catchable specifically so programmatic callers can recover onto
+    a confirm flow); the primitive never silently destroys versions, and the
+    caller owns the confirm. The initial Untracked to Nexus association
+    touches nothing but the tag: prior version facts stay as they were.
   - **Retag**: a same-identity edit retags only the latest version record,
     with no removal on a multi-version container. `versionTag` may be empty
     only for the programmatic association path (an empty tag is the derived
     version-unknown state); the edit dialog always passes non-empty when
-    saving as Nexus, empty when saving as Untracked. A tag colliding with
-    another surviving version's tag throws (the `AddVersion` upsert-key
-    conflict).
-  - **Guards**: a `LinkedSource` argument or a linked target container
-    throws; a Nexus identity another container already carries throws (one
-    container per `(source, identity)`); a null/whitespace name throws
+    saving as Nexus, empty when saving as Untracked. A non-empty tag with an
+    Untracked destination throws `ArgumentException` (an untracked container
+    is single-version by construction: the empty tag is the upsert key
+    re-imports dedupe onto). A tag colliding with another surviving version's
+    tag throws (the `AddVersion` upsert-key conflict).
+  - **Guards**: a `LinkedSource` argument, a linked target container, or a
+    non-empty tag with an Untracked destination throw `ArgumentException`; a
+    Nexus identity another container already carries throws (one container
+    per `(source, identity)`); a null/whitespace name throws
     `ArgumentException`.
   - Surviving versions' folders never move, so pins onto them stay valid;
     pins onto removed versions degrade to the existing staging

@@ -288,13 +288,58 @@ public sealed class EditImportDetailsTests
     // ---- the identity reset ------------------------------------------------------
 
     [Fact]
+    public void A_non_empty_tag_with_an_untracked_destination_throws()
+    {
+        // An untracked container is single-version by construction (the empty
+        // tag is the upsert key re-imports dedupe onto); a non-empty tag would
+        // fabricate a version record that contract cannot hold.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new UntrackedSource(), "WT");
+        fx.Repo.AddVersion(container.Id, "", EmptyPopulate);
+
+        Assert.Throws<ArgumentException>(() => fx.Repo.EditImportDetails(
+            container.Id, "WT", new UntrackedSource(), "1.0", removeOlderVersions: false));
+    }
+
+    [Fact]
+    public void A_zero_version_container_edits_name_and_source_with_no_version_records()
+    {
+        // The latest-is-null branch: a container created but never given a
+        // version edits its name + source cleanly; the tag has no version
+        // record to land on and none is fabricated.
+        using var fx = new RepoFixture();
+        var nexus = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
+        var untracked = fx.Repo.CreateContainer(new UntrackedSource(), "Local");
+
+        var updatedNexus = fx.Repo.EditImportDetails(
+            nexus.Id, "Renamed", new NexusSource { ModId = 9 }, "1.0",
+            removeOlderVersions: false);
+        var updatedUntracked = fx.Repo.EditImportDetails(
+            untracked.Id, "Local Renamed", new UntrackedSource(), "",
+            removeOlderVersions: false);
+
+        Assert.NotNull(updatedNexus);
+        Assert.Empty(updatedNexus!.Versions);
+        Assert.Equal("Renamed", updatedNexus.Name);
+        Assert.Equal(9, Assert.IsType<NexusSource>(updatedNexus.Source).ModId);
+        Assert.NotNull(updatedUntracked);
+        Assert.Empty(updatedUntracked!.Versions);
+        Assert.Equal("Local Renamed", updatedUntracked.Name);
+        Assert.Null(fx.Repo.FindUntrackedByName("Local"));
+        Assert.Equal(untracked.Id, fx.Repo.FindUntrackedByName("Local Renamed")!.Id);
+    }
+
+    [Fact]
     public void Identity_change_on_a_multi_version_container_requires_the_flag()
     {
         using var fx = new RepoFixture();
         var container = SeedNexus(fx, "1.0");
         fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, NewStamp);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => fx.Repo.EditImportDetails(
+        // The typed guard: catchable specifically by programmatic callers
+        // that want to recover onto a confirm flow (it derives from
+        // InvalidOperationException, so coarse catches keep working).
+        var ex = Assert.Throws<RemovalConfirmationRequiredException>(() => fx.Repo.EditImportDetails(
             container.Id, "WT", new NexusSource { ModId = 9 }, "9.1",
             removeOlderVersions: false));
         Assert.Contains("older versions", ex.Message);
@@ -373,7 +418,7 @@ public sealed class EditImportDetailsTests
         var head = fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, NewStamp);
         var headFolder = head.Versions.Single(v => v.VersionString == "2.0").Folder;
 
-        Assert.Throws<InvalidOperationException>(() => fx.Repo.EditImportDetails(
+        Assert.Throws<RemovalConfirmationRequiredException>(() => fx.Repo.EditImportDetails(
             container.Id, "WT", new UntrackedSource(), "", removeOlderVersions: false));
 
         var updated = fx.Repo.EditImportDetails(

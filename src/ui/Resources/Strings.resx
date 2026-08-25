@@ -746,8 +746,12 @@
     <comment>Caution title of the edit-import-details modal's inline removal confirm, shown before an identity change on a multi-version container.</comment>
   </data>
   <data name="EditDetails_ConfirmMessage" xml:space="preserve">
-    <value>Changing the mod id removes the {0} older version(s) of this mod. The current version's files are kept.</value>
-    <comment>Body of the edit-import-details modal's inline removal confirm. {0} is the number of older versions the identity change removes.</comment>
+    <value>Changing this mod's identity removes the {0} older version(s) of this mod. The current version's files are kept.</value>
+    <comment>Body of the edit-import-details modal's inline removal confirm, shown before an identity change on a multi-version container (a different mod id, or switching to Untracked). {0} is the number of older versions removed.</comment>
+  </data>
+  <data name="EditDetails_UntrackedNameConflict" xml:space="preserve">
+    <value>Another local mod already uses the name '{0}'.</value>
+    <comment>Inline failure in the edit-import-details modal when saving as Untracked under a name another untracked container already holds (the untracked-name dedupe index would silently shadow it). {0} is the typed name.</comment>
   </data>
   <data name="EditDetails_FailedMessage" xml:space="preserve">
     <value>The changes were not saved.</value>

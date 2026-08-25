@@ -1,3 +1,4 @@
+using System.IO;
 using Modificus.Curator.Mods;
 using Modificus.Curator.UI.Dialogs;
 using Modificus.Curator.UI.Localization;
@@ -277,6 +278,145 @@ public sealed class EditImportDetailsViewModelTests
     }
 
     // ---- failure surfacing --------------------------------------------------------
+
+    [Fact]
+    public void A_disk_failure_mid_save_surfaces_inline_instead_of_crashing()
+    {
+        // The primitive's disk work (manifest write, directory creation, the
+        // recursive folder deletion in the identity reset) can fail outside
+        // the guard families: a full disk or an AV lock mid-save must land on
+        // the inline failure, never terminate the app with the modal open.
+        var (vm, repo, container) = Build();
+        repo.EditImportDetailsThrows = new IOException("disk full");
+        vm.Name = "WT Fixed";
+
+        vm.SaveCommand.Execute(null);
+
+        Assert.False(vm.Result);
+        Assert.Contains("disk full", vm.FailureMessage);
+        // Nothing applied: the container keeps its name.
+        Assert.Equal("WT", repo.Get(container.Id)!.Name);
+
+        // The dialog stays usable: clearing the disk fault + saving again
+        // succeeds.
+        repo.EditImportDetailsThrows = null;
+        vm.SaveCommand.Execute(null);
+        Assert.True(vm.Result);
+        Assert.Equal("WT Fixed", repo.Get(container.Id)!.Name);
+    }
+
+    [Fact]
+    public void A_version_added_while_the_dialog_is_open_recovers_onto_the_confirm_step()
+    {
+        // The construction-time count goes stale when a download for the same
+        // container completes while the dialog is open: the save-time re-read
+        // sees the second version, so the save swaps to the removal confirm
+        // instead of applying a silent removal (or dead-ending on the guard).
+        var repo = RepoWithNexus();
+        var container = repo.List().First();
+        var vm = new EditImportDetailsViewModel(repo.Get(container.Id)!, repo, new LocalizationService());
+        vm.Url = "9";
+        vm.Version = "9.1";
+        Assert.False(vm.RequiresIdentityConfirm);
+
+        // The completed download lands a second version behind the dialog.
+        repo.AddVersion(container.Id, "2.0", _ => { },
+            new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero));
+
+        vm.SaveCommand.Execute(null);
+
+        Assert.True(vm.IsConfirmStep);
+        Assert.False(vm.Result);
+        Assert.Empty(vm.FailureMessage);
+        Assert.Contains("1", vm.ConfirmMessage); // one older version removed
+
+        vm.ConfirmSaveCommand.Execute(null);
+
+        Assert.True(vm.Result);
+        var updated = repo.Get(container.Id)!;
+        Assert.Equal(9, Assert.IsType<NexusSource>(updated.Source).ModId);
+        Assert.Equal("9.1", Assert.Single(updated.Versions).VersionString);
+    }
+
+    [Fact]
+    public void The_confirm_guard_thrown_mid_save_swaps_to_the_confirm_step()
+    {
+        // The save-time re-read closes the practical window; the typed guard
+        // catch covers the read-to-call race. A refusal with that specific
+        // guard recovers onto the confirm step (re-reading the container), not
+        // a terminal inline failure the user can only cancel out of.
+        var (vm, repo, _) = Build();
+        vm.Url = "9";
+        vm.Version = "9.1";
+        repo.EditImportDetailsThrows = new RemovalConfirmationRequiredException(
+            "Changing this mod's identity removes the older versions; the caller must confirm.");
+
+        vm.SaveCommand.Execute(null);
+
+        Assert.True(vm.IsConfirmStep);
+        Assert.Empty(vm.FailureMessage);
+        Assert.False(vm.Result);
+
+        repo.EditImportDetailsThrows = null;
+        vm.ConfirmSaveCommand.Execute(null);
+        Assert.True(vm.Result);
+    }
+
+    [Fact]
+    public void Saving_as_untracked_under_another_untracked_name_is_refused_inline()
+    {
+        // First UI-reachable duplicate-untracked-name path: renaming onto
+        // another untracked container's exact name would silently shadow the
+        // dedupe index (later folder imports of that mod dedupe onto this
+        // one), so the save is refused with an inline localized message.
+        var (vm, repo, container) = Build();
+        var other = repo.CreateContainer(new UntrackedSource(), "Taken");
+        vm.SourceChoice = ImportSource.Untracked;
+        vm.Name = "Taken";
+
+        vm.SaveCommand.Execute(null);
+
+        Assert.False(vm.Result);
+        Assert.Contains("Taken", vm.FailureMessage);
+        Assert.Contains(
+            Localization.Format("EditDetails_UntrackedNameConflict", "Taken"),
+            vm.FailureMessage);
+        // Nothing applied: the container keeps its name + Nexus source, and
+        // the other container still owns the name.
+        var unchanged = repo.Get(container.Id)!;
+        Assert.Equal("WT", unchanged.Name);
+        Assert.IsType<NexusSource>(unchanged.Source);
+        Assert.Equal(other.Id, repo.FindUntrackedByName("Taken")!.Id);
+
+        // Correctable: a free name saves.
+        vm.Name = "Free";
+        vm.SaveCommand.Execute(null);
+        Assert.True(vm.Result);
+        Assert.Equal(container.Id, repo.FindUntrackedByName("Free")!.Id);
+    }
+
+    [Fact]
+    public void An_untracked_container_saving_under_its_own_name_is_allowed()
+    {
+        // The conflict check excludes the edited container itself: saving an
+        // untracked container under the name it already holds (or a rename to
+        // a free name) is the ordinary path.
+        var repo = new FakeModRepository();
+        var container = repo.CreateContainer(new UntrackedSource(), "Local");
+        repo.AddVersion(container.Id, "", _ => { });
+        var vm = new EditImportDetailsViewModel(
+            repo.Get(container.Id)!, repo, new LocalizationService());
+
+        vm.SaveCommand.Execute(null);
+        Assert.True(vm.Result);
+
+        var reopened = new EditImportDetailsViewModel(
+            repo.Get(container.Id)!, repo, new LocalizationService());
+        reopened.Name = "Renamed";
+        reopened.SaveCommand.Execute(null);
+        Assert.True(reopened.Result);
+        Assert.Equal(container.Id, repo.FindUntrackedByName("Renamed")!.Id);
+    }
 
     [Fact]
     public void A_refused_save_surfaces_inline_and_stays_open()

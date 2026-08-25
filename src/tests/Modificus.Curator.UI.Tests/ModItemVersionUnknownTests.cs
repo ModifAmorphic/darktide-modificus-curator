@@ -215,10 +215,10 @@ public sealed class ModItemVersionUnknownTests
     // ---- the edit action -----------------------------------------------------------
 
     [Fact]
-    public void The_edit_action_is_offered_for_unknown_and_missing_rows_only()
+    public void The_edit_action_offers_unknown_rows_and_suppresses_linked_and_morphed_rows()
     {
-        // Suppressed for linked rows + download-morphed rows; offered for
-        // ordinary + unknown rows.
+        // Offered for an unknown (and every ordinary) row; suppressed for
+        // linked rows + download-morphed rows.
         var unknown = Row(
             new NexusSource { ModId = 8 },
             new[] { Version(string.Empty, isLatest: true) },

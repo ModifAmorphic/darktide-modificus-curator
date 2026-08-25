@@ -1,3 +1,4 @@
+using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Modificus.Curator.Mods;
@@ -43,7 +44,10 @@ public partial class EditImportDetailsViewModel : LocalizedViewModel
     private readonly IModRepository _repo;
     private readonly Guid _containerId;
     private readonly ModSource _originalSource;
-    private readonly int _originalVersionCount;
+    // The construction-time snapshot's version count; refreshed from the
+    // repository at save time so the removal-confirm decision cannot go stale
+    // against a download that completed while the dialog was open.
+    private int _originalVersionCount;
     private readonly bool _identityLocked;
 
     /// <summary>The raw failure detail of the last refused save, or null.</summary>
@@ -375,7 +379,10 @@ public partial class EditImportDetailsViewModel : LocalizedViewModel
     /// Save. When the fields require the removal confirm (an identity change
     /// on a multi-version container) the first click swaps to the inline
     /// confirm panel instead of applying; otherwise it applies through the
-    /// primitive. No-op when the fields are invalid (CanSave).
+    /// primitive. The confirm decision re-reads the live container first: a
+    /// download for this container may have completed while the dialog was
+    /// open, making the construction-time version count stale. No-op when the
+    /// fields are invalid (CanSave).
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanSaveCore))]
     private void Save()
@@ -384,6 +391,8 @@ public partial class EditImportDetailsViewModel : LocalizedViewModel
         {
             return;
         }
+
+        RefreshVersionCount();
 
         if (RequiresIdentityConfirm && !IsConfirmStep)
         {
@@ -397,6 +406,21 @@ public partial class EditImportDetailsViewModel : LocalizedViewModel
     }
 
     private bool CanSaveCore => CanSave;
+
+    /// <summary>
+    /// Re-reads the container's version count from the repository so the
+    /// confirm decision + its copy reflect the live container, not the
+    /// construction-time snapshot (a download for this container completing
+    /// while the dialog is open adds a version the snapshot never saw).
+    /// </summary>
+    private void RefreshVersionCount()
+    {
+        if (_repo.Get(_containerId) is { } current)
+        {
+            _originalVersionCount = current.Versions.Count;
+            OnPropertyChanged(nameof(ConfirmMessage));
+        }
+    }
 
     /// <summary>
     /// The confirm panel's explicit proceed: applies the save with
@@ -433,8 +457,10 @@ public partial class EditImportDetailsViewModel : LocalizedViewModel
     /// <see cref="IModRepository.EditImportDetails"/>, and on success marks
     /// <see cref="Result"/> true (the dialog closes). A refused save records
     /// the localized inline failure (with the primitive's detail) and stays
-    /// open; an unexpected exception is caught the same way, never a crash
-    /// through the command's calling context.
+    /// open; the expected failure families (the guards, plus the disk work's
+    /// <see cref="IOException"/>/<see cref="UnauthorizedAccessException"/>,
+    /// e.g. a full disk or an AV lock mid-save) are all caught the same way,
+    /// never a crash through the command's calling context.
     /// </summary>
     private void Apply(bool removeOlderVersions)
     {
@@ -454,10 +480,25 @@ public partial class EditImportDetailsViewModel : LocalizedViewModel
             tag = (Version ?? string.Empty).Trim();
         }
 
+        var name = (Name ?? string.Empty).Trim();
+
+        // The untracked-name dedupe index is the identity for untracked
+        // containers: saving under another untracked container's exact name
+        // would silently shadow it in the index (later folder imports of that
+        // mod would dedupe onto this one). Refuse inline.
+        if (source is UntrackedSource
+            && _repo.FindUntrackedByName(name)?.Id is { } conflicting
+            && conflicting != _containerId)
+        {
+            _failureDetail = _localization.Format("EditDetails_UntrackedNameConflict", name);
+            OnPropertyChanged(nameof(FailureMessage));
+            return;
+        }
+
         try
         {
             var updated = _repo.EditImportDetails(
-                _containerId, (Name ?? string.Empty).Trim(), source, tag, removeOlderVersions);
+                _containerId, name, source, tag, removeOlderVersions);
             if (updated is null)
             {
                 // The container vanished between opening the dialog + saving.
@@ -469,11 +510,22 @@ public partial class EditImportDetailsViewModel : LocalizedViewModel
             Result = true;
             OnPropertyChanged(nameof(Result));
         }
-        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        catch (RemovalConfirmationRequiredException)
         {
-            // A refused save (the guards' messages are user-actionable): show
-            // the localized framing + the detail inline; the dialog stays
-            // open for correction or cancel.
+            // The version count went stale between the save-time refresh and
+            // the primitive (a download for this container landed mid-save):
+            // recover onto the confirm step over the fresh state instead of a
+            // terminal inline failure the user cannot act on.
+            RefreshVersionCount();
+            IsConfirmStep = true;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException
+            or IOException or UnauthorizedAccessException)
+        {
+            // A refused or failed save (the guards' messages are
+            // user-actionable; the IO failures are transient disk state): show
+            // the localized framing + the detail inline; the dialog stays open
+            // for correction or cancel.
             _failureDetail = ex.Message;
             OnPropertyChanged(nameof(FailureMessage));
         }

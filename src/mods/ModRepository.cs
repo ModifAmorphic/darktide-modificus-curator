@@ -426,6 +426,17 @@ internal sealed class ModRepository : IModRepository
                     "A linked container's import details cannot be edited.");
             }
 
+            // An untracked container is single-version by construction (the
+            // empty tag is the AddVersion upsert key re-imports dedupe onto);
+            // a non-empty tag would fabricate a version record the untracked
+            // contract cannot hold.
+            if (source is UntrackedSource && !string.IsNullOrEmpty(versionTag))
+            {
+                throw new ArgumentException(
+                    "An untracked container's version tag is always empty; pass an empty versionTag.",
+                    nameof(versionTag));
+            }
+
             // One container per (source, identity): reject a Nexus identity
             // another container already carries, so the edit cannot fork the
             // invariant Import + FindExistingContainer maintain.
@@ -459,8 +470,8 @@ internal sealed class ModRepository : IModRepository
             {
                 if (!removeOlderVersions)
                 {
-                    throw new InvalidOperationException(
-                        "Changing the mod id removes the older versions; the caller must confirm (removeOlderVersions).");
+                    throw new RemovalConfirmationRequiredException(
+                        "Changing this mod's identity removes the older versions; the caller must confirm (removeOlderVersions).");
                 }
 
                 foreach (var older in container.Versions

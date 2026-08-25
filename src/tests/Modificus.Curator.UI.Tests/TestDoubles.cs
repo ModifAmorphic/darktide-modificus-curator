@@ -1778,11 +1778,23 @@ internal class FakeModRepository : IModRepository
         return updated;
     }
 
+    /// <summary>
+    /// When set, the next <see cref="EditImportDetails"/> call throws this
+    /// instead of running (the GetThrows pattern), so VM tests can script a
+    /// refused or failing save deterministically.
+    /// </summary>
+    public Exception? EditImportDetailsThrows { get; set; }
+
     public ModContainer? EditImportDetails(
         Guid containerId, string name, ModSource source, string versionTag, bool removeOlderVersions)
     {
         // Mirror production: the edit-details primitive's guard + mutation
         // rules, minus the disk (the fake has no manifest to persist).
+        if (EditImportDetailsThrows is { } scripted)
+        {
+            throw scripted;
+        }
+
         if (!_byId.TryGetValue(containerId, out var container))
         {
             return null;
@@ -1798,6 +1810,12 @@ internal class FakeModRepository : IModRepository
         if (container.Source is LinkedSource)
         {
             throw new InvalidOperationException("A linked container cannot be edited.");
+        }
+        if (source is UntrackedSource && !string.IsNullOrEmpty(versionTag))
+        {
+            throw new ArgumentException(
+                "An untracked container's version tag is always empty; pass an empty versionTag.",
+                nameof(versionTag));
         }
         if (source is NexusSource incoming
             && _byId.Values.Any(c => c.Id != containerId
@@ -1821,8 +1839,8 @@ internal class FakeModRepository : IModRepository
         {
             if (!removeOlderVersions)
             {
-                throw new InvalidOperationException(
-                    "Changing the mod id removes the older versions; the caller must confirm.");
+                throw new RemovalConfirmationRequiredException(
+                    "Changing this mod's identity removes the older versions; the caller must confirm.");
             }
             var latestFolder = container.Versions.First(v => v.IsLatest).Folder;
             var survivors = container.Versions.Where(v => v.Folder == latestFolder).ToList();
