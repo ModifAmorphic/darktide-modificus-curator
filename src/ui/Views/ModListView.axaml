@@ -810,9 +810,13 @@
         while a rate limit is active (server-driven, takes precedence), or the
         live m:ss countdown ("Rate limiting protection enabled. Manual refresh
         will be available again in {time}.") while the manual throttle is active.
+        The whole cluster also disables while the import card is active in
+        either mode (IsListToolingEnabled: no projection churn under an open
+        editor).
       -->
       <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6"
-                  VerticalAlignment="Center">
+                  VerticalAlignment="Center"
+                  IsEnabled="{Binding IsListToolingEnabled}">
         <Button Classes="icon"
                 Click="RefreshUpdates_Click"
                 IsEnabled="{Binding IsRefreshEnabled}"
@@ -837,7 +841,11 @@
       <!--
         Search box. A fixed-width TextBox between the flexible rate-limit
         column and the density pair; TwoWay binding to SearchText is
-        keystroke-live (the projection rebuilds per keystroke). The inner
+        keystroke-live (the projection rebuilds per keystroke). Disables while
+        the import card is active in either mode (IsListToolingEnabled: a
+        search change could hide the row being edited under its own open
+        editor); the inner clear affordance is inside the TextBox, so it goes
+        with it. The inner
         clear affordance reuses the Fluent theme's own text-box clear-button
         chrome (FluentTextBoxButton, the same ControlTheme the theme's
         built-in clearButton class applies) with the theme's drawn X geometry;
@@ -849,6 +857,7 @@
                Width="200"
                Margin="16,0,0,0"
                VerticalAlignment="Center"
+               IsEnabled="{Binding IsListToolingEnabled}"
                Text="{Binding SearchText, Mode=TwoWay}"
                PlaceholderText="{ReflectionBinding [ModList_SearchWatermark], Source={StaticResource Loc}}">
         <TextBox.InnerRightContent>
@@ -882,10 +891,13 @@
         visibility toggle (same icon/density chrome, selected while hiding)
         filters the row list to enabled mods only, and the trailing
         updates-only toggle narrows the list to rows flagged with an available
-        update.
+        update. The whole cluster disables while the import card is active in
+        either mode (IsListToolingEnabled: the projection must not change
+        under an open editor).
       -->
       <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="2"
-                   VerticalAlignment="Center" Margin="16,0,0,0">
+                   VerticalAlignment="Center" Margin="16,0,0,0"
+                   IsEnabled="{Binding IsListToolingEnabled}">
         <Button Classes="icon density"
                 Classes.selected="{Binding DetailedRows.IsCompact}"
                 Command="{Binding DetailedRows.SetDensityCommand}"

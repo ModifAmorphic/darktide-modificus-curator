@@ -1673,7 +1673,13 @@ feature).
   in the same group: one stable drawn Material `update` glyph (updates-only
   has no natural crossed-out variant to swap), `selected` bound to
   `ShowUpdatesOnly`, bound to `ToggleUpdatesOnlyCommand`, with the dynamic
-  filter/show-all tooltip + automation name.
+  filter/show-all tooltip + automation name. While the import card is active
+  in either mode, the projection-touching toolbar controls (the search box,
+  the density + filter cluster, and the check-now refresh cluster) disable
+  through `ModListViewModel.IsListToolingEnabled` (the `IsAddEnabled` shape:
+  a plain projection over `ImportWorkflow.IsActive`, re-fired through the same
+  child `IsActive` subscription), so no filter or search change can hide the
+  row being edited under its open editor; row-level controls stay live.
 - **Edit-card name field.** In the edit mode the name TextBox locks as
   read-only (`IsReadOnly` bound to `!IsNameEditable`), never disabled: the
   Fluent dark theme renders disabled text near-invisibly, which read as an

@@ -285,7 +285,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            drag-and-drop forward paths to the workflow's
                            `StartBatchCommand`; while the workflow is active
                            (either mode) the Add button disables and drops are
-                           rejected; a batch cannot start over an edit or vice
+                           rejected, and the toolbar's projection-touching
+                           controls (the search box, the hide-disabled +
+                           updates-only filter toggles, the density selector,
+                           the check-now refresh; `IsListToolingEnabled`) also
+                           disable so no filter change can hide the row being
+                           edited under its open editor (row-level controls
+                           stay live); a batch cannot start over an edit or vice
                            versa (both entries check the shared inactive gate).
                            Copied
                            local-import failures surface inline (not via modal

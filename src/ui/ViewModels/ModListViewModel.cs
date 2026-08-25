@@ -551,6 +551,22 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     public bool IsAddEnabled => !ImportWorkflow.IsActive && !IsGamingMode;
 
     /// <summary>
+    /// Whether the toolbar's projection-touching controls (the search box,
+    /// the hide-disabled + updates-only filter toggles, the density selector,
+    /// and the check-now refresh) accept input: disabled for the whole time
+    /// the import card is active in EITHER mode (a batch or an edit). There
+    /// is nothing to filter mid-edit (the user already found the mod), and a
+    /// projection change could hide the row being edited under its own open
+    /// editor. Row-level controls (the enabled toggle, policy, remove,
+    /// lock/move, the grip) are untouched: they do not affect the projection,
+    /// and locking the whole page would be hostile. The Add split button has
+    /// its own gate (<see cref="IsAddEnabled"/>). The IsAddEnabled shape: a
+    /// plain projection over the injected child VM, re-fired through the same
+    /// <see cref="ImportWorkflowViewModel.IsActive"/> subscription.
+    /// </summary>
+    public bool IsListToolingEnabled => !ImportWorkflow.IsActive;
+
+    /// <summary>
     /// The Add split button's tooltip: the Gaming Mode guidance while gaming
     /// (shown on the disabled button), otherwise the ordinary add tooltip.
     /// Re-resolves on a culture change.
@@ -863,15 +879,18 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     }
 
     /// <summary>
-    /// The import workflow's activity flipped (batch started / ended). Re-fires
-    /// <see cref="IsAddEnabled"/> so the Add split button's disabled state
-    /// tracks the workflow without the view walking into the child VM.
+    /// The import workflow's activity flipped (batch started / ended, edit
+    /// started / saved / cancelled). Re-fires <see cref="IsAddEnabled"/> and
+    /// <see cref="IsListToolingEnabled"/> so the Add split button + the
+    /// toolbar's projection controls track the workflow without the view
+    /// walking into the child VM.
     /// </summary>
     private void OnImportWorkflowPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(ImportWorkflowViewModel.IsActive))
         {
             OnPropertyChanged(nameof(IsAddEnabled));
+            OnPropertyChanged(nameof(IsListToolingEnabled));
         }
     }
 

@@ -2418,4 +2418,76 @@ public sealed class ModListViewModelTests
         vm.EditImportDetailsCommand.Execute(row);
         Assert.False(vm.ImportWorkflow.IsActive);
     }
+    // ---- toolbar lock while the import card is active ------------------------
+
+    [Fact]
+    public void List_tooling_disables_while_a_batch_is_active_and_restores_on_close()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            localization: Localization);
+        Assert.True(vm.IsListToolingEnabled);
+
+        vm.ImportWorkflow.StartBatchCommand.Execute(new[] { "/tmp/some-mod" });
+        Assert.False(vm.IsListToolingEnabled);
+
+        vm.ImportWorkflow.CancelBatchCommand.Execute(null);
+        Assert.True(vm.IsListToolingEnabled);
+    }
+
+    [Fact]
+    public void List_tooling_disables_while_editing_and_restores_on_save_or_cancel()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            localization: Localization);
+
+        // Cancel path.
+        vm.ImportWorkflow.StartEditCommand.Execute(nexus.Id);
+        Assert.False(vm.IsListToolingEnabled);
+        vm.ImportWorkflow.CancelBatchCommand.Execute(null);
+        Assert.True(vm.IsListToolingEnabled);
+
+        // Save path (an unchanged-name retag is a valid save).
+        vm.ImportWorkflow.StartEditCommand.Execute(nexus.Id);
+        Assert.False(vm.IsListToolingEnabled);
+        vm.ImportWorkflow.SaveEditCommand.Execute(null);
+        Assert.True(vm.IsListToolingEnabled);
+    }
+
+    [Fact]
+    public void Row_level_commands_stay_enabled_while_the_card_is_active()
+    {
+        // The lock is the toolbar's projection controls only; a row's own
+        // controls keep working while its editor (or a batch) is open.
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            localization: Localization);
+        var row = vm.Mods.Single(m => m.ContainerId == nexus.Id);
+
+        vm.ImportWorkflow.StartEditCommand.Execute(nexus.Id);
+        Assert.False(vm.IsListToolingEnabled);
+
+        row.Enabled = !row.Enabled;
+        vm.ToggleEnabledCommand.Execute(row);
+
+        var call = Assert.Single(profiles.SetModEnabledCalls);
+        Assert.Equal(nexus.Id, call.ContainerId);
+        Assert.Equal(row.Enabled, call.Enabled);
+    }
 }
