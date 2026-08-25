@@ -625,8 +625,11 @@
     </ContainerQuery>
     <!--
       The Compact row's strip spacing: the same shared strip with the
-      single-line row's tighter inter-control margins (12 / 12 / 8 / 8 / 4 /
-      4 / 4, with ItemSpacing 0 so the margins alone define the gaps). Scoped
+      single-line row's tighter inter-control margins (12 / 8 / 12 / 8 / 8 /
+      4 / 4 / 4: the pencil leads at 12, the Enabled checkbox follows at 8,
+      then the policy cluster 12, update cell 8, move up 8, and 4 each for
+      move down / order lock / remove, with ItemSpacing 0 so the margins
+      alone define the gaps). Scoped
       under the Compact root's Grid.compactRow class so the Detailed card is
       untouched, and declared after the WrapPanel.actionStrip base so the
       override wins.

@@ -1136,15 +1136,21 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
         AdvanceOrClose();
     }
 
-    private bool CanImportCurrent => _state == WorkflowState.Editing && CanImport;
+    // Batch-only by construction: the edit mode never enters Editing with a
+    // path queue (its save path is SaveEdit), and the mode gate keeps a
+    // programmatic ImportCurrentCommand call mid-edit from indexing an empty
+    // _paths (defense in depth, matching the file's posture).
+    private bool CanImportCurrent => IsBatchEditing && CanImport;
 
     // ---- cancel (editing only) --------------------------------------------
 
     /// <summary>
-    /// Cancels the batch while editing: clears the current and remaining paths
-    /// and hides the card. No-op when not editing (cancel is intentionally
-    /// unavailable after Import is clicked). Items already imported in earlier
-    /// positions remain imported.
+    /// Cancels the active card in either mode while it is editing: a batch
+    /// clears its current and remaining paths (items already imported in
+    /// earlier positions remain imported); an edit discards its staged fields
+    /// with no repository write. Both hide the card. No-op when not editing
+    /// (cancel is intentionally unavailable after a batch's Import is clicked;
+    /// the edit mode has no post-Save state to cancel).
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanCancelBatch))]
     private void CancelBatch() => Reset();

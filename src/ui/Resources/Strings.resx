@@ -710,16 +710,12 @@
   </data>
 
   <!-- ============================================================ -->
-  <!-- Edit import details dialog                                    -->
+  <!-- Edit import details (the import card's edit mode)             -->
   <!-- ============================================================ -->
 
   <data name="EditDetails_Title" xml:space="preserve">
     <value>Edit import details</value>
-    <comment>Title of the edit-import-details modal (the per-mod correction surface for name, source, and version tag).</comment>
-  </data>
-  <data name="EditDetails_Header" xml:space="preserve">
-    <value>Update this mod's import details. It keeps its place, policy, and settings in every profile.</value>
-    <comment>Header of the edit-import-details modal, explaining what survives the edit (everything the profiles reference).</comment>
+    <comment>Header of the import card while the edit mode is active (the per-mod correction surface for name, source, and version tag).</comment>
   </data>
   <data name="EditDetails_FileIdLockHint" xml:space="preserve">
     <value>This mod was downloaded from Nexus, so its mod id is fixed. A version installed by that download also keeps its tag.</value>
@@ -727,39 +723,39 @@
   </data>
   <data name="EditDetails_SaveButton" xml:space="preserve">
     <value>Save</value>
-    <comment>The accent Save button in the edit-import-details modal. Disabled while the fields are invalid.</comment>
+    <comment>The accent Save button in the import card's edit mode. Disabled while the fields are invalid; applies the edit through the repository's EditImportDetails primitive.</comment>
   </data>
   <data name="EditDetails_CancelButton" xml:space="preserve">
     <value>Cancel</value>
-    <comment>The Cancel button in the edit-import-details modal. ESC, the title-bar close, and a window close behave the same way.</comment>
+    <comment>The Cancel button in the import card's edit mode. A plain button (the card is a hosted view, not a window): discards the staged fields and deactivates the card with no repository write.</comment>
   </data>
   <data name="EditDetails_BackButton" xml:space="preserve">
     <value>Back</value>
-    <comment>The Back button on the edit-import-details modal's removal-confirm step, returning to the editing form without saving.</comment>
+    <comment>The Back button on the import card's edit-mode removal-confirm stage, returning to the editing form without saving.</comment>
   </data>
   <data name="EditDetails_ConfirmButton" xml:space="preserve">
     <value>Remove older versions and save</value>
-    <comment>The accent confirm button on the edit-import-details modal's removal-confirm step. Applies the identity change, which removes the container's older versions.</comment>
+    <comment>The accent confirm button on the import card's edit-mode removal-confirm stage. Applies the identity change, which removes the container's older versions.</comment>
   </data>
   <data name="EditDetails_ConfirmTitle" xml:space="preserve">
     <value>Older versions will be removed</value>
-    <comment>Caution title of the edit-import-details modal's inline removal confirm, shown before an identity change on a multi-version container.</comment>
+    <comment>Caution title of the import card's edit-mode inline removal confirm, shown before an identity change on a multi-version container.</comment>
   </data>
   <data name="EditDetails_ConfirmMessage" xml:space="preserve">
     <value>Changing this mod's identity removes the {0} older version(s) of this mod. The current version's files are kept.</value>
-    <comment>Body of the edit-import-details modal's inline removal confirm, shown before an identity change on a multi-version container (a different mod id, or switching to Untracked). {0} is the number of older versions removed.</comment>
+    <comment>Body of the import card's edit-mode inline removal confirm, shown before an identity change on a multi-version container (a different mod id, or switching to Untracked). {0} is the number of older versions removed.</comment>
   </data>
   <data name="EditDetails_UntrackedNameConflict" xml:space="preserve">
     <value>Another local mod already uses the name '{0}'.</value>
-    <comment>Inline failure in the edit-import-details modal when saving as Untracked under a name another untracked container already holds (the untracked-name dedupe index would silently shadow it). {0} is the typed name.</comment>
+    <comment>Inline failure in the import card's edit mode when saving as Untracked under a name another untracked container already holds (the untracked-name dedupe index would silently shadow it). {0} is the typed name.</comment>
   </data>
   <data name="EditDetails_FailedMessage" xml:space="preserve">
     <value>The changes were not saved.</value>
-    <comment>Localized framing prefix of the inline failure message in the edit-import-details modal. The actionable detail of the refused save follows.</comment>
+    <comment>Localized framing prefix of the inline failure message in the import card's edit mode. The actionable detail of the refused save follows.</comment>
   </data>
   <data name="EditDetails_ContainerGone" xml:space="preserve">
     <value>This mod is no longer in the repository.</value>
-    <comment>Inline failure shown when the edited container vanished between opening the dialog and saving.</comment>
+    <comment>Inline failure shown when the edited container vanished between opening the card and saving.</comment>
   </data>
 
   <!-- ============================================================ -->

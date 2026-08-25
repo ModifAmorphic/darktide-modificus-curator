@@ -74,6 +74,22 @@ public sealed class ModRowSharedTemplatesTests
             cb => A(cb, "Click") == "Enabled_Click");
         Assert.Equal("{Binding EnabledLabel}", A(checkbox, "Content"));
         Assert.Equal("{Binding EnabledLabel}", A(checkbox, "AutomationProperties.Name"));
+
+        // The pencil contract: the edit-import-details button binds IsEnabled
+        // (never IsVisible) to CanEditImportDetails, the update-action-cell
+        // pattern of a stable position that goes inert rather than shifting
+        // the strip, and it precedes the Enabled checkbox in document order
+        // within the shared strip (between the source badge cell and the
+        // checkbox).
+        var pencil = Assert.Single(
+            Elements(xaml.Root!, "Button"),
+            b => A(b, "Click") == "EditImportDetails_Click");
+        Assert.Equal("{Binding CanEditImportDetails}", A(pencil, "IsEnabled"));
+        Assert.Null(A(pencil, "IsVisible"));
+        Assert.Equal("WrapPanel", (pencil.Parent as XElement)?.Name.LocalName);
+        Assert.True(
+            pencil.IsBefore(checkbox),
+            "the pencil precedes the Enabled checkbox in document order");
     }
 
     [Fact]
@@ -82,10 +98,12 @@ public sealed class ModRowSharedTemplatesTests
         var xaml = LoadStrippedXaml("src/ui/Views/ModListView.axaml");
 
         // The Compact root carries the scoping class, and the page styles
-        // supply the strip's compact margins (12 / 12 / 8 / 8 / 4 / 4 / 4,
-        // exactly the former per-column margins) + zero item spacing. Without
-        // these styles the compact strip would fall back to the Detailed
-        // spacing, a silent visual change.
+        // supply the strip's compact margins (12 / 8 / 12 / 8 / 8 / 4 / 4 / 4:
+        // the pencil leads at 12, the Enabled checkbox follows at 8, then the
+        // policy cluster 12, update cell 8, move up 8, and 4 each for move
+        // down / order lock / remove) + zero item spacing. Without these
+        // styles the compact strip would fall back to the Detailed spacing, a
+        // silent visual change.
         var compactRoot = Assert.Single(
             Elements(xaml.Root!, "Grid"),
             g => A(g, "Classes")?.Contains("compactRow") == true);
@@ -103,6 +121,12 @@ public sealed class ModRowSharedTemplatesTests
         Assert.Contains("Grid.compactRow WrapPanel.actionStrip > Button.orderLock", styles);
         Assert.Contains("Grid.compactRow WrapPanel.actionStrip > Button.remove", styles);
         Assert.Contains("Grid.compactRow WrapPanel.actionStrip > Button.editDetails", styles);
+
+        // The leading pair's margins are pinned (the pencil owns the leading
+        // 12 the checkbox used to carry; the checkbox drops to 8), so a
+        // reorder or margin edit that changes the strip rhythm is a red test.
+        AssertMargin(xaml, "Grid.compactRow WrapPanel.actionStrip > Button.editDetails", "12,0,0,0");
+        AssertMargin(xaml, "Grid.compactRow WrapPanel.actionStrip > CheckBox", "8,0,0,0");
     }
 
     [Fact]
@@ -132,6 +156,19 @@ public sealed class ModRowSharedTemplatesTests
     }
 
     // ---- required source lookup (the GamingModeGatingXamlTests pattern) ----
+
+    /// <summary>
+    /// Asserts that the page-scoped style with the given selector sets
+    /// <c>Margin</c> to the expected value (the compact strip's rhythm pins).
+    /// </summary>
+    private static void AssertMargin(XDocument xaml, string selector, string margin)
+    {
+        var style = Elements(xaml.Root!, "Style")
+            .Single(s => A(s, "Selector") == selector);
+        var setter = style.Descendants()
+            .Single(e => e.Name.LocalName == "Setter" && A(e, "Property") == "Margin");
+        Assert.Equal(margin, A(setter, "Value"));
+    }
 
     private static string RequireSourceFile(string relativeFromRepo)
     {

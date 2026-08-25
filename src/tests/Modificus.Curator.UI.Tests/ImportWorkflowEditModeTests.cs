@@ -75,6 +75,9 @@ public sealed class ImportWorkflowEditModeTests
         // mode even for a Nexus choice.
         Assert.False(vm.IsPolicyVisible);
         Assert.True(vm.CanImport);
+        // Defense in depth: the batch's Import command stays unexecutable in
+        // edit mode (a programmatic call would index the empty path queue).
+        Assert.False(vm.ImportCurrentCommand.CanExecute(null));
     }
 
     [Fact]
@@ -611,5 +614,63 @@ public sealed class ImportWorkflowEditModeTests
         var updated = repo.Get(container.Id)!;
         Assert.IsType<UntrackedSource>(updated.Source);
         Assert.Equal(string.Empty, Assert.Single(updated.Versions).VersionString);
+    }
+
+    [Fact]
+    public void The_version_tag_is_trimmed_and_the_url_is_parsed_to_an_id()
+    {
+        // ApplyEdit trims the typed name + tag and parses the id/URL field to
+        // the canonical identity; both behaviors are otherwise unpinned.
+        var (vm, _, _, repo, _) = Build();
+        var container = SeedNexus(repo, "1.0");
+        vm.StartEditCommand.Execute(container.Id);
+        vm.Url = "https://www.nexusmods.com/warhammer40kdarktide/mods/42";
+        vm.Version = "  3.1  ";
+        vm.ModName = "  WT Renamed  ";
+
+        vm.SaveEditCommand.Execute(null);
+
+        Assert.False(vm.IsActive);
+        var updated = repo.Get(container.Id)!;
+        Assert.Equal(42, Assert.IsType<NexusSource>(updated.Source).ModId);
+        Assert.Equal("WT Renamed", updated.Name);
+        Assert.Equal("3.1", Assert.Single(updated.Versions).VersionString);
+    }
+
+    [Fact]
+    public void A_refused_confirm_save_surfaces_the_failure_without_leaving_the_confirm_stage()
+    {
+        // The confirm stage's ConfirmEditSave can be refused too (the
+        // duplicate-identity guard): the inline failure must show while the
+        // stage stays, so the card never appears inert (the catch preserves
+        // the stage; only Back or a successful save moves it).
+        var (vm, _, _, repo, _) = Build();
+        var container = SeedNexus(repo, "1.0");
+        repo.AddVersion(container.Id, "2.0", _ => { }, NewStamp);
+        repo.CreateContainer(new NexusSource { ModId = 9 }, "Owner");
+        vm.StartEditCommand.Execute(container.Id);
+        vm.Url = "9";
+        vm.Version = "9.1";
+
+        vm.SaveEditCommand.Execute(null);
+        Assert.True(vm.IsEditConfirm);
+        vm.ConfirmEditSaveCommand.Execute(null);
+
+        Assert.True(vm.IsEditConfirm);
+        Assert.True(vm.IsActive);
+        Assert.Contains("9", vm.EditFailureMessage);
+        Assert.Equal(2, repo.Get(container.Id)!.Versions.Count);
+
+        // Back to the form still shows the failure until the next attempt.
+        vm.BackFromEditConfirmCommand.Execute(null);
+        Assert.True(vm.IsEditForm);
+        Assert.NotEmpty(vm.EditFailureMessage);
+
+        // Correcting the id + confirming applies.
+        vm.Url = "10";
+        vm.SaveEditCommand.Execute(null);
+        vm.ConfirmEditSaveCommand.Execute(null);
+        Assert.False(vm.IsActive);
+        Assert.Equal(10, Assert.IsType<NexusSource>(repo.Get(container.Id)!.Source).ModId);
     }
 }
