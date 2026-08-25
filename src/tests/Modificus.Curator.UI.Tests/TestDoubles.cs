@@ -1696,9 +1696,17 @@ internal class FakeModRepository : IModRepository
             };
             versions = container.Versions.Append(entry).ToList();
         }
-        // Mirror production: latest = argmax of (RemoteUploadedAt ?? ImportedAt,
-        // ImportedAt), recomputed after either branch.
-        var newest = versions.MaxBy(v => (v.RemoteUploadedAt ?? v.ImportedAt, v.ImportedAt))!;
+        // Mirror production (ModRepository.WithLatestMarked): the most recent
+        // ARRIVAL decides the clock. A manual import (null RemoteUploadedAt)
+        // with the newest ImportedAt is latest; otherwise the newest
+        // downloaded version by RemoteUploadedAt (ImportedAt tie-break), with
+        // manual imports ignored for latest in that branch.
+        var newestArrival = versions.MaxBy(v => v.ImportedAt)!;
+        var newest = newestArrival.RemoteUploadedAt is null
+            ? newestArrival
+            : versions
+                .Where(v => v.RemoteUploadedAt is not null)
+                .MaxBy(v => (v.RemoteUploadedAt, v.ImportedAt))!;
         versions = versions.Select(v => v with { IsLatest = ReferenceEquals(v, newest) }).ToList();
         // Mirror production: a non-null displayMetadata replaces the container
         // value in the same update; null preserves any prior value.

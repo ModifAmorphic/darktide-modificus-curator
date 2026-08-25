@@ -326,7 +326,7 @@ UI-layer download queue wires it to its per-row progress.
 4. **Import** via `IModImportService.Import(tempPath, modName, new NexusSource
    { ModId = modId }, version, remoteUploadedAt, remoteFileId, displayMetadata)`. The import service handles
    find-or-create-container (dedup by `NexusSource.ModId`) + add-version +
-   the effective-timestamp `IsLatest` re-evaluation + records
+   the arrival-rule `IsLatest` re-evaluation + records
    `RemoteUploadedAt` and the Nexus `FileId` on the entry (new or reused), and
    the `displayMetadata` argument replaces the container's `DisplayMetadata` in the
    same manifest update (an acquisition that fetched newer text wins atomically

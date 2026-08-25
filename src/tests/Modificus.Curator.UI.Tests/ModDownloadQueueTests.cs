@@ -730,7 +730,7 @@ public sealed class ModDownloadQueueTests
         Assert.Single(harness.Acquisition.Calls);
         // The acquired version really landed + the unknown state self-clears:
         // the fresh import is now the container's latest under the
-        // effective-timestamp key.
+        // arrival rule.
         var updated = harness.Repo.Get(container.Id)!;
         var latest = updated.Versions.Single(v => v.IsLatest);
         Assert.Equal("2.0", latest.VersionString);
@@ -1032,7 +1032,7 @@ public sealed class ModDownloadQueueTests
         /// <summary>
         /// Seeds a known Nexus mod with two MAIN versions: an older "1.0"
         /// (file 100) and the head "2.0" (file 200, IsLatest under the
-        /// effective-timestamp key). Returns the container + both version
+        /// arrival rule). Returns the container + both version
         /// folder ids.
         /// </summary>
         public (ModContainer Container, string FolderOld, string FolderHead) SeedKnownMod()

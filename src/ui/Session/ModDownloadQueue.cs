@@ -544,7 +544,7 @@ internal sealed class ModDownloadQueue : IModDownloadQueue
                 pinId = hit.Folder;
                 // Head-ness reads the matched version's IsLatest flag.
                 // Accepted edge: a legacy manifest (pre-FileId, or with an
-                // IsLatest persisted before the effective-timestamp fix) can
+                // IsLatest persisted before the arrival-rule fix) can
                 // disagree with the current latest key until that version's
                 // next mutation; no migration (legacy entries self-heal by
                 // attrition).

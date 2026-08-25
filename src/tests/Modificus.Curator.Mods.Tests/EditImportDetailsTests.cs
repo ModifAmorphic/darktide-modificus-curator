@@ -508,7 +508,7 @@ public sealed class EditImportDetailsTests
     /// <paramref name="version"/> with no download evidence (a manual
     /// association: the only editable Nexus shape). Follow-on AddVersion calls
     /// without remote facts order by import time, so a later call becomes the
-    /// container's latest under the effective-timestamp key.
+    /// container's latest under the arrival rule.
     /// </summary>
     private static ModContainer SeedNexus(RepoFixture fx, string version)
     {

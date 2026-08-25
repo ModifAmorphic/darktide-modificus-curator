@@ -20,14 +20,21 @@ namespace Modificus.Curator.Mods;
 /// one-field manifest edit; profiles resolve dynamically at stage time, so
 /// <c>isLatest</c> changing never requires a profile-entry update.</para>
 /// <para>
-/// Versions order by the <b>effective timestamp</b>: <see cref="RemoteUploadedAt"/>
-/// when the remote source published the file, else <see cref="ImportedAt"/>,
-/// with <see cref="ImportedAt"/> breaking exact ties. The repository
-/// re-evaluates the flag with that key on every add/remove, so importing an
-/// older file never flips latest. <see cref="IModRepository.AddVersion"/>
+/// Which version carries the flag is decided by the most recent ARRIVAL (the
+/// newest <see cref="ImportedAt"/>): when the newest arrival is a manual
+/// import (no <see cref="RemoteUploadedAt"/>), that version is latest; when
+/// it is a download, the latest is the newest downloaded version by
+/// <see cref="RemoteUploadedAt"/> with <see cref="ImportedAt"/> breaking
+/// exact ties (manual imports are ignored for latest in that branch). The
+/// repository re-evaluates the flag with that rule on every add/remove, so
+/// importing an older remote file never flips latest, while a download
+/// arriving after a manual import correctly takes the flag. An all-manual
+/// container orders purely by <see cref="ImportedAt"/> and an all-download
+/// container by <see cref="RemoteUploadedAt"/>. <see cref="IModRepository.AddVersion"/>
 /// stamps <see cref="ImportedAt"/> on insert and never changes it;
 /// re-importing the same <see cref="VersionString"/> reuses the existing
-/// entry (refreshed files + remote facts, unchanged import stamp).</para>
+/// entry (refreshed files + remote facts, unchanged import stamp, so a dedup
+/// re-import is not a new arrival).</para>
 /// </remarks>
 public sealed record ModVersion
 {
@@ -49,9 +56,11 @@ public sealed record ModVersion
     /// <summary>
     /// Whether this is the container's current "latest" version (the one a
     /// <see cref="LatestPolicy"/> profile resolves to). Exactly one version per
-    /// container carries this flag: the newest by effective timestamp
-    /// (<see cref="RemoteUploadedAt"/> when present, else
-    /// <see cref="ImportedAt"/>; exact ties fall to the newer
+    /// container carries this flag, decided by the most recent arrival (the
+    /// newest <see cref="ImportedAt"/>): a manual import (no
+    /// <see cref="RemoteUploadedAt"/>) with the newest arrival is latest;
+    /// otherwise the newest downloaded version by
+    /// <see cref="RemoteUploadedAt"/> (exact ties fall to the newer
     /// <see cref="ImportedAt"/>). The repository re-evaluates it on every
     /// add/remove.
     /// </summary>

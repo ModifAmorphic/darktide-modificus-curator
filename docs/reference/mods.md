@@ -65,14 +65,19 @@ public interface IModRepository
   import, and a manual re-import passes nulls and clears them). A new tag
   creates a new opaque folder + a new entry stamped with the current time and
   the call's remote facts. After either branch the repository re-evaluates
-  `IsLatest` over ALL of the container's versions with the effective-timestamp
-  key (see [`ModVersion`](#modversion-record)): `RemoteUploadedAt` when
-  present, else `ImportedAt`, with `ImportedAt` breaking exact ties. Importing
-  an older file therefore never flips latest, and a dedup re-import promotes
-  the reused entry only when its refreshed remote timestamp makes it newly
-  newest; containers whose versions all have a null `RemoteUploadedAt` (manual
-  imports, linked) order purely by `ImportedAt`, and mixed null/non-null
-  manifests coalesce per-entry with no migration. The optional
+  `IsLatest` over ALL of the container's versions under the arrival rule (see
+  [`ModVersion`](#modversion-record)): the most recent arrival (the newest
+  `ImportedAt`) decides the clock. A manual import with the newest arrival is
+  latest; otherwise the newest downloaded version by `RemoteUploadedAt`
+  (`ImportedAt` breaking exact ties) is latest, with manual imports ignored in
+  that branch. Importing an older remote file therefore never flips latest, a
+  download arriving after a manual import correctly takes the flag, and a
+  dedup re-import (which keeps the reused entry's original arrival stamp)
+  promotes the reused entry only when its refreshed remote timestamp makes it
+  newly newest while the newest arrival is a download; containers whose
+  versions all have a null `RemoteUploadedAt` (manual imports, linked) order
+  purely by `ImportedAt`, and all-download containers by `RemoteUploadedAt`.
+  The optional
   `remoteUploadedAt` (UTC) is the underlying remote file's publish date,
   captured at acquisition for remote-source mods (Nexus). `null` for manual
   imports + non-remote sources. The optional `remoteFileId` is the remote
@@ -174,7 +179,7 @@ public interface IModRepository
     pins onto removed versions degrade to the existing staging
     skip-with-warning path.
 - `RemoveVersion(containerId, versionFolder)`: idempotent. Promotes the newest
-  remaining version by the effective-timestamp key (see
+  remaining version by the arrival rule (see
   [`ModVersion`](#modversion-record)) if the removed one carried `IsLatest`.
 - `PruneUnreferenced(referenced)`: GC. Drops every `(containerId, versionFolder)`
   not in the referenced set + removes containers left with zero versions,
@@ -226,7 +231,7 @@ public interface IModImportService
   absent.
 - Version resolution: dedup by `versionString` (`AddVersion` reuses the existing
   folder + refreshes its files); a new `versionString` creates a new version.
-  `IsLatest` follows the repository's effective-timestamp key (see
+  `IsLatest` follows the repository's arrival rule (see
   [`ModVersion`](#modversion-record)), not import recency.
 - **`remoteUploadedAt`** (optional, UTC): the underlying remote file's publish
   date, forwarded by the acquisition layer (`ModAcquisitionService`) for
@@ -396,7 +401,7 @@ One version of a mod (immutable record):
 | --- | --- |
 | `Folder` | The opaque version-folder ID (UUID-derived). The version's files live at `<ModsFolder>/<containerId>/<Folder>/`. Never the raw version tag. |
 | `VersionString` | The raw release tag (e.g. `"1.2"`, `"v2.0.1"`). Used for display only. Arbitrary source tags, not SemVer; never parsed. |
-| `IsLatest` | Whether this is the container's current latest version. Exactly one per container: the newest by the **effective timestamp** (`RemoteUploadedAt` when present, else `ImportedAt`; exact ties fall to the newer `ImportedAt`). The repository re-evaluates the flag with that key on every `AddVersion` / `RemoveVersion`, so importing an older remote file never flips latest. Moving latest is a one-field manifest edit. |
+| `IsLatest` | Whether this is the container's current latest version. Exactly one per container, decided by the most recent **arrival** (the newest `ImportedAt`): a manual import (no `RemoteUploadedAt`) with the newest arrival is latest; otherwise the newest downloaded version by `RemoteUploadedAt` (exact ties fall to the newer `ImportedAt`), with manual imports ignored in that branch. The repository re-evaluates the flag with that rule on every `AddVersion` / `RemoveVersion`, so importing an older remote file never flips latest while a download arriving after a manual import takes the flag. Moving latest is a one-field manifest edit. |
 | `ImportedAt` | When first imported (UTC). The fallback ordering key when `RemoteUploadedAt` is unknown (manual imports, legacy manifests) and the tie-break for equal remote timestamps. Never changes on a re-import. |
 | `RemoteUploadedAt` | When the underlying remote file was published (UTC), captured at acquisition for remote-source mods (Nexus). `null` for manual imports + non-remote sources. The update check uses it (with an `ImportedAt` fallback) as the comparison basis against the latest file's publish date. Backward-compatible on disk: a manifest from before this field existed deserializes it to `null`. |
 | `FileId` | The remote source's file id this version was acquired from (the Nexus file id): the exact identity that distinguishes two versions of the same mod beyond their display tags, and the download queue's repository hit check. `null` for manual imports (folder/archive via the picker or drag-and-drop) and legacy manifests; a re-acquisition overwrites the reused entry's value, so legacy entries self-heal by attrition. Backward-compatible on disk: a manifest from before this field existed deserializes it to `null`. |
@@ -543,13 +548,13 @@ absent; an older manifest without it deserializes to `null` (see
   (drops unreferenced version folders + empty containers, keeps referenced),
   opaque version-folder naming, derived paths, and the linked-external
   availability snapshot (recomputed on index rebuild, target left untouched);
-  the `IsLatest` effective-timestamp contract (the flag follows
-  `RemoteUploadedAt ?? ImportedAt` with `ImportedAt` tie-break at add and
-  remove: an older remote file never flips latest, a newer one does, mixed
-  null/non-null manifests coalesce per-entry, a dedup re-import promotes the
-  reused entry only when its refreshed remote timestamp makes it newly
-  newest, equal remote timestamps fall to the later import, and
-  `RemoveVersion` promotes by the same key over import recency); `FileId`
+  the `IsLatest` arrival-rule contract (the most recent arrival decides the
+  clock: a manual import with the newest arrival is latest, otherwise the
+  newest downloaded version by `RemoteUploadedAt` with the arrival stamp
+  breaking exact ties; a download arriving after a manual import takes the
+  flag, a later manual import lands as latest, an older remote file never
+  flips latest, a dedup re-import is not a new arrival, and `RemoveVersion`
+  promotes by the same rule over import recency); `FileId`
   persistence (recorded on a new version, default null, overwritten on a
   dedup re-import, persisted through a new repository instance, and old
   manifests deserialize it to `null`).
@@ -561,7 +566,7 @@ absent; an older manifest without it deserializes to `null` (see
   id; malformed rejections: wrong host, wrong game slug, too few segments,
   non-numeric/zero/negative id).
 - `ModImportService`: container find/create + version dedup + the
-  effective-timestamp `isLatest` contract (importing an older remote file does
+  arrival-rule `isLatest` contract (importing an older remote file does
   not flip latest) +
   folder/archive import (zip, 7z via on-the-fly SharpCompress writers, rar via
   a committed RAR5 fixture under `Fixtures/`) + the source-structure validation

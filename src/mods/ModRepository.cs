@@ -263,8 +263,11 @@ internal sealed class ModRepository : IModRepository
                 // entry fields refreshed on re-import: a re-acquired version
                 // carries the current remote facts (callers pass nulls for manual
                 // re-imports, which clears them; non-remote sources aren't
-                // update-checked anyway). Latest is then re-evaluated: a refreshed
-                // remote timestamp can make the reused entry newly newest.
+                // update-checked anyway). Latest is then re-evaluated under the
+                // arrival rule; because the reused entry keeps its original
+                // import stamp, a refreshed remote timestamp can make it newly
+                // newest only when the newest arrival is a download (see
+                // WithLatestMarked).
                 var versionDir = VersionDir(baseFolder, containerId, existing.Folder);
                 PopulateAtomically(versionDir, populateFolder);
                 var refreshed = existing with { RemoteUploadedAt = remoteUploadedAt, FileId = remoteFileId };
@@ -280,9 +283,9 @@ internal sealed class ModRepository : IModRepository
                 // PopulateAtomically stages into a temp + swaps into the new
                 // version folder; on a populateFolder failure nothing is created
                 // on disk and the manifest is left untouched (no entry added
-                // below). Latest is recomputed over ALL versions with the
-                // effective-timestamp key, so importing an older remote file
-                // leaves the flag on the existing newest entry.
+                // below). Latest is recomputed over ALL versions under the
+                // arrival rule, so importing an older remote file leaves the
+                // flag on the existing newest download.
                 var folder = Guid.NewGuid().ToString("N");
                 var versionDir = VersionDir(baseFolder, containerId, folder);
                 PopulateAtomically(versionDir, populateFolder);
@@ -320,20 +323,52 @@ internal sealed class ModRepository : IModRepository
 
     /// <summary>
     /// Recomputes the <see cref="ModVersion.IsLatest"/> flag over
-    /// <paramref name="versions"/>: the newest by effective timestamp carries
-    /// it, every other entry does not. Shared by both
+    /// <paramref name="versions"/>: the most recent ARRIVAL decides which
+    /// clock governs. When the version with the newest
+    /// <see cref="ModVersion.ImportedAt"/> is a manual import (no
+    /// <see cref="ModVersion.RemoteUploadedAt"/>), that version is latest
+    /// (the user just brought this content in by hand; it stages, and a
+    /// hand-imported folder landing on a previously downloaded container
+    /// becomes latest). Otherwise the most recent arrival is a download, and
+    /// the latest is the newest DOWNLOADED version by
+    /// <see cref="ModVersion.RemoteUploadedAt"/> with
+    /// <see cref="ModVersion.ImportedAt"/> breaking exact ties; manual
+    /// imports are ignored for latest in that branch. Shared by both
     /// <see cref="AddVersion"/> branches and the
-    /// <see cref="RemoveVersion"/> promotion so the key cannot drift between
+    /// <see cref="RemoveVersion"/> promotion so the rule cannot drift between
     /// sites.
     /// </summary>
+    /// <remarks>
+    /// The arrival rule beats the plain effective-timestamp comparison
+    /// (<c>RemoteUploadedAt ?? ImportedAt</c>) on mixed containers: a manual
+    /// import's fresh <c>ImportedAt</c> used to outrank an older download's
+    /// publish date forever, so a downloaded version arriving after a manual
+    /// import never became latest. Ranking by arrival first keeps every
+    /// all-manual and all-download container's outcome unchanged from the
+    /// effective-timestamp key (the newest import, and the newest publish
+    /// date respectively); only mixed containers decide differently.
+    /// </remarks>
     private static List<ModVersion> WithLatestMarked(List<ModVersion> versions)
     {
-        // Effective timestamp: the remote publish date when known, else the
-        // import date. ImportedAt breaks exact ties (two files within the
-        // remote timestamp granularity); an all-null container degenerates to
-        // a plain ImportedAt argmax. MaxBy returns the first max, so exact
-        // double-ties stay stable in storage order.
-        var newest = versions.MaxBy(v => (v.RemoteUploadedAt ?? v.ImportedAt, v.ImportedAt))!;
+        var newestArrival = versions.MaxBy(v => v.ImportedAt)!;
+        ModVersion newest;
+        if (newestArrival.RemoteUploadedAt is null)
+        {
+            // The most recent arrival is a manual import: it is latest.
+            newest = newestArrival;
+        }
+        else
+        {
+            // The most recent arrival is a download: the newest downloaded
+            // version by publish date is latest. MaxBy returns the first max,
+            // so exact publish-date ties stay stable in storage order with
+            // the arrival stamp as the deciding order (arrivals are unique
+            // per insert; a dedup re-import keeps its original stamp).
+            newest = versions
+                .Where(v => v.RemoteUploadedAt is not null)
+                .MaxBy(v => (v.RemoteUploadedAt, v.ImportedAt))!;
+        }
+
         return versions.Select(v => v with { IsLatest = ReferenceEquals(v, newest) }).ToList();
     }
 
@@ -782,9 +817,8 @@ internal sealed class ModRepository : IModRepository
             var versions = container.Versions.Where(v => !ReferenceEquals(v, existing)).ToList();
 
             // If the removed entry was latest, re-evaluate the flag over the
-            // survivors with the same effective-timestamp key AddVersion uses
-            // (remote publish date when known, else import date, ImportedAt
-            // tie-break).
+            // survivors with the same arrival rule AddVersion uses (the most
+            // recent arrival decides the clock; see WithLatestMarked).
             if (wasLatest && versions.Count > 0)
             {
                 versions = WithLatestMarked(versions);

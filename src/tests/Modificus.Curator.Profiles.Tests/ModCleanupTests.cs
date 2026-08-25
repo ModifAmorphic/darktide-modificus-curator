@@ -7,11 +7,13 @@ using Microsoft.Extensions.Logging;
 namespace Modificus.Curator.Profiles.Tests;
 
 /// <summary>
-/// <see cref="ModCleanup.PruneUnreferenced"/> linked-container behavior: a
-/// referenced linked container survives the startup prune (kept by containerId
-/// reference, not version), an unreferenced one is pruned, and the external
-/// target is never touched in either case. Covers the sentinel-based safety
-/// invariant across the prune + the missing-then-returned availability flip.
+/// <see cref="ModCleanup.PruneUnreferenced"/> behavior: a referenced linked
+/// container survives the startup prune (kept by containerId reference, not
+/// version), an unreferenced one is pruned, and the external target is never
+/// touched in either case; and managed containers keep every folder a
+/// profile would stage PLUS the container's current latest (a pinned entry
+/// must not let the prune delete the newest version), while unreferenced
+/// superseded versions are still reclaimed.
 /// </summary>
 public sealed class ModCleanupTests
 {
@@ -124,5 +126,107 @@ public sealed class ModCleanupTests
 
         Assert.Null(fx.Repo.Get(containerId));
         Assert.True(Directory.Exists(external));
+    }
+
+    // ---- managed containers: the policy folder + the current latest survive ----
+
+    /// <summary>
+    /// Seeds a mixed manual/download container: "hand" (a manual import)
+    /// arrives first, then the June-published download, then the
+    /// March-published download. Under the arrival rule the latest is the
+    /// June download (the newest arrival is a download, so the newest
+    /// downloaded version by publish date governs). Returns the container
+    /// plus each version's folder.
+    /// </summary>
+    private static (ModContainer Container, string Hand, string June, string March)
+        SeedMixedContainer(ProfileServiceFixture fx)
+    {
+        var june = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        var march = new DateTimeOffset(2024, 3, 1, 0, 0, 0, TimeSpan.Zero);
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+
+        fx.Repo.AddVersion(container.Id, "hand", EmptyPopulate);
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, june);
+        var seeded = fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, march);
+        return (
+            seeded,
+            seeded.Versions.Single(v => v.VersionString == "hand").Folder,
+            seeded.Versions.Single(v => v.VersionString == "1.0").Folder,
+            seeded.Versions.Single(v => v.VersionString == "2.0").Folder);
+    }
+
+    private static readonly Action<string> EmptyPopulate = dir =>
+    {
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "marker.txt"), "x");
+    };
+
+    private static void AssertVersionExists(ProfileServiceFixture fx, ModContainer container, string folder)
+    {
+        Assert.Contains(container.Versions, v => v.Folder == folder);
+        Assert.True(Directory.Exists(fx.Repo.GetVersionFolderPath(container.Id, folder)));
+    }
+
+    private static void AssertVersionGone(ProfileServiceFixture fx, ModContainer container, string folder)
+    {
+        Assert.DoesNotContain(container.Versions, v => v.Folder == folder);
+        Assert.False(Directory.Exists(fx.Repo.GetVersionFolderPath(container.Id, folder)));
+    }
+
+    [Fact]
+    public void A_pinned_entry_keeps_the_pinned_folder_and_the_container_latest()
+    {
+        // The sibling hole: a PinnedPolicy entry resolves only the pinned
+        // folder, which used to let the prune delete the container's newest
+        // version on restart. The latest now survives unconditionally, so
+        // both the pinned March download + the latest June download stay;
+        // only the unreferenced manual (not pinned, not latest) is dropped.
+        using var fx = new ProfileServiceFixture();
+        var (container, hand, june, march) = SeedMixedContainer(fx);
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
+        fx.Service.AddMod(profile.Id, container.Id, new PinnedPolicy(march));
+
+        ModCleanup.PruneUnreferenced(fx.Service, fx.Repo);
+
+        var reloaded = fx.Repo.Get(container.Id);
+        Assert.NotNull(reloaded);
+        AssertVersionExists(fx, reloaded!, march); // the pin
+        AssertVersionExists(fx, reloaded!, june);  // the container's latest
+        AssertVersionGone(fx, reloaded!, hand);    // superseded + unreferenced
+    }
+
+    [Fact]
+    public void A_latest_entry_on_a_mixed_container_keeps_the_policy_folder_and_the_latest()
+    {
+        // The LatestPolicy resolves the June download (also the container's
+        // latest); the manual that arrived first is neither policy-resolved
+        // nor latest, so the GC still reclaims it.
+        using var fx = new ProfileServiceFixture();
+        var (container, hand, june, _) = SeedMixedContainer(fx);
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
+        fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
+
+        ModCleanup.PruneUnreferenced(fx.Service, fx.Repo);
+
+        var reloaded = fx.Repo.Get(container.Id);
+        Assert.NotNull(reloaded);
+        AssertVersionExists(fx, reloaded!, june);
+        AssertVersionGone(fx, reloaded!, hand);
+    }
+
+    [Fact]
+    public void An_unreferenced_managed_container_is_pruned_entirely()
+    {
+        // Empty-container removal is unchanged: a container no profile
+        // references is dropped, manifest + directory.
+        using var fx = new ProfileServiceFixture();
+        var container = fx.Repo.CreateContainer(new UntrackedSource(), "Orphan");
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate);
+        // No profile references it.
+
+        ModCleanup.PruneUnreferenced(fx.Service, fx.Repo);
+
+        Assert.Null(fx.Repo.Get(container.Id));
+        Assert.False(Directory.Exists(fx.ContainerDir(container.Id)));
     }
 }

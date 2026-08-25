@@ -1171,7 +1171,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         lists like any ordinary mod; one derivation consumed
                         by both the launch flag + the mod-list banner) + ModCleanup (the startup
                         prune orchestration; keeps a referenced linked container by
-                        containerId sentinel, since a linked container has no versions)
+                        containerId sentinel, since a linked container has no
+                        versions, and keeps every referenced container's CURRENT
+                        latest version folder unconditionally, regardless of the
+                        entry's own policy, so a pinned entry can never let the
+                        prune delete the container's newest version)
   mods/          Modificus.Curator.Mods -- the unified mod repository
                         (IModRepository: UUID containers per (source, identity),
                         opaque-ID version subfolders, per-container container.json
@@ -1232,10 +1236,15 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                          RemoteUploadedAt precedent; recorded on both the
                          new-version + dedup-reuse branches, so legacy entries
                          self-heal by attrition) + the IsLatest contract keys on
-                         the effective timestamp (RemoteUploadedAt ?? ImportedAt,
-                         tie-break ImportedAt) re-evaluated at every
+                         the most recent ARRIVAL (the newest ImportedAt decides
+                         the clock: a manual import with the newest arrival is
+                         latest, otherwise the newest downloaded version by
+                         RemoteUploadedAt with the arrival stamp breaking exact
+                         ties), re-evaluated at every
                          AddVersion/RemoveVersion, so importing an older remote
-                         file never flips latest (issue #232);
+                         file never flips latest while a download arriving
+                         after a manual import correctly takes the flag
+                         (issues #232 + its mixed-container incomplete fix);
                          TryInitializeDisplayMetadata is the atomic missing-only
                          initialization seam (writes + persists under the repo lock,
                          returns false if DisplayMetadata is already non-null); LinkFolder records an external
@@ -1533,12 +1542,24 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           Nexus + linked, the exact staged manager path), ordinary
                                           staging/mods.lst behavior for the manager mod, null for
                                           disabled/unresolvable/missing-file/capitalized-Base shapes,
-                                          the unknown-profile throw, first-in-order-wins)
+                                          the unknown-profile throw, first-in-order-wins
+                                          + ModCleanupTests: the startup prune -- the linked
+                                          keep/unreferenced-drop pair + the managed latest-keep
+                                          (a pinned entry keeps the pinned folder AND the
+                                          container's current latest, a Latest entry on a mixed
+                                          container keeps the resolved latest, unreferenced
+                                          superseded versions still dropped, empty-container
+                                          removal unchanged)
     Modificus.Curator.Mods.Tests/      xUnit tests for the mod repository + import
                                         (incl. the linked-folder add + linked-container prune,
                                         + the display-metadata AddVersion/Import pass-through
-                                        + the IsLatest effective-timestamp contract (an older
-                                        remote file never flips latest, at add/remove/dedup)
+                                        + the IsLatest arrival-rule contract (the decision
+                                        table: a download arriving after a manual import takes
+                                        latest, a later manual import lands as latest, an
+                                        older remote file never flips latest, manuals-only by
+                                        ImportedAt, downloads-only by RemoteUploadedAt; the
+                                        dedup branch is not a new arrival; RemoveVersion
+                                        promotion under the rule)
                                         + FileId persistence on both AddVersion branches
                                         + TryInitializeDisplayMetadata atomic missing-only init
                                         + EditImportDetailsTests: every primitive branch (the

@@ -692,4 +692,23 @@ public sealed class ImportWorkflowEditModeTests
         Assert.False(vm.IsActive);
         Assert.Equal(10, Assert.IsType<NexusSource>(repo.Get(container.Id)!.Source).ModId);
     }
+
+    [Fact]
+    public void The_fake_repository_mirrors_the_arrival_based_latest_rule()
+    {
+        // The fake's AddVersion mirror must track the production
+        // WithLatestMarked rule so UI tests observe real latest behavior:
+        // the mixed row of the decision table (a download published June
+        // arriving after a manual import becomes latest). The real
+        // repository's full table is covered by ModRepositoryTests.
+        var repo = new FakeModRepository();
+        var container = repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
+        repo.AddVersion(container.Id, "1.1.20", _ => { }); // manual, arrives first
+        var updated = repo.AddVersion(
+            container.Id, "1.1.21", _ => { }, OldStamp); // download, arrives last
+
+        var latest = updated.Versions.Single(v => v.IsLatest);
+        Assert.Equal("1.1.21", latest.VersionString);
+        Assert.Equal(OldStamp, latest.RemoteUploadedAt);
+    }
 }

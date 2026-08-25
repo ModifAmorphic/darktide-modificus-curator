@@ -59,7 +59,7 @@ public interface IModRepository
     /// it; on success the repo atomically swaps the temp into the version folder
     /// (a same-volume <c>Directory.Move</c> rename), records the version entry
     /// on the manifest, and re-evaluates <see cref="ModVersion.IsLatest"/> over
-    /// the container's versions (the effective-timestamp key; see
+    /// the container's versions (the arrival rule; see
     /// <see cref="ModVersion.IsLatest"/>).
     /// </summary>
     /// <remarks>
@@ -90,13 +90,16 @@ public interface IModRepository
     /// <para>
     /// <b>Latest key:</b> after either branch the repository re-evaluates
     /// <see cref="ModVersion.IsLatest"/> over ALL of the container's versions
-    /// with the effective-timestamp key (see <see cref="ModVersion.IsLatest"/>).
-    /// Importing an older file therefore never flips latest, and a dedup
-    /// re-import promotes the reused entry only when its refreshed remote
-    /// timestamp makes it newly newest. Containers whose versions all have a
+    /// under the arrival rule (see <see cref="ModVersion.IsLatest"/>): the
+    /// most recent arrival decides the clock. Importing an older remote file
+    /// therefore never flips latest, a download arriving after a manual
+    /// import correctly takes the flag, and a dedup re-import (which keeps
+    /// the reused entry's original import stamp) promotes the reused entry
+    /// only when its refreshed remote timestamp makes it newly newest while
+    /// the newest arrival is a download. Containers whose versions all have a
     /// null <see cref="ModVersion.RemoteUploadedAt"/> (manual imports, linked)
-    /// order purely by <see cref="ModVersion.ImportedAt"/>; mixed
-    /// null/non-null manifests coalesce per-entry with no migration.</para>
+    /// order purely by <see cref="ModVersion.ImportedAt"/>; all-download
+    /// containers by <see cref="ModVersion.RemoteUploadedAt"/>.</para>
     /// <para>
     /// <b>Display metadata is container-scoped, not version-scoped.</b> A
     /// non-null <paramref name="displayMetadata"/> replaces
@@ -314,7 +317,7 @@ public interface IModRepository
     /// Removes a version from the container's manifest + deletes its folder
     /// (idempotent: a missing container or folder is a no-op). If the removed
     /// version carried <see cref="ModVersion.IsLatest"/>, the newest remaining
-    /// version by the effective-timestamp key (see
+    /// version by the arrival rule (see
     /// <see cref="ModVersion.IsLatest"/>) is promoted.
     /// </summary>
     void RemoveVersion(Guid containerId, string versionFolder);
