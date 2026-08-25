@@ -59,7 +59,7 @@ public interface IModRepository
     /// it; on success the repo atomically swaps the temp into the version folder
     /// (a same-volume <c>Directory.Move</c> rename), records the version entry
     /// on the manifest, and re-evaluates <see cref="ModVersion.IsLatest"/> over
-    /// the container's versions (the effective-timestamp key; see
+    /// the container's versions (the arrival rule; see
     /// <see cref="ModVersion.IsLatest"/>).
     /// </summary>
     /// <remarks>
@@ -90,13 +90,16 @@ public interface IModRepository
     /// <para>
     /// <b>Latest key:</b> after either branch the repository re-evaluates
     /// <see cref="ModVersion.IsLatest"/> over ALL of the container's versions
-    /// with the effective-timestamp key (see <see cref="ModVersion.IsLatest"/>).
-    /// Importing an older file therefore never flips latest, and a dedup
-    /// re-import promotes the reused entry only when its refreshed remote
-    /// timestamp makes it newly newest. Containers whose versions all have a
+    /// under the arrival rule (see <see cref="ModVersion.IsLatest"/>): the
+    /// most recent arrival decides the clock. Importing an older remote file
+    /// therefore never flips latest, a download arriving after a manual
+    /// import correctly takes the flag, and a dedup re-import (which keeps
+    /// the reused entry's original import stamp) promotes the reused entry
+    /// only when its refreshed remote timestamp makes it newly newest while
+    /// the newest arrival is a download. Containers whose versions all have a
     /// null <see cref="ModVersion.RemoteUploadedAt"/> (manual imports, linked)
-    /// order purely by <see cref="ModVersion.ImportedAt"/>; mixed
-    /// null/non-null manifests coalesce per-entry with no migration.</para>
+    /// order purely by <see cref="ModVersion.ImportedAt"/>; all-download
+    /// containers by <see cref="ModVersion.RemoteUploadedAt"/>.</para>
     /// <para>
     /// <b>Display metadata is container-scoped, not version-scoped.</b> A
     /// non-null <paramref name="displayMetadata"/> replaces
@@ -174,6 +177,111 @@ public interface IModRepository
     ModContainer? RenameContainer(Guid containerId, string newName);
 
     /// <summary>
+    /// Edits a managed container's import details in one atomic manifest write:
+    /// the display <paramref name="name"/>, the source provenance
+    /// (<paramref name="source"/>), and the release tag recorded on the
+    /// container's latest version (<paramref name="versionTag"/>). The
+    /// correction surface for a container whose import details were wrong or
+    /// incomplete: <see cref="ModContainer.Id"/> never changes, so every
+    /// profile reference (position, enabled, policy, lock) survives the edit.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Name:</b> a display rename folding <see cref="RenameContainer"/>
+    /// semantics (the untracked-name index is kept coherent for untracked
+    /// containers). Must be non-whitespace.</para>
+    /// <para>
+    /// <b>Downloaded mods are not editable:</b> a version record is
+    /// download-grounded when it carries a <see cref="ModVersion.FileId"/> OR
+    /// a <see cref="ModVersion.RemoteUploadedAt"/> (only the download path
+    /// ever records either fact; the timestamp widens the evidence to
+    /// downloads from before FileId persistence). When ANY version on the
+    /// container is grounded, every edit throws
+    /// <see cref="InvalidOperationException"/>, name-only included: there is
+    /// no degraded editing surface for a downloaded mod. The guard is
+    /// enforced here, not just in the UI: programmatic callers get the same
+    /// refusal.</para>
+    /// <para>
+    /// <b>The name is Untracked-only:</b> a Nexus mod's name comes from Nexus
+    /// (the update check's name-sync renames the container when Nexus's name
+    /// changes, so a user-typed name would be reverted), so an edit whose
+    /// destination is <see cref="NexusSource"/> throws when it changes the
+    /// name. The rule follows the destination: switching to Untracked may
+    /// rename, associating to Nexus keeps the name it had.</para>
+    /// <para>
+    /// <b>Identity reset:</b> changing the identity (a different Nexus id, or
+    /// a switch between Nexus and Untracked) keeps only the latest version's
+    /// local facts (its folder + <see cref="ModVersion.ImportedAt"/>; its
+    /// remote claims, the tag, <see cref="ModVersion.FileId"/>, and
+    /// <see cref="ModVersion.RemoteUploadedAt"/>, are reset for the new
+    /// identity) and REMOVES every older version (manifest entry + on-disk
+    /// folder). Because removal destroys data, a multi-version identity change
+    /// requires <paramref name="removeOlderVersions"/> = <c>true</c>; with
+    /// <c>false</c> it throws
+    /// <see cref="RemovalConfirmationRequiredException"/> (an
+    /// <see cref="InvalidOperationException"/> subclass, catchable
+    /// specifically) so the primitive can never silently destroy versions.
+    /// The caller owns the confirm (the edit card shows an explicit removal
+    /// notice before passing <c>true</c>).</para>
+    /// <para>
+    /// <b>Retag:</b> a same-identity edit retags only the latest version
+    /// record. <paramref name="versionTag"/> may be empty ONLY for the
+    /// programmatic association path (an empty tag marks the derived
+    /// version-unknown state); the edit card always passes non-empty when
+    /// saving as Nexus, and empty when saving as Untracked (a single-version
+    /// identity change to Untracked clears the tag; a non-empty tag with an
+    /// Untracked destination is rejected, since an untracked container is
+    /// single-version by construction). A tag colliding with another
+    /// surviving version's tag on the same container throws
+    /// <see cref="InvalidOperationException"/> (the same upsert-key conflict
+    /// <see cref="AddVersion"/> would hit).</para>
+    /// <para>
+    /// <b>Invariant guard:</b> the repository holds one container per
+    /// (source, identity); a Nexus identity another container already carries
+    /// is rejected with <see cref="InvalidOperationException"/>. Linked
+    /// containers (either side) are rejected: a linked container's identity is
+    /// its external path and is never edited.</para>
+    /// <para>
+    /// Version folders of surviving versions never move, so a profile's
+    /// <c>PinnedPolicy</c> pins onto surviving versions stay valid; pins onto
+    /// removed versions degrade to the existing staging skip-with-warning
+    /// path.</para>
+    /// </remarks>
+    /// <param name="containerId">The target container.</param>
+    /// <param name="name">The new display name (non-whitespace).</param>
+    /// <param name="source">The new source provenance (Untracked or Nexus; a
+    /// <see cref="LinkedSource"/> is rejected).</param>
+    /// <param name="versionTag">The release tag to record on the latest
+    /// version. Empty is valid only for the programmatic association path
+    /// (Nexus) and required for the Untracked destination; a non-empty tag
+    /// with an Untracked destination throws.</param>
+    /// <param name="removeOlderVersions">Whether a multi-version identity
+    /// change may remove the older versions. Ignored unless the identity
+    /// changes; required <c>true</c> then when more than one version
+    /// exists.</param>
+    /// <returns>The updated container, or <c>null</c> when the container id is
+    /// unknown (mirroring <see cref="RenameContainer"/>).</returns>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is null or
+    /// whitespace, <paramref name="source"/> is a
+    /// <see cref="LinkedSource"/>, or <paramref name="versionTag"/> is
+    /// non-empty with an Untracked destination.</exception>
+    /// <exception cref="RemovalConfirmationRequiredException">An identity
+    /// change on a multi-version container was made without
+    /// <paramref name="removeOlderVersions"/>.</exception>
+    /// <exception cref="InvalidOperationException">The container is
+    /// download-grounded (any version carries a FileId or a
+    /// RemoteUploadedAt) and refuses every edit; a Nexus-destination edit
+    /// changes the name; the new tag collides with another
+    /// surviving version's tag; the target container is linked; or another
+    /// container already carries the new Nexus identity.</exception>
+    ModContainer? EditImportDetails(
+        Guid containerId,
+        string name,
+        ModSource source,
+        string versionTag,
+        bool removeOlderVersions);
+
+    /// <summary>
     /// Initializes a container's <see cref="ModContainer.DisplayMetadata"/> when
     /// it is still <c>null</c> (never fetched). An atomic, missing-only
     /// initialization: the write + the manifest persist run under the
@@ -209,7 +317,7 @@ public interface IModRepository
     /// Removes a version from the container's manifest + deletes its folder
     /// (idempotent: a missing container or folder is a no-op). If the removed
     /// version carried <see cref="ModVersion.IsLatest"/>, the newest remaining
-    /// version by the effective-timestamp key (see
+    /// version by the arrival rule (see
     /// <see cref="ModVersion.IsLatest"/>) is promoted.
     /// </summary>
     void RemoveVersion(Guid containerId, string versionFolder);

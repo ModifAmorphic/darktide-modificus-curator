@@ -121,6 +121,37 @@
                  Orientation="Horizontal"
                  ItemsAlignment="End">
         <!--
+          Edit import details (drawn pencil), first in the strip (between the
+          source badge cell and the Enabled checkbox). The universal
+          correction surface for the row's container: name, source
+          association, version tag. The host cell is laid out on EVERY row
+          (the update-action-cell pattern), sized to the pencil's footprint,
+          and the button itself shows only while the row is editable (linked
+          rows: an external folder's identity is its path; download-morphed
+          rows: the morph's completion is about to write the container;
+          downloaded rows: a version carries a FileId or a RemoteUploadedAt,
+          so the details are Nexus-owned). A non-editable row shows empty
+          space of the same width, so the Enabled checkbox and the strip
+          geometry never shift; the hidden button leaves the accessibility
+          tree, focus order, and hit testing naturally. The parent's command
+          repeats the guards.
+        -->
+        <Panel Classes="editCell" MinWidth="28" VerticalAlignment="Center">
+          <Button Classes="icon editDetails"
+                  IsVisible="{Binding CanEditImportDetails}"
+                  ToolTip.Tip="{ReflectionBinding [ModRow_EditImportDetailsTooltip], Source={StaticResource Loc}}"
+                  AutomationProperties.Name="{ReflectionBinding [ModRow_EditImportDetailsTooltip], Source={StaticResource Loc}}"
+                  Click="EditImportDetails_Click"
+                  CommandParameter="{Binding}">
+            <!-- Material "edit" (24x24 source): pencil. -->
+            <Path Width="16" Height="16" Stretch="Uniform"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  Fill="{Binding $parent[Button].Foreground}"
+                  Data="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+          </Button>
+        </Panel>
+
+        <!--
           Enabled. In Detailed the localized label is the CheckBox content so
           the whole label is part of the click hit target, with an explicit
           automation name; in Compact EnabledLabel is null, the exact
@@ -145,7 +176,11 @@
           PinnedPolicy(versionId). Disabled for linked rows (a linked mod has
           a single implicit version) and while a download morphs the row
           (IsPolicyEditable covers both; the morphing download writes the
-          policy itself at completion, so a manual edit would race it).
+          policy itself at completion, so a manual edit would race it). A
+          version-unknown row offers no pin: its only version carries an empty
+          tag (nothing legible to pin to), so the Pinned choice is disabled
+          and the dropdown never renders (CanShowVersionDropdown covers the
+          IsPinned + not-unknown conjunction).
         -->
         <StackPanel Orientation="Horizontal" Spacing="6"
                     VerticalAlignment="Center">
@@ -154,12 +189,13 @@
                     IsEnabled="{Binding IsPolicyEditable}"
                     MinWidth="100">
             <ComboBoxItem Content="{ReflectionBinding [ModRow_PolicyLatest], Source={StaticResource Loc}}" />
-            <ComboBoxItem Content="{ReflectionBinding [ModRow_PolicyPinned], Source={StaticResource Loc}}" />
+            <ComboBoxItem Content="{ReflectionBinding [ModRow_PolicyPinned], Source={StaticResource Loc}}"
+                          IsEnabled="{Binding !IsVersionUnknown}" />
           </ComboBox>
           <ComboBox ItemsSource="{Binding AvailableVersions}"
                     SelectedItem="{Binding SelectedVersion, Mode=TwoWay}"
                     SelectionChanged="PinnedVersion_Changed"
-                    IsVisible="{Binding IsPinned}"
+                    IsVisible="{Binding CanShowVersionDropdown}"
                     IsEnabled="{Binding IsPolicyEditable}"
                     PlaceholderText="{ReflectionBinding [ModRow_PinnedVersionPlaceholder], Source={StaticResource Loc}}"
                     MinWidth="120">
@@ -176,11 +212,13 @@
           EVERY row (so later controls never shift when the button
           appears/disappears). For Nexus + Latest rows it holds the update
           button; for Pinned Nexus and Untracked rows the cell stays reserved
-          but empty. No update -> disabled, neutral/grey download arrow (the
-          updateAction:disabled style dims the whole button to 0.4 opacity);
-          update available -> enabled with the accent-blue arrow. Premium click
-          enqueues the in-app update; regular/unknown click opens the mod's
-          Nexus files page (the row VM carries the click behavior; the tooltip
+          but empty. No update + not version-unknown -> disabled, neutral/grey
+          download arrow (the updateAction:disabled style dims the whole button
+          to 0.4 opacity); update available OR version unknown (the resolution
+          path) -> enabled with the accent-blue arrow. Premium click enqueues
+          the in-app update (for an unknown row, the resolution install with an
+          empty expected version); regular/unknown click opens the mod's Nexus
+          files page (the row VM carries the click behavior; the tooltip
           distinguishes the cases).
           While a download morphs the row, the WHOLE cell is not rendered
           (the morph's progress owns the row's progress surface, and hiding
@@ -196,17 +234,18 @@
                   IsEnabled="{Binding UpdateActionEnabled}"
                   ToolTip.Tip="{Binding UpdateActionTooltip}">
             <Panel>
-              <!-- Neutral/grey download arrow (no update / disabled):
-                   inherits the button foreground. -->
+              <!-- Neutral/grey download arrow (no update + not unknown:
+                   disabled; inherits the button foreground). -->
               <Path Width="16" Height="16" Stretch="Uniform"
                     HorizontalAlignment="Center" VerticalAlignment="Center"
-                    IsVisible="{Binding !UpdateAvailable}"
+                    IsVisible="{Binding !UpdateActionEnabled}"
                     Fill="{Binding $parent[Button].Foreground}"
                     Data="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
-              <!-- Accent-blue download arrow (update available). -->
+              <!-- Accent-blue download arrow (update available or version
+                   unknown: enabled + accent while unknown too). -->
               <Path Width="16" Height="16" Stretch="Uniform"
                     HorizontalAlignment="Center" VerticalAlignment="Center"
-                    IsVisible="{Binding UpdateAvailable}"
+                    IsVisible="{Binding UpdateActionEnabled}"
                     Fill="{DynamicResource SystemControlForegroundAccentBrush}"
                     Data="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
             </Panel>
@@ -390,6 +429,17 @@
           </Button>
         </StackPanel>
       </StackPanel>
+    </DataTemplate>
+    <!--
+      The edit band's content: the SAME workflow view the top card hosts
+      (batch + edit share the form fields; only the placement differs). The
+      band ContentControl assigns this template with the workflow VM as the
+      content, so the form is instantiated only on the editing row. The
+      removal-confirm panel + the edit failure area ride inside the view, so
+      they move into the band with it.
+    -->
+    <DataTemplate x:Key="ModRowEditBandTemplate" x:DataType="vm:ImportWorkflowViewModel">
+      <views:ImportWorkflowView />
     </DataTemplate>
   </UserControl.Resources>
 
@@ -593,8 +643,11 @@
     </ContainerQuery>
     <!--
       The Compact row's strip spacing: the same shared strip with the
-      single-line row's tighter inter-control margins (12 / 12 / 8 / 8 / 4 /
-      4 / 4, with ItemSpacing 0 so the margins alone define the gaps). Scoped
+      single-line row's tighter inter-control margins (12 / 8 / 12 / 8 / 8 /
+      4 / 4 / 4: the pencil's reserved slot leads at 12, the Enabled checkbox
+      follows at 8, then the policy cluster 12, update cell 8, move up 8, and
+      4 each for move down / order lock / remove, with ItemSpacing 0 so the
+      margins alone define the gaps). Scoped
       under the Compact root's Grid.compactRow class so the Detailed card is
       untouched, and declared after the WrapPanel.actionStrip base so the
       override wins.
@@ -602,8 +655,11 @@
     <Style Selector="Grid.compactRow WrapPanel.actionStrip">
       <Setter Property="ItemSpacing" Value="0" />
     </Style>
-    <Style Selector="Grid.compactRow WrapPanel.actionStrip > CheckBox">
+    <Style Selector="Grid.compactRow WrapPanel.actionStrip > Panel.editCell">
       <Setter Property="Margin" Value="12,0,0,0" />
+    </Style>
+    <Style Selector="Grid.compactRow WrapPanel.actionStrip > CheckBox">
+      <Setter Property="Margin" Value="8,0,0,0" />
     </Style>
     <Style Selector="Grid.compactRow WrapPanel.actionStrip > StackPanel">
       <Setter Property="Margin" Value="12,0,0,0" />
@@ -765,9 +821,13 @@
         while a rate limit is active (server-driven, takes precedence), or the
         live m:ss countdown ("Rate limiting protection enabled. Manual refresh
         will be available again in {time}.") while the manual throttle is active.
+        The whole cluster also disables while the import card is active in
+        either mode (IsListToolingEnabled: no projection churn under an open
+        editor).
       -->
       <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6"
-                  VerticalAlignment="Center">
+                  VerticalAlignment="Center"
+                  IsEnabled="{Binding IsListToolingEnabled}">
         <Button Classes="icon"
                 Click="RefreshUpdates_Click"
                 IsEnabled="{Binding IsRefreshEnabled}"
@@ -792,7 +852,11 @@
       <!--
         Search box. A fixed-width TextBox between the flexible rate-limit
         column and the density pair; TwoWay binding to SearchText is
-        keystroke-live (the projection rebuilds per keystroke). The inner
+        keystroke-live (the projection rebuilds per keystroke). Disables while
+        the import card is active in either mode (IsListToolingEnabled: a
+        search change could hide the row being edited under its own open
+        editor); the inner clear affordance is inside the TextBox, so it goes
+        with it. The inner
         clear affordance reuses the Fluent theme's own text-box clear-button
         chrome (FluentTextBoxButton, the same ControlTheme the theme's
         built-in clearButton class applies) with the theme's drawn X geometry;
@@ -804,6 +868,7 @@
                Width="200"
                Margin="16,0,0,0"
                VerticalAlignment="Center"
+               IsEnabled="{Binding IsListToolingEnabled}"
                Text="{Binding SearchText, Mode=TwoWay}"
                PlaceholderText="{ReflectionBinding [ModList_SearchWatermark], Source={StaticResource Loc}}">
         <TextBox.InnerRightContent>
@@ -837,10 +902,13 @@
         visibility toggle (same icon/density chrome, selected while hiding)
         filters the row list to enabled mods only, and the trailing
         updates-only toggle narrows the list to rows flagged with an available
-        update.
+        update. The whole cluster disables while the import card is active in
+        either mode (IsListToolingEnabled: the projection must not change
+        under an open editor).
       -->
       <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="2"
-                   VerticalAlignment="Center" Margin="16,0,0,0">
+                   VerticalAlignment="Center" Margin="16,0,0,0"
+                   IsEnabled="{Binding IsListToolingEnabled}">
         <Button Classes="icon density"
                 Classes.selected="{Binding DetailedRows.IsCompact}"
                 Command="{Binding DetailedRows.SetDensityCommand}"
@@ -979,15 +1047,17 @@
     </Grid>
 
     <!--
-      Inline import card (ImportWorkflowView). Visible only while the workflow
-      is active (editing, processing, or failure). Hosted directly below the
-      toolbar with the same 20px left/right inset. DataContext is the workflow
-      child VM (reached through ModListViewModel.ImportWorkflow); the visibility
-      binding stays on the wrapper Panel so it resolves against the mod-list VM's
-      context, not the workflow VM's.
+      The BATCH-mode card host (the inline import card). Visible only while a
+      batch is active (editing, processing, or failure); the EDIT mode never
+      uses the top card, it renders as an in-row band on the edited row inside
+      the row list below (a batch edits many mods, one row at a time up here;
+      an edit is about exactly one row, so its editor lives at that row).
+      DataContext is the workflow child VM (reached through the mod-list VM's
+      context); the visibility binding stays on the wrapper Panel so it
+      resolves against the mod-list VM's context, not the workflow VM's.
     -->
     <Panel Grid.Row="1"
-           IsVisible="{Binding ImportWorkflow.IsActive}"
+           IsVisible="{Binding ImportWorkflow.IsBatchActive}"
            Margin="20,0,20,4">
       <views:ImportWorkflowView DataContext="{Binding ImportWorkflow}" />
     </Panel>
@@ -1114,7 +1184,8 @@
             <ItemsControl.ItemTemplate>
             <DataTemplate x:DataType="vm:ModItemViewModel">
               <!--
-                One row, two mutually exclusive roots selected by the row's
+                One row: an optional leading edit band above exactly one of
+                two mutually exclusive roots selected by the row's
                 IsDetailed projection (pushed down by the detailed-rows
                 coordinator): the Compact Grid + the Detailed card. The
                 grip, badge cluster, and action strip are the shared
@@ -1122,13 +1193,34 @@
                 placement, margins, and density). Both roots bind the exact
                 same per-row state + route to the exact same code-behind
                 handlers, so no action behavior forks between modes. The
-                Panel root only hosts the two alternatives (it carries no
-                margin of its own); exactly one is visible at a time, and
-                each visible root owns its own row spacing (the Compact Grid
-                keeps Margin="0,3"; the Detailed Border carries its own
+                StackPanel root hosts the band + the two alternatives in one
+                vertical flow (an ItemsControl cannot inject elements between
+                items, so "right above the row" lives inside the row template
+                itself); exactly one root is visible at a time, and each
+                visible root owns its own row spacing (the Compact Grid keeps
+                Margin="0,3"; the Detailed Border carries its own
                 Margin="0,3").
               -->
-              <Panel>
+              <StackPanel>
+              <!--
+                The edit band: the import card's EDIT mode rendered inside the
+                row being edited, a leading section above the row's content.
+                ONE definition serves both densities + both breakpoints (it
+                precedes whichever root is visible; the shared workflow view
+                carries the form, the removal-confirm panel, and the failure
+                area). The band follows the ActiveDownload morph pattern: the
+                parent assigns the row's EditBandContext together with
+                IsEditTarget (on the workflow's target change + on every
+                Reload), so the form is instantiated only on the editing row
+                and a mid-edit reload re-attaches it to the rebuilt row
+                instance for the same container. While the band is open the
+                row is anchored (grip inert + move commands refuse).
+              -->
+              <ContentControl Classes="editBand"
+                              Margin="0,3"
+                              IsVisible="{Binding IsEditTarget}"
+                              Content="{Binding EditBandContext}"
+                              ContentTemplate="{StaticResource ModRowEditBandTemplate}" />
               <!--
                 Compact row layout (4 columns): grip | Name | badges | action
                 strip. The drag grip is column 0 and is the ONLY surface that
@@ -1385,7 +1477,7 @@
                           Background="{DynamicResource SystemControlForegroundAccentBrush}" />
                    </Panel>
                  </Border>
-              </Panel>
+              </StackPanel>
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>

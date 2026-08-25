@@ -342,10 +342,14 @@ is not secret storage; logs never print environment values (only the profile id
 
 Startup prune orchestration. Collects every `(containerId, versionFolder)`
 referenced by any profile (resolving each entry's policy against its container
-via `ModContainer.ResolveVersion`), then calls
+via `ModContainer.ResolveVersion`), plus every referenced container's CURRENT
+latest version folder (what a `LatestPolicy` resolves to today,
+unconditionally regardless of the entry's own policy, so a pinned entry can
+never let the prune delete the container's newest version), then calls
 `IModRepository.PruneUnreferenced`. The composition root invokes it once after
 building the service provider; a failure is logged + swallowed so cleanup never
-blocks startup.
+blocks startup. Unreferenced superseded versions (referenced by no policy and
+not the container's latest) are still reclaimed.
 
 A `LinkedSource` container has no versions, so it is referenced by containerId
 alone: a linked profile entry adds `(containerId, "")` to the referenced set.

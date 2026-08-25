@@ -287,9 +287,12 @@ Each version is a subfolder with an **opaque unique ID**; the raw version tag
 lives only in the manifest (for display + pin resolution), never as a folder
 name. **`isLatest` is a flag on one version entry**, not a duplicate folder:
 the repository re-evaluates the flag on every add/remove with the
-**effective-timestamp key** (`remoteUploadedAt` when the remote source
-published the file, else the import time, with the import time breaking exact
-ties), so importing an older remote file never flips latest. Each version
+**arrival rule** (the most recent arrival, i.e. the newest import time,
+decides the clock: a manual import with the newest arrival is latest;
+otherwise the newest downloaded version by `remoteUploadedAt`, with the
+import time breaking exact ties), so importing an older remote file never
+flips latest while a download arriving after a manual import takes the
+flag. Each version
 entry also records the remote file id it was acquired from (`FileId`, the
 exact identity the download queue's repository hit check keys on; null for
 manual imports, self-healing on re-acquisition). Moving latest is a one-field
@@ -367,7 +370,7 @@ contents; the archive is validated to have a single top-level folder before
 extraction). Container dedup: Untracked by name, Nexus by mod id. Version dedup:
 re-importing the same tag reuses its folder (refreshed); a new tag creates a new
 version, and the repository re-evaluates `isLatest` over all versions with its
-effective-timestamp key. The service returns `(containerId, versionId)`,
+arrival rule. The service returns `(containerId, versionId)`,
 where `versionId` is the imported version's opaque on-disk folder id (a
 `ModVersion.Folder` value); the display tag (`ModVersion.VersionString`) is
 recorded in the container manifest and is not returned. The caller then adds

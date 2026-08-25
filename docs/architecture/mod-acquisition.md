@@ -166,7 +166,7 @@ and `IHttpClientFactory` (for the raw CDN download) from the container.
    the archive structure (single base folder plus matching `<base>.mod`
    descriptor; archive detection is content-based via SharpCompress), handles
    find-or-create-container (dedup by `NexusSource.ModId`) plus add-version,
-   re-evaluates `IsLatest` with the repository's effective-timestamp key, records
+   re-evaluates `IsLatest` with the repository's arrival rule, records
    the publish date and the file id on the entry (new or reused), replaces the
    container's `DisplayMetadata` in the same
    manifest update as the version mutation, and extracts into

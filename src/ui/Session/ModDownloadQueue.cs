@@ -69,8 +69,11 @@ public enum DownloadPhase
 /// <param name="NxmExpires">The per-file download expiry from the nxm URL.</param>
 /// <param name="ExpectedVersion">For <see cref="DownloadPurpose.UpdateInstall"/>
 /// only: the installed version the update flag was recorded against (the
-/// eligibility version rule). Required with a non-null
-/// <paramref name="ContainerId"/> on that purpose.</param>
+/// eligibility version rule). Empty for an unknown-resolution install (a
+/// manual click on a version-unknown row): it matches the container's empty
+/// installed tag, so the dequeue-time revalidation passes. Required
+/// non-null with a non-null <paramref name="ContainerId"/> on that
+/// purpose.</param>
 public sealed record ModDownloadRequest(
     string GameDomain,
     int ModId,
@@ -323,8 +326,14 @@ internal sealed class ModDownloadQueue : IModDownloadQueue
     public DownloadItem Enqueue(ModDownloadRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        // An UpdateInstall requires a container + an expected version: null is
+        // a programming error, but the empty string is the legitimate
+        // unknown-resolution install (a manual click on a version-unknown row;
+        // the empty expected version matches the container's empty installed
+        // tag at revalidation, so the resolution install is never dropped as
+        // stale).
         if (request.Purpose == DownloadPurpose.UpdateInstall &&
-            (request.ContainerId is null || string.IsNullOrWhiteSpace(request.ExpectedVersion)))
+            (request.ContainerId is null || request.ExpectedVersion is null))
         {
             throw new ArgumentException(
                 "An update-install request requires a container id and an expected version.", nameof(request));
@@ -535,7 +544,7 @@ internal sealed class ModDownloadQueue : IModDownloadQueue
                 pinId = hit.Folder;
                 // Head-ness reads the matched version's IsLatest flag.
                 // Accepted edge: a legacy manifest (pre-FileId, or with an
-                // IsLatest persisted before the effective-timestamp fix) can
+                // IsLatest persisted before the arrival-rule fix) can
                 // disagree with the current latest key until that version's
                 // next mutation; no migration (legacy entries self-heal by
                 // attrition).

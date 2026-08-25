@@ -5,25 +5,34 @@
              x:DataType="vm:ImportWorkflowViewModel">
 
   <!--
-    The inline local-import card, hosted directly below the Mods toolbar inside
-    ModListView. A full-width bordered card with the same 20px left/right inset
-    as the toolbar and rows. A vertical sequence of compact label/control rows
-    so the card remains usable at the main window minimum width with either
-    compact or expanded navigation.
+    The inline import form, hosted in two places inside ModListView: the
+    batch card below the toolbar, and the in-row edit band on the row being
+    edited (one band instance at most; the batch card and the band are never
+    both visible). A full-width bordered card with the same 20px left/right
+    inset as the toolbar and rows. A vertical sequence of compact
+    label/control rows so the card remains usable at the main window minimum
+    width with either compact or expanded navigation.
 
-    Four rows: header (position + path), the editing form (visible-but-disabled
-    during processing, hidden during failure), the status/failure area
-    (processing spinner or the terminal inline error), and the actions row
-    (Cancel/Import or Close). Status/failure and actions are in separate rows so
+    Two exclusive modes over one editing form (the fields + validation are
+    shared): the batch import and the single-container edit mode (the
+    correction surface for a mod's import details, entered from a row's pencil
+    button; the policy row hides, the primary button reads Save, and a
+    multi-version identity change swaps the form for an inline removal
+    confirm). Rows: header (position + path, or the edit title), the editing
+    form (visible-but-disabled during processing, hidden during failure and
+    during the edit confirm stage), the status/failure area (processing
+    spinner, the terminal inline error, or the edit mode's inline refusal),
+    and the actions row. Status/failure and actions are in separate rows so
     they never overlap.
 
     Icons + markers are drawn geometry, never Unicode glyphs, per AGENTS.md.
     No new authored icon is needed here: the actions are text buttons.
   -->
 
-  <!-- The card is visible only while the workflow is active (editing,
-       processing, or failure). The host binds this UserControl's IsVisible to
-       ImportWorkflow.IsActive. -->
+  <!-- Each host gates this UserControl's visibility itself, outside this
+       control: the top wrapper binds ImportWorkflow.IsBatchActive (the batch
+       card), the band's ContentControl binds the row's IsEditTarget (the edit
+       band). -->
   <Border Background="{DynamicResource SystemControlBackgroundBaseMediumLowBrush}"
           BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
           BorderThickness="1"
@@ -31,9 +40,10 @@
           Padding="12,10">
     <Grid RowDefinitions="Auto,Auto,Auto,Auto">
 
-      <!-- Header: "Import mod {n} of {total}" (Auto) + the current source path
-           (star, character-ellipsized). The star column constrains the path so
-           it cannot make the card overflow; the full path is retained in the
+      <!-- Header: "Import mod {n} of {total}" (batch) or "Edit import
+           details" (edit) + the current source path (batch only; star,
+           character-ellipsized). The star column constrains the path so it
+           cannot make the card overflow; the full path is retained in the
            tooltip + automation name. -->
       <Grid Grid.Row="0" ColumnDefinitions="Auto,*" Margin="0,0,0,8">
         <TextBlock Grid.Column="0"
@@ -51,102 +61,137 @@
       </Grid>
 
       <!--
-        Editing form: a vertical sequence of compact label/control rows over a
-        single two-column grid (120px label, star control). Visible when editing
-        and processing (disabled during processing so the card does not shift);
-        hidden during failure. Conditional Nexus-only rows (Version, URL/ID,
-        policy) collapse cleanly for Untracked.
+        The mode content (row 1): the visibility-swapped pair of the editing
+        form and the edit mode's inline removal-confirm panel. The form is
+        also hidden during the terminal batch failure (only the failure
+        message + Close show).
       -->
-      <Grid Grid.Row="1"
-            ColumnDefinitions="120,*"
-            RowDefinitions="Auto,Auto,Auto,Auto,Auto"
-            IsVisible="{Binding !IsFailure}"
-            IsEnabled="{Binding IsEditing}"
-            Margin="0,0,0,8">
+      <StackPanel Grid.Row="1" Margin="0,0,0,8">
 
-        <!-- Row 0: Mod name. -->
-        <TextBlock Grid.Row="0" Grid.Column="0"
-                   Text="{ReflectionBinding [Import_NameLabel], Source={StaticResource Loc}}"
-                   VerticalAlignment="Center"
-                   Margin="0,0,6,4" />
-        <TextBox Grid.Row="0" Grid.Column="1"
-                 Text="{Binding ModName, Mode=TwoWay}"
-                 Margin="0,0,0,4" />
+        <!--
+          Editing form: a vertical sequence of compact label/control rows over a
+          single two-column grid (120px label, star control). Shown when
+          editing and processing (disabled during processing so the card does
+          not shift) and in the edit mode's form stage; hidden during failure
+          and during the edit confirm stage. Conditional Nexus-only rows
+          (Version, URL/ID, policy) collapse cleanly for Untracked; the policy
+          row is batch-only (policy is a per-row profile setting, not part of a
+          container's import details). The name field is read-only in edit
+          mode
+          for the Nexus choice (a Nexus mod's name comes from Nexus; the
+          update check's name-sync manages it) and always editable in batch
+          mode; a downloaded container never opens the edit mode at all.
+        -->
+        <Grid IsVisible="{Binding IsFormVisible}"
+              ColumnDefinitions="120,*"
+              RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+              IsEnabled="{Binding IsEditing}">
 
-        <!-- Row 1: Source. -->
-        <TextBlock Grid.Row="1" Grid.Column="0"
-                   Text="{ReflectionBinding [Import_SourceLabel], Source={StaticResource Loc}}"
-                   VerticalAlignment="Center"
-                   Margin="0,0,6,4" />
-        <ComboBox Grid.Row="1" Grid.Column="1"
-                  SelectedIndex="{Binding SourceChoiceIndex, Mode=TwoWay}"
-                  HorizontalAlignment="Stretch"
-                  Margin="0,0,0,4">
-          <ComboBoxItem Content="{ReflectionBinding [Import_SourceUntracked], Source={StaticResource Loc}}" />
-          <ComboBoxItem Content="{ReflectionBinding [Import_SourceNexus], Source={StaticResource Loc}}" />
-        </ComboBox>
+          <!-- Row 0: Mod name (batch: always editable; edit mode: the
+               Untracked choice only). Locked as READ-ONLY, never disabled:
+               read-only text renders at full contrast (the Fluent dark
+               theme's disabled text is near-invisible) + stays selectable,
+               so the user can always read the name being edited. -->
+          <TextBlock Grid.Row="0" Grid.Column="0"
+                     Text="{ReflectionBinding [Import_NameLabel], Source={StaticResource Loc}}"
+                     VerticalAlignment="Center"
+                     Margin="0,0,6,4" />
+          <TextBox Grid.Row="0" Grid.Column="1"
+                   Text="{Binding ModName, Mode=TwoWay}"
+                   IsReadOnly="{Binding !IsNameEditable}"
+                   Margin="0,0,0,4" />
 
-        <!-- Row 2: Version (Nexus only). A vertical stack: TextBox then its
-             inline validation message, both under the same label. Collapses
-             for Untracked. -->
-        <TextBlock Grid.Row="2" Grid.Column="0"
-                   Text="{ReflectionBinding [Import_VersionLabel], Source={StaticResource Loc}}"
-                   VerticalAlignment="Top"
-                   Margin="0,0,6,4"
-                   IsVisible="{Binding IsRemote}" />
-        <StackPanel Grid.Row="2" Grid.Column="1"
-                    Orientation="Vertical"
-                    Margin="0,0,0,4"
-                    IsVisible="{Binding IsRemote}">
-          <TextBox Text="{Binding Version, Mode=TwoWay}"
-                   PlaceholderText="{ReflectionBinding [Import_VersionRequired], Source={StaticResource Loc}}" />
-          <TextBlock Text="{Binding VersionValidationMessage}"
-                     FontSize="11"
-                     Margin="0,2,0,0"
-                     Foreground="{DynamicResource CuratorCautionBrush}"
-                     IsVisible="{Binding VersionValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+          <!-- Row 1: Source. -->
+          <TextBlock Grid.Row="1" Grid.Column="0"
+                     Text="{ReflectionBinding [Import_SourceLabel], Source={StaticResource Loc}}"
+                     VerticalAlignment="Center"
+                     Margin="0,0,6,4" />
+          <ComboBox Grid.Row="1" Grid.Column="1"
+                    SelectedIndex="{Binding SourceChoiceIndex, Mode=TwoWay}"
+                    HorizontalAlignment="Stretch"
+                    Margin="0,0,0,4">
+            <ComboBoxItem Content="{ReflectionBinding [Import_SourceUntracked], Source={StaticResource Loc}}" />
+            <ComboBoxItem Content="{ReflectionBinding [Import_SourceNexus], Source={StaticResource Loc}}" />
+          </ComboBox>
+
+          <!-- Row 2: Version (Nexus only). A vertical stack: TextBox then
+               its inline validation message, both under the same label.
+               Collapses for Untracked. -->
+          <TextBlock Grid.Row="2" Grid.Column="0"
+                     Text="{ReflectionBinding [Import_VersionLabel], Source={StaticResource Loc}}"
+                     VerticalAlignment="Top"
+                     Margin="0,0,6,4"
+                     IsVisible="{Binding IsRemote}" />
+          <StackPanel Grid.Row="2" Grid.Column="1"
+                      Orientation="Vertical"
+                      Margin="0,0,0,4"
+                      IsVisible="{Binding IsRemote}">
+            <TextBox Text="{Binding Version, Mode=TwoWay}"
+                     PlaceholderText="{ReflectionBinding [Import_VersionRequired], Source={StaticResource Loc}}" />
+            <TextBlock Text="{Binding VersionValidationMessage}"
+                       FontSize="11"
+                       Margin="0,2,0,0"
+                       Foreground="{DynamicResource CuratorCautionBrush}"
+                       IsVisible="{Binding VersionValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+          </StackPanel>
+
+          <!-- Row 3: Mod URL or ID (Nexus only; edit mode prefills the bare
+               id). Same vertical-stack shape. -->
+          <TextBlock Grid.Row="3" Grid.Column="0"
+                     Text="{Binding UrlLabel}"
+                     VerticalAlignment="Top"
+                     Margin="0,0,6,4"
+                     IsVisible="{Binding IsRemote}" />
+          <StackPanel Grid.Row="3" Grid.Column="1"
+                      Orientation="Vertical"
+                      Margin="0,0,0,4"
+                      IsVisible="{Binding IsRemote}">
+            <TextBox Text="{Binding Url, Mode=TwoWay}"
+                     PlaceholderText="{Binding UrlPlaceholder}" />
+            <TextBlock Text="{Binding UrlValidationMessage}"
+                       FontSize="11"
+                       Margin="0,2,0,0"
+                       Foreground="{DynamicResource CuratorCautionBrush}"
+                       IsVisible="{Binding UrlValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+          </StackPanel>
+
+          <!-- Row 4: Version policy (batch only; hidden in edit mode). -->
+          <TextBlock Grid.Row="4" Grid.Column="0"
+                     Text="{ReflectionBinding [Import_PolicyLabel], Source={StaticResource Loc}}"
+                     VerticalAlignment="Center"
+                     Margin="0,0,6,0"
+                     IsVisible="{Binding IsPolicyVisible}" />
+          <ComboBox Grid.Row="4" Grid.Column="1"
+                    SelectedIndex="{Binding PolicyChoiceIndex, Mode=TwoWay}"
+                    HorizontalAlignment="Stretch"
+                    IsVisible="{Binding IsPolicyVisible}">
+            <ComboBoxItem Content="{ReflectionBinding [Import_PolicyLatest], Source={StaticResource Loc}}" />
+            <ComboBoxItem Content="{ReflectionBinding [Import_PolicyPinned], Source={StaticResource Loc}}" />
+          </ComboBox>
+        </Grid>
+
+        <!--
+          The edit mode's inline identity-removal confirm (visibility-swapped
+          with the form; the card is a hosted view, so there is no nested
+          modal). Plain language: the older versions will be removed. Back
+          returns to the form without saving.
+        -->
+        <StackPanel IsVisible="{Binding IsEditConfirm}" Spacing="8">
+          <TextBlock Text="{Binding ConfirmTitle}"
+                     TextWrapping="Wrap"
+                     FontWeight="SemiBold"
+                     Foreground="{DynamicResource CuratorCautionBrush}" />
+          <TextBlock Text="{Binding ConfirmMessage}"
+                     TextWrapping="Wrap" />
         </StackPanel>
 
-        <!-- Row 3: Mod URL or ID (Nexus only). Same vertical-stack shape. -->
-        <TextBlock Grid.Row="3" Grid.Column="0"
-                   Text="{Binding UrlLabel}"
-                   VerticalAlignment="Top"
-                   Margin="0,0,6,4"
-                   IsVisible="{Binding IsRemote}" />
-        <StackPanel Grid.Row="3" Grid.Column="1"
-                    Orientation="Vertical"
-                    Margin="0,0,0,4"
-                    IsVisible="{Binding IsRemote}">
-          <TextBox Text="{Binding Url, Mode=TwoWay}"
-                   PlaceholderText="{Binding UrlPlaceholder}" />
-          <TextBlock Text="{Binding UrlValidationMessage}"
-                     FontSize="11"
-                     Margin="0,2,0,0"
-                     Foreground="{DynamicResource CuratorCautionBrush}"
-                     IsVisible="{Binding UrlValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-        </StackPanel>
-
-        <!-- Row 4: Version policy (Nexus only). -->
-        <TextBlock Grid.Row="4" Grid.Column="0"
-                   Text="{ReflectionBinding [Import_PolicyLabel], Source={StaticResource Loc}}"
-                   VerticalAlignment="Center"
-                   Margin="0,0,6,0"
-                   IsVisible="{Binding IsRemote}" />
-        <ComboBox Grid.Row="4" Grid.Column="1"
-                  SelectedIndex="{Binding PolicyChoiceIndex, Mode=TwoWay}"
-                  HorizontalAlignment="Stretch"
-                  IsVisible="{Binding IsRemote}">
-          <ComboBoxItem Content="{ReflectionBinding [Import_PolicyLatest], Source={StaticResource Loc}}" />
-          <ComboBoxItem Content="{ReflectionBinding [Import_PolicyPinned], Source={StaticResource Loc}}" />
-        </ComboBox>
-      </Grid>
+      </StackPanel>
 
       <!--
-        Status/failure area (row 2). Processing: localized text + indeterminate
-        ProgressBar. Failure: the derived inline FailureMessage (wraps, no
-        horizontal scroll). The two are mutually exclusive; neither shows while
-        editing. The actions are in a separate row (row 3) so they never
-        overlap this area.
+        Status/failure area (row 2), mutually exclusive: the processing
+        spinner (batch), the terminal batch failure message (wraps, no
+        horizontal scroll), or the edit mode's inline refusal (localized
+        framing + the actionable detail; the form stays editable above).
       -->
       <StackPanel Grid.Row="2"
                   Orientation="Horizontal"
@@ -168,11 +213,19 @@
                  IsVisible="{Binding IsFailure}"
                  Margin="0,0,0,4" />
 
+      <TextBlock Grid.Row="2"
+                 Text="{Binding EditFailureMessage}"
+                 TextWrapping="Wrap"
+                 Foreground="{DynamicResource CuratorCautionBrush}"
+                 IsVisible="{Binding EditFailureMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                 Margin="0,0,0,4" />
+
       <!--
-        Actions (row 3), right-aligned. Editing: Cancel batch + accent Import.
-        Failure: Close only. Processing: both hidden (the disabled editing form
-        above is the focus). Editing buttons and failure Close are mutually
-        visible by state (IsEditing vs IsFailure).
+        Actions (row 3), right-aligned, one set per mode/stage: batch editing
+        (Cancel batch + accent Import), edit form (Cancel + accent Save), edit
+        confirm (Back + accent confirm), or the terminal failure's Close.
+        Processing hides the row entirely (the disabled form above is the
+        focus).
       -->
       <StackPanel Grid.Row="3"
                   Orientation="Horizontal"
@@ -181,11 +234,25 @@
                   IsVisible="{Binding !IsProcessing}">
         <Button Content="{ReflectionBinding [ImportWorkflow_CancelBatch], Source={StaticResource Loc}}"
                 Command="{Binding CancelBatchCommand}"
-                IsVisible="{Binding IsEditing}" />
+                IsVisible="{Binding IsBatchEditing}" />
         <Button Content="{ReflectionBinding [ImportWorkflow_Import], Source={StaticResource Loc}}"
                 Command="{Binding ImportCurrentCommand}"
                 Classes="accent"
-                IsVisible="{Binding IsEditing}" />
+                IsVisible="{Binding IsBatchEditing}" />
+        <Button Content="{ReflectionBinding [EditDetails_CancelButton], Source={StaticResource Loc}}"
+                Command="{Binding CancelBatchCommand}"
+                IsVisible="{Binding IsEditForm}" />
+        <Button Content="{ReflectionBinding [EditDetails_SaveButton], Source={StaticResource Loc}}"
+                Command="{Binding SaveEditCommand}"
+                Classes="accent"
+                IsVisible="{Binding IsEditForm}" />
+        <Button Content="{ReflectionBinding [EditDetails_BackButton], Source={StaticResource Loc}}"
+                Command="{Binding BackFromEditConfirmCommand}"
+                IsVisible="{Binding IsEditConfirm}" />
+        <Button Content="{ReflectionBinding [EditDetails_ConfirmButton], Source={StaticResource Loc}}"
+                Command="{Binding ConfirmEditSaveCommand}"
+                Classes="accent"
+                IsVisible="{Binding IsEditConfirm}" />
         <Button Content="{ReflectionBinding [ImportWorkflow_Close], Source={StaticResource Loc}}"
                 Command="{Binding CloseFailureCommand}"
                 IsVisible="{Binding IsFailure}" />

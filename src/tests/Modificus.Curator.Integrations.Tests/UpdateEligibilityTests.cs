@@ -126,4 +126,36 @@ public sealed class UpdateEligibilityTests
         Assert.True(eligible);
         Assert.Equal(string.Empty, reason);
     }
+
+    [Fact]
+    public void Empty_expected_version_matches_an_empty_installed_tag()
+    {
+        // The unknown-resolution install: a manual click on a version-unknown
+        // row (its latest version carries an empty tag) enqueues with an empty
+        // expected version. That install must pass revalidation instead of
+        // being dropped as "version changed".
+        var candidate = new ModListCandidate(Guid.NewGuid(), new LatestPolicy());
+        var container = Container(new NexusSource { ModId = 8 }, string.Empty);
+
+        var eligible = UpdateEligibility.IsEligible(
+            candidate, container, 8, string.Empty, out var reason);
+
+        Assert.True(eligible);
+        Assert.Equal(string.Empty, reason);
+    }
+
+    [Theory]
+    [InlineData("1.0", "")]   // stale empty flag against a resolved container
+    [InlineData("", "1.0")]   // an unknown-resolution click against a resolved container
+    public void Empty_versus_nonempty_still_mismatches(string expected, string installed)
+    {
+        var candidate = new ModListCandidate(Guid.NewGuid(), new LatestPolicy());
+        var container = Container(new NexusSource { ModId = 8 }, installed);
+
+        var eligible = UpdateEligibility.IsEligible(
+            candidate, container, 8, expected, out var reason);
+
+        Assert.False(eligible);
+        Assert.Equal("version changed", reason);
+    }
 }

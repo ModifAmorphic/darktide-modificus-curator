@@ -918,6 +918,10 @@ public sealed class NexusModMetadataServiceTests
             return c;
         }
 
+        public ModContainer? EditImportDetails(
+            Guid containerId, string name, ModSource source, string versionTag, bool removeOlderVersions)
+            => throw new NotImplementedException();
+
         public bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata)
         {
             ArgumentNullException.ThrowIfNull(metadata);
@@ -969,6 +973,8 @@ public sealed class NexusModMetadataServiceTests
         public string GetVersionFolderPath(Guid containerId, string versionFolder) => throw new NotImplementedException();
         public void PruneUnreferenced(IReadOnlySet<(Guid ContainerId, string VersionFolder)> referenced) => throw new NotImplementedException();
         public bool IsExternalAvailable(Guid containerId) => throw new NotImplementedException();
+        public ModContainer? EditImportDetails(
+            Guid containerId, string name, ModSource source, string versionTag, bool removeOlderVersions) => throw new NotImplementedException();
         public bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata) => throw new NotImplementedException();
     }
 }

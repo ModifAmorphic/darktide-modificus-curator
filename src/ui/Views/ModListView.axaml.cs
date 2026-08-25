@@ -598,6 +598,49 @@ public partial class ModListView : UserControl
     }
 
     /// <summary>
+    /// Routes a row's edit-import-details button click to the parent's
+    /// <c>EditImportDetailsCommand</c>, which starts the import card's edit
+    /// mode as an in-row band on this row (the child workflow VM owns the
+    /// form + the save; the parent reloads on the child's edited event). The
+    /// command owns the linked / download-morphed guards (the button is
+    /// hidden inside its always-laid-out slot for all three non-editable
+    /// shapes, the update-action-cell pattern); the view is pure mechanics.
+    /// After the edit starts, the row's container (which now carries the
+    /// expanded band) is brought into view: posted at Loaded priority so the
+    /// band has laid out first, and a no-op when the row is already visible.
+    /// </summary>
+    private void EditImportDetails_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button b && b.DataContext is ModItemViewModel row)
+        {
+            ViewModel?.EditImportDetailsCommand.Execute(row);
+
+            if (ViewModel is { ImportWorkflow.EditTargetContainerId: { } target }
+                && target == row.ContainerId)
+            {
+                BringEditBandIntoView(row);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Scrolls the row's realized container into view. The container hosts
+    /// the open band, so bringing it in brings the whole expanded row (the
+    /// band plus the row content) into the viewport; already-visible rows
+    /// scroll nowhere. UI-thread only; posted at Loaded priority so the band
+    /// participates in layout before the scroll decision.
+    /// </summary>
+    private void BringEditBandIntoView(ModItemViewModel row)
+    {
+        if (ModListItems?.ContainerFromItem(row) is not { } container)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(container.BringIntoView, DispatcherPriority.Loaded);
+    }
+
+    /// <summary>
     /// Routes a per-row Update button click to the parent's
     /// <c>UpdateCommand</c>. The command owns the defenses (premium, Nexus +
     /// Latest, update flagged, one-at-a-time) + the acquire + reload + alert
@@ -999,7 +1042,10 @@ public partial class ModListView : UserControl
         for (var i = 0; i < vm.VisibleMods.Count; i++)
         {
             var row = vm.VisibleMods[i];
-            if (row.OrderLocked)
+            // Anchored rows (order-locked or the current edit target) are
+            // never drag destinations; the edit target's grip is inert too,
+            // so it can never be the source.
+            if (row.OrderLocked || row.IsEditTarget)
             {
                 continue;
             }
@@ -1089,7 +1135,9 @@ public partial class ModListView : UserControl
         ModItemViewModel? anchor = null;
         foreach (var row in vm.VisibleMods)
         {
-            if (row.OrderLocked)
+            // Anchored rows (locked or the edit target) are never marker
+            // anchors: they are not destinations.
+            if (row.OrderLocked || row.IsEditTarget)
             {
                 continue;
             }

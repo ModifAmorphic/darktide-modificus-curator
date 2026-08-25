@@ -149,18 +149,18 @@ public sealed class ModRepositoryTests
     }
 
     [Fact]
-    public void AddVersion_flips_isLatest_to_the_newest_by_effective_timestamp()
+    public void AddVersion_flips_isLatest_to_the_newest_import_when_all_versions_are_manual()
     {
-        // All-null RemoteUploadedAt (manual imports) degenerates the
-        // effective-timestamp key to a plain ImportedAt argmax: the newest
-        // import carries isLatest, exactly the pre-existing behavior.
+        // All-null RemoteUploadedAt (manual imports): the arrival rule
+        // degenerates to a plain ImportedAt argmax: the newest import carries
+        // isLatest, exactly the pre-existing behavior.
         using var fx = new RepoFixture();
         var container = fx.Repo.CreateContainer(new UntrackedSource(), "DMF");
 
         var v1 = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate);
         var v2 = fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate);
 
-        // v2 is the newest; it carries isLatest. v1's isLatest was cleared.
+        // v2 is the newest arrival; it carries isLatest. v1's isLatest was cleared.
         Assert.True(v2.Versions.Single(v => v.VersionString == "2.0").IsLatest);
         Assert.False(v2.Versions.Single(v => v.VersionString == "1.0").IsLatest);
     }
@@ -513,24 +513,132 @@ public sealed class ModRepositoryTests
         Assert.False(updated.Versions.Single(v => v.VersionString == "1.0").IsLatest);
     }
 
+    // ---- AddVersion: the arrival rule on mixed containers --------------------
+    //
+    // The most recent ARRIVAL decides which clock governs: a manual import
+    // (null RemoteUploadedAt) with the newest ImportedAt is latest; otherwise
+    // the newest DOWNLOADED version by RemoteUploadedAt is latest (manual
+    // imports ignored in that branch). All-manual and all-download containers
+    // keep their pre-existing outcomes.
+
     [Fact]
-    public void AddVersion_mixed_manifests_coalesce_per_entry()
+    public void AddVersion_a_download_arriving_after_a_manual_import_takes_latest()
     {
-        // Mixed null/non-null (a legacy entry next to a fresh acquisition):
-        // the key coalesces per-entry. The later import ("2.0") carries a
-        // known remote date older than "1.0"'s import date, so "1.0"'s
-        // effective timestamp is newer and it keeps the flag.
+        // THE bug: the manual v1.1.20 was imported today; the downloaded
+        // v1.1.21 (published June, an older date than the manual's fresh
+        // import stamp) arrives afterward. The most recent arrival is the
+        // download, so the newest downloaded version is latest: the old
+        // effective-timestamp comparison let the manual's fresh ImportedAt
+        // outrank the download's publish date forever.
         using var fx = new RepoFixture();
         var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+        var june = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
 
-        var first = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate); // null remote
-        var firstImportedAt = first.Versions.Single(v => v.VersionString == "1.0").ImportedAt;
-        var olderRemote = firstImportedAt.AddDays(-30);
+        fx.Repo.AddVersion(container.Id, "1.1.20", EmptyPopulate); // manual, arrives first
+        var updated = fx.Repo.AddVersion(container.Id, "1.1.21", EmptyPopulate, june);
 
-        var updated = fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, olderRemote);
+        Assert.True(updated.Versions.Single(v => v.VersionString == "1.1.21").IsLatest);
+        Assert.False(updated.Versions.Single(v => v.VersionString == "1.1.20").IsLatest);
+    }
 
-        Assert.True(updated.Versions.Single(v => v.VersionString == "1.0").IsLatest);
-        Assert.False(updated.Versions.Single(v => v.VersionString == "2.0").IsLatest);
+    [Fact]
+    public void AddVersion_a_later_manual_import_lands_as_latest_on_a_downloaded_container()
+    {
+        // The migration case: a hand-imported folder landing on a previously
+        // downloaded container becomes latest (the most recent arrival is the
+        // manual import; the user just brought this content in by hand).
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+        var june = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+
+        fx.Repo.AddVersion(container.Id, "1.1.21", EmptyPopulate, june);
+        var updated = fx.Repo.AddVersion(container.Id, "migrated", EmptyPopulate); // manual, later
+
+        Assert.True(updated.Versions.Single(v => v.VersionString == "migrated").IsLatest);
+        Assert.False(updated.Versions.Single(v => v.VersionString == "1.1.21").IsLatest);
+    }
+
+    [Fact]
+    public void AddVersion_an_older_remote_file_arriving_after_a_download_does_not_flip_latest()
+    {
+        // #232's original case must keep passing: among downloads, latest
+        // tracks the newest publish date, not import recency. (Overlaps
+        // AddVersion_older_remote_file_does_not_flip_isLatest; restated here
+        // as the arrival rule's all-download row: the newest arrival is a
+        // download, so the newest downloaded version by RemoteUploadedAt
+        // wins.)
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+        var june = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        var march = new DateTimeOffset(2024, 3, 1, 0, 0, 0, TimeSpan.Zero);
+
+        fx.Repo.AddVersion(container.Id, "1.1.21", EmptyPopulate, june);
+        var updated = fx.Repo.AddVersion(container.Id, "1.1.20", EmptyPopulate, march);
+
+        Assert.True(updated.Versions.Single(v => v.VersionString == "1.1.21").IsLatest);
+        Assert.False(updated.Versions.Single(v => v.VersionString == "1.1.20").IsLatest);
+    }
+
+    [Fact]
+    public void AddVersion_downloads_only_rank_by_remote_date_with_the_arrival_stamp_breaking_ties()
+    {
+        // The all-download row, incl. the tie-break: two files published the
+        // same day, imported in either order, the later arrival's stamp wins
+        // the exact-tie comparison.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+        var march = new DateTimeOffset(2024, 3, 1, 0, 0, 0, TimeSpan.Zero);
+
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, march);
+        var updated = fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, march);
+
+        Assert.True(updated.Versions.Single(v => v.VersionString == "2.0").IsLatest);
+        Assert.False(updated.Versions.Single(v => v.VersionString == "1.0").IsLatest);
+    }
+
+    [Fact]
+    public void AddVersion_a_manual_arriving_between_downloads_is_latest_until_the_next_download()
+    {
+        // The full decision table in one container: download, then a manual
+        // (manual latest), then another download (the download branch takes
+        // over: newest downloaded version by publish date).
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+        var march = new DateTimeOffset(2024, 3, 1, 0, 0, 0, TimeSpan.Zero);
+        var june = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var afterDownload = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, march);
+        Assert.True(afterDownload.Versions.Single(v => v.VersionString == "1.0").IsLatest);
+
+        var afterManual = fx.Repo.AddVersion(container.Id, "hand", EmptyPopulate);
+        Assert.True(afterManual.Versions.Single(v => v.VersionString == "hand").IsLatest);
+
+        var afterSecondDownload = fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, june);
+        Assert.True(afterSecondDownload.Versions.Single(v => v.VersionString == "2.0").IsLatest);
+        Assert.False(afterSecondDownload.Versions.Single(v => v.VersionString == "hand").IsLatest);
+        Assert.False(afterSecondDownload.Versions.Single(v => v.VersionString == "1.0").IsLatest);
+    }
+
+    [Fact]
+    public void AddVersion_mixed_a_refreshed_remote_date_does_not_steal_latest_from_a_newer_manual_arrival()
+    {
+        // The dedup branch is not a new arrival: the reused entry keeps its
+        // original import stamp, so refreshing its remote date (even to a
+        // newer one) cannot outrank a manual import that arrived later. The
+        // manual stays latest.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+        var june = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        var august = new DateTimeOffset(2024, 8, 1, 0, 0, 0, TimeSpan.Zero);
+
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, june); // download, arrives first
+        var manual = fx.Repo.AddVersion(container.Id, "hand", EmptyPopulate); // manual, later
+        Assert.True(manual.Versions.Single(v => v.VersionString == "hand").IsLatest);
+
+        var updated = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, august); // dedup refresh
+
+        Assert.True(updated.Versions.Single(v => v.VersionString == "hand").IsLatest);
+        Assert.False(updated.Versions.Single(v => v.VersionString == "1.0").IsLatest);
     }
 
     [Fact]
@@ -726,13 +834,15 @@ public sealed class ModRepositoryTests
     }
 
     [Fact]
-    public void RemoveVersion_promotes_by_effective_timestamp_over_import_recency()
+    public void RemoveVersion_promotes_by_remote_date_over_import_recency()
     {
         // Remove the newest remote-published entry ("3.0", September). Among
         // the survivors, "1.0" carries the second-newest remote date (June)
         // but was imported FIRST; "2.0" was imported later with an older
-        // remote date (March). Promotion keys on the effective timestamp, so
-        // "1.0" wins; the old ImportedAt argmax would have picked "2.0".
+        // remote date (March). All survivors are downloads, so the arrival
+        // rule's download branch applies: the newest downloaded version by
+        // remote date ("1.0") wins; the old ImportedAt argmax would have
+        // picked "2.0".
         using var fx = new RepoFixture();
         var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
         var mar = new DateTimeOffset(2024, 3, 1, 0, 0, 0, TimeSpan.Zero);
@@ -749,7 +859,52 @@ public sealed class ModRepositoryTests
 
         var reloaded = fx.Repo.Get(container.Id);
         Assert.True(reloaded!.Versions.Single(v => v.VersionString == "1.0").IsLatest);
-        Assert.False(reloaded.Versions.Single(v => v.VersionString == "2.0").IsLatest);
+        Assert.False(reloaded!.Versions.Single(v => v.VersionString == "2.0").IsLatest);
+    }
+
+    [Fact]
+    public void RemoveVersion_removing_the_latest_download_promotes_the_next_download()
+    {
+        // A mixed container whose newest arrival is a download: latest is the
+        // newest downloaded version ("1.0", June). Removing it leaves the
+        // manual + the March download; the newest surviving arrival is still
+        // the March download (it arrived after the manual), so the download
+        // branch promotes the next-newest downloaded version.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+        var mar = new DateTimeOffset(2024, 3, 1, 0, 0, 0, TimeSpan.Zero);
+        var jun = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+
+        fx.Repo.AddVersion(container.Id, "hand", EmptyPopulate); // manual, arrives first
+        var latest = fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, jun); // latest
+        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, mar); // newest arrival
+        Assert.Equal("1.0", latest.Versions.Single(v => v.IsLatest).VersionString);
+
+        fx.Repo.RemoveVersion(container.Id, latest.Versions.Single(v => v.IsLatest).Folder);
+
+        var reloaded = fx.Repo.Get(container.Id);
+        Assert.True(reloaded!.Versions.Single(v => v.VersionString == "2.0").IsLatest);
+        Assert.False(reloaded!.Versions.Single(v => v.VersionString == "hand").IsLatest);
+    }
+
+    [Fact]
+    public void RemoveVersion_removing_the_newest_arrival_promotes_per_the_survivors_arrival_order()
+    {
+        // A manual that arrived after a download is latest; removing the
+        // manual promotes the download (the newest surviving arrival is a
+        // download, so the newest downloaded version wins).
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 9 }, "Mod");
+        var jun = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, jun);
+        var manual = fx.Repo.AddVersion(container.Id, "hand", EmptyPopulate); // manual latest
+        Assert.Equal("hand", manual.Versions.Single(v => v.IsLatest).VersionString);
+
+        // Remove the manual (the newest arrival): the download is the newest
+        // survivor + the only download, so it is promoted.
+        fx.Repo.RemoveVersion(container.Id, manual.Versions.Single(v => v.IsLatest).Folder);
+        Assert.True(fx.Repo.Get(container.Id)!.Versions.Single(v => v.VersionString == "1.0").IsLatest);
     }
 
     [Fact]

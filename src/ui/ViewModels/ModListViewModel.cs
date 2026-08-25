@@ -165,6 +165,14 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     private ActiveModManager? _activeModManager;
 
     /// <summary>
+    /// The container currently being edited in the import card's edit mode
+    /// (the in-row band's target), mirrored from
+    /// <see cref="ImportWorkflowViewModel.EditTargetContainerId"/> through
+    /// the shared child subscription. Null while no edit is active.
+    /// </summary>
+    private Guid? _editTargetContainerId;
+
+    /// <summary>
     /// Creates the list VM, subscribes to the session (reload on
     /// active-profile change), the update-check runner (row hydration on every
     /// completed check), the download queue (the per-row morph + appended-row
@@ -221,6 +229,10 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         // forwarding names + fan out to the live rows.
         RowContext.PropertyChanged += OnRowContextChanged;
         ImportWorkflow.ItemImported += OnItemImported;
+        // The edit-mode sibling: a saved import-details edit reloads the list
+        // (the edited row's name/badge/version re-join from the repository).
+        // Application-lifetime singletons; never undone.
+        ImportWorkflow.ImportDetailsEdited += OnImportDetailsEdited;
         // The Add split button's enabled state combines the workflow's activity
         // with the Gaming Mode gate, so the workflow's own IsActive flips must
         // re-fire it. Both VMs are application-lifetime singletons; the
@@ -348,8 +360,9 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// toolbar's updates-only filter toggle). Session-transient view state:
     /// never persisted, survives reloads and navigation, and clears on an
     /// active-profile change. Changing it rebuilds <see cref="VisibleMods"/>.
-    /// The filter keeps only rows whose
-    /// <see cref="ModItemViewModel.UpdateAvailable"/> is true.
+    /// The filter keeps rows whose <see cref="ModItemViewModel.UpdateAvailable"/>
+    /// is true, plus version-unknown rows (their update action is the
+    /// resolution path, so they stay reachable while the filter is active).
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsFilterOrSearchActive))]
@@ -544,6 +557,22 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// half is constant for the process lifetime.
     /// </summary>
     public bool IsAddEnabled => !ImportWorkflow.IsActive && !IsGamingMode;
+
+    /// <summary>
+    /// Whether the toolbar's projection-touching controls (the search box,
+    /// the hide-disabled + updates-only filter toggles, the density selector,
+    /// and the check-now refresh) accept input: disabled for the whole time
+    /// the import card is active in EITHER mode (a batch or an edit). There
+    /// is nothing to filter mid-edit (the user already found the mod), and a
+    /// projection change could hide the row being edited under its own open
+    /// editor. Row-level controls (the enabled toggle, policy, remove,
+    /// lock/move, the grip) are untouched: they do not affect the projection,
+    /// and locking the whole page would be hostile. The Add split button has
+    /// its own gate (<see cref="IsAddEnabled"/>). The IsAddEnabled shape: a
+    /// plain projection over the injected child VM, re-fired through the same
+    /// <see cref="ImportWorkflowViewModel.IsActive"/> subscription.
+    /// </summary>
+    public bool IsListToolingEnabled => !ImportWorkflow.IsActive;
 
     /// <summary>
     /// The Add split button's tooltip: the Gaming Mode guidance while gaming
@@ -858,16 +887,58 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     }
 
     /// <summary>
-    /// The import workflow's activity flipped (batch started / ended). Re-fires
-    /// <see cref="IsAddEnabled"/> so the Add split button's disabled state
-    /// tracks the workflow without the view walking into the child VM.
+    /// The import workflow's activity flipped (batch started / ended, edit
+    /// started / saved / cancelled). Re-fires <see cref="IsAddEnabled"/> and
+    /// <see cref="IsListToolingEnabled"/> so the Add split button + the
+    /// toolbar's projection controls track the workflow without the view
+    /// walking into the child VM. The edit target itself arrives through the
+    /// <see cref="ImportWorkflowViewModel.EditTargetContainerId"/> change.
     /// </summary>
     private void OnImportWorkflowPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(ImportWorkflowViewModel.IsActive))
         {
             OnPropertyChanged(nameof(IsAddEnabled));
+            OnPropertyChanged(nameof(IsListToolingEnabled));
+            return;
         }
+
+        if (e.PropertyName == nameof(ImportWorkflowViewModel.EditTargetContainerId))
+        {
+            AssignEditTarget();
+        }
+    }
+
+    /// <summary>
+    /// Mirrors the workflow's edit target onto the rows: the matching row
+    /// gets <see cref="ModItemViewModel.IsEditTarget"/> (its in-row band
+    /// shows) + the band context (the workflow VM, the ActiveDownload
+    /// assignment pattern, reference-guarded so an unchanged assignment never
+    /// re-instantiates the band); every other row's flag clears. Called from
+    /// the <see cref="ImportWorkflowViewModel.EditTargetContainerId"/>
+    /// subscription (activation, save/cancel/profile reset) and after every
+    /// <see cref="Reload"/>'s row rebuild, so the band re-attaches to the new
+    /// row instance for the same container automatically.
+    /// </summary>
+    private void AssignEditTarget()
+    {
+        _editTargetContainerId = ImportWorkflow.EditTargetContainerId;
+        foreach (var row in Mods)
+        {
+            var isTarget = row.ContainerId == _editTargetContainerId;
+            row.IsEditTarget = isTarget;
+            var context = isTarget ? ImportWorkflow : null;
+            if (!ReferenceEquals(row.EditBandContext, context))
+            {
+                row.EditBandContext = context;
+            }
+        }
+
+        // The anchored set changed: recompute the pushed move flags over it
+        // (CanMoveUp/Down are parent-pushed, not row-derived). Cheap +
+        // idempotent; the Reload path runs it again inside its projection
+        // rebuild.
+        ApplyMoveAvailability();
     }
 
     /// <summary>
@@ -1006,6 +1077,10 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
             _activeModManager = null;
             OnPropertyChanged(nameof(IsModManagerActive));
             OnPropertyChanged(nameof(ModManagerBannerText));
+            // Re-attach the edit target over the (now empty) row set: the
+            // card resets itself on a profile switch, so this clears any
+            // lingering band assignment.
+            AssignEditTarget();
             // Hand an empty snapshot so old work is cancelled.
             _ = DetailedRows.SetRowsAsync(Array.Empty<ModItemViewModel>());
             RebuildVisibleMods();
@@ -1053,6 +1128,13 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         }
 
         ModCount = Mods.Count;
+
+        // Re-attach the edit band to the freshly built rows: the target is a
+        // container id, so a mid-edit reload (a name-sync, an UpdatesApplied
+        // reload, any out-of-band change) re-attaches the band to the new row
+        // instance for the same container. Runs before the projection rebuild
+        // so ApplyMoveAvailability sees the anchored row.
+        AssignEditTarget();
 
         // The manager banner reads the same derivation the launch path hands
         // to Relay, so the banner and the --mod-manager flag can never
@@ -1156,12 +1238,12 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// Rebuilds <see cref="VisibleMods"/> from <see cref="Mods"/> under the
     /// current filter/search: a row is visible when it is enabled or the
-    /// hide-disabled filter is off, AND it is flagged with an available
-    /// update or the updates-only filter is off, AND its display name
-    /// contains the search text (case-insensitive ordinal substring; an
-    /// empty or whitespace search matches everything). Called at the end of
-    /// every <see cref="Reload"/>, on every filter/search state change, and
-    /// after an enable toggle. Also
+    /// hide-disabled filter is off, AND it is flagged with an available update
+    /// or version-unknown (the resolution path) or the updates-only filter is
+    /// off, AND its display name contains the search text (case-insensitive
+    /// ordinal substring; an empty or whitespace search matches everything).
+    /// Called at the end of every <see cref="Reload"/>, on every filter/search
+    /// state change, and after an enable toggle. Also
     /// recomputes per-row move availability over the visible unlocked rows (a
     /// hidden row has no visible neighbors to cross) and re-fires the
     /// derived empty-state projections. Never touches the density coordinator:
@@ -1180,7 +1262,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
                 continue;
             }
 
-            if (ShowUpdatesOnly && !row.UpdateAvailable)
+            if (ShowUpdatesOnly && !row.UpdateAvailable && !row.IsVersionUnknown)
             {
                 continue;
             }
@@ -1321,6 +1403,21 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         HasDownloadRows = DownloadRows.Count > 0;
         HasActiveDownloads = items.Any(item => !item.IsTerminal);
         OnPropertyChanged(nameof(HasListContent));
+
+        // A morph arriving on the row being edited closes the edit: a
+        // download is targeting this container (not editable once it lands),
+        // and the morph itself is the visible explanation in the row.
+        // CancelBatch is the deactivate path for either mode; its Reset
+        // re-fires EditTargetContainerId, which re-enters AssignEditTarget
+        // (flags + band contexts only; no collection work, so re-entrancy
+        // into this rebuild is safe).
+        if (_editTargetContainerId is Guid editTarget && morphByContainer.ContainsKey(editTarget))
+        {
+            _logger.LogInformation(
+                "A download morphed the row being edited (container {Container}); closing the edit.",
+                editTarget);
+            ImportWorkflow.CancelBatchCommand.Execute(null);
+        }
     }
 
     // ---- reorder (up / down / drag) ----------------------------------------
@@ -1330,15 +1427,20 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <see cref="ModItemViewModel.CanMoveDown"/> over the VISIBLE unlocked
     /// rows only (the rows reorder within the visible projection: Move Up /
     /// Move Down cross to the adjacent visible unlocked row, and a row with
-    /// only hidden or locked rows above it cannot move up). A hidden row
+    /// only hidden or locked rows above it cannot move up). The edit target
+    /// is anchored exactly like a locked row (its band is open in place; the
+    /// row must not move under its own editor): it is skipped as a mover and
+    /// as a destination rank. A hidden row
     /// carries no move affordances at all (it is not rendered), so both flags
     /// are cleared for it. Locked rows disable both. Called from
     /// <see cref="RebuildVisibleMods"/> so the buttons reflect the current
-    /// order, lock state, and visibility after every edit or filter change.
+    /// order, lock state, edit target, and visibility after every edit or
+    /// filter change.
     /// </summary>
     private void ApplyMoveAvailability()
     {
-        // Hidden rows first: no visible neighbors, no move affordances.
+        // Hidden + anchored rows first: no visible neighbors, no move
+        // affordances.
         foreach (var row in Mods)
         {
             row.CanMoveUp = false;
@@ -1348,16 +1450,18 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         var visibleUnlockedCount = 0;
         foreach (var row in VisibleMods)
         {
-            if (!row.OrderLocked)
+            if (IsAnchored(row))
             {
-                visibleUnlockedCount++;
+                continue;
             }
+
+            visibleUnlockedCount++;
         }
 
         var unlockedIndex = 0;
         foreach (var row in VisibleMods)
         {
-            if (row.OrderLocked)
+            if (IsAnchored(row))
             {
                 continue;
             }
@@ -1367,6 +1471,17 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
             unlockedIndex++;
         }
     }
+
+    /// <summary>
+    /// Whether a row is immovable for the reorder machinery: order-locked by
+    /// the user, or the current edit target (its band is open in place).
+    /// Both anchor the row identically for every movement computation (move
+    /// availability, rank math, the planner's fixed slots) without conflating
+    /// their flags: the lock toggle's visuals still read
+    /// <see cref="ModItemViewModel.OrderLocked"/> alone.
+    /// </summary>
+    private static bool IsAnchored(ModItemViewModel row) =>
+        row.OrderLocked || row.IsEditTarget;
 
     /// <summary>
     /// The unlocked rank of <paramref name="containerId"/> among the VISIBLE
@@ -1380,7 +1495,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         var rank = 0;
         foreach (var row in VisibleMods)
         {
-            if (row.OrderLocked)
+            if (IsAnchored(row))
             {
                 continue;
             }
@@ -1420,12 +1535,13 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// through <see cref="CommitReorderCore"/> (the source crosses to the
     /// adjacent visible unlocked row, skipping hidden rows). Boundary rejection
     /// (target out of range or a no-op) happens inside the planner, so a
-    /// no-move call makes no service call. No-op for a locked row, a row hidden
+    /// no-move call makes no service call. No-op for a locked row, the row
+    /// being edited (anchored under its open band), a row hidden
     /// by the current filter/search, or no active profile.
     /// </summary>
     private void MoveTo(ModItemViewModel? row, int delta)
     {
-        if (row is null || _session.ActiveProfileId is not Guid id || row.OrderLocked)
+        if (row is null || _session.ActiveProfileId is not Guid id || IsAnchored(row))
         {
             return;
         }
@@ -1459,11 +1575,12 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
 
     /// <summary>
     /// Builds + persists a reorder request against the current rows. The
-    /// planner receives each row's locked flag AND its visibility under the
+    /// planner receives each row's anchored flag (order-locked OR the current
+    /// edit target: both keep their exact slots) AND its visibility under the
     /// current filter/search, and constructs the full order that moves the
-    /// source within the visible subsequence while locked rows keep their
+    /// source within the visible subsequence while anchored rows keep their
     /// exact slots and hidden rows shift at most one slot. It returns null for
-    /// any invalid or no-op request (including a locked, hidden, or missing
+    /// any invalid or no-op request (including an anchored, hidden, or missing
     /// source), so a no-change call makes no service call and sets no pending
     /// flag.
     /// </summary>
@@ -1471,7 +1588,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     {
         var visibleIds = new HashSet<Guid>(VisibleMods.Select(r => r.ContainerId));
         var rows = Mods.Select(r =>
-            (r.ContainerId, r.OrderLocked, Visible: visibleIds.Contains(r.ContainerId))).ToArray();
+            (r.ContainerId, IsAnchored(r), Visible: visibleIds.Contains(r.ContainerId))).ToArray();
         var fullOrder = ModReorderPlanner.BuildFullOrder(rows, request);
         if (fullOrder is null)
         {
@@ -1683,13 +1800,16 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// injectable external-launcher seam, surfacing a fallback alert on launch
     /// failure, except inside a Steam Deck Gaming Mode session where the
     /// browser flow cannot complete and Desktop Mode guidance is shown
-    /// instead.
+    /// instead. A version-unknown row takes the same paths (the click is its
+    /// resolution path: the Premium install lands a real version + the state
+    /// self-clears; the files page lets the user identify the installed
+    /// version manually).
     /// </summary>
     /// <remarks>
     /// <para><b>Defense.</b> No-op when: there is no active profile; the row is
     /// not Nexus+Latest (<see cref="ModItemViewModel.IsNexusLatest"/>); no update
-    /// is flagged (<see cref="ModItemViewModel.UpdateAvailable"/>); or the row
-    /// has no <see cref="ModItemViewModel.NexusModId"/>.</para>
+    /// is flagged AND the row is not version-unknown; or the row has no
+    /// <see cref="ModItemViewModel.NexusModId"/>.</para>
     /// <para><b>One engine.</b> The download queue's serial worker is the single
     /// mutual-exclusion point across the manual click, the automatic batch, and
     /// nxm downloads: a click for a file already live in the queue joins the
@@ -1717,8 +1837,12 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
 
         // Defense: the button is only visible+enabled under these conditions,
         // but the command is the source of truth (a programmatic caller, a test,
-        // or a future keystroke could bypass the view's gating).
-        if (!row.IsNexusLatest || !row.UpdateAvailable || row.NexusModId is not int modId)
+        // or a future keystroke could bypass the view's gating). A
+        // version-unknown row is actionable without a flagged update (its
+        // click resolves the version).
+        if (!row.IsNexusLatest
+            || (!row.UpdateAvailable && !row.IsVersionUnknown)
+            || row.NexusModId is not int modId)
         {
             return;
         }
@@ -1748,18 +1872,22 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// the shared enqueue front. The queue owns the rest under its serial
     /// worker: the row morphs while the item is live (the morph hides the
     /// update-action cell, the double-click guard), the dequeue-time
-    /// eligibility revalidation makes a stale flag a silent no-op, and the
-    /// completion acknowledges once + raises the applied event (which marks
-    /// the session pending + reloads this list). A resolve failure (the API
-    /// call before any item exists) surfaces the localized failure alert;
+    /// eligibility revalidation makes a stale flag a silent no-op (for a
+    /// version-unknown row the empty expected version matches the empty
+    /// installed tag, so the resolution install is never dropped as stale),
+    /// and the completion acknowledges once + raises the applied event (which
+    /// marks the session pending + reloads this list). A resolve failure (the
+    /// API call before any item exists) surfaces the localized failure alert;
     /// cancellation is swallowed (not a failure).
     /// </summary>
     private async Task UpdatePremiumAsync(Guid profileId, ModItemViewModel row, int modId)
     {
-        // A row with no resolved version cannot carry the eligibility version
-        // rule's input (the enqueue requires it); treat it like a stale flag:
-        // a silent no-op.
-        if (string.IsNullOrWhiteSpace(row.ActualVersion))
+        // A row whose container resolves NO version at all (a degenerate,
+        // version-less container) cannot carry the eligibility version rule's
+        // input; treat it like a stale flag: a silent no-op. A version-unknown
+        // row (its latest version carries an empty tag) is different: the
+        // empty expected version is its resolution install.
+        if (string.IsNullOrWhiteSpace(row.ActualVersion) && !row.IsVersionUnknown)
         {
             return;
         }
@@ -1769,10 +1897,11 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
             // No ConfigureAwait(false): the continuation must stay on the UI
             // thread so the failure-path ShowAlertAsync below runs on the UI
             // thread (the UI-layer convention). The expected version is the
-            // row's resolved version (what the row was built from); the queue
+            // row's resolved version (what the row was built from): empty for
+            // a version-unknown row, the unknown-resolution install; the queue
             // revalidates it against the container's current state at dequeue.
             await _updateEnqueuer.EnqueueLatestAsync(
-                modId, row.ContainerId, row.Name, row.ActualVersion, profileId);
+                modId, row.ContainerId, row.Name, row.ActualVersion ?? string.Empty, profileId);
             _logger.LogInformation(
                 "Enqueued the update install for mod {Container} (mod id {Mod}).",
                 row.ContainerId, modId);
@@ -1840,6 +1969,45 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
                 row.Name, url);
         }
     }
+
+    // ---- edit import details (the universal correction surface) -------------
+
+    /// <summary>
+    /// Starts the import card's edit mode for a row's container (the
+    /// correction surface for a wrong or incomplete import: rename, source
+    /// association, version tag). The child workflow VM owns the card, the
+    /// fields, and the save; this VM reloads when the child's
+    /// <see cref="ImportWorkflowViewModel.ImportDetailsEdited"/> event reports
+    /// a successful save (the container's name, source, and version can all
+    /// have changed). Linked rows (an external folder's identity is its path
+    /// and is never edited), download-morphed rows (the morph's completion
+    /// is about to write the container), and downloaded rows (a version
+    /// carries a FileId or a RemoteUploadedAt; a downloaded mod's details
+    /// are Nexus-owned) never offer the action (the pencil is hidden for
+    /// all three, its layout slot reserved so the strip geometry never
+    /// shifts); this command repeats the guards as defense in depth, and
+    /// the child's StartEdit repeats them again.
+    /// </summary>
+    [RelayCommand]
+    private void EditImportDetails(ModItemViewModel? row)
+    {
+        if (row is null || row.IsLinked || row.IsDownloadMorphed || row.IsDownloadGrounded)
+        {
+            return;
+        }
+
+        ImportWorkflow.StartEditCommand.Execute(row.ContainerId);
+    }
+
+    /// <summary>
+    /// The import card finished an edit-mode save (the container's import
+    /// details changed). Reload so the edited row's name, badge, and derived
+    /// state re-join from the repository. Unconditional by design: the edit is
+    /// a repository-level mutation and a reload over a profile that no longer
+    /// holds the container is a harmless re-join (a mid-edit profile switch
+    /// resets the card before a save can land).
+    /// </summary>
+    private void OnImportDetailsEdited(object? sender, Guid containerId) => Reload();
 
     /// <summary>
     /// The command behind the "Add Nexus Mods" flyout item + the face button's
