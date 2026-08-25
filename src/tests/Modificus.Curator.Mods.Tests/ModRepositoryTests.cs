@@ -834,7 +834,7 @@ public sealed class ModRepositoryTests
     }
 
     [Fact]
-    public void RemoveVersion_promotes_by_effective_timestamp_over_import_recency()
+    public void RemoveVersion_promotes_by_remote_date_over_import_recency()
     {
         // Remove the newest remote-published entry ("3.0", September). Among
         // the survivors, "1.0" carries the second-newest remote date (June)

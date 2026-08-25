@@ -5,11 +5,13 @@
              x:DataType="vm:ImportWorkflowViewModel">
 
   <!--
-    The inline import card, hosted directly below the Mods toolbar inside
-    ModListView. A full-width bordered card with the same 20px left/right inset
-    as the toolbar and rows. A vertical sequence of compact label/control rows
-    so the card remains usable at the main window minimum width with either
-    compact or expanded navigation.
+    The inline import form, hosted in two places inside ModListView: the
+    batch card below the toolbar, and the in-row edit band on the row being
+    edited (one band instance at most; the batch card and the band are never
+    both visible). A full-width bordered card with the same 20px left/right
+    inset as the toolbar and rows. A vertical sequence of compact
+    label/control rows so the card remains usable at the main window minimum
+    width with either compact or expanded navigation.
 
     Two exclusive modes over one editing form (the fields + validation are
     shared): the batch import and the single-container edit mode (the
@@ -27,9 +29,10 @@
     No new authored icon is needed here: the actions are text buttons.
   -->
 
-  <!-- The card is visible only while the workflow is active (batch editing,
-       processing, failure, or edit mode). The host binds this UserControl's
-       IsVisible to ImportWorkflow.IsActive. -->
+  <!-- Each host gates this UserControl's visibility itself, outside this
+       control: the top wrapper binds ImportWorkflow.IsBatchActive (the batch
+       card), the band's ContentControl binds the row's IsEditTarget (the edit
+       band). -->
   <Border Background="{DynamicResource SystemControlBackgroundBaseMediumLowBrush}"
           BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
           BorderThickness="1"

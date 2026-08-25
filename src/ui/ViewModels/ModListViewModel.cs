@@ -1404,13 +1404,13 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         HasActiveDownloads = items.Any(item => !item.IsTerminal);
         OnPropertyChanged(nameof(HasListContent));
 
-        // A morph arriving on the row being edited closes the edit: the
-        // container just became downloaded (not editable by rule), and the
-        // morph itself is the visible explanation in the row. CancelBatch is
-        // the deactivate path for either mode; its Reset re-fires
-        // EditTargetContainerId, which re-enters AssignEditTarget (flags +
-        // band contexts only; no collection work, so re-entrancy into this
-        // rebuild is safe).
+        // A morph arriving on the row being edited closes the edit: a
+        // download is targeting this container (not editable once it lands),
+        // and the morph itself is the visible explanation in the row.
+        // CancelBatch is the deactivate path for either mode; its Reset
+        // re-fires EditTargetContainerId, which re-enters AssignEditTarget
+        // (flags + band contexts only; no collection work, so re-entrancy
+        // into this rebuild is safe).
         if (_editTargetContainerId is Guid editTarget && morphByContainer.ContainsKey(editTarget))
         {
             _logger.LogInformation(
