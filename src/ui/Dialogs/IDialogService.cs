@@ -75,8 +75,8 @@ public enum GameDirConflictChoice
 /// against a fake of this seam. Each member shows exactly one modal over the
 /// owning main window: the first-run Welcome, a yes/no confirm, the launch
 /// discovery escape hatch, a single-button alert, an unsaved-changes three-
-/// choice prompt, the game-dir conflict prompt, or a
-/// non-dismissable progress spinner. Hosted destinations
+/// choice prompt, the game-dir conflict prompt, the edit-import-details
+/// editor, or a non-dismissable progress spinner. Hosted destinations
 /// (Profiles, Mods, Nexus, Preferences, Settings) are not modals and live
 /// entirely on the shell's SplitView content region; the inline import card is
 /// a hosted UserControl, not a modal.
@@ -152,6 +152,21 @@ public interface IDialogService
     /// <param name="title">The localized dialog title.</param>
     /// <param name="message">The localized prompt body.</param>
     Task<GameDirConflictChoice> ShowGameDirConflictAsync(string title, string message);
+
+    /// <summary>
+    /// Shows the edit-import-details modal for one mod container: the
+    /// correction surface for its import details (name, source association,
+    /// release tag). The dialog's view model is built through the narrow
+    /// <see cref="IEditImportDetailsFactory"/> (this service constructs no
+    /// view models). Returns <c>true</c> when the user saved (the edits were
+    /// applied through <c>IModRepository.EditImportDetails</c>; the caller
+    /// reloads whatever it shows), <c>false</c> when they cancelled (ESC,
+    /// title-bar close, window close, or the Cancel button; no writes) or the
+    /// container no longer exists / is linked (the modal is skipped
+    /// entirely).
+    /// </summary>
+    /// <param name="containerId">The container to edit.</param>
+    Task<bool> ShowEditImportDetailsAsync(Guid containerId);
 
     /// <summary>
     /// Shows a buttonless modal spinner over the supplied async work, awaits

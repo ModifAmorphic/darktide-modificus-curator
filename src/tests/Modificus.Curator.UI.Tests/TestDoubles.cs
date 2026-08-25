@@ -1334,6 +1334,22 @@ internal sealed class FakeDialogService : IDialogService
     }
 
     /// <summary>
+    /// The result returned by the next edit-import-details call: <c>true</c> =
+    /// saved, <c>false</c> = cancelled / skipped. Default <c>false</c>.
+    /// </summary>
+    public bool EditImportDetailsResult { get; set; }
+
+    /// <summary>The container ids the caller asked the edit-details modal to
+    /// show, in call order.</summary>
+    public IReadOnlyList<Guid> EditImportDetailsCalls { get; } = new List<Guid>();
+
+    public Task<bool> ShowEditImportDetailsAsync(Guid containerId)
+    {
+        ((List<Guid>)EditImportDetailsCalls).Add(containerId);
+        return Task.FromResult(EditImportDetailsResult);
+    }
+
+    /// <summary>
     /// The work passed to <see cref="ShowProgressAsync{T}"/>, in call order.
     /// Tests assert on this to verify the DMF download path was driven through
     /// the spinner. Each entry is invoked (awaited) so the work's result /
@@ -1758,6 +1774,97 @@ internal class FakeModRepository : IModRepository
             _untrackedByName[newName] = container.Id;
         }
         var updated = container with { Name = newName };
+        _byId[containerId] = updated;
+        return updated;
+    }
+
+    public ModContainer? EditImportDetails(
+        Guid containerId, string name, ModSource source, string versionTag, bool removeOlderVersions)
+    {
+        // Mirror production: the edit-details primitive's guard + mutation
+        // rules, minus the disk (the fake has no manifest to persist).
+        if (!_byId.TryGetValue(containerId, out var container))
+        {
+            return null;
+        }
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new ArgumentException("Container name must not be null or whitespace.", nameof(name));
+        }
+        if (source is LinkedSource)
+        {
+            throw new ArgumentException("A linked source cannot be assigned.", nameof(source));
+        }
+        if (container.Source is LinkedSource)
+        {
+            throw new InvalidOperationException("A linked container cannot be edited.");
+        }
+        if (source is NexusSource incoming
+            && _byId.Values.Any(c => c.Id != containerId
+                && c.Source is NexusSource ns && ns.ModId == incoming.ModId))
+        {
+            throw new InvalidOperationException($"Another container already tracks Nexus mod {incoming.ModId}.");
+        }
+
+        var identityChanged = !((container.Source, source) switch
+        {
+            (NexusSource a, NexusSource b) => a.ModId == b.ModId,
+            (UntrackedSource, UntrackedSource) => true,
+            _ => false,
+        });
+        if (identityChanged && container.Versions.Any(v => v.FileId is not null))
+        {
+            throw new InvalidOperationException("The mod id is locked: this mod was downloaded from Nexus.");
+        }
+
+        if (identityChanged && container.Versions.Count > 1)
+        {
+            if (!removeOlderVersions)
+            {
+                throw new InvalidOperationException(
+                    "Changing the mod id removes the older versions; the caller must confirm.");
+            }
+            var latestFolder = container.Versions.First(v => v.IsLatest).Folder;
+            var survivors = container.Versions.Where(v => v.Folder == latestFolder).ToList();
+            container = container with { Versions = survivors };
+            _byId[containerId] = container;
+        }
+
+        var latest = container.Versions.FirstOrDefault(v => v.IsLatest);
+        if (latest is not null
+            && container.Versions.Any(v => !ReferenceEquals(v, latest)
+                && string.Equals(v.VersionString, versionTag, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException($"A version tagged '{versionTag}' already exists.");
+        }
+
+        var versions = container.Versions;
+        if (latest is not null)
+        {
+            // Mirror production: the reset clears remote claims only when
+            // leaving a Nexus identity; the initial Untracked -> Nexus
+            // association touches nothing but the tag.
+            var resetRemoteClaims = identityChanged && container.Source is NexusSource;
+            var retagged = latest with
+            {
+                VersionString = versionTag,
+                FileId = resetRemoteClaims ? null : latest.FileId,
+                RemoteUploadedAt = resetRemoteClaims ? null : latest.RemoteUploadedAt,
+            };
+            versions = container.Versions
+                .Select(v => ReferenceEquals(v, latest) ? retagged : v)
+                .ToList();
+        }
+
+        if (container.Source is UntrackedSource)
+        {
+            _untrackedByName.Remove(container.Name);
+        }
+        var updated = container with { Name = name, Source = source, Versions = versions };
+        if (updated.Source is UntrackedSource)
+        {
+            _untrackedByName[name] = updated.Id;
+        }
         _byId[containerId] = updated;
         return updated;
     }

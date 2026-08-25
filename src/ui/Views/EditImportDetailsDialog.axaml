@@ -1,0 +1,160 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Modificus.Curator.UI.ViewModels"
+        xmlns:views="using:Modificus.Curator.UI.Views"
+        xmlns:behaviors="using:Modificus.Curator.UI.Behaviors"
+        x:Class="Modificus.Curator.UI.Views.EditImportDetailsDialog"
+        x:DataType="vm:EditImportDetailsViewModel"
+        Title="{ReflectionBinding [EditDetails_Title], Source={StaticResource Loc}}"
+        ExtendClientAreaToDecorationsHint="True"
+        WindowDecorations="None"
+        Width="520" MinWidth="440"
+        SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        behaviors:EscapeClosesBehavior.IsEnabled="True"
+        WindowStartupLocation="CenterOwner">
+
+  <!--
+    The edit-import-details modal. Custom chrome (DialogTitleBar) mirrors the
+    escape-hatch modal pattern. Two visibility-swapped steps in the same
+    window: the editing form (name, source switch, mod id/URL, version; the
+    FileId lock degrades it to name-only) and the inline identity-removal
+    confirm (plain language, no nested modal). ESC / title-bar close / window
+    close all behave like Cancel (Result stays false).
+  -->
+  <Border BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+          BorderThickness="1">
+    <Grid RowDefinitions="Auto,*">
+
+      <views:DialogTitleBar Grid.Row="0" />
+
+      <Grid Grid.Row="1" Margin="24,16">
+
+        <!-- Step 1: the editing form. -->
+        <StackPanel IsVisible="{Binding IsEditingStep}" Spacing="12">
+          <TextBlock Text="{Binding HeaderText}"
+                     TextWrapping="Wrap"
+                     FontWeight="SemiBold" />
+
+          <!-- The FileId lock's name-only degradation: the hint explains why
+               the id + source fields are inert (shown only while locked). -->
+          <TextBlock Text="{Binding FileIdLockHint}"
+                     IsVisible="{Binding IsIdentityLocked}"
+                     FontSize="11"
+                     Opacity="0.7"
+                     TextWrapping="Wrap" />
+
+          <Grid ColumnDefinitions="120,*" RowDefinitions="Auto,Auto,Auto,Auto">
+            <!-- Row 0: Mod name (always editable). -->
+            <TextBlock Grid.Row="0" Grid.Column="0"
+                       Text="{ReflectionBinding [Import_NameLabel], Source={StaticResource Loc}}"
+                       VerticalAlignment="Center"
+                       Margin="0,0,6,4" />
+            <TextBox Grid.Row="0" Grid.Column="1"
+                     Text="{Binding Name, Mode=TwoWay}"
+                     Margin="0,0,0,4" />
+
+            <!-- Row 1: Source switch (disabled while the identity is
+                 FileId-locked). -->
+            <TextBlock Grid.Row="1" Grid.Column="0"
+                       Text="{ReflectionBinding [Import_SourceLabel], Source={StaticResource Loc}}"
+                       VerticalAlignment="Center"
+                       Margin="0,0,6,4" />
+            <ComboBox Grid.Row="1" Grid.Column="1"
+                      SelectedIndex="{Binding SourceChoiceIndex, Mode=TwoWay}"
+                      IsEnabled="{Binding IsSourceEditable}"
+                      HorizontalAlignment="Stretch"
+                      Margin="0,0,0,4">
+              <ComboBoxItem Content="{ReflectionBinding [Import_SourceUntracked], Source={StaticResource Loc}}" />
+              <ComboBoxItem Content="{ReflectionBinding [Import_SourceNexus], Source={StaticResource Loc}}" />
+            </ComboBox>
+
+            <!-- Row 2: Mod id / URL (Nexus only; read-only while locked). -->
+            <TextBlock Grid.Row="2" Grid.Column="0"
+                       Text="{Binding UrlLabel}"
+                       VerticalAlignment="Top"
+                       Margin="0,0,6,4"
+                       IsVisible="{Binding IsRemote}" />
+            <StackPanel Grid.Row="2" Grid.Column="1"
+                        Orientation="Vertical"
+                        Margin="0,0,0,4"
+                        IsVisible="{Binding IsRemote}">
+              <TextBox Text="{Binding Url, Mode=TwoWay}"
+                       IsReadOnly="{Binding !IsIdEditable}"
+                       PlaceholderText="{Binding UrlPlaceholder}" />
+              <TextBlock Text="{Binding UrlValidationMessage}"
+                         FontSize="11"
+                         Margin="0,2,0,0"
+                         Foreground="{DynamicResource CuratorCautionBrush}"
+                         IsVisible="{Binding UrlValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            </StackPanel>
+
+            <!-- Row 3: Version (required when saving as Nexus; disabled +
+                 empty for Untracked). -->
+            <TextBlock Grid.Row="3" Grid.Column="0"
+                       Text="{ReflectionBinding [Import_VersionLabel], Source={StaticResource Loc}}"
+                       VerticalAlignment="Top"
+                       Margin="0,0,6,0"
+                       IsVisible="{Binding IsVersionVisible}" />
+            <StackPanel Grid.Row="3" Grid.Column="1"
+                        Orientation="Vertical"
+                        IsVisible="{Binding IsVersionVisible}">
+              <TextBox Text="{Binding Version, Mode=TwoWay}"
+                       PlaceholderText="{ReflectionBinding [Import_VersionRequired], Source={StaticResource Loc}}" />
+              <TextBlock Text="{Binding VersionValidationMessage}"
+                         FontSize="11"
+                         Margin="0,2,0,0"
+                         Foreground="{DynamicResource CuratorCautionBrush}"
+                         IsVisible="{Binding VersionValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            </StackPanel>
+          </Grid>
+
+          <!-- The last refused save's inline failure (localized framing +
+               the primitive's actionable detail); the dialog stays open for
+               correction. -->
+          <TextBlock Text="{Binding FailureMessage}"
+                     IsVisible="{Binding FailureMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                     TextWrapping="Wrap"
+                     Foreground="{DynamicResource CuratorCautionBrush}" />
+
+          <StackPanel Orientation="Horizontal" Spacing="8"
+                      HorizontalAlignment="Right">
+            <Button Content="{ReflectionBinding [EditDetails_CancelButton], Source={StaticResource Loc}}"
+                    Click="Cancel_Click"
+                    MinWidth="80" />
+            <Button Content="{ReflectionBinding [EditDetails_SaveButton], Source={StaticResource Loc}}"
+                    Click="Save_Click"
+                    IsEnabled="{Binding CanSave}"
+                    Classes="accent"
+                    MinWidth="80" />
+          </StackPanel>
+        </StackPanel>
+
+        <!-- Step 2: the inline identity-removal confirm (visibility-swapped
+             with the form; never a nested modal). Plain language: the older
+             versions will be removed. -->
+        <StackPanel IsVisible="{Binding IsConfirmStep}" Spacing="12">
+          <TextBlock Text="{Binding ConfirmTitle}"
+                     TextWrapping="Wrap"
+                     FontWeight="SemiBold"
+                     Foreground="{DynamicResource CuratorCautionBrush}" />
+          <TextBlock Text="{Binding ConfirmMessage}"
+                     TextWrapping="Wrap" />
+          <StackPanel Orientation="Horizontal" Spacing="8"
+                      HorizontalAlignment="Right">
+            <Button Content="{ReflectionBinding [EditDetails_BackButton], Source={StaticResource Loc}}"
+                    Command="{Binding BackCommand}"
+                    MinWidth="80" />
+            <Button Content="{ReflectionBinding [EditDetails_ConfirmButton], Source={StaticResource Loc}}"
+                    Click="ConfirmSave_Click"
+                    IsEnabled="{Binding CanSave}"
+                    Classes="accent"
+                    MinWidth="80" />
+          </StackPanel>
+        </StackPanel>
+
+      </Grid>
+    </Grid>
+  </Border>
+</Window>

@@ -98,19 +98,6 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     }
 
     /// <summary>
-    /// The source provenance options offered by the editing form's ComboBox
-    /// (Untracked / Nexus), offered by the editing form's ComboBox.
-    /// </summary>
-    public enum ImportSource
-    {
-        /// <summary>Untracked import: no remote identity, no version.</summary>
-        Untracked,
-
-        /// <summary>Nexus Mods: collects a URL or bare mod id parsed to a mod id.</summary>
-        Nexus,
-    }
-
-    /// <summary>
     /// The version-policy options offered by the editing form's ComboBox
     /// (Latest / Pinned), offered by the editing form's ComboBox. Pinned freezes the
     /// profile entry to the version being imported; the opaque version id is
@@ -270,7 +257,7 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
                 return _localization["Import_UrlRequired"];
             }
 
-            return TryParseUrl(SourceChoice, url, out _)
+            return ImportSourceValidator.TryParseUrl(SourceChoice, url, out _)
                 ? string.Empty
                 : _localization["Import_UrlInvalid"];
         }
@@ -298,14 +285,13 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
 
     /// <summary>
     /// Whether Import may be enabled. The mod name must be non-empty; a remote
-    /// source additionally needs a non-empty Version + a URL that parses.
-    /// Untracked needs only the name.
+    /// source additionally needs a non-empty Version + a URL that parses (the
+    /// shared <see cref="ImportSourceValidator"/> rules). Untracked needs only
+    /// the name.
     /// </summary>
     public bool CanImport =>
         !string.IsNullOrWhiteSpace(ModName)
-        && (!IsRemote
-            || (!string.IsNullOrWhiteSpace(Version)
-                && TryParseUrl(SourceChoice, Url ?? string.Empty, out _)));
+        && ImportSourceValidator.IsRemoteSourceValid(SourceChoice, Url ?? string.Empty, Version ?? string.Empty);
 
     // ---- state projections -------------------------------------------------
 
@@ -482,7 +468,7 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
 
         // Build the canonical source from the validated fields. Untracked
         // records an empty version; Nexus parses the URL (guaranteed by
-        // CanImport).
+        // CanImport through the shared validator).
         ModSource source;
         if (SourceChoice == ImportSource.Untracked)
         {
@@ -491,7 +477,7 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
         }
         else
         {
-            TryParseUrl(SourceChoice, Url ?? string.Empty, out source);
+            ImportSourceValidator.TryParseUrl(SourceChoice, Url ?? string.Empty, out source);
         }
 
         SetState(WorkflowState.Processing);
@@ -875,31 +861,5 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
         var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var name = Path.GetFileNameWithoutExtension(trimmed);
         return string.IsNullOrWhiteSpace(name) ? path : name;
-    }
-
-    /// <summary>
-    /// Parses the URL/id for the chosen source into a canonical
-    /// <see cref="ModSource"/>. Never throws. Mirrors the editing form's field semantics.
-    /// </summary>
-    private static bool TryParseUrl(ImportSource source, string url, out ModSource parsed)
-    {
-        parsed = new UntrackedSource();
-        if (string.IsNullOrWhiteSpace(url))
-        {
-            return false;
-        }
-
-        switch (source)
-        {
-            case ImportSource.Nexus:
-                if (ModSourceParser.TryParseNexus(url, out var nexus))
-                {
-                    parsed = nexus;
-                    return true;
-                }
-                return false;
-            default:
-                return false;
-        }
     }
 }

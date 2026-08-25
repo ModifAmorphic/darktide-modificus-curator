@@ -348,8 +348,9 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// toolbar's updates-only filter toggle). Session-transient view state:
     /// never persisted, survives reloads and navigation, and clears on an
     /// active-profile change. Changing it rebuilds <see cref="VisibleMods"/>.
-    /// The filter keeps only rows whose
-    /// <see cref="ModItemViewModel.UpdateAvailable"/> is true.
+    /// The filter keeps rows whose <see cref="ModItemViewModel.UpdateAvailable"/>
+    /// is true, plus version-unknown rows (their update action is the
+    /// resolution path, so they stay reachable while the filter is active).
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsFilterOrSearchActive))]
@@ -1156,12 +1157,12 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <summary>
     /// Rebuilds <see cref="VisibleMods"/> from <see cref="Mods"/> under the
     /// current filter/search: a row is visible when it is enabled or the
-    /// hide-disabled filter is off, AND it is flagged with an available
-    /// update or the updates-only filter is off, AND its display name
-    /// contains the search text (case-insensitive ordinal substring; an
-    /// empty or whitespace search matches everything). Called at the end of
-    /// every <see cref="Reload"/>, on every filter/search state change, and
-    /// after an enable toggle. Also
+    /// hide-disabled filter is off, AND it is flagged with an available update
+    /// or version-unknown (the resolution path) or the updates-only filter is
+    /// off, AND its display name contains the search text (case-insensitive
+    /// ordinal substring; an empty or whitespace search matches everything).
+    /// Called at the end of every <see cref="Reload"/>, on every filter/search
+    /// state change, and after an enable toggle. Also
     /// recomputes per-row move availability over the visible unlocked rows (a
     /// hidden row has no visible neighbors to cross) and re-fires the
     /// derived empty-state projections. Never touches the density coordinator:
@@ -1180,7 +1181,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
                 continue;
             }
 
-            if (ShowUpdatesOnly && !row.UpdateAvailable)
+            if (ShowUpdatesOnly && !row.UpdateAvailable && !row.IsVersionUnknown)
             {
                 continue;
             }
@@ -1683,13 +1684,16 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// injectable external-launcher seam, surfacing a fallback alert on launch
     /// failure, except inside a Steam Deck Gaming Mode session where the
     /// browser flow cannot complete and Desktop Mode guidance is shown
-    /// instead.
+    /// instead. A version-unknown row takes the same paths (the click is its
+    /// resolution path: the Premium install lands a real version + the state
+    /// self-clears; the files page lets the user identify the installed
+    /// version manually).
     /// </summary>
     /// <remarks>
     /// <para><b>Defense.</b> No-op when: there is no active profile; the row is
     /// not Nexus+Latest (<see cref="ModItemViewModel.IsNexusLatest"/>); no update
-    /// is flagged (<see cref="ModItemViewModel.UpdateAvailable"/>); or the row
-    /// has no <see cref="ModItemViewModel.NexusModId"/>.</para>
+    /// is flagged AND the row is not version-unknown; or the row has no
+    /// <see cref="ModItemViewModel.NexusModId"/>.</para>
     /// <para><b>One engine.</b> The download queue's serial worker is the single
     /// mutual-exclusion point across the manual click, the automatic batch, and
     /// nxm downloads: a click for a file already live in the queue joins the
@@ -1717,8 +1721,12 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
 
         // Defense: the button is only visible+enabled under these conditions,
         // but the command is the source of truth (a programmatic caller, a test,
-        // or a future keystroke could bypass the view's gating).
-        if (!row.IsNexusLatest || !row.UpdateAvailable || row.NexusModId is not int modId)
+        // or a future keystroke could bypass the view's gating). A
+        // version-unknown row is actionable without a flagged update (its
+        // click resolves the version).
+        if (!row.IsNexusLatest
+            || (!row.UpdateAvailable && !row.IsVersionUnknown)
+            || row.NexusModId is not int modId)
         {
             return;
         }
@@ -1748,18 +1756,22 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// the shared enqueue front. The queue owns the rest under its serial
     /// worker: the row morphs while the item is live (the morph hides the
     /// update-action cell, the double-click guard), the dequeue-time
-    /// eligibility revalidation makes a stale flag a silent no-op, and the
-    /// completion acknowledges once + raises the applied event (which marks
-    /// the session pending + reloads this list). A resolve failure (the API
-    /// call before any item exists) surfaces the localized failure alert;
+    /// eligibility revalidation makes a stale flag a silent no-op (for a
+    /// version-unknown row the empty expected version matches the empty
+    /// installed tag, so the resolution install is never dropped as stale),
+    /// and the completion acknowledges once + raises the applied event (which
+    /// marks the session pending + reloads this list). A resolve failure (the
+    /// API call before any item exists) surfaces the localized failure alert;
     /// cancellation is swallowed (not a failure).
     /// </summary>
     private async Task UpdatePremiumAsync(Guid profileId, ModItemViewModel row, int modId)
     {
-        // A row with no resolved version cannot carry the eligibility version
-        // rule's input (the enqueue requires it); treat it like a stale flag:
-        // a silent no-op.
-        if (string.IsNullOrWhiteSpace(row.ActualVersion))
+        // A row whose container resolves NO version at all (a degenerate,
+        // version-less container) cannot carry the eligibility version rule's
+        // input; treat it like a stale flag: a silent no-op. A version-unknown
+        // row (its latest version carries an empty tag) is different: the
+        // empty expected version is its resolution install.
+        if (string.IsNullOrWhiteSpace(row.ActualVersion) && !row.IsVersionUnknown)
         {
             return;
         }
@@ -1769,10 +1781,11 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
             // No ConfigureAwait(false): the continuation must stay on the UI
             // thread so the failure-path ShowAlertAsync below runs on the UI
             // thread (the UI-layer convention). The expected version is the
-            // row's resolved version (what the row was built from); the queue
+            // row's resolved version (what the row was built from): empty for
+            // a version-unknown row, the unknown-resolution install; the queue
             // revalidates it against the container's current state at dequeue.
             await _updateEnqueuer.EnqueueLatestAsync(
-                modId, row.ContainerId, row.Name, row.ActualVersion, profileId);
+                modId, row.ContainerId, row.Name, row.ActualVersion ?? string.Empty, profileId);
             _logger.LogInformation(
                 "Enqueued the update install for mod {Container} (mod id {Mod}).",
                 row.ContainerId, modId);
@@ -1838,6 +1851,34 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
                 "ModList_OpenFilesFailedTitle",
                 "ModList_OpenFilesFailedMessage",
                 row.Name, url);
+        }
+    }
+
+    // ---- edit import details (the universal correction surface) -------------
+
+    /// <summary>
+    /// Opens the edit-import-details modal for a row's container (the
+    /// correction surface for a wrong or incomplete import: rename, source
+    /// association, version tag). The dialog owns every edit; on a saved
+    /// result (true) the list reloads, because the container's name, source,
+    /// and version can all have changed (the row's badge, identity, and
+    /// derived state re-join from the repository). A cancelled dialog changes
+    /// nothing. Linked rows (an external folder's identity is its path and is
+    /// never edited) and download-morphed rows (the morph's completion is
+    /// about to write the container) never offer the action; the command
+    /// repeats both guards as defense in depth.
+    /// </summary>
+    [RelayCommand]
+    private async Task EditImportDetails(ModItemViewModel? row)
+    {
+        if (row is null || row.IsLinked || row.IsDownloadMorphed)
+        {
+            return;
+        }
+
+        if (await _dialogs.ShowEditImportDetailsAsync(row.ContainerId))
+        {
+            Reload();
         }
     }
 

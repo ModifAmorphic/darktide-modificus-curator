@@ -593,7 +593,7 @@ public sealed class ModListViewModelTests
 
         // Start a batch + confirm with Untracked (simplest valid metadata).
         workflow.StartBatchCommand.Execute(new[] { "/mods/DMF" });
-        workflow.SourceChoice = ImportWorkflowViewModel.ImportSource.Untracked;
+        workflow.SourceChoice = ImportSource.Untracked;
         await workflow.ImportCurrentCommand.ExecuteAsync(null);
 
         // The workflow's ItemImported event reloaded the list; the row shows.
@@ -624,7 +624,7 @@ public sealed class ModListViewModelTests
             localization: Localization);
         var workflow = vm.ImportWorkflow;
         workflow.StartBatchCommand.Execute(new[] { "/mods/DMF" });
-        workflow.SourceChoice = ImportWorkflowViewModel.ImportSource.Untracked;
+        workflow.SourceChoice = ImportSource.Untracked;
         var task = workflow.ImportCurrentCommand.ExecuteAsync(null);
 
         // Switch the active profile mid-processing.
@@ -666,7 +666,7 @@ public sealed class ModListViewModelTests
             localization: Localization);
         var workflow = vm.ImportWorkflow;
         workflow.StartBatchCommand.Execute(new[] { "/mods/DMF" });
-        workflow.SourceChoice = ImportWorkflowViewModel.ImportSource.Untracked;
+        workflow.SourceChoice = ImportSource.Untracked;
 
         await workflow.ImportCurrentCommand.ExecuteAsync(null);
 
@@ -2341,5 +2341,71 @@ public sealed class ModListViewModelTests
         queue.RaiseUpdatesApplied();
 
         Assert.True(session.HasPendingChanges);
+    }
+
+    // ---- edit import details ---------------------------------------------------
+
+    [Fact]
+    public async Task EditImportDetails_opens_the_dialog_and_reloads_only_on_a_save()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var dialogs = new FakeDialogService();
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            dialogs: dialogs, localization: Localization);
+        var row = vm.Mods.Single(m => m.ContainerId == nexus.Id);
+
+        // A cancelled dialog: no reload (nothing changed).
+        dialogs.EditImportDetailsResult = false;
+        await vm.EditImportDetailsCommand.ExecuteAsync(row);
+        Assert.Equal([nexus.Id], dialogs.EditImportDetailsCalls);
+        Assert.Equal("DMF", vm.Mods.Single(m => m.ContainerId == nexus.Id).Name);
+
+        // A saved dialog: the reload re-joins the row from the repository, so
+        // an applied rename shows.
+        repo.RenameContainer(nexus.Id, "DMF Renamed");
+        dialogs.EditImportDetailsResult = true;
+        await vm.EditImportDetailsCommand.ExecuteAsync(row);
+        Assert.Equal(2, dialogs.EditImportDetailsCalls.Count);
+        Assert.Equal("DMF Renamed", vm.Mods.Single(m => m.ContainerId == nexus.Id).Name);
+    }
+
+    [Fact]
+    public async Task EditImportDetails_is_a_noop_for_linked_null_and_morphed_rows()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var dialogs = new FakeDialogService();
+        var queue = new FakeModDownloadQueue();
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            dialogs: dialogs, downloadQueue: queue, localization: Localization);
+
+        var linkedRow = new ModItemViewModel(Localization, TestDoubles.RowContext(), Guid.NewGuid(), "Linked",
+            new LinkedSource { ExternalPath = "/tmp/x" }, "", true, 0, ModVersionPolicy.Latest,
+            Array.Empty<ModVersion>(), found: true);
+        await vm.EditImportDetailsCommand.ExecuteAsync(linkedRow);
+        await vm.EditImportDetailsCommand.ExecuteAsync(null);
+        Assert.Empty(dialogs.EditImportDetailsCalls);
+
+        // A download-morphed row: a live queue item targeting the row's
+        // container morphs it in place; the edit action never offers.
+        var row = vm.Mods.Single(m => m.ContainerId == nexus.Id);
+        queue.Enqueue(new ModDownloadRequest(
+            "warhammer40kdarktide", 8, 100, DownloadPurpose.ProfileAdd,
+            nexus.Id, "DMF", a.Id, a.Name));
+        Assert.True(row.IsDownloadMorphed);
+
+        await vm.EditImportDetailsCommand.ExecuteAsync(row);
+        Assert.Empty(dialogs.EditImportDetailsCalls);
     }
 }

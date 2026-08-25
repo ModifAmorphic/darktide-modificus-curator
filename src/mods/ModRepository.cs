@@ -390,6 +390,187 @@ internal sealed class ModRepository : IModRepository
     }
 
     /// <inheritdoc />
+    public ModContainer? EditImportDetails(
+        Guid containerId,
+        string name,
+        ModSource source,
+        string versionTag,
+        bool removeOlderVersions)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(versionTag);
+
+        lock (_sync)
+        {
+            if (!_byId.TryGetValue(containerId, out var container))
+            {
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                throw new ArgumentException(
+                    "Container name must not be null or whitespace.", nameof(name));
+            }
+
+            if (source is LinkedSource)
+            {
+                throw new ArgumentException(
+                    "A linked source cannot be assigned through EditImportDetails.", nameof(source));
+            }
+
+            if (container.Source is LinkedSource)
+            {
+                throw new InvalidOperationException(
+                    "A linked container's import details cannot be edited.");
+            }
+
+            // One container per (source, identity): reject a Nexus identity
+            // another container already carries, so the edit cannot fork the
+            // invariant Import + FindExistingContainer maintain.
+            if (source is NexusSource incoming
+                && _byId.Values.Any(c => c.Id != containerId
+                    && c.Source is NexusSource ns && ns.ModId == incoming.ModId))
+            {
+                throw new InvalidOperationException(
+                    $"Another container already tracks Nexus mod {incoming.ModId}.");
+            }
+
+            var identityChanged = !SourceIdentityEquals(container.Source, source);
+            var latest = container.Versions.FirstOrDefault(v => v.IsLatest);
+
+            // The FileId lock: a version acquired from a download grounds the
+            // mod's identity; any identity change (id change or source swap,
+            // either direction) is refused. A same-identity name/tag edit is
+            // always allowed.
+            if (identityChanged && container.Versions.Any(v => v.FileId is not null))
+            {
+                throw new InvalidOperationException(
+                    "The mod id is locked: this mod was downloaded from Nexus.");
+            }
+
+            // Identity reset: the older versions' tags + remote facts are
+            // claims about the OLD identity, so only the latest version's
+            // local facts survive. Removal is destructive, so the caller must
+            // opt in explicitly; without the flag the primitive refuses rather
+            // than silently destroying versions.
+            if (identityChanged && container.Versions.Count > 1)
+            {
+                if (!removeOlderVersions)
+                {
+                    throw new InvalidOperationException(
+                        "Changing the mod id removes the older versions; the caller must confirm (removeOlderVersions).");
+                }
+
+                foreach (var older in container.Versions
+                    .Where(v => latest is null || v.Folder != latest.Folder)
+                    .Select(v => v.Folder)
+                    .ToArray())
+                {
+                    // Reentrant lock (Monitor): RemoveVersion also takes _sync.
+                    // Each call updates the index + manifest, so the working
+                    // container is re-read below.
+                    RemoveVersion(containerId, older);
+                }
+
+                container = _byId[containerId];
+                latest = container.Versions.FirstOrDefault(v => v.IsLatest);
+            }
+
+            // Retag: apply the new tag to the latest version record. The tag
+            // is the AddVersion upsert key, so a collision with another
+            // surviving version's tag is the same conflict AddVersion would
+            // hit; refuse it rather than creating a duplicate-key manifest.
+            if (latest is not null)
+            {
+                var collides = container.Versions.Any(v =>
+                    !ReferenceEquals(v, latest)
+                    && string.Equals(v.VersionString, versionTag, StringComparison.Ordinal));
+                if (collides)
+                {
+                    throw new InvalidOperationException(
+                        $"A version tagged '{versionTag}' already exists on this container.");
+                }
+            }
+
+            var versions = container.Versions;
+            if (latest is not null)
+            {
+                // Remote-claim reset applies to the identity RESET (leaving a
+                // Nexus identity: its tags + remote facts were claims about the
+                // old identity). The initial Untracked -> Nexus association
+                // touches nothing but the tag: any prior facts stay as they
+                // were.
+                var resetRemoteClaims = identityChanged && container.Source is NexusSource;
+                var retagged = latest with
+                {
+                    VersionString = versionTag,
+                    FileId = resetRemoteClaims ? null : latest.FileId,
+                    RemoteUploadedAt = resetRemoteClaims ? null : latest.RemoteUploadedAt,
+                };
+                versions = container.Versions
+                    .Select(v => ReferenceEquals(v, latest) ? retagged : v)
+                    .ToList();
+            }
+
+            var baseFolder = EnsureBaseFolder();
+            var updated = container with { Name = name, Source = source, Versions = versions };
+            _byId[containerId] = updated;
+            WriteContainer(updated, baseFolder);
+
+            // Keep the untracked-name index coherent: drop the old key when
+            // the container leaves the untracked namespace (regardless of a
+            // rename: the swap itself orphans the key) or renames within it;
+            // record the new key when it arrives. Nexus identity lives on the
+            // source record and is served by the scan, so no other index is
+            // involved.
+            var wasUntracked = container.Source is UntrackedSource;
+            var isUntracked = updated.Source is UntrackedSource;
+            if (wasUntracked
+                && (!isUntracked || !string.Equals(container.Name, name, StringComparison.Ordinal)))
+            {
+                _untrackedByName.Remove(container.Name);
+            }
+
+            if (updated.Source is UntrackedSource)
+            {
+                // Mirror IndexUntrackedName: a duplicate untracked name (a
+                // hand-edit edge case) points the index at this container and
+                // is logged rather than silently shifting.
+                if (_untrackedByName.TryGetValue(name, out var collision) && collision != containerId)
+                {
+                    _logger.LogWarning(
+                        "Duplicate untracked container name '{Name}' (ids {Prior} + {Current}); index points at {Current}.",
+                        name, collision, containerId, containerId);
+                }
+                _untrackedByName[name] = containerId;
+            }
+
+            _logger.LogInformation(
+                "Edited import details of container {Id} ('{Name}', source={Source}, tag='{Tag}', identityChanged={IdentityChanged})",
+                containerId, name, source, versionTag, identityChanged);
+            return updated;
+        }
+    }
+
+    /// <summary>
+    /// Whether two sources carry the same container identity: Nexus by mod id,
+    /// Untracked by type (its identity is the container name, which this
+    /// comparison deliberately ignores: a same-identity rename is allowed, and
+    /// an identity change is defined by the source record, not the label).
+    /// Linked never compares equal here (the method is only reached after the
+    /// linked rejections).
+    /// </summary>
+    private static bool SourceIdentityEquals(ModSource current, ModSource incoming) =>
+        (current, incoming) switch
+        {
+            (NexusSource a, NexusSource b) => a.ModId == b.ModId,
+            (UntrackedSource, UntrackedSource) => true,
+            _ => false,
+        };
+
+    /// <inheritdoc />
     public bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);

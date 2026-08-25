@@ -145,7 +145,11 @@
           PinnedPolicy(versionId). Disabled for linked rows (a linked mod has
           a single implicit version) and while a download morphs the row
           (IsPolicyEditable covers both; the morphing download writes the
-          policy itself at completion, so a manual edit would race it).
+          policy itself at completion, so a manual edit would race it). A
+          version-unknown row offers no pin: its only version carries an empty
+          tag (nothing legible to pin to), so the Pinned choice is disabled
+          and the dropdown never renders (CanShowVersionDropdown covers the
+          IsPinned + not-unknown conjunction).
         -->
         <StackPanel Orientation="Horizontal" Spacing="6"
                     VerticalAlignment="Center">
@@ -154,12 +158,13 @@
                     IsEnabled="{Binding IsPolicyEditable}"
                     MinWidth="100">
             <ComboBoxItem Content="{ReflectionBinding [ModRow_PolicyLatest], Source={StaticResource Loc}}" />
-            <ComboBoxItem Content="{ReflectionBinding [ModRow_PolicyPinned], Source={StaticResource Loc}}" />
+            <ComboBoxItem Content="{ReflectionBinding [ModRow_PolicyPinned], Source={StaticResource Loc}}"
+                          IsEnabled="{Binding !IsVersionUnknown}" />
           </ComboBox>
           <ComboBox ItemsSource="{Binding AvailableVersions}"
                     SelectedItem="{Binding SelectedVersion, Mode=TwoWay}"
                     SelectionChanged="PinnedVersion_Changed"
-                    IsVisible="{Binding IsPinned}"
+                    IsVisible="{Binding CanShowVersionDropdown}"
                     IsEnabled="{Binding IsPolicyEditable}"
                     PlaceholderText="{ReflectionBinding [ModRow_PinnedVersionPlaceholder], Source={StaticResource Loc}}"
                     MinWidth="120">
@@ -176,11 +181,13 @@
           EVERY row (so later controls never shift when the button
           appears/disappears). For Nexus + Latest rows it holds the update
           button; for Pinned Nexus and Untracked rows the cell stays reserved
-          but empty. No update -> disabled, neutral/grey download arrow (the
-          updateAction:disabled style dims the whole button to 0.4 opacity);
-          update available -> enabled with the accent-blue arrow. Premium click
-          enqueues the in-app update; regular/unknown click opens the mod's
-          Nexus files page (the row VM carries the click behavior; the tooltip
+          but empty. No update + not version-unknown -> disabled, neutral/grey
+          download arrow (the updateAction:disabled style dims the whole button
+          to 0.4 opacity); update available OR version unknown (the resolution
+          path) -> enabled with the accent-blue arrow. Premium click enqueues
+          the in-app update (for an unknown row, the resolution install with an
+          empty expected version); regular/unknown click opens the mod's Nexus
+          files page (the row VM carries the click behavior; the tooltip
           distinguishes the cases).
           While a download morphs the row, the WHOLE cell is not rendered
           (the morph's progress owns the row's progress surface, and hiding
@@ -196,17 +203,18 @@
                   IsEnabled="{Binding UpdateActionEnabled}"
                   ToolTip.Tip="{Binding UpdateActionTooltip}">
             <Panel>
-              <!-- Neutral/grey download arrow (no update / disabled):
-                   inherits the button foreground. -->
+              <!-- Neutral/grey download arrow (no update + not unknown:
+                   disabled; inherits the button foreground). -->
               <Path Width="16" Height="16" Stretch="Uniform"
                     HorizontalAlignment="Center" VerticalAlignment="Center"
-                    IsVisible="{Binding !UpdateAvailable}"
+                    IsVisible="{Binding !UpdateActionEnabled}"
                     Fill="{Binding $parent[Button].Foreground}"
                     Data="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
-              <!-- Accent-blue download arrow (update available). -->
+              <!-- Accent-blue download arrow (update available or version
+                   unknown: enabled + accent while unknown too). -->
               <Path Width="16" Height="16" Stretch="Uniform"
                     HorizontalAlignment="Center" VerticalAlignment="Center"
-                    IsVisible="{Binding UpdateAvailable}"
+                    IsVisible="{Binding UpdateActionEnabled}"
                     Fill="{DynamicResource SystemControlForegroundAccentBrush}"
                     Data="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
             </Panel>
@@ -309,6 +317,27 @@
                 HorizontalAlignment="Center" VerticalAlignment="Center"
                 Fill="{Binding $parent[Button].Foreground}"
                 Data="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+        </Button>
+
+        <!--
+          Edit import details (drawn pencil), at the end of the strip. The
+          universal correction surface for the row's container: name, source
+          association, version tag. Never offered for linked rows (an
+          external folder's identity is its path) or download-morphed rows
+          (the morph's completion is about to write the container); the
+          parent's command repeats both guards.
+        -->
+        <Button Classes="icon editDetails"
+                IsVisible="{Binding CanEditImportDetails}"
+                ToolTip.Tip="{ReflectionBinding [ModRow_EditImportDetailsTooltip], Source={StaticResource Loc}}"
+                AutomationProperties.Name="{ReflectionBinding [ModRow_EditImportDetailsTooltip], Source={StaticResource Loc}}"
+                Click="EditImportDetails_Click"
+                CommandParameter="{Binding}">
+          <!-- Material "edit" (24x24 source): pencil. -->
+          <Path Width="16" Height="16" Stretch="Uniform"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                Fill="{Binding $parent[Button].Foreground}"
+                Data="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
         </Button>
       </WrapPanel>
     </DataTemplate>
@@ -621,6 +650,9 @@
       <Setter Property="Margin" Value="4,0,0,0" />
     </Style>
     <Style Selector="Grid.compactRow WrapPanel.actionStrip > Button.remove">
+      <Setter Property="Margin" Value="4,0,0,0" />
+    </Style>
+    <Style Selector="Grid.compactRow WrapPanel.actionStrip > Button.editDetails">
       <Setter Property="Margin" Value="4,0,0,0" />
     </Style>
     <!--

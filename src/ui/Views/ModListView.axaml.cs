@@ -598,6 +598,22 @@ public partial class ModListView : UserControl
     }
 
     /// <summary>
+    /// Routes a row's edit-import-details button click to the parent's
+    /// <c>EditImportDetailsCommand</c>, which opens the correction modal over
+    /// the row's container and reloads on a saved result. The command owns
+    /// the linked / download-morphed guards (the button is hidden for both,
+    /// but the command repeats them); the view is pure mechanics.
+    /// </summary>
+    private void EditImportDetails_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button b && b.DataContext is ModItemViewModel row)
+        {
+            // AsyncRelayCommand.Execute forwards to ExecuteAsync.
+            ViewModel?.EditImportDetailsCommand.Execute(row);
+        }
+    }
+
+    /// <summary>
     /// Routes a per-row Update button click to the parent's
     /// <c>UpdateCommand</c>. The command owns the defenses (premium, Nexus +
     /// Latest, update flagged, one-at-a-time) + the acquire + reload + alert

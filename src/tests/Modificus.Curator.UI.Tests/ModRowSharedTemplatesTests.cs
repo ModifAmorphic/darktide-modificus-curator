@@ -44,6 +44,7 @@ public sealed class ModRowSharedTemplatesTests
         Assert.Single(Elements(xaml.Root!, "Button"), b => A(b, "Click") == "MoveDown_Click");
         Assert.Single(Elements(xaml.Root!, "Button"), b => A(b, "Click") == "ToggleOrderLock_Click");
         Assert.Single(Elements(xaml.Root!, "Button"), b => A(b, "Click") == "Remove_Click");
+        Assert.Single(Elements(xaml.Root!, "Button"), b => A(b, "Click") == "EditImportDetails_Click");
         Assert.Single(Elements(xaml.Root!, "Border"), b => A(b, "PointerPressed") == "Grip_PointerPressed");
         Assert.Single(Elements(xaml.Root!, "HyperlinkButton"), b => A(b, "Click") == "OpenFolder_Click");
     }
@@ -101,6 +102,7 @@ public sealed class ModRowSharedTemplatesTests
         Assert.Contains("Grid.compactRow WrapPanel.actionStrip > Button.moveDown", styles);
         Assert.Contains("Grid.compactRow WrapPanel.actionStrip > Button.orderLock", styles);
         Assert.Contains("Grid.compactRow WrapPanel.actionStrip > Button.remove", styles);
+        Assert.Contains("Grid.compactRow WrapPanel.actionStrip > Button.editDetails", styles);
     }
 
     [Fact]

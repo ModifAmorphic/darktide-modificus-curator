@@ -37,6 +37,7 @@ public interface IModRepository
     ModContainer AddVersion(Guid containerId, string versionString, Action<string> populateFolder, DateTimeOffset? remoteUploadedAt = null, int? remoteFileId = null, ModDisplayMetadata? displayMetadata = null);
     bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata);   // atomic missing-only initialization
     ModContainer? RenameContainer(Guid containerId, string newName);   // display label only; Id unchanged, directory does not move
+    ModContainer? EditImportDetails(Guid containerId, string name, ModSource source, string versionTag, bool removeOlderVersions);  // name + source + latest-tag correction; FileId-locked, confirm-gated
     void RemoveVersion(Guid containerId, string versionFolder);
     void PruneUnreferenced(IReadOnlySet<(Guid ContainerId, string VersionFolder)> referenced);
     string GetVersionFolderPath(Guid containerId, string versionFolder);  // derived, never stored
@@ -123,6 +124,41 @@ public interface IModRepository
   kept consistent; for other sources the index is untouched (Nexus identity is
   on the source record, not the name). Driven by the update-check name sync
   (Nexus containers).
+- `EditImportDetails(containerId, name, source, versionTag, removeOlderVersions)`:
+  edits a managed container's import details in one atomic manifest write: the
+  display name (folding `RenameContainer` semantics, untracked-name index
+  kept coherent), the source provenance, and the release tag recorded on the
+  container's latest version. The correction surface for wrong or incomplete
+  imports; `Id` never changes, so every profile reference (position, enabled,
+  policy, lock) survives the edit. Returns `null` when the container id is
+  unknown.
+  - **The FileId lock**: when any version carries a non-null `FileId` the
+    identity is grounded by a download; any identity change (a different
+    Nexus mod id, Nexus to Untracked, Untracked to Nexus) throws
+    `InvalidOperationException`. A same-identity name/tag edit is always
+    allowed. The lock is enforced at the primitive, not just the UI.
+  - **Identity reset**: changing the identity keeps only the latest version's
+    local facts (folder + `ImportedAt`; the tag, `FileId`, and
+    `RemoteUploadedAt` are reset for the new identity) and REMOVES every
+    older version (manifest entry + folder). A multi-version identity change
+    requires `removeOlderVersions = true` or it throws (the primitive never
+    silently destroys versions; the caller owns the confirm). The initial
+    Untracked to Nexus association touches nothing but the tag: prior
+    version facts stay as they were.
+  - **Retag**: a same-identity edit retags only the latest version record,
+    with no removal on a multi-version container. `versionTag` may be empty
+    only for the programmatic association path (an empty tag is the derived
+    version-unknown state); the edit dialog always passes non-empty when
+    saving as Nexus, empty when saving as Untracked. A tag colliding with
+    another surviving version's tag throws (the `AddVersion` upsert-key
+    conflict).
+  - **Guards**: a `LinkedSource` argument or a linked target container
+    throws; a Nexus identity another container already carries throws (one
+    container per `(source, identity)`); a null/whitespace name throws
+    `ArgumentException`.
+  - Surviving versions' folders never move, so pins onto them stay valid;
+    pins onto removed versions degrade to the existing staging
+    skip-with-warning path.
 - `RemoveVersion(containerId, versionFolder)`: idempotent. Promotes the newest
   remaining version by the effective-timestamp key (see
   [`ModVersion`](#modversion-record)) if the removed one carried `IsLatest`.

@@ -120,6 +120,7 @@ public partial class ModItemViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsDownloadMorphed))]
     [NotifyPropertyChangedFor(nameof(IsPolicyEditable))]
+    [NotifyPropertyChangedFor(nameof(CanEditImportDetails))]
     private DownloadRowViewModel? _activeDownload;
 
     /// <summary>
@@ -369,6 +370,7 @@ public partial class ModItemViewModel : ObservableObject
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsPinned))]
+    [NotifyPropertyChangedFor(nameof(CanShowVersionDropdown))]
     private int _policyChoice;
 
     /// <summary>
@@ -401,6 +403,28 @@ public partial class ModItemViewModel : ObservableObject
     public bool IsPinned => PolicyChoice == PolicyPinned;
 
     /// <summary>
+    /// Whether the inline version (pin) dropdown should render: the row is
+    /// Pinned AND not version-unknown. An unknown row's only version carries an
+    /// empty tag, so there is nothing legible to pin to; the dropdown is
+    /// suppressed (and the policy editor's Pinned choice is disabled with it).
+    /// </summary>
+    public bool CanShowVersionDropdown => IsPinned && !IsVersionUnknown;
+
+    /// <summary>
+    /// Whether this row's container is in the derived version-unknown state: a
+    /// Nexus-sourced container whose resolved latest version carries an empty
+    /// <see cref="ModVersion.VersionString"/> (the container was associated
+    /// with its Nexus identity without a version stamp). No storage is
+    /// involved: the state is joined from the repository at construction and
+    /// self-clears when a real version lands (an update install, an nxm
+    /// download, or an edit-details retag) through the ordinary reload. Drives
+    /// the enabled update-action cell (the resolution path), the
+    /// version-unknown tooltip variant, the updates-only filter's inclusion,
+    /// and the pin-dropdown suppression.
+    /// </summary>
+    public bool IsVersionUnknown { get; }
+
+    /// <summary>
     /// Whether the stable update-action button should show for this row: the row
     /// is Nexus-sourced AND on the <see cref="LatestPolicy"/>. Pinned Nexus and
     /// Untracked rows do not show the button (their reserved update-action cell
@@ -411,12 +435,15 @@ public partial class ModItemViewModel : ObservableObject
     public bool CanShowUpdateAction => IsNexusLatest;
 
     /// <summary>
-    /// Whether the stable update-action button is enabled: an update is
-    /// flagged. No other coordination applies: a Premium click whose install
-    /// is already live joins the queue item (dedupe + pulse), and a
-    /// regular/unknown click merely opens the Nexus files page.
+    /// Whether the stable update-action button is enabled: an update is flagged
+    /// OR the row is version-unknown (the click is the resolution path either
+    /// way: Premium installs the head release in-app, recording the version;
+    /// regular/unknown opens the files page). No other coordination applies: a
+    /// Premium click whose install is already live joins the queue item
+    /// (dedupe + pulse), and a regular/unknown click merely opens the Nexus
+    /// files page.
     /// </summary>
-    public bool UpdateActionEnabled => UpdateAvailable;
+    public bool UpdateActionEnabled => UpdateAvailable || IsVersionUnknown;
 
     /// <summary>
     /// The localized tooltip for the stable update-action button, distinguished by
@@ -425,27 +452,36 @@ public partial class ModItemViewModel : ObservableObject
     /// Mode too, so the gaming flag does not change it); regular/unknown +
     /// update available -> "open the Nexus files page", or the Desktop Mode
     /// guidance while inside a Gaming Mode session (the click shows the same
-    /// guidance instead of opening the browser); no update -> "up to date".
-    /// Unsupported rows (Pinned / Untracked) never show the button, so no tooltip
-    /// applies there.
+    /// guidance instead of opening the browser); version unknown -> the
+    /// same install/open-files split with the version-unknown wording (the
+    /// gaming guidance still wins for non-Premium rows); no update -> "up to
+    /// date". Unsupported rows (Pinned / Untracked) never show the button, so
+    /// no tooltip applies there.
     /// </summary>
     public string UpdateActionTooltip
     {
         get
         {
-            if (!UpdateAvailable)
+            if (!UpdateAvailable && !IsVersionUnknown)
             {
                 return _localization["ModRow_UpdateTooltipNoUpdate"];
             }
 
             if (IsPremiumUser)
             {
-                return _localization["ModRow_UpdateTooltipInstall"];
+                return UpdateAvailable
+                    ? _localization["ModRow_UpdateTooltipInstall"]
+                    : _localization["ModRow_UpdateTooltipInstallUnknown"];
             }
 
-            return IsGamingMode
-                ? _localization["GamingMode_BrowserGuidance"]
-                : _localization["ModRow_UpdateTooltipOpenFiles"];
+            if (IsGamingMode)
+            {
+                return _localization["GamingMode_BrowserGuidance"];
+            }
+
+            return UpdateAvailable
+                ? _localization["ModRow_UpdateTooltipOpenFiles"]
+                : _localization["ModRow_UpdateTooltipOpenFilesUnknown"];
         }
     }
 
@@ -453,12 +489,15 @@ public partial class ModItemViewModel : ObservableObject
     /// The source badge text (localized): "Local" / "Nexus #{id}" (with the
     /// resolved version appended for a Nexus + Latest row that has one, e.g.
     /// "Nexus #{id} · {version}") / "External" / "Folder unavailable", or a
-    /// "not found" marker when <see cref="Found"/> is <c>false</c>. Pinned rows
-    /// keep their version in the pin dropdown, so the badge stays plain
-    /// "Nexus #{id}". Linked rows resolve to "External" when the external
-    /// folder is available and "Folder unavailable" when it is missing; the
-    /// XAML swaps the clickable pill for non-clickable warning text on the same
-    /// flag (see <see cref="IsLinkedAvailable"/> / <see cref="IsLinkedBroken"/>).
+    /// "not found" marker when <see cref="Found"/> is <c>false</c>. An empty
+    /// <see cref="ActualVersion"/> (a version-unknown row, an orphan pin)
+    /// never appends: the badge stays the plain "Nexus #{id}" with no dangling
+    /// separator. Pinned rows keep their version in the pin dropdown, so a
+    /// tagged badge stays "Nexus #{id}". Linked rows resolve to "External"
+    /// when the external folder is available and "Folder unavailable" when it
+    /// is missing; the XAML swaps the clickable pill for non-clickable warning
+    /// text on the same flag (see <see cref="IsLinkedAvailable"/> /
+    /// <see cref="IsLinkedBroken"/>).
     /// </summary>
     public string SourceBadgeText
     {
@@ -623,6 +662,16 @@ public partial class ModItemViewModel : ObservableObject
     public bool IsPolicyEditable => !IsLinked && !IsDownloadMorphed;
 
     /// <summary>
+    /// Whether the row offers the edit-import-details action (the universal
+    /// correction surface for its container). Linked rows never offer it (an
+    /// external folder's identity is its path and is never edited), and a
+    /// download-morphed row suppresses it while a download writes the
+    /// container; every other row (Untracked, Nexus, not-found) does offer
+    /// it.
+    /// </summary>
+    public bool CanEditImportDetails => !IsLinked && !IsDownloadMorphed;
+
+    /// <summary>
     /// The external folder path for a linked row (the <c>LinkedSource.ExternalPath</c>),
     /// or <c>null</c> for non-linked rows. The parent's open-folder command reads
     /// this to launch the OS file manager at the folder.
@@ -727,6 +776,14 @@ public partial class ModItemViewModel : ObservableObject
         Found = found;
         _orderLocked = orderLocked;
         _displayMetadata = displayMetadata;
+
+        // The derived version-unknown truth: a Nexus container whose latest
+        // version carries an empty tag. Joined once at construction (the row
+        // is rebuilt on every reload, so the state follows the repository
+        // without a watcher).
+        IsVersionUnknown = source is NexusSource
+            && versions.FirstOrDefault(v => v.IsLatest) is { } latestVersion
+            && string.IsNullOrEmpty(latestVersion.VersionString);
 
         // Build the dropdown source from the container's versions: each entry
         // pairs the readable tag (shown) with the opaque folder id (stored).

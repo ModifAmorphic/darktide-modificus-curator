@@ -685,12 +685,55 @@ public sealed class ModDownloadQueueTests
         var harness = new QueueHarness();
         var profile = harness.AddProfile();
 
+        // Null expected version is a programming error (the eligibility rule's
+        // input is missing); an EMPTY one is the legitimate unknown-resolution
+        // install and is accepted.
         Assert.Throws<ArgumentException>(() => harness.Queue.Enqueue(new ModDownloadRequest(
             "warhammer40kdarktide", KnownModId, 300, DownloadPurpose.UpdateInstall,
             null, "Mod", profile.Id, profile.Name, ExpectedVersion: "1.0")));
         Assert.Throws<ArgumentException>(() => harness.Queue.Enqueue(new ModDownloadRequest(
             "warhammer40kdarktide", KnownModId, 300, DownloadPurpose.UpdateInstall,
             Guid.NewGuid(), "Mod", profile.Id, profile.Name)));
+        Assert.NotNull(harness.Queue.Enqueue(new ModDownloadRequest(
+            "warhammer40kdarktide", KnownModId, 300, DownloadPurpose.UpdateInstall,
+            Guid.NewGuid(), "Mod", profile.Id, profile.Name,
+            ExpectedVersion: string.Empty)));
+    }
+
+    [Fact]
+    public void UpdateInstall_with_an_empty_expected_version_installs_over_an_unknown_container()
+    {
+        // The unknown-resolution click: a version-unknown container (its
+        // latest version carries an empty tag) enqueues an UpdateInstall with
+        // an empty expected version. The dequeue-time revalidation must treat
+        // empty-vs-empty as a MATCH (never dropped as "version changed"), so
+        // the item acquires, acknowledges, and raises like any update.
+        var harness = new QueueHarness();
+        var profile = harness.AddProfile();
+        var container = harness.SeedUnknownVersionMod();
+        harness.Profiles.WithMods(profile.Id, new ModListEntry
+        {
+            ContainerId = container.Id,
+            Enabled = true,
+            Policy = ModVersionPolicy.Latest,
+        });
+        var applied = 0;
+        harness.Queue.UpdatesApplied += (_, _) => applied++;
+
+        var item = harness.Queue.Enqueue(UpdateRequest(profile, container, string.Empty));
+
+        Assert.True(WaitUntil(() => item.IsTerminal));
+        Assert.Equal(DownloadPhase.Completed, item.Phase);
+        Assert.True(WaitUntil(() => applied == 1));
+        var acknowledge = Assert.Single(harness.UpdateState.AcknowledgeCalls);
+        Assert.Equal(container.Id, acknowledge.ContainerId);
+        Assert.Single(harness.Acquisition.Calls);
+        // The acquired version really landed + the unknown state self-clears:
+        // the fresh import is now the container's latest under the
+        // effective-timestamp key.
+        var updated = harness.Repo.Get(container.Id)!;
+        var latest = updated.Versions.Single(v => v.IsLatest);
+        Assert.Equal("2.0", latest.VersionString);
     }
 
     [Fact]
@@ -1021,6 +1064,19 @@ public sealed class ModDownloadQueueTests
             Repo.AddVersion(
                 container.Id, KnownOldVersion, _ => { },
                 new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero), KnownOldFileId);
+            return Repo.Get(container.Id)!;
+        }
+
+        /// <summary>
+        /// Seeds a version-unknown target: a Nexus mod whose only version
+        /// carries an EMPTY tag (an association recorded without a version
+        /// stamp). The scripted acquisition adds "2.0" over it.
+        /// </summary>
+        public ModContainer SeedUnknownVersionMod()
+        {
+            var container = Repo.CreateContainer(
+                new NexusSource { ModId = KnownModId }, KnownModName);
+            Repo.AddVersion(container.Id, string.Empty, _ => { });
             return Repo.Get(container.Id)!;
         }
     }

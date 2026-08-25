@@ -621,4 +621,33 @@ public sealed class ModListFilterTests
         Assert.Empty(profiles.SetModOrderCalls);
         Assert.False(session.HasPendingChanges);
     }
+
+    [Fact]
+    public void ShowUpdatesOnly_keeps_version_unknown_rows()
+    {
+        // A version-unknown row (Nexus + an empty latest tag) carries no
+        // flagged update, but its update action is the resolution path, so
+        // the filter keeps it reachable while active.
+        var (profiles, profile, repo) = SeedProfile(["A", "B"]);
+        var unknown = repo.Seed(new NexusSource { ModId = 8 }, "Unknown", string.Empty);
+        profiles.WithMods(profile.Id,
+            new ModListEntry { ContainerId = ContainerId(repo, "A"), Enabled = true, Order = 0, Policy = ModVersionPolicy.Latest },
+            new ModListEntry { ContainerId = ContainerId(repo, "B"), Enabled = true, Order = 1, Policy = ModVersionPolicy.Latest },
+            new ModListEntry { ContainerId = unknown.Id, Enabled = true, Order = 2, Policy = ModVersionPolicy.Latest });
+        var updateState = FlaggedStore(repo, profile.Id, ContainerId(repo, "A"));
+        var vm = BuildWithUpdates(profiles,
+            new FakeProfileSession { ActiveProfileId = profile.Id }, repo,
+            updateState: updateState);
+
+        var unknownRow = Row(vm, "Unknown");
+        Assert.True(unknownRow.IsVersionUnknown);
+        Assert.False(unknownRow.UpdateAvailable);
+
+        vm.ShowUpdatesOnly = true;
+
+        // The flagged row + the unknown row stay; the untagged ordinary row
+        // leaves.
+        Assert.Equal(["A", "Unknown"], vm.VisibleMods.Select(m => m.Name));
+        Assert.Equal(3, vm.Mods.Count);
+    }
 }

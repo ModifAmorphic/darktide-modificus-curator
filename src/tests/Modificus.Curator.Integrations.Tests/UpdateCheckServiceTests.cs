@@ -1569,6 +1569,9 @@ public sealed class UpdateCheckServiceTests
             Guid containerId, string versionString, Action<string> populateFolder,
             DateTimeOffset? remoteUploadedAt = null, int? remoteFileId = null, ModDisplayMetadata? displayMetadata = null)
             => throw new NotImplementedException();
+        public ModContainer? EditImportDetails(
+            Guid containerId, string name, ModSource source, string versionTag, bool removeOlderVersions)
+            => throw new NotImplementedException();
         public bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata)
             => throw new NotImplementedException();
         public void RemoveVersion(Guid containerId, string versionFolder)

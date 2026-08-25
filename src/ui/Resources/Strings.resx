@@ -565,6 +565,18 @@
     <value>Up to date</value>
     <comment>Tooltip on the stable update-action button when no update is available (the button is disabled).</comment>
   </data>
+  <data name="ModRow_UpdateTooltipInstallUnknown" xml:space="preserve">
+    <value>Version unknown. Install the latest release to record the version</value>
+    <comment>Tooltip on the stable update-action button for a Premium user on a version-unknown row (the click installs the head release in-app, which records the version and clears the unknown state).</comment>
+  </data>
+  <data name="ModRow_UpdateTooltipOpenFilesUnknown" xml:space="preserve">
+    <value>Version unknown. Open the Nexus files page to identify the installed version</value>
+    <comment>Tooltip on the stable update-action button for a regular or unknown Premium user on a version-unknown row (the click opens the files page).</comment>
+  </data>
+  <data name="ModRow_EditImportDetailsTooltip" xml:space="preserve">
+    <value>Edit import details</value>
+    <comment>Tooltip on the edit-action button in each mod row's action strip. Opens the edit-import-details modal (name, source, version tag).</comment>
+  </data>
   <data name="ModList_RateLimited" xml:space="preserve">
     <value>Refresh disabled due to rate-limiting</value>
     <comment>Short banner shown in the mod-list header while a rate-limited update check keeps the refresh button disabled (until the server-reported reset elapses). Pairs with the disabled refresh button; the pill hides when the reset passes and the button re-enables.</comment>
@@ -695,6 +707,55 @@
   <data name="ImportWorkflow_Close" xml:space="preserve">
     <value>Close</value>
     <comment>The Close button on the inline import card's terminal failure. Resets the workflow so a new batch may start.</comment>
+  </data>
+
+  <!-- ============================================================ -->
+  <!-- Edit import details dialog                                    -->
+  <!-- ============================================================ -->
+
+  <data name="EditDetails_Title" xml:space="preserve">
+    <value>Edit import details</value>
+    <comment>Title of the edit-import-details modal (the per-mod correction surface for name, source, and version tag).</comment>
+  </data>
+  <data name="EditDetails_Header" xml:space="preserve">
+    <value>Update this mod's import details. It keeps its place, policy, and settings in every profile.</value>
+    <comment>Header of the edit-import-details modal, explaining what survives the edit (everything the profiles reference).</comment>
+  </data>
+  <data name="EditDetails_FileIdLockHint" xml:space="preserve">
+    <value>This mod was downloaded from Nexus, so its mod id is fixed. Only the name can be changed.</value>
+    <comment>Inline hint in the edit-import-details modal while the identity is locked by a download (any version carries a Nexus file id). The id field and source switch are disabled.</comment>
+  </data>
+  <data name="EditDetails_SaveButton" xml:space="preserve">
+    <value>Save</value>
+    <comment>The accent Save button in the edit-import-details modal. Disabled while the fields are invalid.</comment>
+  </data>
+  <data name="EditDetails_CancelButton" xml:space="preserve">
+    <value>Cancel</value>
+    <comment>The Cancel button in the edit-import-details modal. ESC, the title-bar close, and a window close behave the same way.</comment>
+  </data>
+  <data name="EditDetails_BackButton" xml:space="preserve">
+    <value>Back</value>
+    <comment>The Back button on the edit-import-details modal's removal-confirm step, returning to the editing form without saving.</comment>
+  </data>
+  <data name="EditDetails_ConfirmButton" xml:space="preserve">
+    <value>Remove older versions and save</value>
+    <comment>The accent confirm button on the edit-import-details modal's removal-confirm step. Applies the identity change, which removes the container's older versions.</comment>
+  </data>
+  <data name="EditDetails_ConfirmTitle" xml:space="preserve">
+    <value>Older versions will be removed</value>
+    <comment>Caution title of the edit-import-details modal's inline removal confirm, shown before an identity change on a multi-version container.</comment>
+  </data>
+  <data name="EditDetails_ConfirmMessage" xml:space="preserve">
+    <value>Changing the mod id removes the {0} older version(s) of this mod. The current version's files are kept.</value>
+    <comment>Body of the edit-import-details modal's inline removal confirm. {0} is the number of older versions the identity change removes.</comment>
+  </data>
+  <data name="EditDetails_FailedMessage" xml:space="preserve">
+    <value>The changes were not saved.</value>
+    <comment>Localized framing prefix of the inline failure message in the edit-import-details modal. The actionable detail of the refused save follows.</comment>
+  </data>
+  <data name="EditDetails_ContainerGone" xml:space="preserve">
+    <value>This mod is no longer in the repository.</value>
+    <comment>Inline failure shown when the edited container vanished between opening the dialog and saving.</comment>
   </data>
 
   <!-- ============================================================ -->

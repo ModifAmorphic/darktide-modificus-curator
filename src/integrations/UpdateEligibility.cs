@@ -27,6 +27,13 @@ public static class UpdateEligibility
     /// <see cref="LatestPolicy"/>) still matches
     /// <paramref name="expectedVersion"/> case-insensitively.
     /// </summary>
+    /// <remarks>
+    /// The version rule treats an EMPTY expected version as the
+    /// unknown-resolution install (a manual click on a version-unknown row):
+    /// it matches an empty installed tag and mismatches any non-empty one, so
+    /// the resolution install is never dropped as "version changed" while a
+    /// stale empty flag against a since-resolved container is.
+    /// </remarks>
     /// <param name="candidate">The candidate for the container the flag was
     /// recorded against, or <c>null</c> when it is no longer a member of the
     /// profile (removed).</param>
@@ -35,7 +42,7 @@ public static class UpdateEligibility
     /// <param name="expectedModId">The Nexus mod id the flag was recorded
     /// against.</param>
     /// <param name="expectedVersion">The installed version string the flag was
-    /// recorded against.</param>
+    /// recorded against. Empty marks an unknown-resolution install.</param>
     /// <param name="reason">When ineligible, a short machine-readable reason
     /// ("removed from profile", "re-pinned", "container gone", "source
     /// changed", "version changed"); empty when eligible.</param>
