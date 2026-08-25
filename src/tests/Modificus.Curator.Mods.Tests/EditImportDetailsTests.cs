@@ -268,21 +268,94 @@ public sealed class EditImportDetailsTests
     }
 
     [Fact]
-    public void FileId_lock_allows_a_same_identity_name_and_tag_edit()
+    public void FileId_lock_allows_a_same_identity_name_edit_with_an_unchanged_tag()
     {
         using var fx = new RepoFixture();
         var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
         fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, OldStamp, remoteFileId: 9001);
 
         var updated = fx.Repo.EditImportDetails(
-            container.Id, "WT Fixed", new NexusSource { ModId = 8 }, "1.0-fix",
+            container.Id, "WT Fixed", new NexusSource { ModId = 8 }, "1.0",
             removeOlderVersions: false);
 
         Assert.NotNull(updated);
         Assert.Equal("WT Fixed", updated!.Name);
-        Assert.Equal("1.0-fix", Assert.Single(updated.Versions).VersionString);
-        // Same identity: the download facts survive the edit.
-        Assert.Equal(9001, Assert.Single(updated.Versions).FileId);
+        var version = Assert.Single(updated.Versions);
+        Assert.Equal("1.0", version.VersionString);
+        // Same identity + unchanged tag: the download facts survive the edit.
+        Assert.Equal(9001, version.FileId);
+    }
+
+    // ---- the per-record tag lock -----------------------------------------------
+
+    [Fact]
+    public void Tag_lock_blocks_a_tag_change_on_a_grounded_latest_record()
+    {
+        // The installed copy came from a download (the latest record carries
+        // its own FileId), so Nexus supplied its version: the tag is fixed.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
+        fx.Repo.AddVersion(container.Id, "1.21", EmptyPopulate, OldStamp, remoteFileId: 9001);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => fx.Repo.EditImportDetails(
+            container.Id, "WT", new NexusSource { ModId = 8 }, "1.22",
+            removeOlderVersions: false));
+        Assert.Contains("version tag is fixed", ex.Message);
+    }
+
+    [Fact]
+    public void Tag_lock_allows_a_tag_change_when_the_latest_record_is_not_grounded()
+    {
+        // A hand-imported copy landed on a previously-downloaded container:
+        // the older version's FileId locks the identity container-wide, but
+        // the latest record carries no FileId of its own, so its tag stays
+        // editable (the migration dedupe's resolvable case).
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, OldStamp, remoteFileId: 9001);
+        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, NewStamp);
+
+        var updated = fx.Repo.EditImportDetails(
+            container.Id, "WT", new NexusSource { ModId = 8 }, "2.0-hotfix",
+            removeOlderVersions: false);
+
+        Assert.NotNull(updated);
+        Assert.Contains(updated!.Versions, v => v.VersionString == "2.0-hotfix" && v.IsLatest);
+        Assert.Null(updated.Versions.Single(v => v.IsLatest).FileId);
+    }
+
+    [Fact]
+    public void Tag_lock_allows_resolving_an_empty_tag_on_a_grounded_container()
+    {
+        // The grounded container's latest is an ungrounded empty-tag record
+        // (the derived version-unknown state landing on a downloaded mod):
+        // resolving the tag is exactly what must stay possible.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, OldStamp, remoteFileId: 9001);
+        fx.Repo.AddVersion(container.Id, string.Empty, EmptyPopulate, NewStamp);
+
+        var updated = fx.Repo.EditImportDetails(
+            container.Id, "WT", new NexusSource { ModId = 8 }, "1.4",
+            removeOlderVersions: false);
+
+        Assert.NotNull(updated);
+        Assert.Equal("1.4", updated!.Versions.Single(v => v.IsLatest).VersionString);
+    }
+
+    [Fact]
+    public void Identity_lock_stays_container_wide_when_only_an_older_version_is_grounded()
+    {
+        // The tag lock is per-record, but the identity lock must not weaken
+        // with it: the older download still grounds the identity.
+        using var fx = new RepoFixture();
+        var container = fx.Repo.CreateContainer(new NexusSource { ModId = 8 }, "WT");
+        fx.Repo.AddVersion(container.Id, "1.0", EmptyPopulate, OldStamp, remoteFileId: 9001);
+        fx.Repo.AddVersion(container.Id, "2.0", EmptyPopulate, NewStamp);
+
+        Assert.Throws<InvalidOperationException>(() => fx.Repo.EditImportDetails(
+            container.Id, "WT", new NexusSource { ModId = 9 }, "2.0",
+            removeOlderVersions: true));
     }
 
     // ---- the identity reset ------------------------------------------------------

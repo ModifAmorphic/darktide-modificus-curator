@@ -453,12 +453,26 @@ internal sealed class ModRepository : IModRepository
 
             // The FileId lock: a version acquired from a download grounds the
             // mod's identity; any identity change (id change or source swap,
-            // either direction) is refused. A same-identity name/tag edit is
+            // either direction) is refused. A same-identity name edit is
             // always allowed.
             if (identityChanged && container.Versions.Any(v => v.FileId is not null))
             {
                 throw new InvalidOperationException(
                     "The mod id is locked: this mod was downloaded from Nexus.");
+            }
+
+            // The tag lock is per-record: only the latest record's OWN FileId
+            // fixes its tag (Nexus supplied that copy's version; a
+            // hand-imported copy landing on a grounded container carries no
+            // FileId of its own and stays resolvable). The identity lock above
+            // stays container-wide; an unchanged tag is always allowed.
+            if (!identityChanged
+                && latest is not null
+                && latest.FileId is not null
+                && !string.Equals(latest.VersionString, versionTag, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The version tag is fixed: this version was downloaded from Nexus.");
             }
 
             // Identity reset: the older versions' tags + remote facts are

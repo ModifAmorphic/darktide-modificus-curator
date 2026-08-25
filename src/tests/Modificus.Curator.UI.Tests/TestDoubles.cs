@@ -1835,6 +1835,18 @@ internal class FakeModRepository : IModRepository
             throw new InvalidOperationException("The mod id is locked: this mod was downloaded from Nexus.");
         }
 
+        // Mirror production: the tag lock is per-record (only the latest
+        // record's own FileId fixes its tag; an unchanged tag is a no-op).
+        var latestRecord = container.Versions.FirstOrDefault(v => v.IsLatest);
+        if (!identityChanged
+            && latestRecord is not null
+            && latestRecord.FileId is not null
+            && !string.Equals(latestRecord.VersionString, versionTag, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The version tag is fixed: this version was downloaded from Nexus.");
+        }
+
         if (identityChanged && container.Versions.Count > 1)
         {
             if (!removeOlderVersions)

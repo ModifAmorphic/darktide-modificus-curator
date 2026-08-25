@@ -196,6 +196,16 @@ public interface IModRepository
     /// and/or retag) is always allowed. The lock is enforced here, not just in
     /// the UI: programmatic callers get the same guard.</para>
     /// <para>
+    /// <b>The tag lock is per-record:</b> changing the latest version record's
+    /// tag throws <see cref="InvalidOperationException"/> when THAT record
+    /// carries its own <see cref="ModVersion.FileId"/> (the installed copy
+    /// came from a download, so Nexus supplied its version); an unchanged tag
+    /// is an allowed no-op. When the latest record has no FileId (a
+    /// hand-imported copy landed on a previously-downloaded container) its tag
+    /// stays editable even though the identity is locked container-wide, so a
+    /// migration dedupe landing an ungrounded latest can still be
+    /// resolved.</para>
+    /// <para>
     /// <b>Identity reset:</b> changing the identity (a different Nexus id, or
     /// a switch between Nexus and Untracked) keeps only the latest version's
     /// local facts (its folder + <see cref="ModVersion.ImportedAt"/>; its
@@ -256,7 +266,8 @@ public interface IModRepository
     /// change on a multi-version container was made without
     /// <paramref name="removeOlderVersions"/>.</exception>
     /// <exception cref="InvalidOperationException">An identity change is
-    /// blocked by the FileId lock; the new tag collides with another
+    /// blocked by the FileId lock; a tag change is blocked by the latest
+    /// record's own FileId; the new tag collides with another
     /// surviving version's tag; the target container is linked; or another
     /// container already carries the new Nexus identity.</exception>
     ModContainer? EditImportDetails(

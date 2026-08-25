@@ -135,8 +135,15 @@ public interface IModRepository
   - **The FileId lock**: when any version carries a non-null `FileId` the
     identity is grounded by a download; any identity change (a different
     Nexus mod id, Nexus to Untracked, Untracked to Nexus) throws
-    `InvalidOperationException`. A same-identity name/tag edit is always
+    `InvalidOperationException`. A same-identity edit is always
     allowed. The lock is enforced at the primitive, not just the UI.
+  - **The tag lock is per-record**: changing the latest version record's tag
+    throws when THAT record carries its own `FileId` (the installed copy came
+    from a download, so Nexus supplied its version); an unchanged tag is an
+    allowed no-op. When the latest record has no `FileId` (a hand-imported
+    copy landed on a previously-downloaded container) its tag stays editable
+    even though the identity is locked container-wide, so a migration dedupe
+    landing an ungrounded latest can still be resolved.
   - **Identity reset**: changing the identity keeps only the latest version's
     local facts (folder + `ImportedAt`; the tag, `FileId`, and
     `RemoteUploadedAt` are reset for the new identity) and REMOVES every

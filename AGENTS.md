@@ -1149,11 +1149,14 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         removeOlderVersions confirm flag (refused with the
                         typed RemovalConfirmationRequiredException, an
                         InvalidOperationException subclass), a FileId on any
-                        version locks the identity, a duplicate Nexus identity
-                        + a non-empty tag with an Untracked destination are
-                        rejected, untracked-name + source indexes stay
-                        coherent, + the container Id never moves so every
-                        profile reference survives), PruneUnreferenced
+                        version locks the identity container-wide while the
+                        tag lock is per-record (only the latest record's own
+                        FileId fixes its tag; a hand-imported latest on a
+                        grounded container stays resolvable), a duplicate
+                        Nexus identity + a non-empty tag with an Untracked
+                        destination are rejected, untracked-name + source
+                        indexes stay coherent, + the container Id never moves
+                        so every profile reference survives), PruneUnreferenced
                         GC at startup, keeping a referenced linked container by
                         containerId sentinel) + the version-policy model (ModVersionPolicy:
                         PinnedPolicy/LatestPolicy; PinnedPolicy pins by VersionId, a foreign
@@ -1501,9 +1504,12 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                         association path, the Nexus-unknown retag, the identity
                                         reset with older-version removal, Nexus->Untracked), the
                                         FileId lock (any version, both directions, same-identity
-                                        allowed), the removeOlderVersions guard, the tag-collision
-                                        throw, the duplicate-identity guard, + the untracked-name
-                                        index coherence
+                                        allowed), the per-record tag lock (blocked on a grounded
+                                        latest, allowed on a hand-imported latest of a grounded
+                                        container + the empty-tag resolve, identity lock stays
+                                        container-wide), the removeOlderVersions guard, the
+                                        tag-collision throw, the duplicate-identity guard, + the
+                                        untracked-name index coherence
                                         + the manager archive shape: base/mod_manager.lua with an
                                         empty base.mod validates with base name base)
     Modificus.Curator.Integrations.Tests/    xUnit tests for the Nexus client
