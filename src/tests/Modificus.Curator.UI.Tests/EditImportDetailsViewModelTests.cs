@@ -302,6 +302,36 @@ public sealed class EditImportDetailsViewModelTests
     }
 
     [Fact]
+    public void A_refused_confirm_save_surfaces_the_failure_without_leaving_the_confirm_step()
+    {
+        // The confirm step's ConfirmSave can be refused too (the
+        // duplicate-identity guard): the inline failure must show while the
+        // step stays, so the dialog never appears inert.
+        var repo = RepoWithNexus();
+        var container = repo.List().First();
+        repo.AddVersion(container.Id, "2.0", _ => { },
+            new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero));
+        repo.CreateContainer(new NexusSource { ModId = 9 }, "Owner");
+        var vm = new EditImportDetailsViewModel(
+            repo.Get(container.Id)!, repo, new LocalizationService());
+        vm.Url = "9";
+        vm.Version = "9.1";
+
+        vm.SaveCommand.Execute(null);
+        Assert.True(vm.IsConfirmStep);
+        vm.ConfirmSaveCommand.Execute(null);
+
+        Assert.True(vm.IsConfirmStep);
+        Assert.False(vm.Result);
+        Assert.NotEmpty(vm.FailureMessage);
+
+        // Back to the form still shows the failure until the next attempt.
+        vm.BackCommand.Execute(null);
+        Assert.False(vm.IsConfirmStep);
+        Assert.NotEmpty(vm.FailureMessage);
+    }
+
+    [Fact]
     public void Cancel_marks_the_result_false_without_touching_the_repository()
     {
         var (vm, repo, container) = Build();
