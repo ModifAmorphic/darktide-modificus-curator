@@ -127,9 +127,11 @@
           association, version tag. Rendered on EVERY row but disabled when
           the row is not editable (linked rows: an external folder's identity
           is its path; download-morphed rows: the morph's completion is about
-          to write the container), the update-action-cell pattern of a stable
-          position that goes inert rather than shifting the strip. The
-          parent's command repeats both guards.
+          to write the container; downloaded rows: a version carries a FileId
+          or a RemoteUploadedAt, so the details are Nexus-owned), the
+          update-action-cell pattern of a stable position that goes inert
+          rather than shifting the strip. The parent's command repeats the
+          guards.
         -->
         <Button Classes="icon editDetails"
                 IsEnabled="{Binding CanEditImportDetails}"

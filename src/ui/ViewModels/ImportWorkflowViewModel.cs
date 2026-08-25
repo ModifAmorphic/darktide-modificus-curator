@@ -234,8 +234,8 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     /// The raw release tag string (e.g. <c>"1.2"</c>). Required for Nexus (the
     /// user supplies the tag; the workflow does not fetch it from the remote);
     /// recorded as empty for Untracked. Never parsed or normalized here. In
-    /// edit mode this is the latest version's tag; when the latest record
-    /// carries its own FileId the field is locked (the tag lock).
+    /// edit mode this is the latest version's tag of an ungrounded container
+    /// (a downloaded container never opens the card).
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanImport))]

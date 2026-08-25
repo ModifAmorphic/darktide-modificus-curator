@@ -1868,15 +1868,17 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// <see cref="ImportWorkflowViewModel.ImportDetailsEdited"/> event reports
     /// a successful save (the container's name, source, and version can all
     /// have changed). Linked rows (an external folder's identity is its path
-    /// and is never edited) and download-morphed rows (the morph's completion
-    /// is about to write the container) never offer the action (the pencil is
-    /// disabled for both); this command repeats both guards as defense in
-    /// depth, and the child's StartEdit repeats them again.
+    /// and is never edited), download-morphed rows (the morph's completion
+    /// is about to write the container), and downloaded rows (a version
+    /// carries a FileId or a RemoteUploadedAt; a downloaded mod's details
+    /// are Nexus-owned) never offer the action (the pencil is disabled for
+    /// all three); this command repeats the guards as defense in depth, and
+    /// the child's StartEdit repeats them again.
     /// </summary>
     [RelayCommand]
     private void EditImportDetails(ModItemViewModel? row)
     {
-        if (row is null || row.IsLinked || row.IsDownloadMorphed)
+        if (row is null || row.IsLinked || row.IsDownloadMorphed || row.IsDownloadGrounded)
         {
             return;
         }
