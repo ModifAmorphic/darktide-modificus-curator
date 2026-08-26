@@ -347,34 +347,50 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            DML loader runtime) + the txt itself; an unresolved
                            line whose name matches a sibling upgrades to the
                            "will be imported" outcome (resolved lines are
-                           never upgraded; migration users are identified by
-                           exact base-name match, search is their fallback;
-                           IO failures degrade to the plain unresolved rows).
+                           never upgraded; IO failures degrade to the plain
+                           unresolved rows; the outcome label stays "will be
+                           imported" through identification: the folder is the
+                           content, identification is the enhancement).
                            The resolver tier: after
                            the repo tier resolves what it can, a SERIAL
                            human-paced search queue (one row at a time, table
                            order, no retries; failures are logged + leave the
-                           row unresolved) fires the anonymous
-                           SearchModsAsync with the folder name normalized
-                           into search terms (lowercase, underscores/hyphens
-                           to spaces, whitespace collapsed), + each
-                           unresolved row gets an identification workspace:
+                           row unidentified) fires the anonymous
+                           SearchModsAsync over the UNRESOLVED + SIBLING
+                           rows alike (a sibling folder provides content, not
+                           identity: the Nexus badge, update checks, +
+                           version come only from the lookup), with the
+                           folder name normalized into search terms
+                           (case-boundary splitting first, then lowercase,
+                           underscores/hyphens to spaces, whitespace
+                           collapsed), + each unidentified lookup row gets an
+                           identification workspace:
                            the TOP candidate inline (name + mod id + a
                            one-click Accept), an expand affordance revealing
                            the alternates (each with its own accept), + the
                            manual id/URL entry in the reserved cells (the
                            shared ImportSourceValidator parse; a bare id or a
-                           nexusmods.com URL both accepted). Accepted or
+                           nexusmods.com URL both accepted; a search that
+                           completes with zero candidates leaves the localized
+                           no-results hint on the row: the manual entry + the
+                           open-on-Nexus link are then the path). Accepted or
                            manually entered identification marks the row
-                           identified (the id cell shows the fact + the
-                           version cell activates, empty by default,
-                           validated non-empty-when-Nexus like the import
-                           form; the apply decides what the version
-                           means per path). Identification never checks the
-                           include checkbox (the identified default stays
-                           excluded; identification is a correction, not
-                           consent). Cancel stops the queue; arrived
-                           candidates stay on their rows. Apply (enabled when >= 1
+                           identified: the id cell swaps the manual entry for
+                           the identified fact (the accepted candidate's name
+                           or the typed id; mutually exclusive projections of
+                           one cell), the Match column shows the identified
+                           mod's name for an identified UNRESOLVED row (whose
+                           outcome label reads the neutral "identified"
+                           instead of not-found; sibling/reorder/library rows
+                           keep their own match + label, the fact lives in the
+                           id cell), + the version cell activates for an
+                           identified SIBLING row (empty by default, validated
+                           non-empty-when-Nexus like the import form; it tags
+                           the content imported from disk). Identification
+                           never checks the include checkbox (the identified
+                           default stays excluded; identification is a
+                           correction, not consent). Cancel stops the queue;
+                           arrived candidates stay on their rows. Apply (enabled when >= 1
                            line is included; an empty/comment-only file shows
                            the localized notice + refuses) sequences
                            membership-before-order: (a) each included

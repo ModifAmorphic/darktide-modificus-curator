@@ -473,6 +473,14 @@
     <value>Apply again later to finish the remaining lines; completed work is kept.</value>
     <comment>The re-runnable hint paired with the rate-limit apply failure (re-runs are idempotent: imports dedupe, memberships no-op, the queue dedupes live downloads).</comment>
   </data>
+  <data name="LoadOrder_OutcomeIdentified" xml:space="preserve">
+    <value>identified</value>
+    <comment>Outcome label for an unresolved line the user identified (an accepted search candidate or a manual id/URL entry): the neutral state between not-found and matched.</comment>
+  </data>
+  <data name="LoadOrder_NoResultsHint" xml:space="preserve">
+    <value>No Nexus results found</value>
+    <comment>The small hint on a review row whose search completed with zero candidates: the manual id/URL entry and the open-on-Nexus link are the path.</comment>
+  </data>
   <data name="LoadOrder_OutcomeUnresolved" xml:space="preserve">
     <value>not found</value>
     <comment>Outcome label: no local match for the line.</comment>

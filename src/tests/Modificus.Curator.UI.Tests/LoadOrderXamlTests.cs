@@ -101,23 +101,38 @@ public sealed class LoadOrderXamlTests
         Assert.Equal("{Binding IsIncluded, Mode=TwoWay}", A(checkbox, "IsChecked"));
         Assert.Equal("{Binding IsIncludeEnabled}", A(checkbox, "IsEnabled"));
 
-        // The open-on-Nexus link rides the last column, unresolved rows only.
+        // The open-on-Nexus link rides the last column, unidentified lookup
+        // rows (unresolved or sibling) only.
         var link = Assert.Single(Elements(rowTemplate, "HyperlinkButton"));
-        Assert.Equal("{Binding IsUnresolved}", A(link, "IsVisible"));
+        Assert.Equal("{Binding ShowSearchLink}", A(link, "IsVisible"));
         Assert.Equal("OpenOnNexus_Click", A(link, "Click"));
 
-        // The identification cells: the manual id/URL entry + the version
-        // field live INSIDE the fixed columns (no definition change), and
-        // their visibility keys off the row's identification projections so
-        // the cells activate without reshuffling the table.
+        // The identification cells, polarity-pinned: the manual id/URL entry
+        // binds the POSITIVE unidentified-lookup projection (an unidentified
+        // row renders the entry; the old inverted binding left unidentified
+        // rows an empty fact slot and identified rows an input box); the
+        // identified fact binds the positive identified projection; the
+        // version cell binds IsVersionCellVisible (identified sibling rows
+        // only). All live inside the fixed columns (no definition change).
         var textBoxes = Elements(rowTemplate, "TextBox").ToList();
         Assert.Equal(2, textBoxes.Count);
         var manual = Assert.Single(textBoxes, t =>
             (string?)t.Attribute("Text") == "{Binding ManualId, Mode=TwoWay}");
-        // The manual cell rides a Panel host pinned to column 4.
-        Assert.Equal("4", (string?)((manual.Parent as XElement)?.Attribute("Grid.Column")));
+        // The manual entry rides a vertical host (the entry + the no-results
+        // hint) whose visibility IS the manual-entry projection, pinned to
+        // column 4.
+        var manualHost = (manual.Parent as XElement)!;
+        Assert.Equal("{Binding IsManualEntryVisible}", (string?)manualHost.Attribute("IsVisible"));
+        Assert.Equal("4", (string?)((manualHost.Parent as XElement)?.Attribute("Grid.Column")));
+        Assert.Contains(Elements(rowTemplate, "TextBlock"),
+            t => ((string?)t.Attribute("Text") ?? string.Empty).Contains("LoadOrder_NoResultsHint")
+                && (string?)t.Attribute("IsVisible") == "{Binding ShowNoResultsHint}");
+        var fact = Assert.Single(Elements(rowTemplate, "TextBlock"),
+            t => (string?)t.Attribute("Text") == "{Binding IdentifiedName}");
+        Assert.Equal("{Binding ShowIdentifiedFact}", (string?)fact.Attribute("IsVisible"));
         var version = Assert.Single(textBoxes, t =>
             (string?)t.Attribute("Text") == "{Binding Version, Mode=TwoWay}");
+        Assert.Equal("{Binding IsVersionCellVisible}", (string?)version.Attribute("IsVisible"));
         Assert.Equal("5", (string?)version.Attribute("Grid.Column"));
 
         // The row's DataTemplate (the vertical host carrying the row grid +

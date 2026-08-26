@@ -1484,8 +1484,9 @@ The picker's file feeds `StartImport(path)`:
   never a mod) and the txt itself. An unresolved line whose name matches a
   sibling upgrades to the "will be imported" outcome (resolved lines are
   never upgraded: the profile/library match wins); IO failures degrade to
-  the plain unresolved rows. Migration users are identified by exact
-  base-name match, with search as their fallback.
+  the plain unresolved rows. The outcome label stays "will be imported"
+  through identification: the folder is the content, identification is the
+  enhancement.
 - **Apply** (single button, enabled when at least one line is included; an
   empty/comment-only file shows the localized notice and refuses rather
   than a no-op write), sequenced membership-before-order (the order write
@@ -1525,16 +1526,28 @@ The picker's file feeds `StartImport(path)`:
 - **The resolver tier** (the identification workspace): after the repo tier
   resolves what it can, a serial human-paced search queue (one row at a time,
   table order, no retries; a failed search is logged and leaves the row
-  unresolved with the manual path available) fires
-  `INexusClient.SearchModsAsync` with the folder name normalized into search
-  terms (lowercase, underscores/hyphens to spaces, whitespace collapsed).
-  Each unresolved row gets a workspace: the TOP candidate inline (name +
+  unidentified with the manual path available) fires
+  `INexusClient.SearchModsAsync` over the UNRESOLVED and SIBLING rows alike
+  (a sibling folder provides content, not identity: the Nexus badge, update
+  checks, and version come only from the lookup), with the folder name
+  normalized into search terms (case-boundary splitting first, then
+  lowercase, underscores/hyphens to spaces, whitespace collapsed).
+  Each unidentified lookup row gets a workspace: the TOP candidate inline
+  (name +
   mod id + a one-click Accept), an expand affordance revealing the
   alternates (each with its own Accept), and the manual id/URL entry in the
   reserved cells (parsed via the shared `ImportSourceValidator` rules; a
-  bare id or a `nexusmods.com` URL both accepted). Accepted or manually
-  entered identification marks the row identified: the id cell shows the
-  fact, and the version cell activates for an identified SIBLING-IMPORT row
+  bare id or a `nexusmods.com` URL both accepted; a search that completes
+  with zero candidates leaves the localized no-results hint on the row: the
+  manual entry and the open-on-Nexus link are then the path). Accepted or
+  manually entered identification marks the row identified: the id cell
+  swaps the manual entry for the identified fact (the accepted candidate's
+  name or the typed id; mutually exclusive projections of one cell), the
+  Match column shows the identified mod's name for an identified UNRESOLVED
+  row (whose outcome label reads the neutral "identified" instead of
+  not-found; sibling/reorder/library rows keep their own match + label, the
+  fact lives in the id cell), and the version cell activates for an
+  identified SIBLING-IMPORT row
   only (empty by default, validated non-empty-when-Nexus like the import
   form): it tags the content imported from disk, while rows with no local
   content carry no version at all (the Premium download resolves the real

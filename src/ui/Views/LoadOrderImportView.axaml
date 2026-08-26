@@ -128,25 +128,34 @@
                             HorizontalAlignment="Center"
                             VerticalAlignment="Center" />
                   <!-- Columns 4 + 5: the identification cells. For an
-                       UNIDENTIFIED row they host the manual id/URL entry
-                       (parsed via the shared ImportSourceValidator rules; a
-                       bare id or a nexusmods.com URL both accepted) + the
-                       Apply button, so the user can identify the row by hand
-                       when the search found nothing (or nothing right). For
-                       an IDENTIFIED row the cells turn read-only facts: the
-                       accepted mod id + the typed version tag (the apply path
-                       decides what the version means per destination; it is
-                       validated non-empty-when-Nexus like the import form).
-                       Resolved rows (reorder/library) keep the cells inert:
-                       the repo tier already identified them. -->
+                       UNIDENTIFIED lookup row (unresolved or sibling) the id
+                       cell hosts the manual id/URL entry (parsed via the
+                       shared ImportSourceValidator rules; a bare id or a
+                       nexusmods.com URL both accepted) + the Apply check
+                       button, plus the no-results hint once the row's search
+                       completed empty. For an IDENTIFIED row the cell turns a
+                       read-only fact: the accepted candidate's name or the
+                       typed id. Resolved rows (reorder/library) keep the cell
+                       inert: the repo tier already identified them. The two
+                       states are mutually exclusive projections of the same
+                       cell (IsManualEntryVisible / ShowIdentifiedFact). -->
                   <Panel Grid.Column="4" VerticalAlignment="Center">
-                    <TextBox Text="{Binding ManualId, Mode=TwoWay}"
-                             IsVisible="{Binding !AreIdCellsEnabled}"
-                             IsEnabled="{Binding IsUnresolved}"
-                             PlaceholderText="{ReflectionBinding [LoadOrder_ManualIdHint], Source={StaticResource Loc}}"
-                             FontSize="11" />
+                    <StackPanel Orientation="Vertical" Spacing="2"
+                                IsVisible="{Binding IsManualEntryVisible}">
+                      <TextBox Text="{Binding ManualId, Mode=TwoWay}"
+                               PlaceholderText="{ReflectionBinding [LoadOrder_ManualIdHint], Source={StaticResource Loc}}"
+                               FontSize="11" />
+                      <!-- The no-results hint: the row's search completed
+                           with zero candidates; the manual entry + the
+                           Nexus link are the path. Hides on
+                           identification. -->
+                      <TextBlock Text="{ReflectionBinding [LoadOrder_NoResultsHint], Source={StaticResource Loc}}"
+                                 IsVisible="{Binding ShowNoResultsHint}"
+                                 FontSize="11"
+                                 Opacity="0.6" />
+                    </StackPanel>
                     <TextBlock Text="{Binding IdentifiedName}"
-                               IsVisible="{Binding AreIdCellsEnabled}"
+                               IsVisible="{Binding ShowIdentifiedFact}"
                                VerticalAlignment="Center"
                                TextTrimming="CharacterEllipsis"
                                ToolTip.Tip="{Binding IdentifiedName}" />
@@ -163,13 +172,14 @@
                            PlaceholderText="{ReflectionBinding [LoadOrder_VersionHint], Source={StaticResource Loc}}"
                            FontSize="11" />
 
-                  <!-- Column 6: the row's action. Identified rows expose the
-                       identity fact (nothing to accept); identified-by-
-                       candidate rows are done, manual rows carry the Apply
-                       inside the id cell's flow (the Apply button below).
-                       Unidentified rows expose the open-on-Nexus link. -->
+                  <!-- Column 6: the row's action. Unidentified lookup rows
+                       (unresolved or sibling) expose the open-on-Nexus link
+                       (the fallback loop's entry: open Nexus, find the mod,
+                       paste the id/URL into the manual entry). Identified
+                       rows hide it; manual rows carry the Apply check inside
+                       the id cell's flow. -->
                   <Panel Grid.Column="6" VerticalAlignment="Center">
-                    <HyperlinkButton IsVisible="{Binding IsUnresolved}"
+                    <HyperlinkButton IsVisible="{Binding ShowSearchLink}"
                                     Click="OpenOnNexus_Click"
                                     CommandParameter="{Binding}">
                       <TextBlock Text="{ReflectionBinding [LoadOrder_SearchOnNexus], Source={StaticResource Loc}}"

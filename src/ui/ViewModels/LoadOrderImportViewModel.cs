@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Text.RegularExpressions;
 using Modificus.Curator.Integrations;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -46,7 +47,7 @@ public partial class LoadOrderRowViewModel : ObservableObject
         Name = line.Name;
         Outcome = line.Outcome;
         ContainerId = line.ContainerId;
-        MatchText = line.DisplayName ?? "-";
+        _repoMatchText = line.DisplayName ?? "-";
         _isIncluded = Outcome == LoadOrderLineOutcome.Reorder;
     }
 
@@ -64,14 +65,36 @@ public partial class LoadOrderRowViewModel : ObservableObject
     /// </summary>
     public Guid? ContainerId { get; internal set; }
 
+    /// <summary>The repo-tier match display (the mod's display name), or
+    /// <c>"-"</c> when unresolved.</summary>
+    private readonly string _repoMatchText;
+
     /// <summary>
-    /// What Curator matched the line to (the mod's display name), or
-    /// <c>"-"</c> when unresolved.
+    /// What the Match column shows: the identified mod's name once an
+    /// unresolved row is identified (the identification IS the match), else
+    /// the repo-tier match (the mod's display name, the sibling folder name,
+    /// or <c>"-"</c>). Sibling, reorder, and library rows keep their existing
+    /// match display when identified: their id cell carries the identity
+    /// fact, and the folder/match remains what the line keys on.
     /// </summary>
-    public string MatchText { get; }
+    public string MatchText =>
+        Outcome == LoadOrderLineOutcome.Unresolved && IsIdentified && IdentifiedName is not null
+            ? IdentifiedName
+            : _repoMatchText;
 
     /// <summary>Whether the line resolved to nothing.</summary>
     public bool IsUnresolved => Outcome == LoadOrderLineOutcome.Unresolved;
+
+    /// <summary>
+    /// Whether this row participates in the identification surface: an
+    /// unresolved line (no local match anywhere) or a sibling-import line
+    /// (the folder provides content, not identity: Nexus identity - the
+    /// badge, update checks, version - comes only from the lookup). Resolved
+    /// rows (reorder, library add) were identified by the repo tier and
+    /// offer no lookup affordances.
+    /// </summary>
+    public bool IsLookupRow =>
+        Outcome is LoadOrderLineOutcome.Unresolved or LoadOrderLineOutcome.SiblingImport;
 
     /// <summary>
     /// Whether the include checkbox accepts input: unresolved lines are
@@ -82,11 +105,11 @@ public partial class LoadOrderRowViewModel : ObservableObject
     public bool IsIncludeEnabled => !IsUnresolved || IsIdentified;
 
     /// <summary>
-    /// The Nexus search URL for an unresolved line (the folder name as the
-    /// keyword), or null for a resolved line. Never opened implicitly; the
+    /// The Nexus search URL for an unidentified lookup row (the folder name
+    /// as the keyword), or null otherwise. Never opened implicitly; the
     /// parent's open-on-Nexus command launches it.
     /// </summary>
-    public string? SearchUrl => IsUnresolved
+    public string? SearchUrl => IsLookupRow && !IsIdentified
         ? $"https://www.nexusmods.com/games/{NexusGameIdentity.DarktideDomain}/mods/?keyword={Uri.EscapeDataString(Name)}"
         : null;
 
@@ -172,10 +195,18 @@ public partial class LoadOrderRowViewModel : ObservableObject
     private string _version = string.Empty;
 
     /// <summary>
-    /// Whether the id + version cells accept input: identified rows only.
-    /// Pre-identification, the row offers the search workspace instead.
+    /// Whether the manual id/URL entry renders: an UNIDENTIFIED lookup row
+    /// (unresolved or sibling). Identified rows show the fact instead;
+    /// resolved rows offer neither.
     /// </summary>
-    public bool AreIdCellsEnabled => !IsIdentified;
+    public bool IsManualEntryVisible => IsLookupRow && !IsIdentified;
+
+    /// <summary>
+    /// Whether the identified fact renders in the id cell (the accepted
+    /// candidate's name or the typed id): identified rows only. The manual
+    /// entry and the fact are mutually exclusive states of the same cell.
+    /// </summary>
+    public bool ShowIdentifiedFact => IsIdentified;
 
     /// <summary>
     /// Whether the version cell renders: an IDENTIFIED sibling-import row
@@ -190,6 +221,21 @@ public partial class LoadOrderRowViewModel : ObservableObject
     /// <summary>Whether the row is still searching (a spinner affordance).</summary>
     [ObservableProperty]
     private bool _isSearching;
+
+    /// <summary>
+    /// Set once the row's search completed with zero candidates: the row's
+    /// identification story is then manual entry or the open-on-Nexus link,
+    /// and the hint says so (a not-yet-searched row shows no hint).
+    /// </summary>
+    [ObservableProperty]
+    private bool _searchedNoResults;
+
+    /// <summary>
+    /// Whether the no-results hint renders: the search ran, found nothing,
+    /// and the row is still unidentified (identification is the answer; the
+    /// hint hides once it lands).
+    /// </summary>
+    public bool ShowNoResultsHint => SearchedNoResults && IsLookupRow && !IsIdentified;
 
     /// <summary>
     /// The sibling mod folder this line imports from (the txt's own
@@ -220,22 +266,29 @@ public partial class LoadOrderRowViewModel : ObservableObject
 
 
     /// <summary>
-    /// Whether the manual-identification Apply button shows: an unresolved,
-    /// unidentified row whose manual text parses to a Nexus id (the check
-    /// button commits the parse).
+    /// Whether the manual-identification Apply button shows: an unidentified
+    /// lookup row (unresolved or sibling) whose manual text parses to a
+    /// Nexus id (the check button commits the parse).
     /// </summary>
     public bool IsManualPending =>
-        IsUnresolved
+        IsLookupRow
         && !IsIdentified
         && ImportSourceValidator.TryParseUrl(ImportSource.Nexus, ManualId, out var parsed)
         && parsed is NexusSource;
 
     /// <summary>
-    /// Whether the candidate workspace renders: an unresolved, unidentified
-    /// row with at least one candidate (the top slot + the expand
-    /// affordance).
+    /// Whether the candidate workspace renders: an unidentified lookup row
+    /// (unresolved or sibling) with at least one candidate (the top slot +
+    /// the expand affordance).
     /// </summary>
-    public bool ShowCandidateWorkspace => IsUnresolved && !IsIdentified && HasCandidates;
+    public bool ShowCandidateWorkspace => IsLookupRow && !IsIdentified && HasCandidates;
+
+    /// <summary>
+    /// Whether the open-on-Nexus link renders (the last column): an
+    /// unidentified lookup row. Identification hides it (the row has its
+    /// answer).
+    /// </summary>
+    public bool ShowSearchLink => IsLookupRow && !IsIdentified;
 
     /// <summary>Whether any alternate candidate exists (the expand affordance's visibility).</summary>
     public bool HasAlternateCandidates => AlternateCandidates.Count > 0;
@@ -282,23 +335,30 @@ public partial class LoadOrderRowViewModel : ObservableObject
 
     /// <summary>
     /// Re-fires every projection that reads the identification state: the
-    /// fact itself, the cell activation family (AreIdCellsEnabled gates the
-    /// manual-id cell), the include checkbox's enable (an unresolved row's
-    /// checkbox ENABLES once identified: the enqueue path now has an identity
-    /// to act on), the manual-pending parse gate, the workspace visibility,
-    /// and the version cell's visibility (it renders for identified
-    /// sibling-import rows only). Anything new that keys off IsIdentified
-    /// joins this list.
+    /// fact itself, the id cell's two mutually-exclusive states (the manual
+    /// entry hides, the fact shows), the include checkbox's enable (an
+    /// unresolved row's checkbox ENABLES once identified: the enqueue path
+    /// now has an identity to act on), the manual-pending parse gate, the
+    /// workspace visibility, the version cell's visibility (identified
+    /// sibling-import rows only), the Nexus link's visibility, the
+    /// no-results hint, and the two identification feedback surfaces (the
+    /// Match column + the outcome label for unresolved rows). Anything new
+    /// that keys off IsIdentified joins this list.
     /// </summary>
     private void OnIdentified()
     {
         OnPropertyChanged(nameof(IsIdentified));
-        OnPropertyChanged(nameof(AreIdCellsEnabled));
+        OnPropertyChanged(nameof(IsManualEntryVisible));
+        OnPropertyChanged(nameof(ShowIdentifiedFact));
         OnPropertyChanged(nameof(IsIncludeEnabled));
         OnPropertyChanged(nameof(IsManualPending));
         OnPropertyChanged(nameof(IdentifiedName));
         OnPropertyChanged(nameof(ShowCandidateWorkspace));
         OnPropertyChanged(nameof(IsVersionCellVisible));
+        OnPropertyChanged(nameof(ShowSearchLink));
+        OnPropertyChanged(nameof(ShowNoResultsHint));
+        OnPropertyChanged(nameof(MatchText));
+        OnPropertyChanged(nameof(OutcomeText));
         IsExpanded = false;
     }
 
@@ -318,12 +378,17 @@ public partial class LoadOrderRowViewModel : ObservableObject
         Manual,
     }
 
-    /// <summary>The localized outcome label. Re-resolves on a culture change.</summary>
+    /// <summary>
+    /// The localized outcome label. An identified unresolved row reads the
+    /// neutral identified label (not "not found"); every other shape keys on
+    /// its outcome. Re-resolves on a culture change.
+    /// </summary>
     public string OutcomeText => Outcome switch
     {
         LoadOrderLineOutcome.Reorder => _localization["LoadOrder_OutcomeReorder"],
         LoadOrderLineOutcome.LibraryAdd => _localization["LoadOrder_OutcomeAdd"],
         LoadOrderLineOutcome.SiblingImport => _localization["LoadOrder_OutcomeImport"],
+        LoadOrderLineOutcome.Unresolved when IsIdentified => _localization["LoadOrder_OutcomeIdentified"],
         _ => _localization["LoadOrder_OutcomeUnresolved"],
     };
 
@@ -709,7 +774,7 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
         var token = _searchCancellation.Token;
 
         var first = true;
-        foreach (var row in Rows.Where(r => r.IsUnresolved).ToArray())
+        foreach (var row in Rows.Where(r => r.IsLookupRow).ToArray())
         {
             if (token.IsCancellationRequested)
             {
@@ -749,6 +814,11 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
                 _invokeOnUi(() =>
                 {
                     row.IsSearching = false;
+                    if (response.Data.Length == 0)
+                    {
+                        row.SearchedNoResults = true;
+                    }
+
                     row.ApplyCandidates(response.Data
                         .Take(MaxCandidatesPerRow)
                         .Select(r => new NexusSearchCandidate(r.ModId, r.Name))
@@ -772,15 +842,26 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     }
 
     /// <summary>
-    /// Normalizes a mod folder name into search terms: lowercase, underscores
-    /// + hyphens to spaces, whitespace collapsed to single spaces, trimmed.
-    /// (The stemmed index matches space-separated stemmed words.)
+    /// Normalizes a mod folder name into search terms: case boundaries split
+    /// first (a lowercase letter or digit followed by an uppercase letter
+    /// gains a space, so fused PascalCase names like SimpleAudio become
+    /// simple audio), then underscores + hyphens to spaces, lowercase, and
+    /// whitespace collapsed to single spaces, trimmed. (The stemmed index
+    /// matches space-separated stemmed words.) A fused name whose title
+    /// still diverges simply lands as untracked content with manual entry;
+    /// there is deliberately no single-token retry.
     /// </summary>
     internal static string NormalizeSearchTerms(string folderName)
     {
-        var spaced = folderName.Replace('_', ' ').Replace('-', ' ').ToLowerInvariant();
-        return string.Join(' ', spaced.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        // Split case boundaries BEFORE lowercasing (the boundary is the
+        // uppercase letter, which lowercasing erases).
+        var spaced = CaseBoundaryRegex().Replace(folderName, "$1 $2");
+        var lowered = spaced.Replace('_', ' ').Replace('-', ' ').ToLowerInvariant();
+        return string.Join(' ', lowered.Split(' ', StringSplitOptions.RemoveEmptyEntries));
     }
+
+    [GeneratedRegex(@"(\p{Ll}|\d)(\p{Lu})")]
+    private static partial Regex CaseBoundaryRegex();
 
     /// <summary>The per-row candidate cap (the inline top slot + the alternates).</summary>
     private const int MaxCandidatesPerRow = 5;
@@ -1194,6 +1275,8 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
                     "LoadOrder_SearchFailedMessage",
                     url);
             }
+
+            _logger.LogInformation("Opened the Nexus search for '{Name}' ({Url}).", row.Name, url);
         }
         catch (Exception ex)
         {

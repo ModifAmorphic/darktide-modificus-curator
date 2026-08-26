@@ -425,6 +425,178 @@ public sealed class LoadOrderImportViewModelTests
         return Assert.Single(vm.Rows);
     }
 
+    // ---- the identification surface's corrected contract -----------------------
+
+    [Fact]
+    public async Task Unidentified_lookup_rows_show_the_manual_entry_not_the_fact()
+    {
+        // The inverted-polarity regression: the manual entry renders for an
+        // UNIDENTIFIED lookup row (unresolved + sibling alike), the fact
+        // renders for an IDENTIFIED row, and the two are mutually exclusive.
+        var (vm, reconciler, _, _, _, _, nexus, _, _, _, _, _) = Build();
+        nexus.NextResults = Results((42, "A Mod"));
+        var unresolved = await StartUnresolvedAsync(vm, reconciler, "ghost");
+
+        Assert.True(unresolved.IsManualEntryVisible);
+        Assert.False(unresolved.ShowIdentifiedFact);
+        vm.AcceptCandidateCommand.Execute(unresolved);
+        Assert.False(unresolved.IsManualEntryVisible);
+        Assert.True(unresolved.ShowIdentifiedFact);
+
+        vm.CancelCommand.Execute(null);
+        reconciler.NextPlan = UnresolvedPlan("RealMod");
+        var txt = WriteLoadOrderWithSiblings("RealMod\n", ("RealMod", true));
+        try
+        {
+            await vm.StartImportCommand.ExecuteAsync(txt);
+            var sibling = Assert.Single(vm.Rows);
+            Assert.True(sibling.IsManualEntryVisible); // siblings identify too
+            Assert.False(sibling.ShowIdentifiedFact);
+            sibling.ManualId = "7";
+            vm.ApplyManualIdCommand.Execute(sibling);
+            Assert.False(sibling.IsManualEntryVisible);
+            Assert.True(sibling.ShowIdentifiedFact);
+        }
+        finally
+        {
+            try { Directory.Delete(Path.GetDirectoryName(txt)!, recursive: true); }
+            catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Sibling_rows_enter_the_search_queue_and_receive_candidates()
+    {
+        var (vm, reconciler, _, _, _, _, nexus, _, _, _, _, _) = Build();
+        nexus.NextResults = Results((5, "The Real One"));
+        reconciler.NextPlan = UnresolvedPlan("RealMod");
+        var txt = WriteLoadOrderWithSiblings("RealMod\n", ("RealMod", true));
+        try
+        {
+            await vm.StartImportCommand.ExecuteAsync(txt);
+
+            var sibling = Assert.Single(vm.Rows);
+            Assert.True(sibling.IsLookupRow);
+            Assert.Equal(LoadOrderLineOutcome.SiblingImport, sibling.Outcome);
+            Assert.True(sibling.HasCandidates); // the queue covered it
+            Assert.Equal(5, sibling.TopCandidate!.ModId);
+            Assert.True(sibling.ShowCandidateWorkspace);
+            var call = Assert.Single(nexus.SearchCalls);
+            Assert.Equal("real mod", call.Terms); // case-boundary split
+
+            // Outcome + match stay the sibling's own: identification is an
+            // enhancement, not an outcome change.
+            Assert.Equal(Localization["LoadOrder_OutcomeImport"], sibling.OutcomeText);
+            Assert.Equal("RealMod", sibling.MatchText);
+        }
+        finally
+        {
+            try { Directory.Delete(Path.GetDirectoryName(txt)!, recursive: true); }
+            catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Accepting_a_candidate_on_a_sibling_identifies_with_full_feedback()
+    {
+        var (vm, reconciler, _, _, _, _, nexus, _, _, _, _, _) = Build();
+        nexus.NextResults = Results((42, "Warp Unbound Timer"));
+        reconciler.NextPlan = UnresolvedPlan("warp_unbound_timer");
+        var txt = WriteLoadOrderWithSiblings("warp_unbound_timer\n", ("warp_unbound_timer", true));
+        try
+        {
+            await vm.StartImportCommand.ExecuteAsync(txt);
+            var sibling = Assert.Single(vm.Rows);
+
+            vm.AcceptCandidateCommand.Execute(sibling);
+
+            Assert.True(sibling.IsIdentified);
+            Assert.Equal(42, sibling.IdentifiedModId);
+            Assert.True(sibling.IsVersionCellVisible); // identified sibling
+            Assert.False(sibling.ShowCandidateWorkspace);
+            Assert.False(sibling.ShowSearchLink);
+            // The include checkbox keeps its excluded default: identification
+            // is a correction, not consent (pinned for sibling rows).
+            Assert.False(sibling.IsIncluded);
+            Assert.True(sibling.IsIncludeEnabled);
+            // The outcome label stays the sibling's own.
+            Assert.Equal(Localization["LoadOrder_OutcomeImport"], sibling.OutcomeText);
+        }
+        finally
+        {
+            try { Directory.Delete(Path.GetDirectoryName(txt)!, recursive: true); }
+            catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Identifying_an_unresolved_row_updates_its_match_and_outcome_label()
+    {
+        var (vm, reconciler, _, _, _, _, _, _, _, _, _, _) = Build();
+        reconciler.NextPlan = UnresolvedPlan("ghost");
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("ghost\n"));
+        var row = Assert.Single(vm.Rows);
+
+        Assert.Equal("-", row.MatchText);
+        Assert.Equal(Localization["LoadOrder_OutcomeUnresolved"], row.OutcomeText);
+
+        row.ManualId = "77";
+        vm.ApplyManualIdCommand.Execute(row);
+
+        Assert.Equal("#77", row.MatchText); // the identification IS the match
+        Assert.Equal(Localization["LoadOrder_OutcomeIdentified"], row.OutcomeText);
+        Assert.NotEqual(Localization["LoadOrder_OutcomeUnresolved"], row.OutcomeText);
+    }
+
+    [Fact]
+    public async Task A_zero_candidate_search_shows_the_no_results_hint_once_terminal()
+    {
+        var (vm, reconciler, _, _, _, _, nexus, _, _, _, _, _) = Build();
+        nexus.NextResults = Results(); // search runs, finds nothing
+        reconciler.NextPlan = UnresolvedPlan("ghost");
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("ghost\n"));
+        var row = Assert.Single(vm.Rows);
+
+        Assert.True(row.SearchedNoResults);
+        Assert.True(row.ShowNoResultsHint);
+
+        // Identification is the answer: the hint hides.
+        row.ManualId = "3";
+        vm.ApplyManualIdCommand.Execute(row);
+        Assert.False(row.ShowNoResultsHint);
+
+        // A row that was never searched shows no hint (resolved rows never
+        // enter the queue).
+        vm.CancelCommand.Execute(null);
+        reconciler.NextPlan = LoadOrderPlanner.Build(
+            new[] { "ModA" },
+            new[] { new LoadOrderProfileMod(Guid.NewGuid(), "ModA", "A") },
+            Array.Empty<LoadOrderRepoCandidate>());
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("ModA\n"));
+        Assert.False(Assert.Single(vm.Rows).ShowNoResultsHint);
+    }
+
+    [Fact]
+    public async Task Search_terms_split_fused_pascal_case_boundaries()
+    {
+        // The case-boundary split: lowercase-or-digit followed by uppercase
+        // gains a space BEFORE lowercasing (the boundary is the uppercase
+        // letter, which lowercasing erases).
+        Assert.Equal("simple audio", LoadOrderImportViewModel.NormalizeSearchTerms("SimpleAudio"));
+        Assert.Equal("requisition auspex", LoadOrderImportViewModel.NormalizeSearchTerms("RequisitionAuspex"));
+        Assert.Equal("mod2 hud", LoadOrderImportViewModel.NormalizeSearchTerms("Mod2Hud"));
+
+        // Already separated: unchanged.
+        Assert.Equal("warp unbound timer", LoadOrderImportViewModel.NormalizeSearchTerms("Warp Unbound Timer"));
+        Assert.Equal("warp unbound timer", LoadOrderImportViewModel.NormalizeSearchTerms("warp_unbound_timer"));
+        Assert.Equal("warp unbound timer", LoadOrderImportViewModel.NormalizeSearchTerms("warp-unbound--TIMER"));
+
+        // Accents are letters to the boundary classes.
+        Assert.Equal("café mod", LoadOrderImportViewModel.NormalizeSearchTerms("CaféMod"));
+        Assert.Equal("éclair mod", LoadOrderImportViewModel.NormalizeSearchTerms("ÉclairMod"));
+        Assert.Equal("  single  ".Trim(), LoadOrderImportViewModel.NormalizeSearchTerms("  single  "));
+    }
+
     [Fact]
     public async Task A_candidates_arrival_fills_the_top_slot_and_alternates()
     {
@@ -809,6 +981,41 @@ public sealed class LoadOrderImportViewModelTests
         catch (IOException)
         {
             // Temp cleanup is best-effort.
+        }
+    }
+
+    [Fact]
+    public async Task Apply_imports_a_sibling_identified_by_candidate_with_its_id_and_version()
+    {
+        // The accepted candidate's id (not a hand-typed one) is what the
+        // import carries, with the typed version.
+        var (vm, reconciler, profiles, _, _, _, nexus, imports, _, _, _, _) = Build();
+        nexus.NextResults = Results((84, "The Accepted Mod"));
+        reconciler.NextPlan = UnresolvedPlan("acceptedmod");
+        var txt = WriteLoadOrderWithSiblings("acceptedmod\n", ("acceptedmod", true));
+        try
+        {
+            await vm.StartImportCommand.ExecuteAsync(txt);
+            var row = Assert.Single(vm.Rows);
+            vm.AcceptCandidateCommand.Execute(row);
+            row.IsIncluded = true;
+            row.Version = "  2.1  ";
+
+            var importedContainer = Guid.NewGuid();
+            imports.NextImportResults =
+                new Queue<(Guid, string)>(new[] { (importedContainer, "v") });
+            await vm.ApplyCommand.ExecuteAsync(null);
+
+            var call = Assert.Single(imports.Imports);
+            var source = Assert.IsType<NexusSource>(call.Source);
+            Assert.Equal(84, source.ModId); // the accepted candidate's id
+            Assert.Equal("2.1", call.Version); // trimmed
+            Assert.Contains(profiles.AddModCalls, c => c.ContainerId == importedContainer);
+        }
+        finally
+        {
+            try { Directory.Delete(Path.GetDirectoryName(txt)!, recursive: true); }
+            catch (IOException) { }
         }
     }
 
