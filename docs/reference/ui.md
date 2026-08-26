@@ -1478,20 +1478,50 @@ The picker's file feeds `StartImport(path)`:
   unresolved rows (the folder name as the search keyword,
   `IExternalLauncher`, fallback alert on failure). Unmatched names are
   fully visible, never dropped.
+- **The sibling tier** (the migration path): the picked txt's own
+  directory is scanned for sibling mod folders (a directory containing
+  `<dirName>/<dirName>.mod`), skipping `base` (the old DML loader runtime,
+  never a mod) and the txt itself. An unresolved line whose name matches a
+  sibling upgrades to the "will be imported" outcome (resolved lines are
+  never upgraded: the profile/library match wins); IO failures degrade to
+  the plain unresolved rows. Migration users are identified by exact
+  base-name match, with search as their fallback.
 - **Apply** (single button, enabled when at least one line is included; an
   empty/comment-only file shows the localized notice and refuses rather
-  than a no-op write): ONE `SetModOrder` carrying every matched container
-  in file order (included or not; order application is not optional, the
-  checkboxes gate only adds; `SetModOrder`'s own lock projection keeps
-  locked entries at their exact slots), then `AddMod` (Latest policy) for
-  each INCLUDED library-add line in file order, marks the session pending,
-  deactivates the card, and raises `OrderApplied` (the mod list reloads).
-  Apply sequencing: the order write precedes the adds and `AddMod`
-  appends, so included adds land after the listed block rather than at
-  their file positions; the apply refinement that arrives with the
-  resolver tiers revisits this deliberately. A mid-apply failure surfaces
-  the localized inline failure with the card still open; earlier writes
-  stand and re-runs are idempotent.
+  than a no-op write), sequenced membership-before-order (the order write
+  cannot place ids that are not profile members yet):
+  1. **Imports**: each INCLUDED sibling-import line imports its folder
+     through `IModImportService.Import` (source = `NexusSource` of the
+     identified id when the row is identified, else `UntrackedSource`;
+     version = the row's typed version when identified + non-empty, else
+     empty, the version-unknown path). The identified sibling import IS
+     the association; there is no separate identity rewrite at apply, and
+     lines matching an existing untracked container stay plain adds. A
+     per-line import failure is recorded on the line and the rest
+     continue.
+  2. **Adds**: `AddMod` (Latest policy) for every included add line
+     (library + the imported containers).
+  3. **Order**: ONE `SetModOrder` carrying every matched + newly-created
+     container in file order, so every add lands at its file position.
+     The checkboxes gate only adds; order application is not optional, and
+     `SetModOrder`'s own lock projection keeps locked entries at their
+     exact slots.
+  4. **Enqueues**: for each INCLUDED identified not-in-Curator line, a
+     Premium account (verified fresh through
+     `INexusAuthService.GetCurrentStateAsync` at apply time) gets a
+     download enqueued onto the shared queue (the head file resolved
+     first so the queue's dedupe key is real; a `ProfileAdd` item with no
+     container; the download rows own progress + completion + the
+     reload). The typed version is informational on these lines: the
+     download resolves the real version. Non-premium accounts perform no
+     network action (the rows carry the open-on-Nexus link).
+  On full success the session is marked pending, the card deactivates,
+  and `OrderApplied` reloads the mod list. A card-level failure (a
+  profile/repo/import failure, or stop-on-429 in the enqueue batch, which
+  keeps prior work and says the run can be re-applied) or any per-line
+  failure keeps the review open so the messages stay readable and a
+  re-run can finish; re-runs are idempotent (imports dedupe, `AddMod`
+  no-ops on existing membership, the queue dedupes live downloads).
 - **The resolver tier** (the identification workspace): after the repo tier
   resolves what it can, a serial human-paced search queue (one row at a time,
   table order, no retries; a failed search is logged and leaves the row

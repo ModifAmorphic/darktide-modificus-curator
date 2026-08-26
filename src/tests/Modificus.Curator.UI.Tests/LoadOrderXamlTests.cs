@@ -120,11 +120,20 @@ public sealed class LoadOrderXamlTests
             (string?)t.Attribute("Text") == "{Binding Version, Mode=TwoWay}");
         Assert.Equal("5", (string?)version.Attribute("Grid.Column"));
 
+        // The row's DataTemplate (the vertical host carrying the row grid +
+        // everything that renders below it).
+        var template = rowTemplate.Ancestors()
+            .Single(a => a.Name.LocalName == "DataTemplate");
+
+        // The per-line apply failure (a failed sibling import, or a download
+        // resolve that produced no item) renders inside the row template,
+        // keyed off the row's LineFailure.
+        Assert.Contains(Elements(template, "TextBlock"),
+            t => (string?)t.Attribute("Text") == "{Binding LineFailure}");
+
         // The candidate workspace + the expand affordance exist in the row's
         // DataTemplate (they render BELOW the row grid, inside the template's
         // vertical host), keyed off the row's workspace projections.
-        var template = rowTemplate.Ancestors()
-            .Single(a => a.Name.LocalName == "DataTemplate");
         Assert.Contains(Elements(template, "Button"),
             b => (string?)b.Attribute("Click") == "AcceptCandidate_Click");
         Assert.Contains(Elements(template, "Button"),

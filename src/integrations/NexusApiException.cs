@@ -37,7 +37,7 @@ public sealed class NexusRateLimitException : NexusApiException
     /// </summary>
     public NexusRateLimits? Limits { get; }
 
-    internal NexusRateLimitException(int statusCode, NexusRateLimits? limits)
+    public NexusRateLimitException(int statusCode, NexusRateLimits? limits)
         : base(statusCode, BuildMessage(statusCode, limits))
     {
         Limits = limits;

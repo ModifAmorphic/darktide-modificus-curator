@@ -453,6 +453,26 @@
     <value>can be added</value>
     <comment>Outcome label: the line matched a mod in the library but not this profile; including it adds it.</comment>
   </data>
+  <data name="LoadOrder_OutcomeImport" xml:space="preserve">
+    <value>will be imported</value>
+    <comment>Outcome label: the line matches a mod folder sitting beside the load-order file; including it imports that folder.</comment>
+  </data>
+  <data name="LoadOrder_LineImportFailed" xml:space="preserve">
+    <value>Import failed: {0}</value>
+    <comment>Per-line failure recorded on a sibling-import row whose import failed during apply. {0} is the failure detail. The apply continues past failed lines; a re-run can finish them.</comment>
+  </data>
+  <data name="LoadOrder_LineEnqueueFailed" xml:space="preserve">
+    <value>Could not enqueue the download: {0}</value>
+    <comment>Per-line failure recorded on an identified row whose head-file resolve failed during the enqueue batch. {0} is the failure detail. The batch continues past failed lines.</comment>
+  </data>
+  <data name="LoadOrder_EnqueueRateLimited" xml:space="preserve">
+    <value>Nexus rate limit reached; the remaining downloads were not queued.</value>
+    <comment>The apply's inline failure when the enqueue batch hits a rate limit. Everything before it stands; the message pairs with the re-runnable hint.</comment>
+  </data>
+  <data name="LoadOrder_RerunnableHint" xml:space="preserve">
+    <value>Apply again later to finish the remaining lines; completed work is kept.</value>
+    <comment>The re-runnable hint paired with the rate-limit apply failure (re-runs are idempotent: imports dedupe, memberships no-op, the queue dedupes live downloads).</comment>
+  </data>
   <data name="LoadOrder_OutcomeUnresolved" xml:space="preserve">
     <value>not found</value>
     <comment>Outcome label: no local match for the line.</comment>

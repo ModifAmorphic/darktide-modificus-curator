@@ -224,6 +224,17 @@
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
                 </StackPanel>
+
+                <!-- The per-line apply failure (a failed sibling import, or a
+                     download resolve that produced no item): the apply
+                     continued past it; the message states what did not land
+                     so a re-run can finish it. -->
+                <TextBlock Text="{Binding LineFailure}"
+                           IsVisible="{Binding LineFailure, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                           FontSize="11"
+                           Foreground="{DynamicResource CuratorCautionBrush}"
+                           TextWrapping="Wrap"
+                           Margin="8,0,0,2" />
                 </StackPanel>
               </DataTemplate>
             </ItemsControl.ItemTemplate>
@@ -245,17 +256,20 @@
       </StackPanel>
 
       <!-- Actions, right-aligned: Cancel + accent Apply. The table was the
-           review; Apply confirms nothing further. -->
+           review; Apply confirms nothing further. Both disable while the
+           apply runs (IsApplying; the card stays active, holding the card
+           gate + the toolbar lock through the apply). -->
       <StackPanel Grid.Row="2"
                   Orientation="Horizontal" Spacing="8"
                   HorizontalAlignment="Right"
                   VerticalAlignment="Bottom">
         <Button Content="{ReflectionBinding [LoadOrder_CancelButton], Source={StaticResource Loc}}"
                 Command="{Binding CancelCommand}"
+                IsEnabled="{Binding CanCancelNow}"
                 MinWidth="80" />
         <Button Content="{ReflectionBinding [LoadOrder_ApplyButton], Source={StaticResource Loc}}"
                 Command="{Binding ApplyCommand}"
-                IsEnabled="{Binding CanApply}"
+                IsEnabled="{Binding CanApplyNow}"
                 Classes="accent"
                 MinWidth="80" />
       </StackPanel>

@@ -340,7 +340,17 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            open-on-Nexus link on unresolved rows, the folder
                            name as the search keyword, IExternalLauncher with
                            the fallback alert). Unmatched names are fully
-                           visible, never dropped. The resolver tier: after
+                           visible, never dropped. The sibling tier: the
+                           txt's own directory is scanned for sibling mod
+                           folders (a directory containing
+                           <dirName>/<dirName>.mod), skipping `base` (the old
+                           DML loader runtime) + the txt itself; an unresolved
+                           line whose name matches a sibling upgrades to the
+                           "will be imported" outcome (resolved lines are
+                           never upgraded; migration users are identified by
+                           exact base-name match, search is their fallback;
+                           IO failures degrade to the plain unresolved rows).
+                           The resolver tier: after
                            the repo tier resolves what it can, a SERIAL
                            human-paced search queue (one row at a time, table
                            order, no retries; failures are logged + leave the
@@ -366,16 +376,41 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            consent). Cancel stops the queue; arrived
                            candidates stay on their rows. Apply (enabled when >= 1
                            line is included; an empty/comment-only file shows
-                           the localized notice + refuses) performs ONE
-                           SetModOrder over every matched container in file
-                           order (included or not; the checkboxes gate only
-                           adds) + AddMod(LatestPolicy) for each included
-                           library add in file order, marks pending, raises
-                           `OrderApplied` (the parent reloads), + deactivates
-                           (runApply sequencing: SetModOrder first, adds
-                           append; positioning refinement lands with the
-                           resolver tiers). Cancel + a profile switch reset
-                           with no writes. Copied
+                           the localized notice + refuses) sequences
+                           membership-before-order: (a) each included
+                           SIBLING-IMPORT line imports its folder via
+                           IModImportService.Import (source = NexusSource of
+                           the identified id when identified, else
+                           UntrackedSource; version = the row's typed version
+                           when identified + non-empty, else empty, the
+                           version-unknown path; a per-line import failure is
+                           recorded on the line + the rest continue), (b)
+                           AddMod(LatestPolicy) for every included add
+                           (library + imported containers), (c) ONE SetModOrder
+                           over every matched + newly-created container in
+                           file order so every add lands at its file position
+                           (the checkboxes gate only adds; SetModOrder's own
+                           lock projection keeps locked entries), then (d) the
+                           enqueue batch: each included IDENTIFIED
+                           not-in-Curator line, on a Premium account verified
+                           fresh through GetCurrentStateAsync at apply time,
+                           gets a download enqueued onto the shared queue
+                           (resolve the head file first, then a ProfileAdd
+                           item with no container; the download rows own
+                           progress + completion + the reload; the typed
+                           version is informational on these lines: the
+                           download resolves the real version), while
+                           non-premium performs no network action (the rows
+                           carry the open-on-Nexus link). The mark-pending +
+                           `OrderApplied` reload (the parent reloads) +
+                           deactivate follow; a card-level failure (incl.
+                           stop-on-429 in the batch, which keeps prior work +
+                           says the run can be re-applied) or any per-line
+                           failure keeps the review open so the messages stay
+                           readable + a re-run can finish (re-runs are
+                           idempotent: imports dedupe, AddMod no-ops on
+                           membership, the queue dedupes live downloads).
+                           Cancel + a profile switch reset with no writes. Copied
                            local-import failures surface inline (not via modal
                            alert); the linked-folder flow keeps its modal alerts.
                            The toolbar's density selector is two drawn-icon buttons
@@ -2069,7 +2104,24 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                              leaves the row unresolved, cancel
                                              stops the queue, resolved rows
                                              never search, the terms
-                                             normalization;
+                                             normalization; the apply paths:
+                                             the sibling scan (base/txt skips,
+                                             resolved lines never upgraded),
+                                             the identified-sibling import
+                                             (NexusSource + version) + the
+                                             unidentified one (Untracked +
+                                             empty), the final order write
+                                             carrying all containers at file
+                                             positions, the premium enqueue
+                                             batch (fresh-verify gate,
+                                             ProfileAdd + head resolve,
+                                             version informational),
+                                             non-premium skipping the network,
+                                             stop-on-429 with prior work
+                                             standing + the card open,
+                                             per-line import + enqueue
+                                             failures recorded + continued,
+                                             the apply holding the card gate;
                                              LoadOrderXamlTests: the fifth Add
                                              flyout item, the card hosted below
                                              the import card, the shared

@@ -56,8 +56,13 @@ public partial class LoadOrderRowViewModel : ObservableObject
     /// <summary>The reconciliation outcome driving the label + checkbox rules.</summary>
     public LoadOrderLineOutcome Outcome { get; }
 
-    /// <summary>The matched container, or null when unresolved.</summary>
-    public Guid? ContainerId { get; }
+    /// <summary>
+    /// The matched container, or null when unmatched. A sibling-import row
+    /// starts null and receives the imported container's id at apply time
+    /// (the parent records it so the final order write can include the new
+    /// container).
+    /// </summary>
+    public Guid? ContainerId { get; internal set; }
 
     /// <summary>
     /// What Curator matched the line to (the mod's display name), or
@@ -70,10 +75,11 @@ public partial class LoadOrderRowViewModel : ObservableObject
 
     /// <summary>
     /// Whether the include checkbox accepts input: unresolved lines are
-    /// disabled (they cannot be included until the resolver tiers can
-    /// identify them).
+    /// disabled until they are identified (the enqueue path needs an identity
+    /// to act on) or resolve to a sibling folder on disk (the import path
+    /// needs no identity).
     /// </summary>
-    public bool IsIncludeEnabled => !IsUnresolved;
+    public bool IsIncludeEnabled => !IsUnresolved || IsIdentified;
 
     /// <summary>
     /// The Nexus search URL for an unresolved line (the folder name as the
@@ -172,6 +178,43 @@ public partial class LoadOrderRowViewModel : ObservableObject
     private bool _isSearching;
 
     /// <summary>
+    /// The sibling mod folder this line imports from (the txt's own
+    /// directory carries the content), or null for every other line kind.
+    /// Set once by the parent at activation; the apply's import path reads
+    /// it.
+    /// </summary>
+    public string? SiblingPath { get; internal set; }
+
+    /// <summary>
+    /// The localized per-line failure of the apply's import or enqueue for
+    /// this row (a failed import, or a download resolve that could not
+    /// produce an item), or null. The apply continues past failed lines;
+    /// the message states what did not land so a re-run can finish it.
+    /// </summary>
+    public string? LineFailure
+    {
+        get => _lineFailure;
+        internal set
+        {
+            _lineFailure = value;
+            OnPropertyChanged();
+        }
+    }
+
+    private string? _lineFailure;
+
+    /// <summary>
+    /// Whether the version cell carries a semantic value for this row's
+    /// apply path. For a sibling import the version is the imported
+    /// container's release tag (empty = the version-unknown path). For an
+    /// identified not-in-Curator line the version is informational only:
+    /// the download resolves the real version, so the cell records what the
+    /// user believes and nothing consumes it.
+    /// </summary>
+    public bool IsVersionInformational =>
+        Outcome != LoadOrderLineOutcome.SiblingImport && IsIdentified;
+
+    /// <summary>
     /// Whether the manual-identification Apply button shows: an unresolved,
     /// unidentified row whose manual text parses to a Nexus id (the check
     /// button commits the parse).
@@ -263,6 +306,7 @@ public partial class LoadOrderRowViewModel : ObservableObject
     {
         LoadOrderLineOutcome.Reorder => _localization["LoadOrder_OutcomeReorder"],
         LoadOrderLineOutcome.LibraryAdd => _localization["LoadOrder_OutcomeAdd"],
+        LoadOrderLineOutcome.SiblingImport => _localization["LoadOrder_OutcomeImport"],
         _ => _localization["LoadOrder_OutcomeUnresolved"],
     };
 
@@ -310,6 +354,10 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     private readonly IProfileSession _session;
     private readonly ILoadOrderReconciler _reconciler;
     private readonly INexusClient _nexus;
+    private readonly IModImportService _imports;
+    private readonly INexusAuthService _auth;
+    private readonly IModAcquisitionService _acquisition;
+    private readonly IModDownloadQueue _downloadQueue;
     private readonly ModCardsGate _cards;
     private readonly IExternalLauncher _launcher;
     private readonly IDialogService _dialogs;
@@ -345,6 +393,10 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
         IProfileSession session,
         ILoadOrderReconciler reconciler,
         INexusClient nexus,
+        IModImportService imports,
+        INexusAuthService auth,
+        IModAcquisitionService acquisition,
+        IModDownloadQueue downloadQueue,
         ModCardsGate cards,
         IExternalLauncher launcher,
         IDialogService dialogs,
@@ -357,6 +409,10 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _reconciler = reconciler ?? throw new ArgumentNullException(nameof(reconciler));
         _nexus = nexus ?? throw new ArgumentNullException(nameof(nexus));
+        _imports = imports ?? throw new ArgumentNullException(nameof(imports));
+        _auth = auth ?? throw new ArgumentNullException(nameof(auth));
+        _acquisition = acquisition ?? throw new ArgumentNullException(nameof(acquisition));
+        _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
         _cards = cards ?? throw new ArgumentNullException(nameof(cards));
         _launcher = launcher ?? throw new ArgumentNullException(nameof(launcher));
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
@@ -410,6 +466,16 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     /// entirely-excluded table stays disabled.
     /// </summary>
     public bool CanApply => IsActive && Rows.Any(r => r.IsIncluded);
+
+    /// <summary>
+    /// The Apply button's enabled projection: CanApply AND not mid-apply
+    /// (the buttons disable while the apply runs; the card stays active,
+    /// holding the card gate + the toolbar lock through it).
+    /// </summary>
+    public bool CanApplyNow => CanApply && !IsApplying;
+
+    /// <summary>The Cancel button's enabled projection: not mid-apply.</summary>
+    public bool CanCancelNow => !IsApplying;
 
     /// <summary>
     /// Raised after a successful apply (UI thread). The mod list reloads from
@@ -473,9 +539,32 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
         _capturedProfileId = profileId;
         _sourcePath = path;
         Rows.Clear();
+        var siblings = ScanSiblingModFolders(path);
         foreach (var line in plan.Lines)
         {
-            var row = new LoadOrderRowViewModel(line, _localization);
+            var effective = line;
+            var siblingPath = (string?)null;
+            // A sibling folder with this name upgrades the unmatched line to
+            // an import line: the txt's own directory carries the content
+            // (the migration case). Resolved lines are never upgraded (the
+            // profile/library match wins; the folder is not scanned for
+            // them).
+            if (effective.Outcome == LoadOrderLineOutcome.Unresolved
+                && siblings.TryGetValue(effective.Name, out siblingPath))
+            {
+                effective = new LoadOrderLine(
+                    effective.Name,
+                    LoadOrderLineOutcome.SiblingImport,
+                    ContainerId: null,
+                    MatchedBaseName: null,
+                    DisplayName: Path.GetFileName(siblingPath.TrimEnd(
+                        Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+            }
+
+            var row = new LoadOrderRowViewModel(effective, _localization)
+            {
+                SiblingPath = siblingPath,
+            };
             row.PropertyChanged += OnRowPropertyChanged;
             Rows.Add(row);
         }
@@ -493,6 +582,72 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
         // card closes.
         _ = RunSearchQueueAsync();
     }
+
+    /// <summary>
+    /// Scans the picked txt's own directory for sibling mod folders: a
+    /// directory directly beside the txt that contains a descriptor named
+    /// <c>&lt;dirName&gt;/&lt;dirName&gt;.mod</c>. Skips <c>base</c> (the old
+    /// DML loader runtime, never a mod) + any directory named like the txt
+    /// itself. Returns the mod folders keyed by name (case-insensitive
+    /// ordinal, matching the planner); IO failures are logged + yield an
+    /// empty map (the review degrades to the plain unresolved rows, the
+    /// manual + search paths remain).
+    /// </summary>
+    private Dictionary<string, string> ScanSiblingModFolders(string txtPath)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var directory = Path.GetDirectoryName(Path.GetFullPath(txtPath));
+            if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+            {
+                return map;
+            }
+
+            var txtName = Path.GetFileName(txtPath);
+            foreach (var dir in Directory.GetDirectories(directory))
+            {
+                var name = Path.GetFileName(dir.TrimEnd(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                if (string.IsNullOrEmpty(name))
+                {
+                    continue;
+                }
+
+                // The old loader runtime is not a mod; a directory named like
+                // the txt itself is skipped too (defensive; the txt is a
+                // file, so this only catches a same-named directory).
+                if (string.Equals(name, "base", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(name, txtName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (File.Exists(Path.Combine(dir, name + ".mod")))
+                {
+                    map.TryAdd(name, dir);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogInformation(
+                ex, "Scanning the load-order file's directory for sibling mod folders failed.");
+        }
+
+        return map;
+    }
+
+    /// <summary>
+    /// Whether the apply is running: the Apply + Cancel buttons disable for
+    /// the duration (the card stays active, so both hosted cards' start
+    /// guards + the toolbar lock hold through the apply). Double-apply is a
+    /// no-op.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanApplyNow))]
+    [NotifyPropertyChangedFor(nameof(CanCancelNow))]
+    private bool _isApplying;
 
     /// <summary>
     /// The serial search queue: one unresolved row at a time, in table order,
@@ -621,49 +776,145 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     }
 
     /// <summary>
-    /// Applies the reviewed table: ONE <see cref="IProfileService.SetModOrder"/>
-    /// carrying every matched container in file order (included or not; order
-    /// application is not optional, and SetModOrder's own lock projection
-    /// keeps locked entries at their exact slots), then an
-    /// <see cref="IProfileService.AddMod"/> (Latest policy) for each INCLUDED
-    /// library-add line in file-position order, marks the session pending,
-    /// deactivates the card, and raises <see cref="OrderApplied"/> so the mod
-    /// list reloads.
+    /// Applies the reviewed table. Sequencing (membership before order: the
+    /// order write cannot place ids that are not profile members yet):
+    /// <list type="number">
+    /// <item><b>Imports</b>: each INCLUDED sibling-import line imports its
+    /// folder through <see cref="IModImportService.Import"/> (source =
+    /// <see cref="NexusSource"/> of the identified id when identified, else
+    /// <see cref="UntrackedSource"/>; version = the row's typed version when
+    /// identified + non-empty, else empty, the version-unknown path). A
+    /// per-line import failure is recorded on the line and the apply
+    /// continues.</item>
+    /// <item><b>Adds</b>: an <see cref="IProfileService.AddMod"/> (Latest
+    /// policy) for every included add line (library + imported
+    /// containers).</item>
+    /// <item><b>Order</b>: ONE <see cref="IProfileService.SetModOrder"/>
+    /// carrying every matched + newly-created container in file order, so
+    /// every add lands at its file position. The checkboxes gate only adds;
+    /// order application is not optional, and SetModOrder's own lock
+    /// projection keeps locked entries at their exact slots.</item>
+    /// <item><b>Enqueues</b>: for each INCLUDED identified not-in-Curator
+    /// line, a Premium account (verified fresh through
+    /// <see cref="INexusAuthService.GetCurrentStateAsync"/>) gets a download
+    /// enqueued onto the shared queue (the DMF-prompt pattern: the head file
+    /// is resolved first so the queue's dedupe key is real; purpose
+    /// ProfileAdd onto the active profile; the download rows own progress +
+    /// completion + the reload). Non-premium accounts perform no network
+    /// action for these lines (the rows carry the open-on-Nexus link). The
+    /// version cell on these lines is informational: the download resolves
+    /// the real version, so nothing consumes it.</item>
+    /// </list>
+    /// On full success the session is marked pending, the card deactivates,
+    /// and <see cref="OrderApplied"/> reloads the mod list.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// <b>Apply sequencing:</b> the order write happens BEFORE the adds,
-    /// and AddMod appends, so included adds land after the listed block
-    /// rather than at their file positions (SetModOrder ignores ids that
-    /// are not profile members yet). The apply paths that import or
-    /// associate content place those mods at their file positions
-    /// deliberately.</para>
-    /// <para>A profile or repository failure mid-apply surfaces the localized
-    /// inline failure with the card still open for retry or cancel; the
-    /// writes before the failure stand (re-runs are idempotent).</para>
+    /// <para><b>Failure semantics.</b> A profile or repository failure
+    /// mid-apply surfaces the localized inline failure with the card still
+    /// open; the writes before the failure stand and re-runs are idempotent
+    /// (imports dedupe, AddMod no-ops on existing membership, SetModOrder
+    /// rewrites the same order, the queue dedupes live downloads). A
+    /// per-line import or enqueue-resolve failure is recorded on its line
+    /// and the rest continue. A <see cref="NexusRateLimitException"/> in the
+    /// enqueue batch aborts the remaining enqueues: everything before it
+    /// stands (local work + landed enqueues), the localized failure states
+    /// the run can be re-applied, and the list still reloads so the landed
+    /// work shows.</para>
+    /// <para><b>Association note.</b> A sibling import whose row is
+    /// identified IS the association (Import with
+    /// <see cref="NexusSource"/>); there is no separate identity rewrite at
+    /// apply. Lines matching an existing untracked container stay plain
+    /// adds: the user can edit import details afterward if they want Nexus
+    /// identity.</para>
+    /// <para><b>Threads.</b> The import loop runs on a worker
+    /// (<see cref="Task.Run"/>; filesystem-heavy) with every row mutation
+    /// marshaled to the UI thread through the injected seam; the enqueue
+    /// batch awaits the resolve + enqueue calls directly. No
+    /// <c>ConfigureAwait(false)</c>.</para>
     /// </remarks>
     [RelayCommand]
-    private void Apply()
+    private async Task ApplyAsync()
     {
-        if (!CanApply || _capturedProfileId is not Guid profileId)
+        if (!CanApply || _capturedProfileId is not Guid profileId || IsApplying)
         {
             return;
         }
 
-        var order = Rows
-            .Where(r => r.ContainerId is { })
-            .Select(r => r.ContainerId!.Value)
+        IsApplying = true;
+        ApplyFailure = null;
+        OnPropertyChanged(nameof(ApplyFailure));
+        try
+        {
+            await ApplyCoreAsync(profileId);
+        }
+        finally
+        {
+            IsApplying = false;
+        }
+    }
+
+    /// <summary>The apply body, staged so <see cref="ApplyAsync"/> owns the
+    /// IsApplying guard in a finally.</summary>
+    private async Task ApplyCoreAsync(Guid profileId)
+    {
+        // (a) Imports: the included sibling lines, on the worker; per-line
+        // failures are recorded on their rows and the rest continue.
+        var includedSiblingRows = Rows
+            .Where(r => r.Outcome == LoadOrderLineOutcome.SiblingImport && r.IsIncluded)
             .ToArray();
-        var includedAdds = Rows
-            .Where(r => r.Outcome == LoadOrderLineOutcome.LibraryAdd && r.IsIncluded)
-            .ToArray();
+        if (includedSiblingRows.Length > 0)
+        {
+            await Task.Run(() =>
+            {
+                foreach (var row in includedSiblingRows)
+                {
+                    try
+                    {
+                        ModSource source = row.IdentifiedModId is { } modId
+                            ? new NexusSource { ModId = modId }
+                            : new UntrackedSource();
+                        var version = row.IdentifiedModId is not null && !string.IsNullOrWhiteSpace(row.Version)
+                            ? row.Version.Trim()
+                            : string.Empty;
+                        var (containerId, _) = _imports.Import(row.SiblingPath!, row.Name, source, version);
+                        _invokeOnUi(() => row.ContainerId = containerId);
+                    }
+                    catch (Exception ex) when (IsExpectedImportException(ex))
+                    {
+                        _logger.LogError(ex, "Importing the sibling mod '{Name}' failed.", row.Name);
+                        var detail = ex.Message;
+                        _invokeOnUi(() => row.LineFailure =
+                            _localization.Format("LoadOrder_LineImportFailed", detail));
+                    }
+                }
+            });
+        }
 
         try
         {
-            _profiles.SetModOrder(profileId, order);
+            // (b) Adds: every included add line (library + the imported
+            // containers, now recorded on their rows).
+            var includedAdds = Rows
+                .Where(r => r.ContainerId is { }
+                    && r.Outcome is LoadOrderLineOutcome.LibraryAdd or LoadOrderLineOutcome.SiblingImport
+                    && r.IsIncluded)
+                .ToArray();
             foreach (var add in includedAdds)
             {
                 _profiles.AddMod(profileId, add.ContainerId!.Value, ModVersionPolicy.Latest);
+            }
+
+            // (c) Order: ONE write over every matched + newly-created
+            // container in file order (non-members, like a not-included
+            // library add, are ignored by SetModOrder and keep their
+            // relative order after the listed block).
+            var order = Rows
+                .Where(r => r.ContainerId is { })
+                .Select(r => r.ContainerId!.Value)
+                .ToArray();
+            if (order.Length > 0)
+            {
+                _profiles.SetModOrder(profileId, order);
             }
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException
@@ -674,13 +925,121 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
             return;
         }
 
-        _session.HasPendingChanges = true;
+        // (d) Enqueues: the included identified not-in-Curator lines. Premium
+        // is verified fresh (the construction-time row-context read is
+        // one-shot; the account may have signed in or out since).
+        var enqueueRows = Rows
+            .Where(r => r.Outcome == LoadOrderLineOutcome.Unresolved
+                && r.IsIdentified && r.IsIncluded)
+            .ToArray();
+        var enqueued = 0;
+        if (enqueueRows.Length > 0)
+        {
+            NexusAuthState? state = null;
+            try
+            {
+                state = await _auth.GetCurrentStateAsync();
+            }
+            catch (Exception ex)
+            {
+                // The premium read failed: do not enqueue on an unverified
+                // account (the fresh-verify posture; the rows keep their
+                // open-on-Nexus path).
+                _logger.LogWarning(ex, "The load-order premium verification failed; skipping the enqueue batch.");
+            }
+
+            if (state?.IsPremium == true)
+            {
+                var profileName = _profiles.GetProfile(profileId).Name;
+                foreach (var row in enqueueRows)
+                {
+                    var modId = row.IdentifiedModId!.Value;
+                    try
+                    {
+                        // The DMF-prompt enqueue shape: resolve the head file
+                        // so the queue's dedupe key is real, then admit a
+                        // ProfileAdd item with no container (the download
+                        // owns the import + the profile add at completion).
+                        // The typed version is informational here: the
+                        // download resolves the real version.
+                        var (fileId, _) = await _acquisition.ResolveLatestNexusAsync(
+                            NexusGameIdentity.DarktideDomain, modId);
+                        _downloadQueue.Enqueue(new ModDownloadRequest(
+                            NexusGameIdentity.DarktideDomain, modId, fileId,
+                            DownloadPurpose.ProfileAdd,
+                            ContainerId: null, row.Name, profileId, profileName));
+                        enqueued++;
+                    }
+                    catch (NexusRateLimitException ex)
+                    {
+                        // Stop-on-429: the remaining enqueues abort. Prior
+                        // work stands (the local apply above + every landed
+                        // enqueue); the failure says the run can be
+                        // re-applied, and the reload below surfaces it.
+                        _logger.LogWarning(
+                            ex, "The load-order enqueue batch hit a rate limit; {Remaining} line(s) remain.",
+                            enqueueRows.Length - enqueued);
+                        ShowInlineFailure(
+                            _localization["LoadOrder_EnqueueRateLimited"]
+                            + " " + _localization["LoadOrder_RerunnableHint"]);
+                        FinishApply(enqueued);
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        // A single line's resolve failure has no row to host
+                        // it on (no item was enqueued): record it on the
+                        // line, continue the batch.
+                        _logger.LogError(
+                            ex, "Resolving the latest release of '{Name}' (mod {Mod}) failed.", row.Name, modId);
+                        var detail = ex.Message;
+                        row.LineFailure = _localization.Format("LoadOrder_LineEnqueueFailed", detail);
+                    }
+                }
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "The load-order enqueue batch skipped: the account is not verified Premium ({State}).",
+                    state is null ? "unverified" : "non-premium");
+            }
+        }
+
         _logger.LogInformation(
-            "Applied a load-order review: {Ordered} container(s) ordered, {Adds} library add(s) included.",
-            order.Length, includedAdds.Length);
-        Reset();
-        OrderApplied?.Invoke(this, EventArgs.Empty);
+            "Applied a load-order review: order over {Ordered} container(s), {Imports} sibling import(s), {Enqueued} download enqueue(s).",
+            Rows.Count(r => r.ContainerId is { }),
+            includedSiblingRows.Length,
+            enqueued);
+        FinishApply(enqueued);
     }
+
+    /// <summary>
+    /// The success tail (also the stop-on-429 + per-line-failure tail): marks
+    /// the session pending, raises <see cref="OrderApplied"/> so the mod list
+    /// reloads (the local writes + any landed enqueues show), and deactivates
+    /// the card only when nothing on it still reports a failure (a card-level
+    /// apply failure or any row's per-line failure keeps the review open so
+    /// the messages stay readable + a re-run can finish the lines).
+    /// </summary>
+    private void FinishApply(int enqueued)
+    {
+        _session.HasPendingChanges = true;
+        OrderApplied?.Invoke(this, EventArgs.Empty);
+        if (ApplyFailure is null && Rows.All(r => r.LineFailure is null))
+        {
+            Reset();
+        }
+    }
+
+    /// <summary>
+    /// The expected exception families for a sibling import (the import
+    /// workflow's family): caught, recorded on the line, and skipped past.
+    /// Any other exception is unexpected and aborts the apply.
+    /// </summary>
+    private static bool IsExpectedImportException(Exception ex) =>
+        ex is InvalidOperationException or ArgumentException
+            or IOException or UnauthorizedAccessException
+            or System.IO.InvalidDataException;
 
     /// <summary>
     /// Cancels the review: no writes, the card deactivates (the picked file

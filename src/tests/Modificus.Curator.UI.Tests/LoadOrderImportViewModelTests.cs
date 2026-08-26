@@ -1,3 +1,4 @@
+using Modificus.Curator.Config;
 using Modificus.Curator.Integrations;
 using Modificus.Curator.Mods;
 using Modificus.Curator.Profiles;
@@ -29,10 +30,11 @@ public sealed class LoadOrderImportViewModelTests
     /// Builds the card VM plus a sibling import-workflow VM sharing the same
     /// card gate (the mutual-exclusion tests drive both).
     /// </summary>
-    private static (LoadOrderImportViewModel Vm, FakeLoadOrderReconciler Reconciler, FakeProfileService Profiles, FakeProfileSession Session, FakeExternalLauncher Launcher, FakeDialogService Dialogs, FakeNexusSearchClient Nexus, ImportWorkflowViewModel Import)
+    private static (LoadOrderImportViewModel Vm, FakeLoadOrderReconciler Reconciler, FakeProfileService Profiles, FakeProfileSession Session, FakeExternalLauncher Launcher, FakeDialogService Dialogs, FakeNexusSearchClient Nexus, FakeModImportService Imports, FakeNexusAuthService Auth, FakeModAcquisitionService Acquisition, FakeModDownloadQueue Queue, ImportWorkflowViewModel Import)
         Build(FakeProfileService? profiles = null, FakeProfileSession? session = null,
               FakeModRepository? repo = null, FakeLoadOrderReconciler? reconciler = null,
-              FakeNexusSearchClient? nexus = null,
+              FakeNexusSearchClient? nexus = null, FakeModImportService? imports = null,
+              FakeNexusAuthService? auth = null, FakeModAcquisitionService? acquisition = null,
               FakeExternalLauncher? launcher = null, FakeDialogService? dialogs = null)
     {
         profiles ??= TestDoubles.Profiles(new ProfileSummary(Guid.NewGuid(), "Alpha", ""));
@@ -43,17 +45,22 @@ public sealed class LoadOrderImportViewModelTests
         repo ??= new FakeModRepository();
         reconciler ??= new FakeLoadOrderReconciler();
         nexus ??= new FakeNexusSearchClient();
+        imports ??= new FakeModImportService(repo);
+        auth ??= new FakeNexusAuthService();
+        acquisition ??= new FakeModAcquisitionService();
         launcher ??= new FakeExternalLauncher();
         dialogs ??= new FakeDialogService();
         var cards = new ModCardsGate();
+        var queue = new FakeModDownloadQueue();
         var import = new ImportWorkflowViewModel(
             profiles, session, repo, new FakeModImportService(repo), cards,
             Localization, NullLogger<ImportWorkflowViewModel>.Instance);
         var vm = new LoadOrderImportViewModel(
-            profiles, session, reconciler, nexus, cards, launcher, dialogs,
+            profiles, session, reconciler, nexus, imports, auth, acquisition, queue,
+            cards, launcher, dialogs,
             Localization, static action => action(),
             NullLogger<LoadOrderImportViewModel>.Instance);
-        return (vm, reconciler, profiles, session, launcher, dialogs, nexus, import);
+        return (vm, reconciler, profiles, session, launcher, dialogs, nexus, imports, auth, acquisition, queue, import);
     }
 
     /// <summary>Writes a temp load-order file and returns its path.</summary>
@@ -81,7 +88,7 @@ public sealed class LoadOrderImportViewModelTests
     {
         var reorder = Guid.NewGuid();
         var add = Guid.NewGuid();
-        var (vm, reconciler, _, _, _, _, _, _) = Build();
+        var (vm, reconciler, _, _, _, _, _, _, _, _, _, _) = Build();
         reconciler.NextPlan = Plan(
             new LoadOrderLine("ModA", LoadOrderLineOutcome.Reorder, reorder, "ModA", "A Row"),
             new LoadOrderLine("ModB", LoadOrderLineOutcome.LibraryAdd, add, "ModB", "B Container"),
@@ -119,7 +126,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task An_empty_file_activates_with_the_notice_and_refuses_apply()
     {
-        var (vm, reconciler, _, _, _, _, _, _) = Build();
+        var (vm, reconciler, _, _, _, _, _, _, _, _, _, _) = Build();
         reconciler.NextPlan = LoadOrderPlan.Empty;
 
         await vm.StartImportCommand.ExecuteAsync(WriteFile("-- only comments\n"));
@@ -137,7 +144,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task An_unreadable_file_alerts_and_stays_inactive()
     {
-        var (vm, _, _, _, _, dialogs, _, _) = Build();
+        var (vm, reconciler, _, _, _, dialogs, _, _, _, _, _, _) = Build();
         var missing = Path.Combine(Path.GetTempPath(), "curator-missing-" + Guid.NewGuid() + ".txt");
 
         await vm.StartImportCommand.ExecuteAsync(missing);
@@ -150,7 +157,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task A_second_start_while_active_refuses()
     {
-        var (vm, reconciler, _, _, _, _, _, _) = Build();
+        var (vm, reconciler, _, _, _, _, _, _, _, _, _, _) = Build();
         reconciler.NextPlan = LoadOrderPlan.Empty;
         var first = WriteFile("ModA\n");
         var second = WriteFile("ModB\n");
@@ -168,7 +175,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task A_load_order_start_refuses_while_the_import_workflow_is_active()
     {
-        var (vm, reconciler, _, session, _, _, _, import) = Build();
+        var (vm, reconciler, _, _, session, _, _, _, _, _, _, import) = Build();
         import.StartBatchCommand.Execute(new[] { "/tmp/some-mod" });
         Assert.True(import.IsActive);
 
@@ -181,7 +188,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task Import_starts_refuse_while_a_load_order_review_is_active()
     {
-        var (vm, reconciler, _, session, _, _, _, import) = Build();
+        var (vm, reconciler, _, _, session, _, _, _, _, _, _, import) = Build();
         reconciler.NextPlan = LoadOrderPlan.Empty;
         await vm.StartImportCommand.ExecuteAsync(WriteFile("ModA\n"));
         Assert.True(vm.IsActive);
@@ -205,7 +212,7 @@ public sealed class LoadOrderImportViewModelTests
         var reorder = Guid.NewGuid();
         var addIncluded = Guid.NewGuid();
         var addExcluded = Guid.NewGuid();
-        var (vm, reconciler, profiles, session, _, _, _, _) = Build();
+        var (vm, reconciler, profiles, session, _, _, _, _, _, _, _, _) = Build();
         reconciler.NextPlan = Plan(
             new LoadOrderLine("ModA", LoadOrderLineOutcome.Reorder, reorder, "ModA", "A"),
             new LoadOrderLine("ModB", LoadOrderLineOutcome.LibraryAdd, addIncluded, "ModB", "B"),
@@ -243,7 +250,7 @@ public sealed class LoadOrderImportViewModelTests
     public async Task Apply_with_only_reorder_lines_performs_no_adds()
     {
         var reorder = Guid.NewGuid();
-        var (vm, reconciler, profiles, _, _, _, _, _) = Build();
+        var (vm, reconciler, profiles, _, _, _, _, _, _, _, _, _) = Build();
         reconciler.NextPlan = Plan(
             new LoadOrderLine("ModA", LoadOrderLineOutcome.Reorder, reorder, "ModA", "A"));
         await vm.StartImportCommand.ExecuteAsync(WriteFile("ModA\n"));
@@ -259,7 +266,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task Apply_with_no_included_lines_is_refused()
     {
-        var (vm, reconciler, profiles, _, _, _, _, _) = Build();
+        var (vm, reconciler, profiles, _, _, _, _, _, _, _, _, _) = Build();
         reconciler.NextPlan = Plan(
             new LoadOrderLine("ModB", LoadOrderLineOutcome.LibraryAdd, Guid.NewGuid(), "ModB", "B"));
 
@@ -275,7 +282,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task Cancel_discards_the_review_with_no_writes()
     {
-        var (vm, reconciler, profiles, _, _, _, _, _) = Build();
+        var (vm, reconciler, profiles, _, _, _, _, _, _, _, _, _) = Build();
         reconciler.NextPlan = Plan(
             new LoadOrderLine("ModA", LoadOrderLineOutcome.Reorder, Guid.NewGuid(), "ModA", "A"));
         await vm.StartImportCommand.ExecuteAsync(WriteFile("ModA\n"));
@@ -298,7 +305,7 @@ public sealed class LoadOrderImportViewModelTests
         {
             ActiveProfileId = profiles.ListProfiles().First().Id,
         };
-        var (vm, reconciler, _, _, _, _, _, _) = Build(profiles: profiles, session: session);
+        var (vm, reconciler, _, _, _, _, _, _, _, _, _, _) = Build(profiles: profiles, session: session);
         reconciler.NextPlan = Plan(
             new LoadOrderLine("ModA", LoadOrderLineOutcome.Reorder, Guid.NewGuid(), "ModA", "A"));
         await vm.StartImportCommand.ExecuteAsync(WriteFile("ModA\n"));
@@ -314,7 +321,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task Unresolved_rows_carry_the_keyword_search_url()
     {
-        var (vm, reconciler, _, _, _, _, _, _) = Build();
+        var (vm, reconciler, _, _, _, _, _, _, _, _, _, _) = Build();
         reconciler.NextPlan = Plan(
             new LoadOrderLine("Warp Unbound Timer", LoadOrderLineOutcome.Unresolved, null, null, null));
         await vm.StartImportCommand.ExecuteAsync(WriteFile("Warp Unbound Timer\n"));
@@ -335,7 +342,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task OpenOnNexus_launches_the_url_and_alerts_on_failure()
     {
-        var (vm, reconciler, _, _, launcher, dialogs, _, _) = Build();
+        var (vm, reconciler, _, _, launcher, dialogs, _, _, _, _, _, _) = Build();
         reconciler.NextPlan = Plan(
             new LoadOrderLine("Ghost Mod", LoadOrderLineOutcome.Unresolved, null, null, null));
         await vm.StartImportCommand.ExecuteAsync(WriteFile("Ghost Mod\n"));
@@ -375,7 +382,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task A_candidates_arrival_fills_the_top_slot_and_alternates()
     {
-        var (vm, reconciler, _, _, _, _, nexus, _) = Build();
+        var (vm, reconciler, _, _, _, _, nexus, _, _, _, _, _) = Build();
         nexus.NextResults = Results((1, "Warp Unbound Timer"), (2, "Other Mod"), (3, "Third"));
         var row = await StartUnresolvedAsync(vm, reconciler, "warp_unbound_timer");
 
@@ -395,7 +402,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task The_candidate_cap_limits_the_proposals()
     {
-        var (vm, reconciler, _, _, _, _, nexus, _) = Build();
+        var (vm, reconciler, _, _, _, _, nexus, _, _, _, _, _) = Build();
         nexus.NextResults = Results(
             (1, "A"), (2, "B"), (3, "C"), (4, "D"), (5, "E"), (6, "F"), (7, "G"));
         var row = await StartUnresolvedAsync(vm, reconciler, "mod");
@@ -407,7 +414,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task Search_terms_are_normalized_from_folder_names()
     {
-        var (vm, reconciler, _, _, _, _, nexus, _) = Build();
+        var (vm, reconciler, _, _, _, _, nexus, _, _, _, _, _) = Build();
         nexus.NextResults = Results();
         await StartUnresolvedAsync(vm, reconciler, "Some_Mod-Name  v2");
 
@@ -422,7 +429,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task Accepting_the_top_candidate_marks_the_row_identified()
     {
-        var (vm, reconciler, _, _, _, _, nexus, _) = Build();
+        var (vm, reconciler, _, _, _, _, nexus, _, _, _, _, _) = Build();
         nexus.NextResults = Results((42, "The Real Mod"));
         var row = await StartUnresolvedAsync(vm, reconciler, "realmod");
 
@@ -442,7 +449,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task Accepting_an_alternate_identifies_with_that_candidate()
     {
-        var (vm, reconciler, _, _, _, _, nexus, _) = Build();
+        var (vm, reconciler, _, _, _, _, nexus, _, _, _, _, _) = Build();
         nexus.NextResults = Results((1, "Wrong Guess"), (99, "The Right One"));
         var row = await StartUnresolvedAsync(vm, reconciler, "mod");
 
@@ -458,7 +465,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task Manual_entry_identifies_by_bare_id_and_by_url()
     {
-        var (vm, reconciler, _, _, _, _, _, _) = Build();
+        var (vm, reconciler, _, _, _, _, _, _, _, _, _, _) = Build();
         var row = await StartUnresolvedAsync(vm, reconciler, "ghost");
 
         // A bare id.
@@ -488,7 +495,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task A_failed_search_leaves_the_row_unresolved_with_the_manual_path()
     {
-        var (vm, reconciler, _, _, _, _, nexus, _) = Build();
+        var (vm, reconciler, _, _, _, _, nexus, _, _, _, _, _) = Build();
         nexus.NextSearchThrows = new InvalidOperationException("cloudflare says no");
         var row = await StartUnresolvedAsync(vm, reconciler, "ghost");
 
@@ -509,7 +516,7 @@ public sealed class LoadOrderImportViewModelTests
         // tears the queue's token (a restart never re-fires the OLD rows'
         // searches; only the new session's rows search), and a new session's
         // queue starts fresh.
-        var (vm, reconciler, _, _, _, _, nexus, _) = Build();
+        var (vm, reconciler, _, _, _, _, nexus, _, _, _, _, _) = Build();
         nexus.NextResults = Results();
         reconciler.NextPlan = LoadOrderPlanner.Build(
             new[] { "one", "two" },
@@ -534,7 +541,7 @@ public sealed class LoadOrderImportViewModelTests
     [Fact]
     public async Task Resolved_rows_never_search()
     {
-        var (vm, reconciler, profiles, _, _, _, nexus, _) = Build();
+        var (vm, reconciler, profiles, _, _, _, nexus, _, _, _, _, _) = Build();
         var reorder = Guid.NewGuid();
         reconciler.NextPlan = LoadOrderPlanner.Build(
             new[] { "ModA" },
@@ -543,5 +550,407 @@ public sealed class LoadOrderImportViewModelTests
         await vm.StartImportCommand.ExecuteAsync(WriteFile("ModA\n"));
 
         Assert.Empty(nexus.SearchCalls);
+    }
+
+    // ---- the apply paths: sibling imports + enqueue batch --------------------
+
+    /// <summary>
+    /// Creates a txt in a temp directory surrounded by sibling mod folders
+    /// (each carrying <c>name/name.mod</c>) + optional plain junk directories;
+    /// returns the txt's path.
+    /// </summary>
+    private static string WriteLoadOrderWithSiblings(
+        string fileContent, params (string Name, bool IsMod)[] siblings)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "curator-loadorder-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        foreach (var (name, isMod) in siblings)
+        {
+            var modDir = Path.Combine(dir, name);
+            Directory.CreateDirectory(modDir);
+            if (isMod)
+            {
+                File.WriteAllText(Path.Combine(modDir, name + ".mod"), name);
+            }
+        }
+
+        var txt = Path.Combine(dir, "mod_load_order.txt");
+        File.WriteAllText(txt, fileContent);
+        return txt;
+    }
+
+    /// <summary>A plan whose only line is unresolved (the sibling-upgrade input).</summary>
+    private static LoadOrderPlan UnresolvedPlan(string name) =>
+        LoadOrderPlanner.Build(
+            new[] { name },
+            Array.Empty<LoadOrderProfileMod>(),
+            Array.Empty<LoadOrderRepoCandidate>());
+
+    [Fact]
+    public async Task Sibling_folders_resolve_as_import_lines_with_skips()
+    {
+        var (vm, reconciler, _, _, _, _, _, _, _, _, _, _) = Build();
+        reconciler.NextPlan = LoadOrderPlanner.Build(
+            new[] { "ModA", "RealMod", "AlsoReal", "NoDescriptor", "base" },
+            new[] { new LoadOrderProfileMod(Guid.NewGuid(), "ModA", "A") },
+            Array.Empty<LoadOrderRepoCandidate>());
+        var txt = WriteLoadOrderWithSiblings(
+            "ModA\nRealMod\nAlsoReal\nNoDescriptor\nbase\n",
+            ("RealMod", true), ("AlsoReal", true), ("NoDescriptor", false),
+            ("base", true), // a real base/base.mod exists: still skipped (the runtime)
+            ("Unlisted", true)); // not named by the file: never scanned into a row
+
+        await vm.StartImportCommand.ExecuteAsync(txt);
+
+        Assert.Equal(5, vm.Rows.Count);
+        var real = vm.Rows.Single(r => r.Name == "RealMod");
+        Assert.Equal(LoadOrderLineOutcome.SiblingImport, real.Outcome);
+        Assert.NotNull(real.SiblingPath);
+        Assert.Equal("RealMod", real.MatchText);
+        Assert.Equal(Localization["LoadOrder_OutcomeImport"], real.OutcomeText);
+        Assert.False(real.IsIncluded); // add default: excluded
+        Assert.True(real.IsIncludeEnabled);
+        Assert.False(real.IsUnresolved); // never searched
+
+        var also = vm.Rows.Single(r => r.Name == "AlsoReal");
+        Assert.Equal(LoadOrderLineOutcome.SiblingImport, also.Outcome);
+
+        // A directory without the descriptor stays unresolved.
+        var noDescriptor = vm.Rows.Single(r => r.Name == "NoDescriptor");
+        Assert.Equal(LoadOrderLineOutcome.Unresolved, noDescriptor.Outcome);
+
+        // base stays unresolved even with a descriptor on disk.
+        var baseRow = vm.Rows.Single(r => r.Name == "base");
+        Assert.Equal(LoadOrderLineOutcome.Unresolved, baseRow.Outcome);
+
+        // A resolved line (profile member) is never upgraded even when a
+        // same-named folder exists beside the txt.
+        Assert.Equal(LoadOrderLineOutcome.Reorder, vm.Rows[0].Outcome);
+
+        try
+        {
+            Directory.Delete(Path.GetDirectoryName(txt)!, recursive: true);
+        }
+        catch (IOException)
+        {
+            // Temp cleanup is best-effort.
+        }
+    }
+
+    [Fact]
+    public async Task Apply_imports_an_identified_sibling_with_nexus_source_and_version()
+    {
+        var (vm, reconciler, profiles, _, _, _, _, imports, _, _, _, _) = Build();
+        reconciler.NextPlan = UnresolvedPlan("RealMod");
+        var txt = WriteLoadOrderWithSiblings("RealMod\n", ("RealMod", true));
+        await vm.StartImportCommand.ExecuteAsync(txt);
+        var row = Assert.Single(vm.Rows);
+
+        // Identify (a bare manual id) + include + a version.
+        row.ManualId = "42";
+        vm.ApplyManualIdCommand.Execute(row);
+        row.IsIncluded = true;
+        row.Version = "1.4";
+
+        var importedContainer = Guid.NewGuid();
+        imports.NextImportResults = new Queue<(Guid, string)>(new[] { (importedContainer, "v-folder") });
+        await vm.ApplyCommand.ExecuteAsync(null);
+
+        // The import carried the Nexus identity + the typed version.
+        var call = Assert.Single(imports.Imports);
+        Assert.Equal(row.SiblingPath, call.SourcePath);
+        Assert.Equal("RealMod", call.ModName);
+        var source = Assert.IsType<NexusSource>(call.Source);
+        Assert.Equal(42, source.ModId);
+        Assert.Equal("1.4", call.Version);
+
+        // The imported container joined the profile + the order write.
+        Assert.Contains(profiles.AddModCalls, c => c.ContainerId == importedContainer);
+        Assert.Equal([importedContainer], Assert.Single(profiles.SetModOrderCalls));
+        Assert.False(vm.IsActive);
+
+        try
+        {
+            Directory.Delete(Path.GetDirectoryName(txt)!, recursive: true);
+        }
+        catch (IOException)
+        {
+            // Temp cleanup is best-effort.
+        }
+    }
+
+    [Fact]
+    public async Task Apply_imports_an_unidentified_sibling_untracked_with_empty_version()
+    {
+        var (vm, reconciler, profiles, _, _, _, _, imports, _, _, _, _) = Build();
+        reconciler.NextPlan = UnresolvedPlan("PlainMod");
+        var txt = WriteLoadOrderWithSiblings("PlainMod\n", ("PlainMod", true));
+        await vm.StartImportCommand.ExecuteAsync(txt);
+        var row = Assert.Single(vm.Rows);
+        row.IsIncluded = true; // not identified: still includeable (the import path needs no identity)
+
+        var importedContainer = Guid.NewGuid();
+        imports.NextImportResults = new Queue<(Guid, string)>(new[] { (importedContainer, "v-folder") });
+        await vm.ApplyCommand.ExecuteAsync(null);
+
+        var call = Assert.Single(imports.Imports);
+        Assert.IsType<UntrackedSource>(call.Source);
+        Assert.Equal(string.Empty, call.Version); // the version-unknown path
+        Assert.Contains(profiles.AddModCalls, c => c.ContainerId == importedContainer);
+    }
+
+    [Fact]
+    public async Task The_final_order_write_carries_every_container_in_file_order()
+    {
+        // [reorder, library add (included), sibling import (included)] in file
+        // order: the order write lists all three, after membership.
+        var (vm, reconciler, profiles, session, _, _, _, imports, _, _, _, _) = Build();
+        var reorder = Guid.NewGuid();
+        var library = Guid.NewGuid();
+        profiles.WithMods(session.ActiveProfileId!.Value,
+            new ModListEntry { ContainerId = reorder, Order = 0, Policy = ModVersionPolicy.Latest });
+        reconciler.NextPlan = LoadOrderPlanner.Build(
+            new[] { "ModA", "ModB", "ModC" },
+            new[] { new LoadOrderProfileMod(reorder, "ModA", "A") },
+            new[] { new LoadOrderRepoCandidate(library, "ModB", false, "B") });
+        var txt = WriteLoadOrderWithSiblings("ModA\nModB\nModC\n", ("ModC", true));
+        await vm.StartImportCommand.ExecuteAsync(txt);
+        vm.Rows.Single(r => r.Name == "ModB").IsIncluded = true;
+        vm.Rows.Single(r => r.Name == "ModC").IsIncluded = true;
+
+        var imported = Guid.NewGuid();
+        imports.NextImportResults = new Queue<(Guid, string)>(new[] { (imported, "v-folder") });
+        await vm.ApplyCommand.ExecuteAsync(null);
+
+        // ONE order write, listing all three at their file positions.
+        var order = Assert.Single(profiles.SetModOrderCalls);
+        Assert.Equal([reorder, library, imported], order);
+
+        // Sequencing pinned through the resulting list: membership precedes
+        // the order write (the fake mirrors production's projection), so the
+        // imported container lands at its file position rather than appended
+        // by AddMod.
+        var resulting = profiles.GetModList(session.ActiveProfileId!.Value);
+        Assert.Equal([reorder, library, imported], resulting.Select(e => e.ContainerId));
+
+        try
+        {
+            Directory.Delete(Path.GetDirectoryName(txt)!, recursive: true);
+        }
+        catch (IOException)
+        {
+            // Temp cleanup is best-effort.
+        }
+    }
+
+    [Fact]
+    public async Task A_per_line_import_failure_is_recorded_and_the_rest_continue()
+    {
+        var (vm, reconciler, profiles, _, _, _, _, imports, _, _, _, _) = Build();
+        reconciler.NextPlan = LoadOrderPlanner.Build(
+            new[] { "Bad", "Good" },
+            Array.Empty<LoadOrderProfileMod>(),
+            Array.Empty<LoadOrderRepoCandidate>());
+        var txt = WriteLoadOrderWithSiblings("Bad\nGood\n", ("Bad", true), ("Good", true));
+        await vm.StartImportCommand.ExecuteAsync(txt);
+        foreach (var row in vm.Rows)
+        {
+            row.IsIncluded = true;
+        }
+
+        var good = Guid.NewGuid();
+        imports.ImportExceptionQueue = new Queue<Exception?>(
+            new Exception?[] { new InvalidOperationException("bad archive"), null });
+        imports.NextImportResults = new Queue<(Guid, string)>(new[] { (good, "v-folder") });
+        await vm.ApplyCommand.ExecuteAsync(null);
+
+        var badRow = vm.Rows.Single(r => r.Name == "Bad");
+        Assert.NotNull(badRow.LineFailure);
+        Assert.Contains("bad archive", badRow.LineFailure);
+        // The sibling line's failure did not stop the apply: the good import
+        // landed + the reload fired; the review stays open so the failed
+        // row's message stays readable.
+        Assert.Contains(profiles.AddModCalls, c => c.ContainerId == good);
+        Assert.True(vm.IsActive);
+
+        try
+        {
+            Directory.Delete(Path.GetDirectoryName(txt)!, recursive: true);
+        }
+        catch (IOException)
+        {
+            // Temp cleanup is best-effort.
+        }
+    }
+
+    [Fact]
+    public async Task Premium_enqueues_one_download_per_included_identified_line()
+    {
+        var (vm, reconciler, profiles, session, _, _, _, _, auth, acquisition, queue, _) = Build();
+        var profileId = session.ActiveProfileId!.Value;
+        reconciler.NextPlan = UnresolvedPlan("Ghost");
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("Ghost\n"));
+        var row = Assert.Single(vm.Rows);
+        row.ManualId = "77";
+        vm.ApplyManualIdCommand.Execute(row);
+        row.IsIncluded = true;
+        acquisition.NextResolve = (1234, "2.0");
+
+        await vm.ApplyCommand.ExecuteAsync(null);
+
+        // The premium gate was verified fresh at apply time.
+        Assert.Equal(1, auth.GetCurrentStateCallCount);
+
+        // One ProfileAdd enqueue with no container (the download owns the
+        // import + the add) + the resolved head file.
+        var request = Assert.Single(queue.Requests);
+        Assert.Equal(77, request.ModId);
+        Assert.Equal(1234, request.FileId);
+        Assert.Equal(DownloadPurpose.ProfileAdd, request.Purpose);
+        Assert.Null(request.ContainerId);
+        Assert.Equal(profileId, request.TargetProfileId);
+        Assert.Single(acquisition.ResolveLatestCalls);
+
+        // No local add/order for the line (nothing exists locally), but the
+        // pending flag + reload still fired on success.
+        Assert.Empty(profiles.AddModCalls);
+        Assert.Empty(profiles.SetModOrderCalls);
+        Assert.False(vm.IsActive);
+        Assert.True(session.HasPendingChanges);
+    }
+
+    [Fact]
+    public async Task Non_premium_performs_no_network_action_for_identified_lines()
+    {
+        var (vm, reconciler, _, _, _, _, _, _, auth, acquisition, queue, _) = Build();
+        auth.State = new NexusAuthState(NexusAuthMethod.OAuth, "free", IsPremium: false);
+        reconciler.NextPlan = UnresolvedPlan("Ghost");
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("Ghost\n"));
+        var row = Assert.Single(vm.Rows);
+        row.ManualId = "77";
+        vm.ApplyManualIdCommand.Execute(row);
+        row.IsIncluded = true;
+
+        await vm.ApplyCommand.ExecuteAsync(null);
+
+        Assert.Empty(queue.Requests);
+        Assert.Empty(acquisition.ResolveLatestCalls);
+        Assert.Equal(1, auth.GetCurrentStateCallCount); // checked, then skipped
+        Assert.False(vm.IsActive);
+    }
+
+    [Fact]
+    public async Task A_rate_limit_aborts_the_remaining_enqueues_and_prior_work_stands()
+    {
+        var (vm, reconciler, profiles, session, _, _, _, _, auth, acquisition, queue, _) = Build();
+        var profileId = session.ActiveProfileId!.Value;
+        reconciler.NextPlan = LoadOrderPlanner.Build(
+            new[] { "One", "Two" },
+            new[] { new LoadOrderProfileMod(Guid.NewGuid(), "One", "One") },
+            Array.Empty<LoadOrderRepoCandidate>());
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("One\nTwo\n"));
+
+        // Identify + include only the second line (the first is a reorder
+        // include, so apply is available + the local write happens).
+        var ghost = vm.Rows.Single(r => r.Name == "Two");
+        ghost.ManualId = "88";
+        vm.ApplyManualIdCommand.Execute(ghost);
+        ghost.IsIncluded = true;
+
+        // The enqueue's resolve (the only network call: one identified line)
+        // throws 429.
+        acquisition.ResolveThrowQueue.Enqueue(
+            new NexusRateLimitException(429, new NexusRateLimits(2500, 0, null, 100, 0, null)));
+
+        await vm.ApplyCommand.ExecuteAsync(null);
+
+        // Prior work stands: the order write for the reorder line landed.
+        Assert.Single(profiles.SetModOrderCalls);
+        // No enqueue admitted (the resolve threw before it).
+        Assert.Empty(queue.Requests);
+        // The failure is on the card + the card stays open for a re-run, and
+        // the reload fired so the landed work shows.
+        Assert.True(vm.IsActive);
+        Assert.NotNull(vm.ApplyFailure);
+        Assert.Contains("rate limit", vm.ApplyFailure, StringComparison.OrdinalIgnoreCase);
+        Assert.True(session.HasPendingChanges);
+    }
+
+    [Fact]
+    public async Task A_resolve_failure_on_one_line_is_recorded_and_the_batch_continues()
+    {
+        var (vm, reconciler, _, _, _, _, _, _, _, acquisition, queue, _) = Build();
+        reconciler.NextPlan = LoadOrderPlanner.Build(
+            new[] { "Boom", "Fine" },
+            Array.Empty<LoadOrderProfileMod>(),
+            Array.Empty<LoadOrderRepoCandidate>());
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("Boom\nFine\n"));
+        foreach (var row in vm.Rows)
+        {
+            row.ManualId = row.Name == "Boom" ? "1" : "2";
+            vm.ApplyManualIdCommand.Execute(row);
+            row.IsIncluded = true;
+        }
+
+        acquisition.ResolveThrowQueue.Enqueue(new InvalidOperationException("api down"));
+        acquisition.NextResolve = (555, "1.0");
+
+        await vm.ApplyCommand.ExecuteAsync(null);
+
+        var boom = vm.Rows.Single(r => r.Name == "Boom");
+        Assert.NotNull(boom.LineFailure);
+        var fine = vm.Rows.Single(r => r.Name == "Fine");
+        Assert.Null(fine.LineFailure);
+        Assert.Single(queue.Requests); // the fine line enqueued
+        // A per-line failure is not a card-level failure, but the review stays
+        // open so the row's message stays readable + a re-run can finish it.
+        Assert.True(vm.IsActive);
+    }
+
+    [Fact]
+    public async Task An_active_apply_holds_the_card_gate()
+    {
+        // The card stays active while the apply runs, so the import workflow
+        // refuses to start until the apply finishes (the shared card gate).
+        var (vm, reconciler, profiles, _, _, _, _, imports, _, _, _, import) = Build();
+        var reorder = Guid.NewGuid();
+        reconciler.NextPlan = LoadOrderPlanner.Build(
+            new[] { "ModA" },
+            new[] { new LoadOrderProfileMod(reorder, "ModA", "A") },
+            Array.Empty<LoadOrderRepoCandidate>());
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("ModA\n"));
+
+        // Hold the apply mid-flight through the import gate... the reorder
+        // plan has no imports, so hold through a sibling import instead.
+        vm.CancelCommand.Execute(null);
+        reconciler.NextPlan = UnresolvedPlan("Held");
+        var txt = WriteLoadOrderWithSiblings("Held\n", ("Held", true));
+        await vm.StartImportCommand.ExecuteAsync(txt);
+        vm.Rows.Single().IsIncluded = true;
+        imports.NextImportResults = new Queue<(Guid, string)>(new[] { (Guid.NewGuid(), "v") });
+        var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        imports.ImportGate = gate;
+
+        var applying = vm.ApplyCommand.ExecuteAsync(null);
+        // The card (and with it the shared card gate) stays active while the
+        // apply runs: the import workflow cannot start mid-apply.
+        Assert.True(vm.IsActive);
+        import.StartBatchCommand.Execute(new[] { "/tmp/other" });
+        Assert.False(import.IsActive);
+
+        gate.TrySetResult(true);
+        await applying;
+        Assert.False(vm.IsActive);
+        import.StartBatchCommand.Execute(new[] { "/tmp/other" });
+        Assert.True(import.IsActive);
+
+        try
+        {
+            Directory.Delete(Path.GetDirectoryName(txt)!, recursive: true);
+        }
+        catch (IOException)
+        {
+            // Temp cleanup is best-effort.
+        }
     }
 }

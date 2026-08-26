@@ -174,6 +174,12 @@ internal static class TestDoubles
         // zero calls unless a test sets them), so unscripted tests make no
         // search traffic.
         var nexusClient = new FakeNexusSearchClient();
+        // The download-queue fake: empty by default so existing tests see no
+        // download rows; the download-row tests drive its collection + events
+        // directly (no worker, no real pipeline), and the update-flow tests
+        // exercise the real enqueue front over it (admission + dedupe only).
+        // Settled before the load-order card VM below consumes it.
+        downloadQueue ??= new FakeModDownloadQueue();
         // SAFETY: an omitted launcher defaults to the harmless in-memory
         // recorder (never the OS shell; the VM has no production fallback).
         // This is the test-safety guarantee that no UI test can shell-open the
@@ -212,6 +218,10 @@ internal static class TestDoubles
             session,
             loadOrderReconciler,
             nexusClient,
+            importService,
+            auth,
+            acquisition,
+            downloadQueue,
             cards,
             launcher,
             dialogs,
@@ -235,12 +245,6 @@ internal static class TestDoubles
         // Gaming Mode default: not gaming (the ordinary desktop session the
         // existing tests assume); gaming-gating tests pass a gaming state.
         gamingMode ??= new GamingModeState(false);
-        // The download-queue fake: empty by default so existing tests see no
-        // download rows; the download-row tests drive its collection + events
-        // directly (no worker, no real pipeline), and the update-flow tests
-        // exercise the real enqueue front over it (admission + dedupe only).
-        downloadQueue ??= new FakeModDownloadQueue();
-
         // The link-external-folder child: constructed over the SAME
         // profile/session/repo/import/dialog fakes (after the launcher +
         // gaming-mode defaults above are settled) so a link-flow test sees its
@@ -2063,6 +2067,15 @@ internal sealed class FakeModImportService : IModImportService
     /// </summary>
     public TaskCompletionSource<bool>? ImportGate { get; set; }
 
+    /// <summary>
+    /// When set, the next Import call returns this pair verbatim (after the
+    /// gate, the recording, + the exception queue), bypassing the repository
+    /// mirror; a null slot (the default) runs the normal resolution. Lets a
+    /// test pin the exact container an import produced without seeding the
+    /// repository shape.
+    /// </summary>
+    public Queue<(Guid ContainerId, string VersionId)>? NextImportResults { get; set; }
+
     public (Guid ContainerId, string VersionId) Import(
         string sourcePath, string modName, ModSource source, string version,
         DateTimeOffset? remoteUploadedAt = null, int? remoteFileId = null, ModDisplayMetadata? displayMetadata = null)
@@ -2084,6 +2097,11 @@ internal sealed class FakeModImportService : IModImportService
             {
                 throw ex;
             }
+        }
+
+        if (NextImportResults is { Count: > 0 })
+        {
+            return NextImportResults.Dequeue();
         }
 
         if (_repo is null)

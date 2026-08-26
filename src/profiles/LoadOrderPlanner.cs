@@ -15,6 +15,17 @@ public enum LoadOrderLineOutcome
 
     /// <summary>No local match (or an ambiguous one); the line is reported, never silently dropped.</summary>
     Unresolved,
+
+    /// <summary>
+    /// The line has no profile or repository match, but the txt's own
+    /// directory contains a mod folder with this name (a sibling of the txt,
+    /// carrying <c>&lt;name&gt;/&lt;name&gt;.mod</c>): applying (when
+    /// included) imports that folder. The planner reports these lines
+    /// unmatched; the load-order card upgrades them after scanning the
+    /// picked file's directory (the reconciler has no path input, so the
+    /// disk fact arrives at the card).
+    /// </summary>
+    SiblingImport,
 }
 
 /// <summary>
