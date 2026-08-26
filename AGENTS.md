@@ -1163,7 +1163,24 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         import-time base-name collision hard-block
                         (GetBaseNameCollision; two same-folder mods can't coexist
                         in a profile; resolves a linked mod's base name from the
-                        external folder's own name) + per-profile launch settings
+                        external folder's own name) + the load-order import
+                        family (ModLoadOrderParser: pure DML-exact
+                        mod_load_order.txt parsing, per line trim + skip empty +
+                        skip -- comments after trim, first-wins dedupe, BOM
+                        tolerance, no #/// /inline-comment support;
+                        LoadOrderPlanner: pure reconciliation of parsed names
+                        against caller-resolved data (profile mods + repo
+                        candidates keyed by base name) into the immutable
+                        LoadOrderPlan (per-line outcomes Reorder/LibraryAdd/
+                        Unresolved, OrderedContainerIds for SetModOrder,
+                        LibraryAdds, UnmatchedNames), case-insensitive ordinal
+                        matching, Nexus-sourced ambiguity preference with
+                        remaining ties reported unmatched, no lock reasoning
+                        (SetModOrder's own projection keeps locked slots);
+                        ILoadOrderReconciler: the resolution glue resolving both
+                        sides' base names through the shared internal ModBaseNames
+                        helper, the same resolution staging uses) + per-profile
+                        launch settings
                         (EnvVar/LaunchSettings: ordered env-var entries + game
                         args + the EnableLuaLogs toggle (emits Relay's bare
                         --log-lua flag, teeing Lua print output into the log
@@ -1572,6 +1589,20 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           staging/mods.lst behavior for the manager mod, null for
                                           disabled/unresolvable/missing-file/capitalized-Base shapes,
                                           the unknown-profile throw, first-in-order-wins
+                                          + ModLoadOrderParserTests: the DML-exact
+                                          reader (trim/blank/comment-after-trim,
+                                          dedupe first-wins, BOM, the rejected
+                                          #/// /inline tolerances, empty + comment-only)
+                                          + LoadOrderPlannerTests: the pure
+                                          matching table (profile/library/unmatched,
+                                          case-insensitive, the Nexus ambiguity
+                                          preference + remaining ties unmatched,
+                                          ordered ids over file order, unlisted
+                                          not appended, empty plan) + the real
+                                          reconciler over the fixture
+                                          (policy-resolved profile base names,
+                                          latest/linked repo candidates, the
+                                          unresolvable-entry unmatched report)
                                           + ModCleanupTests: the startup prune -- the linked
                                           keep/unreferenced-drop pair + the managed latest-keep
                                           (a pinned entry keeps the pinned folder AND the

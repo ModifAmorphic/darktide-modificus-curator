@@ -40,6 +40,13 @@ internal sealed class ProfileServiceFixture : IDisposable
     /// </summary>
     public IModImportService Imports { get; }
 
+    /// <summary>
+    /// The <see cref="ILoadOrderReconciler"/> resolved through the same DI
+    /// tree, so load-order tests reconcile over the same live profile +
+    /// repository the rest of the fixture uses.
+    /// </summary>
+    public ILoadOrderReconciler Reconciler { get; }
+
     /// <param name="createLink">Optional override for the staging-link seam
     /// (default: the platform-selective link, a junction on Windows or
     /// <see cref="Directory.CreateSymbolicLink"/> on Linux). Pass a throwing
@@ -64,6 +71,7 @@ internal sealed class ProfileServiceFixture : IDisposable
         Service = _provider.GetRequiredService<IProfileService>();
         Repo = _provider.GetRequiredService<IModRepository>();
         Imports = _provider.GetRequiredService<IModImportService>();
+        Reconciler = _provider.GetRequiredService<ILoadOrderReconciler>();
     }
 
     // ---- profile-tree path helpers -----------------------------------------

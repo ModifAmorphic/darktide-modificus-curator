@@ -649,63 +649,21 @@ internal sealed class ProfileService : IProfileService
         // resolution drives the collision check for free.
         if (container.Source is LinkedSource linked)
         {
-            var external = linked.ExternalPath;
-            if (!Directory.Exists(external))
-            {
-                return (null, null, "external folder unavailable");
-            }
-
-            // Trim trailing separators so a path stored with a trailing slash
-            // still yields its folder name (ExternalPath is normalized at link
-            // time, so this is defensive only).
-            var linkedBaseName = Path.GetFileName(
-                external.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-            if (string.IsNullOrEmpty(linkedBaseName))
-            {
-                return (null, null, "external folder has no base name");
-            }
-
-            return (linkedBaseName, external, null);
+            var linkedBaseName = ModBaseNames.TryResolveLinkedBaseName(linked);
+            return linkedBaseName is null
+                ? (null, null, "external folder unavailable or has no base name")
+                : (linkedBaseName, linked.ExternalPath, null);
         }
 
-        var version = container.ResolveVersion(mod.Policy);
-        if (version is null)
-        {
-            return (null, null, $"no version resolves for policy {mod.Policy}");
-        }
-
-        var versionFolder = _repo.GetVersionFolderPath(mod.ContainerId, version.Folder);
-        if (!Directory.Exists(versionFolder))
-        {
-            // Defensive: the manifest points at a folder that is not on disk
-            // (a hand-delete between prune + stage).
-            return (null, null, $"version folder {version.Folder} is missing on disk");
-        }
-
-        // Discover the mod's base folder: the import validation guarantees the
-        // version folder contains exactly one subdirectory (the base, named to
-        // match its <base>.mod descriptor). A corrupted/inconsistent version
-        // folder (zero/multiple subdirs) can't yield a base name.
-        string[] baseDirs;
-        try
-        {
-            baseDirs = Directory.GetDirectories(versionFolder);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return (null, null, $"version folder {version.Folder} is not readable");
-        }
-
-        if (baseDirs.Length != 1)
-        {
-            return (null, null,
-                $"version folder {version.Folder} has {baseDirs.Length} subdirectories; expected exactly one base folder");
-        }
-
-        var baseName = Path.GetFileName(baseDirs[0]);
-        // The staging-link target is the base folder inside the version folder:
+        // Managed: the shared base-name resolution (the single base directory
+        // inside the policy-resolved version folder; the load-order reconciler
+        // resolves through the same helper so staging + matching cannot drift).
+        // The staging-link target is that base directory itself:
         // <versionFolder>/<baseName>/.
-        return (baseName, Path.Combine(versionFolder, baseName), null);
+        var baseDir = ModBaseNames.TryResolveBaseDir(container, mod.Policy, _repo);
+        return baseDir is null
+            ? (null, null, $"no resolvable base folder for policy {mod.Policy}")
+            : (Path.GetFileName(baseDir), baseDir, null);
     }
 
     /// <inheritdoc />

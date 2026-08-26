@@ -35,6 +35,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<StagingLinkCreator>(_ => CreateStagingLink);
 
         services.AddSingleton<IProfileService, ProfileService>();
+
+        // The load-order reconciliation glue over the pure planner: resolves
+        // both sides' base names from the live profile + repository. Stateless
+        // per call; singleton.
+        services.AddSingleton<ILoadOrderReconciler, LoadOrderReconciler>();
         return services;
     }
 
