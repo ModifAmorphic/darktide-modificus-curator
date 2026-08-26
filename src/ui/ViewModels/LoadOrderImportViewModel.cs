@@ -632,13 +632,12 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Rung-2 apply sequencing (deliberate simplification):</b> the order
-    /// write happens BEFORE the adds, and AddMod appends, so included adds
-    /// land after the listed block rather than at their file positions
-    /// (SetModOrder ignores ids that are not profile members yet). The apply
-    /// refinement that lands with the resolver tiers revisits this
-    /// deliberately so imported/associated mods join at their file
-    /// positions.</para>
+    /// <b>Apply sequencing:</b> the order write happens BEFORE the adds,
+    /// and AddMod appends, so included adds land after the listed block
+    /// rather than at their file positions (SetModOrder ignores ids that
+    /// are not profile members yet). The apply paths that import or
+    /// associate content place those mods at their file positions
+    /// deliberately.</para>
     /// <para>A profile or repository failure mid-apply surfaces the localized
     /// inline failure with the card still open for retry or cancel; the
     /// writes before the failure stand (re-runs are idempotent).</para>

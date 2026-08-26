@@ -88,8 +88,9 @@ public sealed class LoadOrderPlan
     /// Every matched container id in file order (reorder + library-add rows
     /// alike): the <see cref="IProfileService.SetModOrder"/> argument. The
     /// ids of library adds that are not yet profile members are included;
-    /// SetModOrder ignores unknown ids today, and rung 4's apply refinement
-    /// will place adds at their file positions deliberately. Installed-but-
+    /// SetModOrder ignores unknown ids today, and the apply paths that
+    /// import or associate content place those mods at their file
+    /// positions deliberately. Installed-but-
     /// unlisted mods are NOT appended here; SetModOrder's own semantics keep
     /// them in relative order after the listed block.
     /// </summary>

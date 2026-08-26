@@ -359,7 +359,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            identified (the id cell shows the fact + the
                            version cell activates, empty by default,
                            validated non-empty-when-Nexus like the import
-                           form; the rung-4 apply decides what the version
+                           form; the apply decides what the version
                            means per path). Identification never checks the
                            include checkbox (the identified default stays
                            excluded; identification is a correction, not
