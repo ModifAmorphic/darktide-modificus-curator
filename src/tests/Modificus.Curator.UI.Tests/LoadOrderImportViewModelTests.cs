@@ -89,6 +89,43 @@ public sealed class LoadOrderImportViewModelTests
                 .Select(l => new LoadOrderRepoCandidate(l.ContainerId!.Value, l.MatchedBaseName!, false, l.DisplayName!))
                 .ToArray());
 
+    // ---- Apply-button enabled notifications ------------------------------------
+    // The Apply button binds CanApplyNow; these tests pin that the binding's
+    // inputs (card activation + checkbox flips) actually notify CanApplyNow,
+    // the notification gap that left the button permanently disabled.
+
+    [Fact]
+    public async Task Activation_with_an_included_row_notifies_CanApplyNow()
+    {
+        var (vm, reconciler, _, _, _, _, _, _, _, _, _, _) = Build();
+        reconciler.NextPlan = Plan(
+            new LoadOrderLine("ModA", LoadOrderLineOutcome.Reorder, Guid.NewGuid(), "ModA", "A Row"));
+
+        var fired = new List<string?>();
+        vm.PropertyChanged += (_, e) => fired.Add(e.PropertyName);
+
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("ModA"));
+
+        Assert.Contains(nameof(LoadOrderImportViewModel.CanApplyNow), fired);
+        Assert.True(vm.CanApplyNow);
+    }
+
+    [Fact]
+    public async Task A_checkbox_flip_notifies_CanApplyNow()
+    {
+        var (vm, reconciler, _, _, _, _, _, _, _, _, _, _) = Build();
+        reconciler.NextPlan = Plan(
+            new LoadOrderLine("ModB", LoadOrderLineOutcome.LibraryAdd, Guid.NewGuid(), "ModB", "B Container"));
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("ModB"));
+
+        var fired = new List<string?>();
+        vm.PropertyChanged += (_, e) => fired.Add(e.PropertyName);
+        vm.Rows[0].IsIncluded = true;
+
+        Assert.Contains(nameof(LoadOrderImportViewModel.CanApplyNow), fired);
+        Assert.True(vm.CanApplyNow);
+    }
+
     // ---- activation + table ---------------------------------------------------
 
     [Fact]

@@ -447,15 +447,17 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     internal static TimeSpan SearchQueueDelay { get; set; } = TimeSpan.FromMilliseconds(400);
 
     /// <summary>
-    /// A row's include checkbox flipped: re-fire <see cref="CanApply"/> so
-    /// the Apply button's enabled state follows (the button binds CanApply;
-    /// the rows are transient, so they push up instead of the card polling).
+    /// A row's include checkbox flipped: re-fire the Apply button's enabled
+    /// projections so the button follows (the button binds
+    /// <see cref="CanApplyNow"/>; the rows are transient, so they push up
+    /// instead of the card polling).
     /// </summary>
     private void OnRowPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(LoadOrderRowViewModel.IsIncluded))
         {
             OnPropertyChanged(nameof(CanApply));
+            OnPropertyChanged(nameof(CanApplyNow));
         }
     }
 
@@ -467,6 +469,7 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     [NotifyPropertyChangedFor(nameof(HasRows))]
     [NotifyPropertyChangedFor(nameof(ShowEmptyNotice))]
     [NotifyPropertyChangedFor(nameof(CanApply))]
+    [NotifyPropertyChangedFor(nameof(CanApplyNow))]
     private bool _isActive;
 
     /// <summary>The picked file's full path (tooltip + automation name; the header ellipsizes it).</summary>
