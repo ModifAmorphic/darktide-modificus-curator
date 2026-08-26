@@ -42,8 +42,9 @@ public sealed class ModRowContextTests
             profiles, session, repo, new FakeModImportService(repo), cards, localization,
             NullLogger<ImportWorkflowViewModel>.Instance);
         var loadOrder = new LoadOrderImportViewModel(
-            profiles, session, new FakeLoadOrderReconciler(), cards,
+            profiles, session, new FakeLoadOrderReconciler(), new FakeNexusSearchClient(), cards,
             new FakeExternalLauncher(), new FakeDialogService(), localization,
+            static action => action(),
             NullLogger<LoadOrderImportViewModel>.Instance);
         var detailedRows = new DetailedModRowsViewModel(
             new FakeConfigLoader(), new FakeNexusModMetadataService(), repo,

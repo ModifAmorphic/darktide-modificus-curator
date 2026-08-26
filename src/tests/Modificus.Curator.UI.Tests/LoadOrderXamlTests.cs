@@ -106,9 +106,33 @@ public sealed class LoadOrderXamlTests
         Assert.Equal("{Binding IsUnresolved}", A(link, "IsVisible"));
         Assert.Equal("OpenOnNexus_Click", A(link, "Click"));
 
-        // No edit behavior exists in the reserved cells: the row template
-        // holds no TextBox at all (the id/version regions are empty).
-        Assert.Empty(Elements(rowTemplate, "TextBox"));
+        // The identification cells: the manual id/URL entry + the version
+        // field live INSIDE the fixed columns (no definition change), and
+        // their visibility keys off the row's identification projections so
+        // the cells activate without reshuffling the table.
+        var textBoxes = Elements(rowTemplate, "TextBox").ToList();
+        Assert.Equal(2, textBoxes.Count);
+        var manual = Assert.Single(textBoxes, t =>
+            (string?)t.Attribute("Text") == "{Binding ManualId, Mode=TwoWay}");
+        // The manual cell rides a Panel host pinned to column 4.
+        Assert.Equal("4", (string?)((manual.Parent as XElement)?.Attribute("Grid.Column")));
+        var version = Assert.Single(textBoxes, t =>
+            (string?)t.Attribute("Text") == "{Binding Version, Mode=TwoWay}");
+        Assert.Equal("5", (string?)version.Attribute("Grid.Column"));
+
+        // The candidate workspace + the expand affordance exist in the row's
+        // DataTemplate (they render BELOW the row grid, inside the template's
+        // vertical host), keyed off the row's workspace projections.
+        var template = rowTemplate.Ancestors()
+            .Single(a => a.Name.LocalName == "DataTemplate");
+        Assert.Contains(Elements(template, "Button"),
+            b => (string?)b.Attribute("Click") == "AcceptCandidate_Click");
+        Assert.Contains(Elements(template, "Button"),
+            b => (string?)b.Attribute("Click") == "ToggleAlternates_Click");
+        // The workspace's own visibility keys off the row's projection.
+        var workspace = Assert.Single(
+            Elements(template, "StackPanel"),
+            s => (string?)s.Attribute("IsVisible") == "{Binding ShowCandidateWorkspace}");
     }
 
     // ---- required source lookup (the GamingModeGatingXamlTests pattern) ----

@@ -23,6 +23,7 @@ public interface INexusClient
     Task<Response<ModInfo>> GetModInfoAsync(string gameDomain, int modId, CancellationToken ct = default);
     Task<Response<ModFile[]>> ListModFilesAsync(string gameDomain, int modId, CancellationToken ct = default);
     Task<Response<ModUpdateStatus[]>> CheckUpdatesGraphQlAsync(int gameId, IReadOnlyList<int> modIds, CancellationToken ct = default);                          // v2 GraphQL
+    Task<Response<NexusSearchResult[]>> SearchModsAsync(string gameDomain, string terms, int count, CancellationToken ct = default);                            // anonymous v2 GraphQL
 }
 ```
 
@@ -39,11 +40,29 @@ public interface INexusClient
   Returns `ModUpdateStatus[]` with the server-computed `viewerUpdateAvailable`
   field per mod. Throws `NexusApiException` on GraphQL-level errors in a 200 OK
   body (in addition to the standard HTTP error handling).
+- `SearchModsAsync` -- the ANONYMOUS v2 GraphQL `mods` search, run TWICE and
+  unioned by mod id preserving search order (name-leg hits first): once with
+  `name:[{op:WILDCARD,value:"*terms*"}]` (surrounding wildcards) and once with
+  `nameStemmed:[{op:WILDCARD,value:"terms"}]` (bare; the stemmed index matches
+  stemmed words, so a wildcard would break it), both against
+  `gameId:[{op:EQUALS,value:"4943"}]` (resolved from the domain; only the
+  Darktide domain resolves) with `sort:{relevance:{direction:DESC}}` + the
+  given `count`. Returns `NexusSearchResult` (modId + name + uid). The request
+  is the one client call that carries NO credentials: it routes around the
+  auth factory entirely (a plain request with only the
+  app-identification headers; no auth gate, no 401-refresh), because the
+  endpoint is anonymous (verified live) and sits behind Cloudflare, not the
+  API key budget. Anonymous responses carry no `x-rl-*` headers; they are
+  parsed onto the `Response<T>` anyway if ever present. Throws
+  `NexusApiException` on a non-2xx or a GraphQL-level error in a 200 OK body
+  (both legs must succeed). Callers stay serial + human-paced (the
+  Cloudflare posture); the load-order resolver's search queue is the model.
 
 Every method throws `NexusApiException` on a non-2xx; `NexusRateLimitException`
 on a rate-limit signal (429, or 403 with `x-rl-*-remaining: 0`);
 `NexusNotAuthenticatedException` when `AuthMethod == None` or the selected
-method has no usable credentials.
+method has no usable credentials -- except `SearchModsAsync`, which works
+signed out and never throws the not-authenticated exception.
 
 **401-reactive refresh + retry-once.** On a 401, the client asks the auth
 factory to refresh (OAuth) or give up (API key, None). On a successful refresh

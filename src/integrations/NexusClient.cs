@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Modificus.Curator.Config;
+using Modificus.Curator.General;
 using Microsoft.Extensions.Logging;
 
 namespace Modificus.Curator.Integrations;
@@ -180,6 +181,131 @@ internal sealed class NexusClient : INexusClient
     /// </summary>
     private const string ModsByUidQuery =
         "query($uids: [ID!]!) { modsByUid(uids: $uids) { nodes { uid name version updatedAt viewerUpdateAvailable viewerDownloaded } totalCount } }";
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para><b>Anonymous routing:</b> this is the one client call that must
+    /// NOT carry credentials. <see cref="SendRawAsync"/> hardwires the auth
+    /// factory (its gate + headers + 401-refresh), so the search sends
+    /// directly through the underlying <see cref="HttpClient"/> with only the
+    /// app-identification headers applied (the same header set the factories
+    /// apply minus the credential): a fresh request per leg, no auth gate, no
+    /// retry. Anonymous is not a degraded mode here; it is how the endpoint
+    /// was verified to work.</para>
+    /// <para><b>Two-leg union:</b> the plain-name leg wraps the terms in
+    /// surrounding wildcards (substring matching); the nameStemmed leg passes
+    /// the terms bare (the stemmed index matches stemmed words; a wildcard
+    /// breaks it). Union by mod id preserving search order, name-leg hits
+    /// first.</para>
+    /// </remarks>
+    public async Task<Response<NexusSearchResult[]>> SearchModsAsync(
+        string gameDomain,
+        string terms,
+        int count,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(gameDomain);
+        ArgumentException.ThrowIfNullOrWhiteSpace(terms);
+        if (count <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(count));
+        }
+
+        // Only the Darktide domain resolves (the app is Darktide-only; an
+        // explicit mapping keeps the failure loud instead of silently
+        // searching the wrong game).
+        if (!string.Equals(gameDomain, NexusGameIdentity.DarktideDomain, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"Unknown game domain '{gameDomain}'; only Darktide is searchable.", nameof(gameDomain));
+        }
+
+        var gameId = NexusGameIdentity.DarktideGameId.ToString(CultureInfo.InvariantCulture);
+        var nameQuery =
+            "query { mods(filter: { gameId: [{op: EQUALS, value: \"" + gameId + "\"}], " +
+            "name: [{op: WILDCARD, value: \"*" + EscapeGraphQlString(terms) + "*\"}] }, " +
+            "sort: { relevance: { direction: DESC } }, count: " +
+            count.ToString(CultureInfo.InvariantCulture) + ") { nodes { modId name uid } } }";
+        var stemmedQuery =
+            "query { mods(filter: { gameId: [{op: EQUALS, value: \"" + gameId + "\"}], " +
+            "nameStemmed: [{op: WILDCARD, value: \"" + EscapeGraphQlString(terms) + "\"}] }, " +
+            "sort: { relevance: { direction: DESC } }, count: " +
+            count.ToString(CultureInfo.InvariantCulture) + ") { nodes { modId name uid } } }";
+        var nameLeg = await SendAnonymousGraphQlSearchAsync(nameQuery, ct).ConfigureAwait(false);
+        var stemmedLeg = await SendAnonymousGraphQlSearchAsync(stemmedQuery, ct).ConfigureAwait(false);
+
+        // Union by mod id preserving search order, name-leg hits first.
+        var seen = new HashSet<int>();
+        var results = new List<NexusSearchResult>();
+        var limits = NexusRateLimitsParser.Empty;
+        foreach (var (legResults, legLimits) in new[] { nameLeg, stemmedLeg })
+        {
+            limits = MergeLimits(limits, legLimits);
+            foreach (var node in legResults)
+            {
+                if (seen.Add(node.ModId))
+                {
+                    results.Add(new NexusSearchResult(node.ModId, node.Name, node.Uid));
+                }
+            }
+        }
+
+        return new Response<NexusSearchResult[]>(results.ToArray(), limits);
+    }
+
+    /// <summary>
+    /// One anonymous GraphQL search leg: builds the request with the
+    /// app-identification headers only (no auth factory involvement; the
+    /// search endpoint is anonymous), sends it, surfaces GraphQL-level errors
+    /// in a 200 OK body as <see cref="NexusApiException"/> (the
+    /// <see cref="CheckUpdatesGraphQlAsync"/> precedent), and returns the
+    /// nodes + whatever rate-limit headers were present.
+    /// </summary>
+    private async Task<(ModsSearchNode[] Nodes, NexusRateLimits Limits)> SendAnonymousGraphQlSearchAsync(
+        string query,
+        CancellationToken ct)
+    {
+        var uri = RelativeUri("v2/graphql");
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, uri);
+        ApiKeyMessageFactory.ApplyAppHeaders(request);
+        var content = new StringContent(
+            JsonSerializer.Serialize(new GraphQlRequest { Query = query }), Encoding.UTF8);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        request.Content = content;
+
+        using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, ct).ConfigureAwait(false);
+        var payload = await ReadAsync<GraphQlResponse<ModsSearchData>>(response, ct).ConfigureAwait(false);
+        var limits = NexusRateLimitsParser.Parse(response);
+        LogRateLimits(uri, limits);
+
+        if (payload.Errors is { Length: > 0 })
+        {
+            var message = string.Join("; ", payload.Errors.Select(e => e.Message));
+            _logger.LogError("Nexus GraphQL search response carried errors: {Message}", message);
+            throw new NexusApiException((int)response.StatusCode, message);
+        }
+
+        return (payload.Data?.Mods?.Nodes ?? Array.Empty<ModsSearchNode>(), limits);
+    }
+
+    /// <summary>
+    /// Escapes a value for embedding in a GraphQL string literal (backslash
+    /// first per the spec, then the double quote; the only characters a
+    /// normalized search term can carry that GraphQL escapes).
+    /// </summary>
+    private static string EscapeGraphQlString(string value) =>
+        value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+    /// <summary>
+    /// Merges two legs' rate-limit readings into the more informative one
+    /// (the fields the first reported non-zero win; anonymous responses
+    /// report none, so this is usually an all-zero no-op that still forwards
+    /// a header if Nexus ever starts sending one).
+    /// </summary>
+    private static NexusRateLimits MergeLimits(NexusRateLimits a, NexusRateLimits b) =>
+        a.DailyLimit > 0 || a.HourlyLimit > 0 ? a : b;
 
     // ---- core send (with 401-reactive refresh + retry once) ----------------
 
@@ -428,6 +554,10 @@ internal sealed class NexusClient : INexusClient
 /// </summary>
 internal static class NexusRateLimitsParser
 {
+    /// <summary>The all-zero / no-header reading (the fields' absent
+    /// values).</summary>
+    public static NexusRateLimits Empty { get; } = new(0, 0, null, 0, 0, null);
+
     public static NexusRateLimits Parse(HttpResponseMessage response)
     {
         ParseInt(response, "x-rl-daily-limit", out var dailyLimit);

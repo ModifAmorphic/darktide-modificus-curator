@@ -1492,6 +1492,24 @@ The picker's file feeds `StartImport(path)`:
   resolver tiers revisits this deliberately. A mid-apply failure surfaces
   the localized inline failure with the card still open; earlier writes
   stand and re-runs are idempotent.
+- **The resolver tier** (the identification workspace): after the repo tier
+  resolves what it can, a serial human-paced search queue (one row at a time,
+  table order, no retries; a failed search is logged and leaves the row
+  unresolved with the manual path available) fires
+  `INexusClient.SearchModsAsync` with the folder name normalized into search
+  terms (lowercase, underscores/hyphens to spaces, whitespace collapsed).
+  Each unresolved row gets a workspace: the TOP candidate inline (name +
+  mod id + a one-click Accept), an expand affordance revealing the
+  alternates (each with its own Accept), and the manual id/URL entry in the
+  reserved cells (parsed via the shared `ImportSourceValidator` rules; a
+  bare id or a `nexusmods.com` URL both accepted). Accepted or manually
+  entered identification marks the row identified: the id cell shows the
+  fact, the version cell activates (empty by default, validated
+  non-empty-when-Nexus like the import form), and the apply path decides
+  what the version means per destination. Identification never checks the
+  include checkbox (the identified default stays excluded; identification
+  is a correction, not consent). Cancelling the card stops the queue;
+  arrived candidates stay on their rows.
 - **Cancel**: no writes, the card deactivates.
 
 ## Mod list density / detailed rows

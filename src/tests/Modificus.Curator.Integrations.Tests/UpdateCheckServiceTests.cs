@@ -1482,10 +1482,15 @@ public sealed class UpdateCheckServiceTests
             {
                 return Task.FromException<Response<ModUpdateStatus[]>>(GraphQlThrows);
             }
+
             return Task.FromResult(
                 GraphQlResponse
                     ?? new Response<ModUpdateStatus[]>(Array.Empty<ModUpdateStatus>(), NexusRateLimits.Unknown));
         }
+
+        public Task<Response<NexusSearchResult[]>> SearchModsAsync(
+            string gameDomain, string terms, int count, CancellationToken ct = default) =>
+            throw new NotImplementedException();
 
         public Task<Response<ValidateInfo>> ValidateAsync(CancellationToken ct = default)
             => throw new NotImplementedException();

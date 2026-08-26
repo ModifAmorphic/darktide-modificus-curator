@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using System.Text.Json;
 
 namespace Modificus.Curator.Integrations;
 
@@ -128,4 +129,44 @@ internal sealed class ModsByUidResult
 
     [JsonPropertyName("totalCount")]
     public int TotalCount { get; set; }
+}
+
+/// <summary>
+/// The <c>data</c> object for the anonymous <c>mods</c> search query.
+/// </summary>
+internal sealed class ModsSearchData
+{
+    [JsonPropertyName("mods")]
+    public ModsSearchResult? Mods { get; set; }
+}
+
+/// <summary>
+/// The <c>mods</c> search result: the matching nodes. The filter runs
+/// server-side; an empty result is a valid (no-match) answer.
+/// </summary>
+internal sealed class ModsSearchResult
+{
+    [JsonPropertyName("nodes")]
+    public ModsSearchNode[] Nodes { get; set; } = Array.Empty<ModsSearchNode>();
+}
+
+/// <summary>
+/// One search node: the mod's id + name + UID. The <c>ID</c> scalars serialize
+/// as strings per the GraphQL spec; <paramref name="ModId"/> is an int and
+/// accepts both the string and number forms (the
+/// <see cref="ModUpdateStatus"/> precedent), while <see cref="Uid"/> stays a
+/// string (informational only; the resolver keys on
+/// <paramref name="ModId"/>).
+/// </summary>
+internal sealed class ModsSearchNode
+{
+    [JsonPropertyName("modId")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public int ModId { get; set; }
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("uid")]
+    public string? Uid { get; set; }
 }

@@ -106,4 +106,36 @@ public interface INexusClient
         int gameId,
         IReadOnlyList<int> modIds,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Searches the game's mods by name through the Nexus v2 GraphQL
+    /// <c>mods</c> query, run ANONYMOUSLY (no auth header; the endpoint sits
+    /// behind Cloudflare, not the API key budget). The query runs twice and
+    /// the results are unioned by mod id preserving search order (plain-name
+    /// hits first): once with a surrounding-wildcard <c>name</c> filter and
+    /// once with a bare <c>nameStemmed</c> filter (the stemmed index matches
+    /// space-separated stemmed words, so a wildcard would break it).
+    /// </summary>
+    /// <remarks>
+    /// <para>Anonymous responses carry no <c>x-rl-*</c> rate-limit headers;
+    /// they are parsed onto the returned <see cref="Response{T}"/> anyway if
+    /// ever present. No auth gate: the call works signed out, so it neither
+    /// throws <see cref="NexusNotAuthenticatedException"/> nor consumes a
+    /// refresh.</para>
+    /// <para>Throws <see cref="NexusApiException"/> on a non-2xx or a
+    /// GraphQL-level error in a 200 OK body (both query legs must succeed;
+    /// the caller's failure posture is no-retry). Callers must stay serial +
+    /// human-paced: the endpoint is Cloudflare-protected and bursts look like
+    /// bot traffic.</para>
+    /// </remarks>
+    /// <param name="gameDomain">The game domain (resolved to the game id for
+    /// the <c>gameId</c> filter; only the Darktide domain resolves).</param>
+    /// <param name="terms">The already-normalized search terms (lowercase,
+    /// word-separated; the caller owns the folder-name conversion).</param>
+    /// <param name="count">The per-leg result cap.</param>
+    Task<Response<NexusSearchResult[]>> SearchModsAsync(
+        string gameDomain,
+        string terms,
+        int count,
+        CancellationToken ct = default);
 }

@@ -469,6 +469,26 @@
     <value>This file contains no mod entries (only comments or blank lines). Nothing to import.</value>
     <comment>The inline notice shown when the picked file parsed to nothing; Apply stays disabled rather than performing a no-op write.</comment>
   </data>
+  <data name="LoadOrder_ManualIdHint" xml:space="preserve">
+    <value>ID or URL</value>
+    <comment>Placeholder for the manual identification cell on an unresolved review row: a bare Nexus mod id or a mod URL.</comment>
+  </data>
+  <data name="LoadOrder_VersionHint" xml:space="preserve">
+    <value>Version</value>
+    <comment>Placeholder for the version cell on an identified review row.</comment>
+  </data>
+  <data name="LoadOrder_ApplyManualTooltip" xml:space="preserve">
+    <value>Apply this mod id</value>
+    <comment>Tooltip on the manual-identification Apply button (the check mark beside the id cell).</comment>
+  </data>
+  <data name="LoadOrder_AcceptCandidate" xml:space="preserve">
+    <value>Accept</value>
+    <comment>The accept button on a search candidate (the inline top slot + each alternate): identifies the row with that mod.</comment>
+  </data>
+  <data name="LoadOrder_ShowAlternatesTooltip" xml:space="preserve">
+    <value>Show other matches</value>
+    <comment>Tooltip on the expand affordance that reveals a row's alternate search candidates.</comment>
+  </data>
   <data name="LoadOrder_SearchOnNexus" xml:space="preserve">
     <value>Search on Nexus</value>
     <comment>The open-on-Nexus link on an unresolved review row: opens the Nexus search for the folder name in the browser.</comment>

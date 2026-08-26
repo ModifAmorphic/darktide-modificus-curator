@@ -1,4 +1,7 @@
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
+using Avalonia.VisualTree;
 using Avalonia.Interactivity;
 using Modificus.Curator.UI.ViewModels;
 
@@ -34,5 +37,59 @@ public partial class LoadOrderImportView : UserControl
             // AsyncRelayCommand.Execute forwards to ExecuteAsync.
             ViewModel?.OpenOnNexusCommand.Execute(row);
         }
+    }
+
+    /// <summary>
+    /// The top candidate's Accept: identifies the row with its best
+    /// candidate. The button's DataContext is the row (the workspace lives in
+    /// the row's template).
+    /// </summary>
+    private void AcceptCandidate_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button b && b.DataContext is LoadOrderRowViewModel row)
+        {
+            ViewModel?.AcceptCandidateCommand.Execute(row);
+        }
+    }
+
+    /// <summary>
+    /// The expand affordance: toggles the row's alternates panel.
+    /// </summary>
+    private void ToggleAlternates_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button b && b.DataContext is LoadOrderRowViewModel row)
+        {
+            row.IsExpanded = !row.IsExpanded;
+        }
+    }
+
+    /// <summary>
+    /// The manual-identification Apply: commits the row's typed id/URL.
+    /// </summary>
+    private void ApplyManualId_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button b && b.DataContext is LoadOrderRowViewModel row)
+        {
+            ViewModel?.ApplyManualIdCommand.Execute(row);
+        }
+    }
+
+    /// <summary>
+    /// An alternate candidate's Accept (inside the alternates panel, whose
+    /// DataContext is the candidate): resolves the owning row by walking the
+    /// visual tree to the first ancestor carrying a row DataContext, then
+    /// identifies it with the clicked candidate.
+    /// </summary>
+    private void AcceptAlternate_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: NexusSearchCandidate candidate })
+        {
+            return;
+        }
+
+        var row = (sender as Control)?.FindAncestorOfType<ContentPresenter>()
+            ?.DataContext as LoadOrderRowViewModel
+            ?? throw new InvalidOperationException("The alternate accept lost its row context.");
+        ViewModel?.AcceptAlternateCommand.Execute((row, candidate));
     }
 }

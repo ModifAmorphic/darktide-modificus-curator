@@ -170,6 +170,10 @@ internal static class TestDoubles
         // The load-order reconciler fake: tests script the plan per case
         // (NextPlan); unscripted defaults to the empty plan.
         loadOrderReconciler ??= new FakeLoadOrderReconciler();
+        // The Nexus client fake: searches are scripted (empty results +
+        // zero calls unless a test sets them), so unscripted tests make no
+        // search traffic.
+        var nexusClient = new FakeNexusSearchClient();
         // SAFETY: an omitted launcher defaults to the harmless in-memory
         // recorder (never the OS shell; the VM has no production fallback).
         // This is the test-safety guarantee that no UI test can shell-open the
@@ -199,15 +203,20 @@ internal static class TestDoubles
 
         // The load-order import card child: same shape as the import workflow
         // (application-lifetime singleton, shared gate + session), with a fake
-        // reconciler whose plan tests script per case.
+        // reconciler whose plan tests script per case + a fake Nexus client
+        // whose search results tests script (empty by default: no search
+        // traffic unless a test opts in). The inline marshal seam keeps
+        // continuations on the test thread.
         var loadOrder = new LoadOrderImportViewModel(
             profiles,
             session,
             loadOrderReconciler,
+            nexusClient,
             cards,
             launcher,
             dialogs,
             localization,
+            static action => action(),
             NullLogger<LoadOrderImportViewModel>.Instance);
 
         // The density coordinator child: one shared instance per BuildModList,
@@ -1113,6 +1122,45 @@ internal sealed class FakeAppStateStore :
 /// Integrations-layer tests; this fake does the simplest equivalent (drop
 /// entries absent from the caller's candidates or whose container is gone).
 /// </summary>
+/// <summary>
+/// <see cref="INexusClient"/> fake for the load-order card's search tier:
+/// only <see cref="SearchModsAsync"/> is real (scripted results, call
+/// recording, optional failure); every other member throws. Unscripted
+/// searches return empty results.
+/// </summary>
+internal sealed class FakeNexusSearchClient : INexusClient
+{
+    /// <summary>The results the next search returns. Default: empty.</summary>
+    public IReadOnlyList<NexusSearchResult> NextResults { get; set; } = Array.Empty<NexusSearchResult>();
+
+    /// <summary>When set, the next search throws this.</summary>
+    public Exception? NextSearchThrows { get; set; }
+
+    /// <summary>Every (domain, terms, count) search call, in order.</summary>
+    public IReadOnlyList<(string Domain, string Terms, int Count)> SearchCalls { get; }
+        = new List<(string, string, int)>();
+
+    public Task<Response<NexusSearchResult[]>> SearchModsAsync(
+        string gameDomain, string terms, int count, CancellationToken ct = default)
+    {
+        ((List<(string, string, int)>)SearchCalls).Add((gameDomain, terms, count));
+        if (NextSearchThrows is { } ex)
+        {
+            return Task.FromException<Response<NexusSearchResult[]>>(ex);
+        }
+
+        return Task.FromResult(new Response<NexusSearchResult[]>(
+            NextResults.ToArray(), NexusRateLimits.Unknown));
+    }
+
+    public Task<Response<ValidateInfo>> ValidateAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<Response<DownloadLink[]>> DownloadLinksAsync(string gameDomain, int modId, int fileId, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<Response<DownloadLink[]>> DownloadLinksAsync(string gameDomain, int modId, int fileId, string nxmKey, long expiresEpoch, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<Response<ModInfo>> GetModInfoAsync(string gameDomain, int modId, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<Response<ModFile[]>> ListModFilesAsync(string gameDomain, int modId, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<Response<ModUpdateStatus[]>> CheckUpdatesGraphQlAsync(int gameId, IReadOnlyList<int> modIds, CancellationToken ct = default) => throw new NotImplementedException();
+}
+
 /// <summary>
 /// <see cref="ILoadOrderReconciler"/> fake: tests script
 /// <see cref="NextPlan"/> per case (an unscripted call reconciles to the

@@ -1050,6 +1050,10 @@ public sealed class ModAcquisitionServiceTests
             return ServeLinks();
         }
 
+        public Task<Response<NexusSearchResult[]>> SearchModsAsync(
+            string gameDomain, string terms, int count, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
         public Task<Response<DownloadLink[]>> DownloadLinksAsync(
             string gameDomain, int modId, int fileId, string nxmKey, long expiresEpoch, CancellationToken ct = default)
         {

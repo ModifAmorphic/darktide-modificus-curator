@@ -257,10 +257,12 @@ public static class CuratorComposition
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<ILoadOrderReconciler>(),
+            sp.GetRequiredService<INexusClient>(),
             sp.GetRequiredService<ModCardsGate>(),
             sp.GetRequiredService<IExternalLauncher>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<Action<Action>>(),
             sp.GetRequiredService<ILogger<LoadOrderImportViewModel>>()));
 
         // The link-external-folder child VM: an application-lifetime singleton

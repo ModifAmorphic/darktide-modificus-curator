@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using Modificus.Curator.Integrations;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Modificus.Curator.General;
@@ -11,6 +12,14 @@ using Modificus.Curator.UI.Session;
 using Microsoft.Extensions.Logging;
 
 namespace Modificus.Curator.UI.ViewModels;
+
+/// <summary>
+/// One search candidate proposed for an unresolved row: the mod's display
+/// name + its Nexus mod id (what the accept action records on the row).
+/// </summary>
+/// <param name="ModId">The Nexus mod id.</param>
+/// <param name="Name">The mod's display name.</param>
+public sealed record NexusSearchCandidate(int ModId, string Name);
 
 /// <summary>
 /// One review-table row: a single parsed file line's reconciliation result.
@@ -80,9 +89,174 @@ public partial class LoadOrderRowViewModel : ObservableObject
     /// participation signal (apply requires at least one included line);
     /// order application itself is not optional, so SetModOrder carries all
     /// matched containers regardless. For add lines it gates the AddMod.
+    /// Identified rows keep the excluded default: identification is a
+    /// correction of WHAT the line is, not a decision to include it (the
+    /// user opts in per the established default).
     /// </summary>
     [ObservableProperty]
     private bool _isIncluded;
+
+    // ---- identification (the resolver's row-facing surface) ------------------
+    //
+    // An unresolved row either carries search candidates (the resolver tier
+    // filled them) or awaits manual identification. Identification records a
+    // Nexus mod id on the row; the include checkbox stays as-is (excluded by
+    // default) so applying never acts on content the user did not opt into.
+
+    /// <summary>
+    /// The search candidates for this row, best first (empty until the
+    /// resolver tier ran + found something; an absent list never renders the
+    /// workspace).
+    /// </summary>
+    public IReadOnlyList<NexusSearchCandidate> Candidates { get; private set; } =
+        Array.Empty<NexusSearchCandidate>();
+
+    /// <summary>Whether any search candidate arrived (drives the workspace's top slot).</summary>
+    public bool HasCandidates => Candidates.Count > 0;
+
+    /// <summary>The best candidate (the inline top slot), when one exists.</summary>
+    public NexusSearchCandidate? TopCandidate => Candidates.FirstOrDefault();
+
+    /// <summary>
+    /// The candidates beyond the top slot (the expandable alternates).
+    /// </summary>
+    public IReadOnlyList<NexusSearchCandidate> AlternateCandidates => Candidates.Skip(1).ToArray();
+
+    /// <summary>Whether the alternates panel is expanded.</summary>
+    [ObservableProperty]
+    private bool _isExpanded;
+
+    /// <summary>
+    /// The identified mod id, once the user accepts a candidate or enters one
+    /// manually. Null while unidentified.
+    /// </summary>
+    public int? IdentifiedModId { get; private set; }
+
+    /// <summary>Whether this row has been identified (candidate or manual).</summary>
+    public bool IsIdentified => IdentifiedModId is not null;
+
+    /// <summary>How the row was identified (candidate vs manual), for the label.</summary>
+    public IdentificationKind IdentifiedBy { get; private set; }
+
+    /// <summary>
+    /// The display name of the identification (the accepted candidate's name,
+    /// or the entered id), shown in the match cell once identified.
+    /// </summary>
+    public string? IdentifiedName { get; private set; }
+
+    /// <summary>
+    /// The manually entered mod id / URL text (two-way bound to the id cell).
+    /// Parsed on save via the shared ImportSourceValidator rules; a bare id or
+    /// a nexusmods.com URL both accepted.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsManualPending))]
+    private string _manualId = string.Empty;
+
+    /// <summary>
+    /// The release tag typed for an identified row (the version cell; empty
+    /// by default). Validated non-empty-when-Nexus per the import form rules;
+    /// the apply path decides what a version means per destination.
+    /// </summary>
+    [ObservableProperty]
+    private string _version = string.Empty;
+
+    /// <summary>
+    /// Whether the id + version cells accept input: identified rows only.
+    /// Pre-identification, the row offers the search workspace instead.
+    /// </summary>
+    public bool AreIdCellsEnabled => !IsIdentified;
+
+    /// <summary>Whether the row is still searching (a spinner affordance).</summary>
+    [ObservableProperty]
+    private bool _isSearching;
+
+    /// <summary>
+    /// Whether the manual-identification Apply button shows: an unresolved,
+    /// unidentified row whose manual text parses to a Nexus id (the check
+    /// button commits the parse).
+    /// </summary>
+    public bool IsManualPending =>
+        IsUnresolved
+        && !IsIdentified
+        && ImportSourceValidator.TryParseUrl(ImportSource.Nexus, ManualId, out var parsed)
+        && parsed is NexusSource;
+
+    /// <summary>
+    /// Whether the candidate workspace renders: an unresolved, unidentified
+    /// row with at least one candidate (the top slot + the expand
+    /// affordance).
+    /// </summary>
+    public bool ShowCandidateWorkspace => IsUnresolved && !IsIdentified && HasCandidates;
+
+    /// <summary>Whether any alternate candidate exists (the expand affordance's visibility).</summary>
+    public bool HasAlternateCandidates => AlternateCandidates.Count > 0;
+
+    /// <summary>
+    /// Applies the resolver tier's candidates to the row (best first). The
+    /// include checkbox is untouched: candidates are proposals, and the
+    /// identified-default stays excluded until the user opts in.
+    /// </summary>
+    public void ApplyCandidates(IReadOnlyList<NexusSearchCandidate> candidates)
+    {
+        Candidates = candidates;
+        OnPropertyChanged(nameof(HasCandidates));
+        OnPropertyChanged(nameof(TopCandidate));
+        OnPropertyChanged(nameof(AlternateCandidates));
+        OnPropertyChanged(nameof(ShowCandidateWorkspace));
+        OnPropertyChanged(nameof(HasAlternateCandidates));
+    }
+
+    /// <summary>
+    /// Marks the row identified by an accepted candidate (records the id +
+    /// the candidate's name; collapses the workspace).
+    /// </summary>
+    public void IdentifyFromCandidate(NexusSearchCandidate candidate)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        IdentifiedModId = candidate.ModId;
+        IdentifiedName = candidate.Name;
+        IdentifiedBy = IdentificationKind.Candidate;
+        OnIdentified();
+    }
+
+    /// <summary>
+    /// Marks the row identified manually (records the parsed id; the entered
+    /// text may have been a URL). The display name falls back to the id.
+    /// </summary>
+    public void IdentifyManually(int modId)
+    {
+        IdentifiedModId = modId;
+        IdentifiedName = "#" + modId;
+        IdentifiedBy = IdentificationKind.Manual;
+        OnIdentified();
+    }
+
+    /// <summary>Re-fires the identification-driven projections.</summary>
+    private void OnIdentified()
+    {
+        OnPropertyChanged(nameof(IsIdentified));
+        OnPropertyChanged(nameof(AreIdCellsEnabled));
+        OnPropertyChanged(nameof(IdentifiedName));
+        OnPropertyChanged(nameof(ShowCandidateWorkspace));
+        IsExpanded = false;
+    }
+
+    /// <summary>
+    /// How a row came to be identified: an accepted search candidate, or the
+    /// user's manual id/URL entry.
+    /// </summary>
+    public enum IdentificationKind
+    {
+        /// <summary>Not identified.</summary>
+        None,
+
+        /// <summary>An accepted search candidate.</summary>
+        Candidate,
+
+        /// <summary>Manual id/URL entry through the reserved cells.</summary>
+        Manual,
+    }
 
     /// <summary>The localized outcome label. Re-resolves on a culture change.</summary>
     public string OutcomeText => Outcome switch
@@ -135,6 +309,7 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     private readonly IProfileService _profiles;
     private readonly IProfileSession _session;
     private readonly ILoadOrderReconciler _reconciler;
+    private readonly INexusClient _nexus;
     private readonly ModCardsGate _cards;
     private readonly IExternalLauncher _launcher;
     private readonly IDialogService _dialogs;
@@ -143,32 +318,55 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     private Guid? _capturedProfileId;
     private string? _sourcePath;
 
+    // ---- the search queue ----------------------------------------------------
+    //
+    // One search at a time over the unresolved rows, in table order, human
+    // paced (the Cloudflare posture): no parallel fan-out, no retries. The
+    // token stops the queue on cancel/reset; arrivals marshal to the UI
+    // thread through the injected seam.
+
+    private CancellationTokenSource? _searchCancellation;
+
     /// <summary>
     /// Creates the card VM, inactive, and subscribes to the session (reset on
     /// active-profile change) and localization (refresh the row labels on a
     /// culture change).
     /// </summary>
+    /// <param name="nexus">The Nexus client: the anonymous search used to
+    /// propose candidates for unresolved rows (one at a time, human-paced).
+    /// A failed search leaves the row unresolved with the manual path
+    /// available; failures are logged, never alerted.</param>
+    /// <param name="invokeOnUi">The marshal-to-UI-thread seam: search
+    /// continuations resume on a background context (the client is awaited
+    /// directly), so every row mutation funnels through here (the download
+    /// queue's seam pattern).</param>
     public LoadOrderImportViewModel(
         IProfileService profiles,
         IProfileSession session,
         ILoadOrderReconciler reconciler,
+        INexusClient nexus,
         ModCardsGate cards,
         IExternalLauncher launcher,
         IDialogService dialogs,
         LocalizationService localization,
+        Action<Action> invokeOnUi,
         ILogger<LoadOrderImportViewModel> logger)
         : base(localization)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _reconciler = reconciler ?? throw new ArgumentNullException(nameof(reconciler));
+        _nexus = nexus ?? throw new ArgumentNullException(nameof(nexus));
         _cards = cards ?? throw new ArgumentNullException(nameof(cards));
         _launcher = launcher ?? throw new ArgumentNullException(nameof(launcher));
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
+        _invokeOnUi = invokeOnUi ?? throw new ArgumentNullException(nameof(invokeOnUi));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         _session.PropertyChanged += OnSessionPropertyChanged;
     }
+
+    private readonly Action<Action> _invokeOnUi;
 
     /// <summary>
     /// A row's include checkbox flipped: re-fire <see cref="CanApply"/> so
@@ -288,6 +486,138 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
         _logger.LogInformation(
             "Started a load-order review of {Path}: {Lines} line(s), {Adds} add candidate(s), {Unmatched} unmatched.",
             path, plan.Lines.Count, plan.LibraryAdds.Count, plan.UnmatchedNames.Count);
+
+        // The resolver tier: the remaining unresolved rows get search
+        // candidates (one at a time, table order). Fire-and-forget: the
+        // queue owns its failures (logged, never alerted) + stops when the
+        // card closes.
+        _ = RunSearchQueueAsync();
+    }
+
+    /// <summary>
+    /// The serial search queue: one unresolved row at a time, in table order,
+    /// firing the anonymous Nexus search with the folder name normalized into
+    /// search terms (lowercase, underscores/hyphens to spaces, whitespace
+    /// collapsed) and applying the top candidates to the row. Human-paced by
+    /// construction (serial awaits); no retries on failure (a failed search
+    /// leaves the row unresolved with the manual path available). Row
+    /// mutations marshal to the UI thread through the injected seam; the
+    /// queue observes the card's cancellation so closing the card stops
+    /// further searches while arrived candidates stay on their rows.
+    /// </summary>
+    private async Task RunSearchQueueAsync()
+    {
+        _searchCancellation?.Dispose();
+        _searchCancellation = new CancellationTokenSource();
+        var token = _searchCancellation.Token;
+
+        foreach (var row in Rows.Where(r => r.IsUnresolved).ToArray())
+        {
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _invokeOnUi(() => row.IsSearching = true);
+            try
+            {
+                // Awaited on the calling context: the client's I/O runs
+                // without capturing this loop, and the continuation below
+                // hops to the UI thread explicitly (no ConfigureAwait(false);
+                // the UI-layer convention applies to the mutations, the seam
+                // carries them).
+                var response = await _nexus.SearchModsAsync(
+                    NexusGameIdentity.DarktideDomain,
+                    NormalizeSearchTerms(row.Name),
+                    MaxCandidatesPerRow,
+                    token);
+
+                _invokeOnUi(() =>
+                {
+                    row.IsSearching = false;
+                    row.ApplyCandidates(response.Data
+                        .Take(MaxCandidatesPerRow)
+                        .Select(r => new NexusSearchCandidate(r.ModId, r.Name))
+                        .ToArray());
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                // A failed search is a proposal gap, not an error state: log,
+                // leave the row unresolved (the manual path + the
+                // open-on-Nexus link remain), keep draining the queue.
+                _logger.LogInformation(
+                    ex, "The search for load-order line '{Name}' failed; leaving it unresolved.", row.Name);
+                _invokeOnUi(() => row.IsSearching = false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Normalizes a mod folder name into search terms: lowercase, underscores
+    /// + hyphens to spaces, whitespace collapsed to single spaces, trimmed.
+    /// (The stemmed index matches space-separated stemmed words.)
+    /// </summary>
+    internal static string NormalizeSearchTerms(string folderName)
+    {
+        var spaced = folderName.Replace('_', ' ').Replace('-', ' ').ToLowerInvariant();
+        return string.Join(' ', spaced.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    /// <summary>The per-row candidate cap (the inline top slot + the alternates).</summary>
+    private const int MaxCandidatesPerRow = 5;
+
+    /// <summary>
+    /// Accepts a search candidate for a row: records the identification
+    /// (the row's id + version cells activate) without touching the include
+    /// checkbox (identification is not consent; the identified default stays
+    /// excluded).
+    /// </summary>
+    [RelayCommand]
+    private void AcceptCandidate(LoadOrderRowViewModel? row)
+    {
+        if (row?.TopCandidate is { } candidate)
+        {
+            row.IdentifyFromCandidate(candidate);
+        }
+    }
+
+    /// <summary>
+    /// Accepts one of the alternates (the expand panel's rows).
+    /// </summary>
+    [RelayCommand]
+    private void AcceptAlternate((LoadOrderRowViewModel Row, NexusSearchCandidate Candidate)? arg)
+    {
+        if (arg is { } pair)
+        {
+            pair.Row.IdentifyFromCandidate(pair.Candidate);
+        }
+    }
+
+    /// <summary>
+    /// Applies the manual identification: parses the row's manual-id text (a
+    /// bare mod id or a nexusmods.com URL, the shared
+    /// <see cref="ImportSourceValidator"/> rules) and marks the row
+    /// identified-manual. No-op on an unparsable entry (the cell's own
+    /// validation shows why).
+    /// </summary>
+    [RelayCommand]
+    private void ApplyManualId(LoadOrderRowViewModel? row)
+    {
+        if (row is null || row.IsIdentified)
+        {
+            return;
+        }
+
+        if (ImportSourceValidator.TryParseUrl(ImportSource.Nexus, row.ManualId, out var parsed)
+            && parsed is NexusSource nexus)
+        {
+            row.IdentifyManually(nexus.ModId);
+        }
     }
 
     /// <summary>
@@ -448,6 +778,7 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     /// </summary>
     private void Reset()
     {
+        _searchCancellation?.Cancel();
         foreach (var row in Rows)
         {
             row.PropertyChanged -= OnRowPropertyChanged;

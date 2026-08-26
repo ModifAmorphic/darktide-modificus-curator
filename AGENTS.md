@@ -340,7 +340,31 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            open-on-Nexus link on unresolved rows, the folder
                            name as the search keyword, IExternalLauncher with
                            the fallback alert). Unmatched names are fully
-                           visible, never dropped. Apply (enabled when >= 1
+                           visible, never dropped. The resolver tier: after
+                           the repo tier resolves what it can, a SERIAL
+                           human-paced search queue (one row at a time, table
+                           order, no retries; failures are logged + leave the
+                           row unresolved) fires the anonymous
+                           SearchModsAsync with the folder name normalized
+                           into search terms (lowercase, underscores/hyphens
+                           to spaces, whitespace collapsed), + each
+                           unresolved row gets an identification workspace:
+                           the TOP candidate inline (name + mod id + a
+                           one-click Accept), an expand affordance revealing
+                           the alternates (each with its own accept), + the
+                           manual id/URL entry in the reserved cells (the
+                           shared ImportSourceValidator parse; a bare id or a
+                           nexusmods.com URL both accepted). Accepted or
+                           manually entered identification marks the row
+                           identified (the id cell shows the fact + the
+                           version cell activates, empty by default,
+                           validated non-empty-when-Nexus like the import
+                           form; the rung-4 apply decides what the version
+                           means per path). Identification never checks the
+                           include checkbox (the identified default stays
+                           excluded; identification is a correction, not
+                           consent). Cancel stops the queue; arrived
+                           candidates stay on their rows. Apply (enabled when >= 1
                            line is included; an empty/comment-only file shows
                            the localized notice + refuses) performs ONE
                            SetModOrder over every matched container in file
@@ -1444,7 +1468,24 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           unknown-resolution install is never dropped as stale),
                           shared by the store's hydration
                           self-heal + the download queue's dequeue-time
-                          revalidation (UI))
+                          revalidation (UI); + INexusClient.SearchModsAsync:
+                          the ANONYMOUS v2 GraphQL mods search (no auth header;
+                          the request routes around the auth factory with only
+                          the app-identification headers, works signed out,
+                          sits behind Cloudflare not the API key budget, no
+                          x-rl headers expected but parsed if present), run
+                          TWICE + unioned by mod id preserving search order
+                          (name-leg hits first): once with
+                          name:[{op:WILDCARD,value:"*terms*"}] (surrounding
+                          wildcards) + once with
+                          nameStemmed:[{op:WILDCARD,value:"terms"}] (bare;
+                          the stemmed index matches stemmed words so a wildcard
+                          breaks it), both against
+                          gameId:[{op:EQUALS,value:"4943"}] with
+                          sort:{relevance:{direction:DESC}} + count, returning
+                          NexusSearchResult (modId + name + uid); GraphQL-level
+                          errors in a 200 OK body surface as NexusApiException;
+                          callers stay serial + human-paced, no retries)
   steam/                Modificus.Curator.Steam -- Steam + Darktide + Proton discovery
                         (multi-library + compatdata; Linux Proton resolves from Steam's
                         CompatToolMapping in config.vdf, app-specific entry first then
@@ -1707,6 +1748,15 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           consumes it runs in the UI-layer
                                           download queue, covered by
                                           ModDownloadQueueTests)
+                                          + SearchModsAsync (the two-query union
+                                          by mod id with name-leg hits first,
+                                          the wildcard placement per leg, the
+                                          no-auth-header + works-signed-out
+                                          assertions, empty-on-both, the
+                                          GraphQL-error + non-2xx
+                                          NexusApiException paths, rate-limit
+                                          header forwarding, the non-Darktide
+                                          domain rejection)
                                           + the NexusModMetadataService (stable-v1
                                           display-metadata backfill: the 24-hour gate,
                                           the 25-attempt cap, active-profile-priority
@@ -2010,12 +2060,24 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                              file refusals, cancel + profile
                                              switch, the search URL + launcher
                                              failure alert;
+                                             the resolver tier: candidate
+                                             arrival fills the top slot + the
+                                             cap, accept (top + alternate)
+                                             marks identified with the include
+                                             default preserved, manual id/URL
+                                             entry + parse, a failed search
+                                             leaves the row unresolved, cancel
+                                             stops the queue, resolved rows
+                                             never search, the terms
+                                             normalization;
                                              LoadOrderXamlTests: the fifth Add
                                              flyout item, the card hosted below
                                              the import card, the shared
                                              header+row column layout with the
-                                             reserved resolver columns, the
-                                             no-edit-behavior pin) + the derived
+                                             identification cells activating
+                                             inside the fixed columns, the
+                                             candidate workspace + expand
+                                             affordance) + the derived
                                              version-unknown
                                              row state (ModItemVersionUnknownTests:
                                              the truth + its negatives, the badge's

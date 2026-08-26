@@ -97,6 +97,7 @@
           <ItemsControl ItemsSource="{Binding Rows}">
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="vm:LoadOrderRowViewModel">
+                <StackPanel>
                 <Grid ColumnDefinitions="*,*,Auto,Auto,110,80,Auto"
                       MinHeight="28"
                       Margin="0,1">
@@ -118,21 +119,112 @@
                             IsEnabled="{Binding IsIncludeEnabled}"
                             HorizontalAlignment="Center"
                             VerticalAlignment="Center" />
-                  <!-- Columns 4 + 5: the reserved resolver cells. Intentionally
-                       empty regions (fixed column widths carry the layout);
-                       the record/search/user tiers populate + activate them.
-                       No edit behavior exists at this rung. -->
-                  <!-- Column 6: the open-on-Nexus link, unresolved rows only
-                       (resolved rows have nowhere to search). -->
-                  <HyperlinkButton Grid.Column="6"
-                                  IsVisible="{Binding IsUnresolved}"
-                                  Click="OpenOnNexus_Click"
-                                  CommandParameter="{Binding}"
-                                  VerticalAlignment="Center">
-                    <TextBlock Text="{ReflectionBinding [LoadOrder_SearchOnNexus], Source={StaticResource Loc}}"
-                               FontSize="11" />
-                  </HyperlinkButton>
+                  <!-- Columns 4 + 5: the identification cells. For an
+                       UNIDENTIFIED row they host the manual id/URL entry
+                       (parsed via the shared ImportSourceValidator rules; a
+                       bare id or a nexusmods.com URL both accepted) + the
+                       Apply button, so the user can identify the row by hand
+                       when the search found nothing (or nothing right). For
+                       an IDENTIFIED row the cells turn read-only facts: the
+                       accepted mod id + the typed version tag (the apply path
+                       decides what the version means per destination; it is
+                       validated non-empty-when-Nexus like the import form).
+                       Resolved rows (reorder/library) keep the cells inert:
+                       the repo tier already identified them. -->
+                  <Panel Grid.Column="4" VerticalAlignment="Center">
+                    <TextBox Text="{Binding ManualId, Mode=TwoWay}"
+                             IsVisible="{Binding !AreIdCellsEnabled}"
+                             IsEnabled="{Binding IsUnresolved}"
+                             PlaceholderText="{ReflectionBinding [LoadOrder_ManualIdHint], Source={StaticResource Loc}}"
+                             FontSize="11" />
+                    <TextBlock Text="{Binding IdentifiedName}"
+                               IsVisible="{Binding AreIdCellsEnabled}"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding IdentifiedName}" />
+                  </Panel>
+                  <TextBox Grid.Column="5"
+                           Text="{Binding Version, Mode=TwoWay}"
+                           IsVisible="{Binding AreIdCellsEnabled}"
+                           PlaceholderText="{ReflectionBinding [LoadOrder_VersionHint], Source={StaticResource Loc}}"
+                           FontSize="11" />
+
+                  <!-- Column 6: the row's action. Identified rows expose the
+                       identity fact (nothing to accept); identified-by-
+                       candidate rows are done, manual rows carry the Apply
+                       inside the id cell's flow (the Apply button below).
+                       Unidentified rows expose the open-on-Nexus link. -->
+                  <Panel Grid.Column="6" VerticalAlignment="Center">
+                    <HyperlinkButton IsVisible="{Binding IsUnresolved}"
+                                    Click="OpenOnNexus_Click"
+                                    CommandParameter="{Binding}">
+                      <TextBlock Text="{ReflectionBinding [LoadOrder_SearchOnNexus], Source={StaticResource Loc}}"
+                                 FontSize="11" />
+                    </HyperlinkButton>
+                    <Button Classes="icon"
+                            IsVisible="{Binding IsManualPending}"
+                            Click="ApplyManualId_Click"
+                            CommandParameter="{Binding}"
+                            ToolTip.Tip="{ReflectionBinding [LoadOrder_ApplyManualTooltip], Source={StaticResource Loc}}"
+                            AutomationProperties.Name="{ReflectionBinding [LoadOrder_ApplyManualTooltip], Source={StaticResource Loc}}">
+                      <!-- Material "check" (24x24 source): drawn geometry. -->
+                      <Path Width="16" Height="16" Stretch="Uniform"
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Fill="{Binding $parent[Button].Foreground}"
+                            Data="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                    </Button>
+                  </Panel>
                 </Grid>
+
+                <!-- The identification workspace: an unresolved row with
+                     search candidates shows the TOP candidate inline (name +
+                     mod id + a one-click Accept); an expand affordance
+                     reveals the alternates (up to the candidate cap), each
+                     with its own accept. The workspace never checks the
+                     include checkbox: identification is a correction of WHAT
+                     the line is, not consent to include it. -->
+                <StackPanel IsVisible="{Binding ShowCandidateWorkspace}" Spacing="2"
+                            Margin="8,0,0,2">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Text="{Binding TopCandidate.Name}" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" MaxWidth="240"
+                               ToolTip.Tip="{Binding TopCandidate.Name}" />
+                    <Button Click="AcceptCandidate_Click" CommandParameter="{Binding}">
+                      <TextBlock Text="{ReflectionBinding [LoadOrder_AcceptCandidate], Source={StaticResource Loc}}"
+                                 FontSize="11" />
+                    </Button>
+                    <Button Classes="icon"
+                            IsVisible="{Binding HasAlternateCandidates}"
+                            Click="ToggleAlternates_Click"
+                            CommandParameter="{Binding}"
+                            ToolTip.Tip="{ReflectionBinding [LoadOrder_ShowAlternatesTooltip], Source={StaticResource Loc}}"
+                            AutomationProperties.Name="{ReflectionBinding [LoadOrder_ShowAlternatesTooltip], Source={StaticResource Loc}}">
+                      <!-- Material "expand_more" (24x24): the expand chevron,
+                           rotated when collapsed via the style below. -->
+                      <Path Width="16" Height="16" Stretch="Uniform"
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Fill="{Binding $parent[Button].Foreground}"
+                            Data="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z" />
+                    </Button>
+                  </StackPanel>
+                  <ItemsControl ItemsSource="{Binding AlternateCandidates}"
+                                IsVisible="{Binding IsExpanded}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:NexusSearchCandidate">
+                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,1">
+                          <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
+                                     TextTrimming="CharacterEllipsis" MaxWidth="240"
+                                     ToolTip.Tip="{Binding Name}" />
+                          <Button Click="AcceptAlternate_Click">
+                            <TextBlock Text="{ReflectionBinding [LoadOrder_AcceptCandidate], Source={StaticResource Loc}}"
+                                       FontSize="11" />
+                          </Button>
+                        </StackPanel>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+                </StackPanel>
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>

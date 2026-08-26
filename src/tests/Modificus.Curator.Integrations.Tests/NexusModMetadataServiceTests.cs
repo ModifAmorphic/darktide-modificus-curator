@@ -898,6 +898,7 @@ public sealed class NexusModMetadataServiceTests
         public Task<Response<DownloadLink[]>> DownloadLinksAsync(string gameDomain, int modId, int fileId, string nxmKey, long expiresEpoch, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<Response<ModFile[]>> ListModFilesAsync(string gameDomain, int modId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<Response<ModUpdateStatus[]>> CheckUpdatesGraphQlAsync(int gameId, IReadOnlyList<int> modIds, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<Response<NexusSearchResult[]>> SearchModsAsync(string gameDomain, string terms, int count, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     private sealed class FakeModRepository : IModRepository
