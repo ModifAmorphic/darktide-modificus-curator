@@ -1472,9 +1472,9 @@ The picker's file feeds `StartImport(path)`:
   localized outcome ("will be reordered" / "can be added" / "not found"),
   an include checkbox (reorder lines default checked, add lines default
   unchecked, unresolved lines disabled + unchecked), two reserved mod
-  id + version columns for the resolver tiers (fixed widths in the shared
-  header + row layout, so activating their cells never reshuffles the
-  table; no edit behavior exists yet), and an open-on-Nexus link on
+  id + version columns (the manual id/URL entry + the version field,
+  activating on identification; fixed widths in the shared header + row
+  layout, so the cells never reshuffle the table), and an open-on-Nexus link on
   unresolved rows (the folder name as the search keyword,
   `IExternalLauncher`, fallback alert on failure). Unmatched names are
   fully visible, never dropped.

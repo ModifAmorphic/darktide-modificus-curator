@@ -33,7 +33,7 @@
           BorderThickness="1"
           CornerRadius="6"
           Padding="12,10">
-    <Grid RowDefinitions="Auto,Auto,Auto">
+    <Grid RowDefinitions="Auto,Auto,Auto,Auto">
 
       <!-- Header: the card title + the picked file's path (star column,
            ellipsized; the full path stays in the tooltip + automation
@@ -111,9 +111,17 @@
                              TextTrimming="CharacterEllipsis"
                              VerticalAlignment="Center"
                              ToolTip.Tip="{Binding MatchText}" />
-                  <TextBlock Grid.Column="2"
-                             Text="{Binding OutcomeText}"
-                             VerticalAlignment="Center" />
+                  <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
+                              VerticalAlignment="Center">
+                    <TextBlock Text="{Binding OutcomeText}" VerticalAlignment="Center" />
+                    <!-- The search spinner: an indeterminate bar while this
+                         row's search runs (the serial queue processes one row
+                         at a time, so at most one spinner shows). -->
+                    <ProgressBar Width="16" Height="10"
+                                 IsIndeterminate="True"
+                                 IsVisible="{Binding IsSearching}"
+                                 VerticalAlignment="Center" />
+                  </StackPanel>
                   <CheckBox Grid.Column="3"
                             IsChecked="{Binding IsIncluded, Mode=TwoWay}"
                             IsEnabled="{Binding IsIncludeEnabled}"
@@ -258,11 +266,14 @@
       <!-- Actions, right-aligned: Cancel + accent Apply. The table was the
            review; Apply confirms nothing further. Both disable while the
            apply runs (IsApplying; the card stays active, holding the card
-           gate + the toolbar lock through the apply). -->
-      <StackPanel Grid.Row="2"
+           gate + the toolbar lock through the apply). Own grid row: the
+           status area above can wrap to any height without rendering under
+           the buttons. -->
+      <StackPanel Grid.Row="3"
                   Orientation="Horizontal" Spacing="8"
                   HorizontalAlignment="Right"
-                  VerticalAlignment="Bottom">
+                  VerticalAlignment="Bottom"
+                  Margin="0,4,0,0">
         <Button Content="{ReflectionBinding [LoadOrder_CancelButton], Source={StaticResource Loc}}"
                 Command="{Binding CancelCommand}"
                 IsEnabled="{Binding CanCancelNow}"

@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
+using System.Linq;
 using Avalonia.VisualTree;
 using Avalonia.Interactivity;
 using Modificus.Curator.UI.ViewModels;
@@ -77,8 +78,11 @@ public partial class LoadOrderImportView : UserControl
     /// <summary>
     /// An alternate candidate's Accept (inside the alternates panel, whose
     /// DataContext is the candidate): resolves the owning row by walking the
-    /// visual tree to the first ancestor carrying a row DataContext, then
-    /// identifies it with the clicked candidate.
+    /// visual ancestors' content presenters and taking the first DataContext
+    /// OF THE ROW TYPE. The nearest presenter is not the row's: the
+    /// alternates ItemsControl wraps each candidate in its own
+    /// ContentPresenter, so a first-ancestor cast would read the candidate
+    /// itself and yield null.
     /// </summary>
     private void AcceptAlternate_Click(object? sender, RoutedEventArgs e)
     {
@@ -87,9 +91,17 @@ public partial class LoadOrderImportView : UserControl
             return;
         }
 
-        var row = (sender as Control)?.FindAncestorOfType<ContentPresenter>()
-            ?.DataContext as LoadOrderRowViewModel
-            ?? throw new InvalidOperationException("The alternate accept lost its row context.");
+        var row = (sender as Control)?
+            .GetVisualAncestors()
+            .OfType<ContentPresenter>()
+            .Select(p => p.DataContext)
+            .OfType<LoadOrderRowViewModel>()
+            .FirstOrDefault();
+        if (row is null)
+        {
+            return;
+        }
+
         ViewModel?.AcceptAlternateCommand.Execute((row, candidate));
     }
 }

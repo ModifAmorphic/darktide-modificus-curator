@@ -203,16 +203,7 @@ public partial class LoadOrderRowViewModel : ObservableObject
 
     private string? _lineFailure;
 
-    /// <summary>
-    /// Whether the version cell carries a semantic value for this row's
-    /// apply path. For a sibling import the version is the imported
-    /// container's release tag (empty = the version-unknown path). For an
-    /// identified not-in-Curator line the version is informational only:
-    /// the download resolves the real version, so the cell records what the
-    /// user believes and nothing consumes it.
-    /// </summary>
-    public bool IsVersionInformational =>
-        Outcome != LoadOrderLineOutcome.SiblingImport && IsIdentified;
+
 
     /// <summary>
     /// Whether the manual-identification Apply button shows: an unresolved,
@@ -275,11 +266,21 @@ public partial class LoadOrderRowViewModel : ObservableObject
         OnIdentified();
     }
 
-    /// <summary>Re-fires the identification-driven projections.</summary>
+    /// <summary>
+    /// Re-fires every projection that reads the identification state: the
+    /// fact itself, the cell activation family (AreIdCellsEnabled gates the
+    /// manual-id + version cells), the include checkbox's enable (an
+    /// unresolved row's checkbox ENABLES once identified: the enqueue path
+    /// now has an identity to act on), the manual-pending parse gate, the
+    /// workspace visibility, and the version-semantics projection. Anything
+    /// new that keys off IsIdentified joins this list.
+    /// </summary>
     private void OnIdentified()
     {
         OnPropertyChanged(nameof(IsIdentified));
         OnPropertyChanged(nameof(AreIdCellsEnabled));
+        OnPropertyChanged(nameof(IsIncludeEnabled));
+        OnPropertyChanged(nameof(IsManualPending));
         OnPropertyChanged(nameof(IdentifiedName));
         OnPropertyChanged(nameof(ShowCandidateWorkspace));
         IsExpanded = false;
@@ -342,11 +343,13 @@ public partial class LoadOrderRowViewModel : ObservableObject
 /// <see cref="ModCardsGate"/> (which the import workflow also reports to, so
 /// the exclusion is symmetric without either VM referencing the other; the
 /// gate also drives the toolbar lock + Add disable).</para>
-/// <para><b>Offline-complete for the local tier:</b> the table renders the
-/// repo-tier outcomes only (profile / library / unresolved). The resolver
-/// tiers (download record, search, user identification) extend the
-/// unresolved rows in later work; the id/version cells are reserved in the
-/// table layout for them.</para>
+/// <para><b>Resolution tiers:</b> the repo tier (profile / library) resolves
+/// what Curator already holds; the sibling tier upgrades unresolved lines
+/// whose folders sit beside the picked txt (the migration path); the search
+/// tier proposes anonymous Nexus candidates for the remaining unresolved
+/// rows (the identification workspace: accepted candidates + manual id/URL
+/// entry). Identified rows feed the apply's enqueue batch; identified
+/// sibling rows carry their Nexus identity into the import.</para>
 /// </remarks>
 public partial class LoadOrderImportViewModel : LocalizedViewModel
 {
@@ -374,6 +377,17 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     // thread through the injected seam.
 
     private CancellationTokenSource? _searchCancellation;
+
+    /// <summary>
+    /// Set when the session's active profile changed while an apply was
+    /// running: the reset is deferred so the in-flight apply completes
+    /// against its captured profile (its imports + writes target it), and
+    /// <see cref="FinishApply"/> performs the reset afterward. Resetting
+    /// mid-apply would empty Rows under the running phases, silently
+    /// dropping the AddMods, the order write, and the enqueues while the
+    /// repo imports had already landed.
+    /// </summary>
+    private bool _resetPendingAfterApply;
 
     /// <summary>
     /// Creates the card VM, inactive, and subscribes to the session (reset on
@@ -423,6 +437,14 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     }
 
     private readonly Action<Action> _invokeOnUi;
+
+    /// <summary>
+    /// The pause between the search queue's queries (the Cloudflare posture:
+    /// the anonymous endpoint sits behind bot protection, so the queue stays
+    /// human-paced rather than back-to-back). Tests shrink it to zero through
+    /// the internal setter.
+    /// </summary>
+    internal static TimeSpan SearchQueueDelay { get; set; } = TimeSpan.FromMilliseconds(400);
 
     /// <summary>
     /// A row's include checkbox flipped: re-fire <see cref="CanApply"/> so
@@ -653,9 +675,10 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     /// The serial search queue: one unresolved row at a time, in table order,
     /// firing the anonymous Nexus search with the folder name normalized into
     /// search terms (lowercase, underscores/hyphens to spaces, whitespace
-    /// collapsed) and applying the top candidates to the row. Human-paced by
-    /// construction (serial awaits); no retries on failure (a failed search
-    /// leaves the row unresolved with the manual path available). Row
+    /// collapsed) and applying the top candidates to the row. Human-paced:
+    /// serial awaits with the <see cref="SearchQueueDelay"/> pause between
+    /// queries (the Cloudflare posture); no retries on failure (a failed
+    /// search leaves the row unresolved with the manual path available). Row
     /// mutations marshal to the UI thread through the injected seam; the
     /// queue observes the card's cancellation so closing the card stops
     /// further searches while arrived candidates stay on their rows.
@@ -666,6 +689,7 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
         _searchCancellation = new CancellationTokenSource();
         var token = _searchCancellation.Token;
 
+        var first = true;
         foreach (var row in Rows.Where(r => r.IsUnresolved).ToArray())
         {
             if (token.IsCancellationRequested)
@@ -673,6 +697,22 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
                 return;
             }
 
+            // Human-paced: pause between queries (not before the first: the
+            // user just picked the file). Cancelled cards exit the delay
+            // immediately.
+            if (!first)
+            {
+                try
+                {
+                    await Task.Delay(SearchQueueDelay, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+            }
+
+            first = false;
             _invokeOnUi(() => row.IsSearching = true);
             try
             {
@@ -877,6 +917,13 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
                             ? row.Version.Trim()
                             : string.Empty;
                         var (containerId, _) = _imports.Import(row.SiblingPath!, row.Name, source, version);
+                        // The container id must land on the row BEFORE the
+                        // worker's continuation proceeds to phase (b): it
+                        // does because the seam is a FIFO dispatcher post
+                        // (the worker's post runs before the continuation's
+                        // own post). Changing the seam to a non-FIFO
+                        // dispatcher breaks phase (b)'s membership
+                        // enumeration silently; keep this ordering.
                         _invokeOnUi(() => row.ContainerId = containerId);
                     }
                     catch (Exception ex) when (IsExpectedImportException(ex))
@@ -950,7 +997,25 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
 
             if (state?.IsPremium == true)
             {
-                var profileName = _profiles.GetProfile(profileId).Name;
+                string profileName;
+                try
+                {
+                    // Inside the guarded region: a profile deleted mid-apply
+                    // surfaces as the card-level failure rather than an
+                    // unhandled KeyNotFoundException (the profile name is
+                    // display-only on the request, but the read still throws
+                    // for an unknown id).
+                    profileName = _profiles.GetProfile(profileId).Name;
+                }
+                catch (KeyNotFoundException ex)
+                {
+                    _logger.LogWarning(
+                        ex, "The load-order apply's target profile {Profile} vanished before the enqueue batch.", profileId);
+                    ShowInlineFailure(ex.Message);
+                    FinishApply(enqueued);
+                    return;
+                }
+
                 foreach (var row in enqueueRows)
                 {
                     var modId = row.IdentifiedModId!.Value;
@@ -1025,6 +1090,17 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     {
         _session.HasPendingChanges = true;
         OrderApplied?.Invoke(this, EventArgs.Empty);
+        if (_resetPendingAfterApply)
+        {
+            // The profile switched mid-apply: the apply finished against its
+            // captured profile (this reload reads whatever profile is now
+            // active), and the deferred reset deactivates the card over the
+            // new profile regardless of any failure state.
+            _resetPendingAfterApply = false;
+            Reset();
+            return;
+        }
+
         if (ApplyFailure is null && Rows.All(r => r.LineFailure is null))
         {
             Reset();
@@ -1088,8 +1164,8 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     }
 
     /// <summary>
-    /// The inline failure detail of a refused apply, or null. Empty when the
-    /// last attempt succeeded or none ran; the card stays open for retry or
+    /// The inline failure detail of a refused apply, or null when the last
+    /// attempt succeeded or none ran; the card stays open for retry or
     /// cancel.
     /// </summary>
     public string? ApplyFailure { get; private set; }
@@ -1106,11 +1182,24 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     /// </summary>
     private void OnSessionPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(IProfileSession.ActiveProfileId) && IsActive)
+        if (e.PropertyName != nameof(IProfileSession.ActiveProfileId) || !IsActive)
         {
-            _logger.LogInformation("Active profile changed during a load-order review; resetting.");
-            Reset();
+            return;
         }
+
+        if (IsApplying)
+        {
+            // Defer: the in-flight apply owns the captured profile until it
+            // finishes (its writes target it); the reset lands in
+            // FinishApply.
+            _logger.LogInformation(
+                "Active profile changed during a load-order apply; deferring the reset until it completes.");
+            _resetPendingAfterApply = true;
+            return;
+        }
+
+        _logger.LogInformation("Active profile changed during a load-order review; resetting.");
+        Reset();
     }
 
     /// <summary>

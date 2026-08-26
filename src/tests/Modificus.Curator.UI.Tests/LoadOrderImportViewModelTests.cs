@@ -26,6 +26,14 @@ public sealed class LoadOrderImportViewModelTests
 {
     private static readonly LocalizationService Localization = new();
 
+    static LoadOrderImportViewModelTests()
+    {
+        // Zero inter-query delay: the search queue's human pacing is real
+        // production posture, but tests assert the queue's serial contract,
+        // not its pacing.
+        LoadOrderImportViewModel.SearchQueueDelay = TimeSpan.Zero;
+    }
+
     /// <summary>
     /// Builds the card VM plus a sibling import-workflow VM sharing the same
     /// card gate (the mutual-exclusion tests drive both).
@@ -424,6 +432,37 @@ public sealed class LoadOrderImportViewModelTests
         // The pure normalizer pinned directly.
         Assert.Equal("warp unbound timer", LoadOrderImportViewModel.NormalizeSearchTerms("Warp_Unbound--TIMER"));
         Assert.Equal("single", LoadOrderImportViewModel.NormalizeSearchTerms("  single  "));
+    }
+
+    [Fact]
+    public async Task Identification_enables_the_include_checkbox_and_the_enqueue_path()
+    {
+        // The transition the bindings live on: an unresolved row's include
+        // checkbox + manual-pending gate flip when the row identifies, for
+        // BOTH identification kinds (the premium-enqueue path is unreachable
+        // through the UI without these).
+        var (vm, reconciler, _, _, _, _, nexus, _, _, _, _, _) = Build();
+        nexus.NextResults = Results((42, "The Real Mod"));
+        var row = await StartUnresolvedAsync(vm, reconciler, "realmod");
+        Assert.False(row.IsIncludeEnabled);
+
+        vm.AcceptCandidateCommand.Execute(row);
+        Assert.True(row.IsIdentified);
+        Assert.True(row.IsIncludeEnabled);
+        Assert.False(row.IsIncluded); // enabled but still default-excluded
+
+        // Manual: fresh row, same transition.
+        vm.CancelCommand.Execute(null);
+        reconciler.NextPlan = LoadOrderPlanner.Build(
+            new[] { "ghost2" }, Array.Empty<LoadOrderProfileMod>(), Array.Empty<LoadOrderRepoCandidate>());
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("ghost2\n"));
+        var manual = Assert.Single(vm.Rows);
+        Assert.False(manual.IsIncludeEnabled);
+        manual.ManualId = "7";
+        Assert.True(manual.IsManualPending);
+        vm.ApplyManualIdCommand.Execute(manual);
+        Assert.True(manual.IsIdentified);
+        Assert.True(manual.IsIncludeEnabled);
     }
 
     [Fact]
@@ -877,6 +916,42 @@ public sealed class LoadOrderImportViewModelTests
     }
 
     [Fact]
+    public async Task A_rate_limit_aborts_the_REMAINING_enqueues_with_prior_ones_landed()
+    {
+        // Two identified lines beyond the reorder: "Second"'s resolve
+        // succeeds + enqueues, "Third"'s throws 429 - the abort skips what
+        // REMAINED (Third), keeping Second's landed enqueue.
+        var (vm, reconciler, _, session, _, _, _, _, auth, acquisition, queue, _) = Build();
+        var profileId = session.ActiveProfileId!.Value;
+        reconciler.NextPlan = LoadOrderPlanner.Build(
+            new[] { "First", "Second", "Third" },
+            new[] { new LoadOrderProfileMod(Guid.NewGuid(), "First", "First") },
+            Array.Empty<LoadOrderRepoCandidate>());
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("First\nSecond\nThird\n"));
+
+        foreach (var name in new[] { "Second", "Third" })
+        {
+            var row = vm.Rows.Single(r => r.Name == name);
+            row.ManualId = name == "Second" ? "2" : "3";
+            vm.ApplyManualIdCommand.Execute(row);
+            row.IsIncluded = true;
+        }
+
+        // The second line's resolve succeeds; the third's throws 429.
+        acquisition.ResolveThrowQueue.Enqueue(null);
+        acquisition.ResolveThrowQueue.Enqueue(
+            new NexusRateLimitException(429, new NexusRateLimits(2500, 0, null, 100, 0, null)));
+
+        await vm.ApplyCommand.ExecuteAsync(null);
+
+        // The second line's enqueue landed; the third was skipped.
+        Assert.Single(queue.Requests);
+        Assert.Equal(2, queue.Requests[0].ModId);
+        Assert.True(vm.IsActive); // the re-runnable failure keeps the card open
+        Assert.NotNull(vm.ApplyFailure);
+    }
+
+    [Fact]
     public async Task A_resolve_failure_on_one_line_is_recorded_and_the_batch_continues()
     {
         var (vm, reconciler, _, _, _, _, _, _, _, acquisition, queue, _) = Build();
@@ -905,6 +980,63 @@ public sealed class LoadOrderImportViewModelTests
         // A per-line failure is not a card-level failure, but the review stays
         // open so the row's message stays readable + a re-run can finish it.
         Assert.True(vm.IsActive);
+    }
+
+    [Fact]
+    public async Task A_profile_switch_mid_apply_defers_the_reset_and_completes_the_write()
+    {
+        // The in-flight apply owns its captured profile: a switch mid-apply
+        // defers the reset (emptying Rows under the running phases would
+        // silently drop the AddMods, the order write, and the enqueues while
+        // the imports had landed); the apply completes, then the deferred
+        // reset deactivates the card.
+        var profiles = TestDoubles.Profiles(
+            new ProfileSummary(Guid.NewGuid(), "Alpha", ""),
+            new ProfileSummary(Guid.NewGuid(), "Beta", ""));
+        var session = new FakeProfileSession(() => profiles.ListProfiles())
+        {
+            ActiveProfileId = profiles.ListProfiles().First().Id,
+        };
+        var (vm, reconciler, _, _, _, _, _, imports, _, _, _, _) = Build(
+            profiles: profiles, session: session);
+        var captured = session.ActiveProfileId!.Value;
+        var reorder = Guid.NewGuid();
+        profiles.WithMods(captured,
+            new ModListEntry { ContainerId = reorder, Order = 0, Policy = ModVersionPolicy.Latest });
+        reconciler.NextPlan = LoadOrderPlanner.Build(
+            new[] { "ModA", "Held" },
+            new[] { new LoadOrderProfileMod(reorder, "ModA", "A") },
+            Array.Empty<LoadOrderRepoCandidate>());
+        var txt = WriteLoadOrderWithSiblings("ModA\nHeld\n", ("Held", true));
+        await vm.StartImportCommand.ExecuteAsync(txt);
+        vm.Rows.Single(r => r.Name == "Held").IsIncluded = true;
+        imports.NextImportResults = new Queue<(Guid, string)>(new[] { (Guid.NewGuid(), "v") });
+        var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        imports.ImportGate = gate;
+
+        var applying = vm.ApplyCommand.ExecuteAsync(null);
+        // Switch while the import worker is held inside Import.
+        session.ActiveProfileId = profiles.ListProfiles().Last().Id;
+        Assert.True(vm.IsActive); // not reset mid-apply
+
+        gate.TrySetResult(true);
+        await applying;
+
+        // The full apply completed against the CAPTURED profile: the add +
+        // the order write landed on it, and the deferred reset then
+        // deactivated the card.
+        Assert.Contains(profiles.AddModCalls, c => c.Id == captured);
+        Assert.Contains(reorder, Assert.Single(profiles.SetModOrderCalls));
+        Assert.False(vm.IsActive);
+
+        try
+        {
+            Directory.Delete(Path.GetDirectoryName(txt)!, recursive: true);
+        }
+        catch (IOException)
+        {
+            // Temp cleanup is best-effort.
+        }
     }
 
     [Fact]

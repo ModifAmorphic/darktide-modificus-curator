@@ -144,6 +144,23 @@ public sealed class LoadOrderXamlTests
             s => (string?)s.Attribute("IsVisible") == "{Binding ShowCandidateWorkspace}");
     }
 
+    [Fact]
+    public void The_alternate_accept_resolves_the_row_by_a_typed_ancestor_walk()
+    {
+        // The alternates ItemsControl wraps each candidate in its own
+        // ContentPresenter, so the NEAREST presenter's DataContext is the
+        // candidate, not the row. The handler must walk the presenters and
+        // take the first DataContext of the row type; a first-ancestor cast
+        // yields null on every alternate accept (a UI-runtime break the VM
+        // tests cannot catch). Pinned as a source assertion.
+        var text = File.ReadAllText(RequireSourceFile(
+            "src/ui/Views/LoadOrderImportView.axaml.cs"));
+        Assert.Contains("GetVisualAncestors()", text);
+        Assert.Contains("OfType<ContentPresenter>()", text);
+        Assert.Contains(".OfType<LoadOrderRowViewModel>()", text);
+        Assert.DoesNotContain("FindAncestorOfType<ContentPresenter>()", text);
+    }
+
     // ---- required source lookup (the GamingModeGatingXamlTests pattern) ----
 
     private static string RequireSourceFile(string relativeFromRepo)
