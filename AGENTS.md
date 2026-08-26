@@ -314,9 +314,44 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            the check-now refresh; `IsListToolingEnabled`) also
                            disable so no filter change can hide the row being
                            edited under its open band (row-level controls
-                           stay live); a batch cannot start over an edit or vice
-                           versa (both entries check the shared inactive gate).
-                           Copied
+                           stay live); the batch, the edit, + the load-order
+                           card are mutually exclusive through the shared
+                           `ModCardsGate` (each card VM reports its activity +
+                           refuses to start while any other card is open; the
+                           gate is also the one any-card source behind
+                           `IsAddEnabled`/`IsListToolingEnabled` + the view's
+                           picker/drop guards). The load-order import card
+                           (`LoadOrderImportViewModel` +
+                           `LoadOrderImportView`, the child-VM pattern, always
+                           the top-below-toolbar card, never an in-row band)
+                           sits directly below the import card: the fifth Add
+                           mode's txt picker feeds `StartImport(path)`, which
+                           reads + parses the file (`ModLoadOrderParser`),
+                           reconciles it against the active profile + repo
+                           (`ILoadOrderReconciler`), + opens the review table:
+                           one compact ordinary-controls row per file line
+                           (folder name | match | localized outcome "will be
+                           reordered"/"can be added"/"not found" | include
+                           checkbox with reorder-default-checked, add-default-
+                           unchecked, unresolved disabled+unchecked | reserved
+                           mod-id/version columns for the resolver tiers,
+                           fixed widths in the shared header+row layout so
+                           activating them never reshuffles the table |
+                           open-on-Nexus link on unresolved rows, the folder
+                           name as the search keyword, IExternalLauncher with
+                           the fallback alert). Unmatched names are fully
+                           visible, never dropped. Apply (enabled when >= 1
+                           line is included; an empty/comment-only file shows
+                           the localized notice + refuses) performs ONE
+                           SetModOrder over every matched container in file
+                           order (included or not; the checkboxes gate only
+                           adds) + AddMod(LatestPolicy) for each included
+                           library add in file order, marks pending, raises
+                           `OrderApplied` (the parent reloads), + deactivates
+                           (runApply sequencing: SetModOrder first, adds
+                           append; positioning refinement lands with the
+                           resolver tiers). Cancel + a profile switch reset
+                           with no writes. Copied
                            local-import failures surface inline (not via modal
                            alert); the linked-folder flow keeps its modal alerts.
                            The toolbar's density selector is two drawn-icon buttons
@@ -893,16 +928,18 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            Reload + the enable-toggle path) sits between the
                            import card + the row list, gating nothing
                            (reorder/lock controls stay fully functional). The Add split
-                            button has four flyout items, all modes that set
-                            the default on click (the face label tracks the
+                            button has five flyout items, all sticky modes that
+                            set the default on click (the face label tracks the
                             mode): "Add Nexus Mods" (the default; opens the
                             Darktide Nexus Mods games page in the browser), "Add
-                            Mod (archive)", "Add Mod (folder)", and "Link
+                            Mod (archive)", "Add Mod (folder)", "Link
                             external folder" (folder picker, no modal; the
                             link flow lives on the `LinkedModsViewModel` child,
                             the ImportWorkflowViewModel pattern, exposed as
                             `vm.LinkedMods` and raised via its `ModsLinked`
-                            event for the parent's reload);
+                            event for the parent's reload), + "Import load
+                            order" (txt picker -> the load-order review card
+                            below);
                             `LinkedMods.LinkModsCommand` peeks the base name,
                             runs the collision check (excluding a re-link),
                             then `LinkFolder` + `AddMod(LatestPolicy)`. In Gaming
@@ -1961,7 +1998,24 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                               card + no band);
                                              ImportSourceValidatorTests: the shared
                                              parse + remote-field rules both card
-                                             modes consume) + the derived
+                                             modes consume; the load-order card
+                                             (LoadOrderImportViewModelTests:
+                                             activation + the checkbox defaults,
+                                             the batch/edit/load-order mutual
+                                             exclusion through the shared card
+                                             gate, apply = one SetModOrder over
+                                             every matched container + AddMod
+                                             only for included adds + reload +
+                                             deactivate, the no-include + empty-
+                                             file refusals, cancel + profile
+                                             switch, the search URL + launcher
+                                             failure alert;
+                                             LoadOrderXamlTests: the fifth Add
+                                             flyout item, the card hosted below
+                                             the import card, the shared
+                                             header+row column layout with the
+                                             reserved resolver columns, the
+                                             no-edit-behavior pin) + the derived
                                              version-unknown
                                              row state (ModItemVersionUnknownTests:
                                              the truth + its negatives, the badge's

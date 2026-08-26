@@ -143,6 +143,7 @@ internal static class TestDoubles
         FakeUpdateStateStore? updateState = null,
         FakeAutomaticUpdateService? automaticUpdates = null,
         ImportWorkflowViewModel? importWorkflow = null,
+        FakeLoadOrderReconciler? loadOrderReconciler = null,
         Action<Action>? invokeOnUi = null,
         Func<DateTimeOffset>? getNow = null,
         Action<Action>? startCountdownTimer = null,
@@ -166,7 +167,21 @@ internal static class TestDoubles
         configLoader ??= new FakeConfigLoader();
         appState ??= new FakeAppStateStore();
         automaticUpdates ??= new FakeAutomaticUpdateService();
+        // The load-order reconciler fake: tests script the plan per case
+        // (NextPlan); unscripted defaults to the empty plan.
+        loadOrderReconciler ??= new FakeLoadOrderReconciler();
+        // SAFETY: an omitted launcher defaults to the harmless in-memory
+        // recorder (never the OS shell; the VM has no production fallback).
+        // This is the test-safety guarantee that no UI test can shell-open the
+        // operator's browser, even when a path that triggers an external open
+        // is exercised. Settled before the load-order card VM below consumes
+        // it.
+        launcher ??= new FakeExternalLauncher();
         profiles.RepoLookup = repo;
+        // The shared hosted-card activity gate: the import workflow + the
+        // load-order card report to it (mirrors production DI: one gate shared
+        // by both card VMs + the mod-list VM).
+        var cards = new ModCardsGate();
         // The inline import-workflow child VM: constructed over the SAME
         // profile/session/repo/import/localization fakes so a test that drives
         // StartBatch sees the imported mod land in the profile the mod-list VM
@@ -178,8 +193,22 @@ internal static class TestDoubles
             session,
             repo,
             importService,
+            cards,
             localization,
             NullLogger<ImportWorkflowViewModel>.Instance);
+
+        // The load-order import card child: same shape as the import workflow
+        // (application-lifetime singleton, shared gate + session), with a fake
+        // reconciler whose plan tests script per case.
+        var loadOrder = new LoadOrderImportViewModel(
+            profiles,
+            session,
+            loadOrderReconciler,
+            cards,
+            launcher,
+            dialogs,
+            localization,
+            NullLogger<LoadOrderImportViewModel>.Instance);
 
         // The density coordinator child: one shared instance per BuildModList,
         // constructed with safe no-op fakes so existing tests are unaffected.
@@ -191,12 +220,6 @@ internal static class TestDoubles
             NullLogger<DetailedModRowsViewModel>.Instance);
 
         invokeOnUi ??= static action => action();
-        // SAFETY: an omitted launcher defaults to the harmless in-memory
-        // recorder (never the OS shell; the VM has no production fallback).
-        // This is the test-safety guarantee that no UI test can shell-open the
-        // operator's browser, even when a path that triggers an external open
-        // is exercised.
-        launcher ??= new FakeExternalLauncher();
         // The shared nxm registration state: default is a plain fake
         // (unavailable, not registered, no probe possible).
         nxmRegistration ??= new FakeNxmRegistrationState();
@@ -278,6 +301,8 @@ internal static class TestDoubles
             runner,
             rowContext,
             importWorkflow,
+            loadOrder,
+            cards,
             detailedRows,
             linkedMods,
             launcher,
@@ -1088,6 +1113,27 @@ internal sealed class FakeAppStateStore :
 /// Integrations-layer tests; this fake does the simplest equivalent (drop
 /// entries absent from the caller's candidates or whose container is gone).
 /// </summary>
+/// <summary>
+/// <see cref="ILoadOrderReconciler"/> fake: tests script
+/// <see cref="NextPlan"/> per case (an unscripted call reconciles to the
+/// empty plan); each call's (profileId, names) pair is recorded.
+/// </summary>
+internal sealed class FakeLoadOrderReconciler : ILoadOrderReconciler
+{
+    /// <summary>The plan the next call returns. Default: empty.</summary>
+    public LoadOrderPlan NextPlan { get; set; } = LoadOrderPlan.Empty;
+
+    /// <summary>Every (profileId, names) pair passed to Reconcile, in order.</summary>
+    public IReadOnlyList<(Guid ProfileId, IReadOnlyList<string> Names)> Calls { get; }
+        = new List<(Guid, IReadOnlyList<string>)>();
+
+    public LoadOrderPlan Reconcile(Guid profileId, IReadOnlyList<string> names)
+    {
+        ((List<(Guid, IReadOnlyList<string>)>)Calls).Add((profileId, names));
+        return NextPlan;
+    }
+}
+
 internal sealed class FakeUpdateStateStore : IUpdateStateStore
 {
     private readonly Dictionary<Guid, HashSet<Guid>> _flagged = new();

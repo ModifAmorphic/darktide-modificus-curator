@@ -233,13 +233,35 @@ public static class CuratorComposition
         // per-item editing form, and the per-item import orchestration. The view
         // hosts its card below the Mods toolbar; the mod-list Add split button +
         // drag-and-drop forward paths to its StartBatchCommand.
+        // The shared hosted-card activity gate: the import workflow + the
+        // load-order card report their activity to it (mutual exclusion +
+        // the mod-list VM's any-card projections). Registered before both
+        // card VMs.
+        services.AddSingleton<ModCardsGate>();
+
         services.AddSingleton(sp => new ImportWorkflowViewModel(
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IModRepository>(),
             sp.GetRequiredService<IModImportService>(),
+            sp.GetRequiredService<ModCardsGate>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<ILogger<ImportWorkflowViewModel>>()));
+
+        // The load-order import card VM: an application-lifetime singleton
+        // child registered before ModListViewModel (which takes it as a
+        // child + reloads on its OrderApplied event). Owns the review table
+        // + the apply; the view's txt picker forwards to its StartImport
+        // command. Shares the card gate with the import workflow.
+        services.AddSingleton(sp => new LoadOrderImportViewModel(
+            sp.GetRequiredService<IProfileService>(),
+            sp.GetRequiredService<IProfileSession>(),
+            sp.GetRequiredService<ILoadOrderReconciler>(),
+            sp.GetRequiredService<ModCardsGate>(),
+            sp.GetRequiredService<IExternalLauncher>(),
+            sp.GetRequiredService<IDialogService>(),
+            sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<ILogger<LoadOrderImportViewModel>>()));
 
         // The link-external-folder child VM: an application-lifetime singleton
         // registered BEFORE ModListViewModel (which takes it as a child +
@@ -285,6 +307,8 @@ public static class CuratorComposition
             sp.GetRequiredService<UpdateCheckRunner>(),
             sp.GetRequiredService<ModRowContext>(),
             sp.GetRequiredService<ImportWorkflowViewModel>(),
+            sp.GetRequiredService<LoadOrderImportViewModel>(),
+            sp.GetRequiredService<ModCardsGate>(),
             sp.GetRequiredService<DetailedModRowsViewModel>(),
             sp.GetRequiredService<LinkedModsViewModel>(),
             // The OS shell-open launcher: the Add NexusMods browser open +

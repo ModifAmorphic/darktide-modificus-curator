@@ -37,9 +37,14 @@ public sealed class ModRowContextTests
 
         var session = new FakeProfileSession { ActiveProfileId = a.Id };
         var localization = new LocalizationService();
+        var cards = new ModCardsGate();
         var importWorkflow = new ImportWorkflowViewModel(
-            profiles, session, repo, new FakeModImportService(repo), localization,
+            profiles, session, repo, new FakeModImportService(repo), cards, localization,
             NullLogger<ImportWorkflowViewModel>.Instance);
+        var loadOrder = new LoadOrderImportViewModel(
+            profiles, session, new FakeLoadOrderReconciler(), cards,
+            new FakeExternalLauncher(), new FakeDialogService(), localization,
+            NullLogger<LoadOrderImportViewModel>.Instance);
         var detailedRows = new DetailedModRowsViewModel(
             new FakeConfigLoader(), new FakeNexusModMetadataService(), repo,
             new FakeModThumbnailService(), NullLogger<DetailedModRowsViewModel>.Instance);
@@ -57,7 +62,8 @@ public sealed class ModRowContextTests
 
         return new ModListViewModel(
             profiles, session, repo, new FakeDialogService(), localization,
-            updateState, runner, context, importWorkflow, detailedRows, linkedMods,
+            updateState, runner, context, importWorkflow, loadOrder, cards,
+            detailedRows, linkedMods,
             new FakeExternalLauncher(), new FakeNxmRegistrationState(),
             queue, new ModUpdateEnqueuer(acquisition, queue, profiles),
             NullLogger<ModListViewModel>.Instance);

@@ -408,6 +408,87 @@
     <value>Link external folder</value>
     <comment>The "Link external folder" flyout item on the Add split button: links an external mod folder into the profile without copying it (the folder stays where it is; Curator stages from it at launch).</comment>
   </data>
+  <data name="ModList_AddLoadOrder" xml:space="preserve">
+    <value>Import load order</value>
+    <comment>The fifth Add split-button mode + its flyout item: pick a mod_load_order.txt and open the load-order review table.</comment>
+  </data>
+
+  <!-- ============================================================ -->
+  <!-- Load-order review card                                         -->
+  <!-- ============================================================ -->
+
+  <data name="LoadOrder_Title" xml:space="preserve">
+    <value>Import load order</value>
+    <comment>The load-order review card's header title.</comment>
+  </data>
+  <data name="LoadOrder_FileNameHeader" xml:space="preserve">
+    <value>Folder</value>
+    <comment>Table column header: the file line's mod folder name.</comment>
+  </data>
+  <data name="LoadOrder_MatchHeader" xml:space="preserve">
+    <value>Match</value>
+    <comment>Table column header: what Curator resolved the line to.</comment>
+  </data>
+  <data name="LoadOrder_OutcomeHeader" xml:space="preserve">
+    <value>Outcome</value>
+    <comment>Table column header: the reconciliation outcome.</comment>
+  </data>
+  <data name="LoadOrder_IncludeHeader" xml:space="preserve">
+    <value>Include</value>
+    <comment>Table column header over the per-line include checkboxes.</comment>
+  </data>
+  <data name="LoadOrder_ModIdHeader" xml:space="preserve">
+    <value>Mod ID</value>
+    <comment>Table column header over the reserved resolver cell (populated when the record/search tiers can identify the mod).</comment>
+  </data>
+  <data name="LoadOrder_VersionHeader" xml:space="preserve">
+    <value>Version</value>
+    <comment>Table column header over the reserved resolver cell.</comment>
+  </data>
+  <data name="LoadOrder_OutcomeReorder" xml:space="preserve">
+    <value>will be reordered</value>
+    <comment>Outcome label: the line matched a mod already in this profile; applying moves it to the file's position.</comment>
+  </data>
+  <data name="LoadOrder_OutcomeAdd" xml:space="preserve">
+    <value>can be added</value>
+    <comment>Outcome label: the line matched a mod in the library but not this profile; including it adds it.</comment>
+  </data>
+  <data name="LoadOrder_OutcomeUnresolved" xml:space="preserve">
+    <value>not found</value>
+    <comment>Outcome label: no local match for the line.</comment>
+  </data>
+  <data name="LoadOrder_ApplyButton" xml:space="preserve">
+    <value>Apply</value>
+    <comment>The accent Apply button on the load-order review card. Applies the reviewed table (the order + the included adds).</comment>
+  </data>
+  <data name="LoadOrder_CancelButton" xml:space="preserve">
+    <value>Cancel</value>
+    <comment>The Cancel button on the load-order review card. A plain button (the card is a hosted view): discards the review with no writes.</comment>
+  </data>
+  <data name="LoadOrder_EmptyNotice" xml:space="preserve">
+    <value>This file contains no mod entries (only comments or blank lines). Nothing to import.</value>
+    <comment>The inline notice shown when the picked file parsed to nothing; Apply stays disabled rather than performing a no-op write.</comment>
+  </data>
+  <data name="LoadOrder_SearchOnNexus" xml:space="preserve">
+    <value>Search on Nexus</value>
+    <comment>The open-on-Nexus link on an unresolved review row: opens the Nexus search for the folder name in the browser.</comment>
+  </data>
+  <data name="LoadOrder_ReadFailedTitle" xml:space="preserve">
+    <value>Could not read the file</value>
+    <comment>Title of the alert shown when the picked load-order file cannot be read or reconciled.</comment>
+  </data>
+  <data name="LoadOrder_ReadFailedMessage" xml:space="preserve">
+    <value>Could not read '{0}'.</value>
+    <comment>Body of the read-failure alert. {0} is the picked file path.</comment>
+  </data>
+  <data name="LoadOrder_SearchFailedTitle" xml:space="preserve">
+    <value>Could not open the search</value>
+    <comment>Title of the alert shown when opening the Nexus search in the browser fails.</comment>
+  </data>
+  <data name="LoadOrder_SearchFailedMessage" xml:space="preserve">
+    <value>Could not open the Nexus search. You can open it manually: {0}</value>
+    <comment>Body of the search-launch-failure alert. {0} is the search URL for manual copy.</comment>
+  </data>
   <data name="ModList_NxmDownloadHint" xml:space="preserve">
     <value>On Nexus, click the 'Vortex' or 'Mod manager download' button.</value>
     <comment>Secondary hint shown in the no-mods empty state ONLY when Curator is the registered OS handler for nxm:// links, so the user knows those Nexus download buttons route the mod straight into the app.</comment>

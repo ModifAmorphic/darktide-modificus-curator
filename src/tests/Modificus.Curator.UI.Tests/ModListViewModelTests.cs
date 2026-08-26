@@ -2636,4 +2636,110 @@ public sealed class ModListViewModelTests
         Assert.All(vm.Mods, m => Assert.False(m.IsEditTarget));
         Assert.All(vm.Mods, m => Assert.Null(m.EditBandContext));
     }
+
+    // ---- the load-order card on the mod-list VM --------------------------------
+
+    [Fact]
+    public async Task Tooling_and_add_disable_while_a_load_order_review_is_active()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var reconciler = new FakeLoadOrderReconciler { NextPlan = LoadOrderPlan.Empty };
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            localization: Localization, loadOrderReconciler: reconciler);
+        Assert.True(vm.IsAddEnabled);
+        Assert.True(vm.IsListToolingEnabled);
+        Assert.False(vm.IsAnyCardActive);
+
+        var path = Path.Combine(Path.GetTempPath(), "curator-loadorder-" + Guid.NewGuid() + ".txt");
+        File.WriteAllText(path, "-- empty\n");
+        try
+        {
+            await vm.LoadOrder.StartImportCommand.ExecuteAsync(path);
+
+            Assert.True(vm.IsAnyCardActive);
+            Assert.False(vm.IsAddEnabled);
+            Assert.False(vm.IsListToolingEnabled);
+
+            vm.LoadOrder.CancelCommand.Execute(null);
+            Assert.True(vm.IsAddEnabled);
+            Assert.True(vm.IsListToolingEnabled);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task An_applied_load_order_reloads_the_list()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var library = repo.Seed(new UntrackedSource(), "FromLibrary", "1.0");
+        var existing = repo.Seed(new UntrackedSource(), "Existing", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = existing.Id, Order = 0, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var reconciler = new FakeLoadOrderReconciler
+        {
+            NextPlan = LoadOrderPlanner.Build(
+                new[] { "FromLibrary" },
+                Array.Empty<LoadOrderProfileMod>(),
+                new[] { new LoadOrderRepoCandidate(library.Id, "FromLibrary", false, library.Name) }),
+        };
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            localization: Localization, loadOrderReconciler: reconciler);
+
+        var path = Path.Combine(Path.GetTempPath(), "curator-loadorder-" + Guid.NewGuid() + ".txt");
+        File.WriteAllText(path, "FromLibrary\n");
+        try
+        {
+            await vm.LoadOrder.StartImportCommand.ExecuteAsync(path);
+            vm.LoadOrder.Rows.Single(r => r.ContainerId == library.Id).IsIncluded = true;
+
+            vm.LoadOrder.ApplyCommand.Execute(null);
+
+            // The OrderApplied event reloaded the list: the added mod shows.
+            Assert.False(vm.LoadOrder.IsActive);
+            Assert.Contains(vm.Mods, m => m.ContainerId == library.Id);
+            Assert.Contains(profiles.AddModCalls, c => c.ContainerId == library.Id);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task The_pencil_command_refuses_while_a_load_order_review_is_active()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var reconciler = new FakeLoadOrderReconciler { NextPlan = LoadOrderPlan.Empty };
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            localization: Localization, loadOrderReconciler: reconciler);
+        var row = vm.Mods.Single(m => m.ContainerId == nexus.Id);
+
+        var path = Path.Combine(Path.GetTempPath(), "curator-loadorder-" + Guid.NewGuid() + ".txt");
+        File.WriteAllText(path, "-- empty\n");
+        try
+        {
+            await vm.LoadOrder.StartImportCommand.ExecuteAsync(path);
+            vm.EditImportDetailsCommand.Execute(row);
+            Assert.False(vm.ImportWorkflow.IsEdit);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

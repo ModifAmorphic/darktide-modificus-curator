@@ -2,6 +2,7 @@ using System.ComponentModel;
 using Modificus.Curator.Mods;
 using Modificus.Curator.Profiles;
 using Modificus.Curator.UI.Localization;
+using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.ViewModels;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -42,7 +43,7 @@ public sealed class ImportWorkflowViewModelTests
         import ??= new FakeModImportService(repo);
         localization ??= new LocalizationService();
         var vm = new ImportWorkflowViewModel(
-            profiles, session, repo, import, localization,
+            profiles, session, repo, import, new ModCardsGate(), localization,
             NullLogger<ImportWorkflowViewModel>.Instance);
         return (vm, profiles, session, repo, import);
     }

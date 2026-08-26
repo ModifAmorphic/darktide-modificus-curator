@@ -1,0 +1,173 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Modificus.Curator.UI.ViewModels"
+             x:Class="Modificus.Curator.UI.Views.LoadOrderImportView"
+             x:DataType="vm:LoadOrderImportViewModel">
+
+  <!--
+    The load-order review table, hosted below the import-workflow card inside
+    ModListView (the two cards are mutually exclusive; this one is always the
+    top-below-toolbar card, never an in-row band). A full-width bordered card
+    with the same 20px left/right inset as the toolbar + rows.
+
+    The table is a compact list of ordinary controls (NOT a DataGrid; the repo
+    has no such package): a header row + one row per parsed file line, over
+    the shared column layout
+    (file name | match | outcome | include | mod id | version | find).
+    The mod id + version columns are RESERVED for the resolver tiers that
+    activate those cells later: the columns exist in the header + row
+    definitions (fixed widths, empty cell regions) so activating them never
+    reshuffles the table. Unresolved rows carry the open-on-Nexus link in the
+    last column; resolved rows leave it empty.
+
+    The include defaults ride in with the rows (reorder included, add
+    excluded, unresolved disabled); Apply needs at least one included line.
+    Icons + markers are drawn geometry, never Unicode glyphs, per AGENTS.md.
+  -->
+
+  <!-- The host (a wrapper Panel in ModListView) gates this UserControl's
+       visibility to the card's IsActive; this control assumes it is only
+       realized while a review session is open. -->
+  <Border Background="{DynamicResource SystemControlBackgroundBaseMediumLowBrush}"
+          BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+          BorderThickness="1"
+          CornerRadius="6"
+          Padding="12,10">
+    <Grid RowDefinitions="Auto,Auto,Auto">
+
+      <!-- Header: the card title + the picked file's path (star column,
+           ellipsized; the full path stays in the tooltip + automation
+           name). -->
+      <Grid Grid.Row="0" ColumnDefinitions="Auto,*" Margin="0,0,0,8">
+        <TextBlock Grid.Column="0"
+                   Text="{ReflectionBinding [LoadOrder_Title], Source={StaticResource Loc}}"
+                   FontWeight="SemiBold"
+                   VerticalAlignment="Center"
+                   Margin="0,0,8,0" />
+        <TextBlock Grid.Column="1"
+                   Text="{Binding SourcePath}"
+                   TextTrimming="CharacterEllipsis"
+                   Opacity="0.7"
+                   VerticalAlignment="Center"
+                   ToolTip.Tip="{Binding SourcePath}"
+                   AutomationProperties.Name="{Binding SourcePath}" />
+      </Grid>
+
+      <!-- The table: header labels + the row list. The ColumnDefinitions are
+           duplicated between the header and the row template BY DESIGN (the
+           fixed widths keep the reserved resolver columns laid out even while
+           their cells are empty); a source-scan test pins the two strings
+           identical so they cannot drift. -->
+      <Grid Grid.Row="1" RowDefinitions="Auto,*" Margin="0,0,0,8">
+
+        <!-- The header row. The mod id + version headers label the reserved
+             columns (their cells activate with the resolver tiers). -->
+        <Grid Grid.Row="0"
+              ColumnDefinitions="*,*,Auto,Auto,110,80,Auto"
+              Opacity="0.7"
+              MinHeight="24">
+          <TextBlock Grid.Column="0"
+                     Text="{ReflectionBinding [LoadOrder_FileNameHeader], Source={StaticResource Loc}}"
+                     FontSize="11" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="1"
+                     Text="{ReflectionBinding [LoadOrder_MatchHeader], Source={StaticResource Loc}}"
+                     FontSize="11" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="2"
+                     Text="{ReflectionBinding [LoadOrder_OutcomeHeader], Source={StaticResource Loc}}"
+                     FontSize="11" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="3"
+                     Text="{ReflectionBinding [LoadOrder_IncludeHeader], Source={StaticResource Loc}}"
+                     FontSize="11" VerticalAlignment="Center"
+                     HorizontalAlignment="Center" />
+          <TextBlock Grid.Column="4"
+                     Text="{ReflectionBinding [LoadOrder_ModIdHeader], Source={StaticResource Loc}}"
+                     FontSize="11" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="5"
+                     Text="{ReflectionBinding [LoadOrder_VersionHeader], Source={StaticResource Loc}}"
+                     FontSize="11" VerticalAlignment="Center" />
+        </Grid>
+
+        <!-- The rows: one per parsed file line, in file order. Bounded height
+             so a long file scrolls inside the card instead of stretching the
+             page. -->
+        <ScrollViewer Grid.Row="1"
+                      MaxHeight="320"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+          <ItemsControl ItemsSource="{Binding Rows}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:LoadOrderRowViewModel">
+                <Grid ColumnDefinitions="*,*,Auto,Auto,110,80,Auto"
+                      MinHeight="28"
+                      Margin="0,1">
+                  <TextBlock Grid.Column="0"
+                             Text="{Binding Name}"
+                             TextTrimming="CharacterEllipsis"
+                             VerticalAlignment="Center"
+                             ToolTip.Tip="{Binding Name}" />
+                  <TextBlock Grid.Column="1"
+                             Text="{Binding MatchText}"
+                             TextTrimming="CharacterEllipsis"
+                             VerticalAlignment="Center"
+                             ToolTip.Tip="{Binding MatchText}" />
+                  <TextBlock Grid.Column="2"
+                             Text="{Binding OutcomeText}"
+                             VerticalAlignment="Center" />
+                  <CheckBox Grid.Column="3"
+                            IsChecked="{Binding IsIncluded, Mode=TwoWay}"
+                            IsEnabled="{Binding IsIncludeEnabled}"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center" />
+                  <!-- Columns 4 + 5: the reserved resolver cells. Intentionally
+                       empty regions (fixed column widths carry the layout);
+                       the record/search/user tiers populate + activate them.
+                       No edit behavior exists at this rung. -->
+                  <!-- Column 6: the open-on-Nexus link, unresolved rows only
+                       (resolved rows have nowhere to search). -->
+                  <HyperlinkButton Grid.Column="6"
+                                  IsVisible="{Binding IsUnresolved}"
+                                  Click="OpenOnNexus_Click"
+                                  CommandParameter="{Binding}"
+                                  VerticalAlignment="Center">
+                    <TextBlock Text="{ReflectionBinding [LoadOrder_SearchOnNexus], Source={StaticResource Loc}}"
+                               FontSize="11" />
+                  </HyperlinkButton>
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+      </Grid>
+
+      <!-- The empty-file notice + the apply failure share the status row;
+           both are mutually exclusive with a populated, healthy table. -->
+      <StackPanel Grid.Row="2" Spacing="4" Margin="0,0,0,4">
+        <TextBlock Text="{ReflectionBinding [LoadOrder_EmptyNotice], Source={StaticResource Loc}}"
+                   IsVisible="{Binding ShowEmptyNotice}"
+                   TextWrapping="Wrap"
+                   Opacity="0.7" />
+        <TextBlock Text="{Binding ApplyFailure}"
+                   IsVisible="{Binding ApplyFailure, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource CuratorCautionBrush}" />
+      </StackPanel>
+
+      <!-- Actions, right-aligned: Cancel + accent Apply. The table was the
+           review; Apply confirms nothing further. -->
+      <StackPanel Grid.Row="2"
+                  Orientation="Horizontal" Spacing="8"
+                  HorizontalAlignment="Right"
+                  VerticalAlignment="Bottom">
+        <Button Content="{ReflectionBinding [LoadOrder_CancelButton], Source={StaticResource Loc}}"
+                Command="{Binding CancelCommand}"
+                MinWidth="80" />
+        <Button Content="{ReflectionBinding [LoadOrder_ApplyButton], Source={StaticResource Loc}}"
+                Command="{Binding ApplyCommand}"
+                IsEnabled="{Binding CanApply}"
+                Classes="accent"
+                MinWidth="80" />
+      </StackPanel>
+
+    </Grid>
+  </Border>
+</UserControl>

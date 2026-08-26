@@ -34,6 +34,12 @@ public enum ModAddMode
 
     /// <summary>Link an external mod folder into the profile via the folder picker (no copy).</summary>
     LinkExternal,
+
+    /// <summary>
+    /// Import a DML/DMF-world mod_load_order.txt via the txt file picker: the
+    /// load-order review table card (order application + library adds).
+    /// </summary>
+    LoadOrder,
 }
 
 /// <summary>
@@ -135,6 +141,13 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     private readonly ModUpdateEnqueuer _updateEnqueuer;
 
     /// <summary>
+    /// The shared hosted-card activity gate: the any-card projections below
+    /// read it, and both card VMs (the import workflow + the load-order
+    /// import) report their activity to it (see <see cref="ModCardsGate"/>).
+    /// </summary>
+    private readonly ModCardsGate _cards;
+
+    /// <summary>
     /// The live download-row wrappers, keyed by their coordinator item
     /// (reference identity: an item is one in-flight download). Created on
     /// first sight of an item in <see cref="IModDownloadQueue.Items"/> and
@@ -193,6 +206,8 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         UpdateCheckRunner updateCheckRunner,
         ModRowContext rowContext,
         ImportWorkflowViewModel importWorkflow,
+        LoadOrderImportViewModel loadOrder,
+        ModCardsGate cards,
         DetailedModRowsViewModel detailedRows,
         LinkedModsViewModel linkedMods,
         IExternalLauncher externalLauncher,
@@ -210,6 +225,8 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         _updateCheckRunner = updateCheckRunner;
         RowContext = rowContext ?? throw new ArgumentNullException(nameof(rowContext));
         ImportWorkflow = importWorkflow ?? throw new ArgumentNullException(nameof(importWorkflow));
+        LoadOrder = loadOrder ?? throw new ArgumentNullException(nameof(loadOrder));
+        _cards = cards ?? throw new ArgumentNullException(nameof(cards));
         DetailedRows = detailedRows ?? throw new ArgumentNullException(nameof(detailedRows));
         LinkedMods = linkedMods ?? throw new ArgumentNullException(nameof(linkedMods));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -242,6 +259,17 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         // linked rows is this VM's (same reload point the flow had inline).
         // Application-lifetime singletons both; never undone.
         LinkedMods.ModsLinked += OnModsLinked;
+
+        // The hosted-card activity gate: both card VMs report to it, so the
+        // any-card projections (Add disable, toolbar lock, drop acceptance)
+        // re-fire from this one subscription regardless of which card
+        // flipped. Already raised on the UI thread.
+        _cards.Changed += OnCardsChanged;
+
+        // The load-order card finished an apply (order written + included
+        // library mods added): reload so the rows + order reflect it.
+        // Application-lifetime singletons both; never undone.
+        LoadOrder.OrderApplied += OnLoadOrderApplied;
 
         // The empty-state Nexus hint reads the shared last-known nxm
         // registration state; no OS probe happens here or in Reload.
@@ -467,6 +495,15 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     public ImportWorkflowViewModel ImportWorkflow { get; }
 
     /// <summary>
+    /// The load-order import card's child VM (application-lifetime singleton,
+    /// injected before this VM in composition). Owns the review table + the
+    /// apply; this VM reloads on its <see cref="LoadOrderImportViewModel.OrderApplied"/>
+    /// event. Exposed read-only so the view binds its card host + picker
+    /// forwards to <c>LoadOrder.StartImportCommand</c>.
+    /// </summary>
+    public LoadOrderImportViewModel LoadOrder { get; }
+
+    /// <summary>
     /// The Compact/Detailed density coordinator child. Owns the persisted density
     /// selection, the metadata-backfill invocation, and the thumbnail hydration
     /// lifecycle. Exposed read-only so the toolbar (later) binds its density
@@ -556,23 +593,31 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// there). Re-fires when the workflow's <c>IsActive</c> flips; the gaming
     /// half is constant for the process lifetime.
     /// </summary>
-    public bool IsAddEnabled => !ImportWorkflow.IsActive && !IsGamingMode;
+    public bool IsAddEnabled => !IsAnyCardActive && !IsGamingMode;
+
+    /// <summary>
+    /// Whether any hosted card is open (the import workflow in either mode,
+    /// or the load-order review). Read from the shared card gate; drives the
+    /// Add disable, the toolbar lock, and the view's picker/drop entry
+    /// guards.
+    /// </summary>
+    public bool IsAnyCardActive => _cards.IsAnyCardActive;
 
     /// <summary>
     /// Whether the toolbar's projection-touching controls (the search box,
     /// the hide-disabled + updates-only filter toggles, the density selector,
     /// and the check-now refresh) accept input: disabled for the whole time
-    /// the import card is active in EITHER mode (a batch or an edit). There
-    /// is nothing to filter mid-edit (the user already found the mod), and a
-    /// projection change could hide the row being edited under its own open
-    /// editor. Row-level controls (the enabled toggle, policy, remove,
-    /// lock/move, the grip) are untouched: they do not affect the projection,
-    /// and locking the whole page would be hostile. The Add split button has
-    /// its own gate (<see cref="IsAddEnabled"/>). The IsAddEnabled shape: a
-    /// plain projection over the injected child VM, re-fired through the same
-    /// <see cref="ImportWorkflowViewModel.IsActive"/> subscription.
+    /// any hosted card is active (the import workflow in either mode, or the
+    /// load-order review). There is nothing to filter mid-card (the user
+    /// already found the mod), and a projection change could hide the row
+    /// being edited under its own open band. Row-level controls (the enabled
+    /// toggle, policy, remove, lock/move, the grip) are untouched: they do
+    /// not affect the projection, and locking the whole page would be
+    /// hostile. The Add split button has its own gate
+    /// (<see cref="IsAddEnabled"/>). Both read the shared card gate, re-fired
+    /// through its single <see cref="ModCardsGate.Changed"/> subscription.
     /// </summary>
-    public bool IsListToolingEnabled => !ImportWorkflow.IsActive;
+    public bool IsListToolingEnabled => !IsAnyCardActive;
 
     /// <summary>
     /// The Add split button's tooltip: the Gaming Mode guidance while gaming
@@ -717,6 +762,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         ModAddMode.Archive => _localization["ModList_AddArchive"],
         ModAddMode.Folder => _localization["ModList_AddFolder"],
         ModAddMode.LinkExternal => _localization["ModList_LinkExternalFolder"],
+        ModAddMode.LoadOrder => _localization["ModList_AddLoadOrder"],
         _ => _localization["ModList_AddNexusMods"],
     };
 
@@ -887,27 +933,39 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     }
 
     /// <summary>
-    /// The import workflow's activity flipped (batch started / ended, edit
-    /// started / saved / cancelled). Re-fires <see cref="IsAddEnabled"/> and
-    /// <see cref="IsListToolingEnabled"/> so the Add split button + the
-    /// toolbar's projection controls track the workflow without the view
-    /// walking into the child VM. The edit target itself arrives through the
-    /// <see cref="ImportWorkflowViewModel.EditTargetContainerId"/> change.
+    /// The import workflow's edit target changed (edit started / saved /
+    /// cancelled / profile reset): re-assign the in-row band's row flags +
+    /// contexts. Activity flips no longer arrive here; the shared card gate
+    /// carries them (see <see cref="OnCardsChanged"/>).
     /// </summary>
     private void OnImportWorkflowPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(ImportWorkflowViewModel.IsActive))
-        {
-            OnPropertyChanged(nameof(IsAddEnabled));
-            OnPropertyChanged(nameof(IsListToolingEnabled));
-            return;
-        }
-
         if (e.PropertyName == nameof(ImportWorkflowViewModel.EditTargetContainerId))
         {
             AssignEditTarget();
         }
     }
+
+    /// <summary>
+    /// A hosted card's activity flipped (either card VM; already on the UI
+    /// thread). Re-fires the any-card projections so the Add split button,
+    /// the toolbar's projection controls, and the view's drop/picker gates
+    /// track whichever card opened or closed, without the view walking into
+    /// the child VMs.
+    /// </summary>
+    private void OnCardsChanged(object? sender, EventArgs e)
+    {
+        OnPropertyChanged(nameof(IsAnyCardActive));
+        OnPropertyChanged(nameof(IsAddEnabled));
+        OnPropertyChanged(nameof(IsListToolingEnabled));
+    }
+
+    /// <summary>
+    /// The load-order card applied its review: reload so the new order +
+    /// the included library adds show (the card owns the pending-changes
+    /// flag; this handler is a narrow reload trigger).
+    /// </summary>
+    private void OnLoadOrderApplied(object? sender, EventArgs e) => Reload();
 
     /// <summary>
     /// Mirrors the workflow's edit target onto the rows: the matching row
@@ -1985,13 +2043,15 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// carries a FileId or a RemoteUploadedAt; a downloaded mod's details
     /// are Nexus-owned) never offer the action (the pencil is hidden for
     /// all three, its layout slot reserved so the strip geometry never
-    /// shifts); this command repeats the guards as defense in depth, and
-    /// the child's StartEdit repeats them again.
+    /// shifts), and the action refuses while the load-order card is open
+    /// (the cards are mutually exclusive); this command repeats the guards
+    /// as defense in depth, and the child's StartEdit repeats them again.
     /// </summary>
     [RelayCommand]
     private void EditImportDetails(ModItemViewModel? row)
     {
-        if (row is null || row.IsLinked || row.IsDownloadMorphed || row.IsDownloadGrounded)
+        if (row is null || row.IsLinked || row.IsDownloadMorphed
+            || row.IsDownloadGrounded || LoadOrder.IsActive)
         {
             return;
         }

@@ -170,16 +170,16 @@ public partial class ModListView : UserControl
     /// <summary>
     /// The Add split button's primary click: runs the current mode's action.
     /// NexusMods opens the Darktide Nexus Mods games page; Archive + Folder open
-    /// their import pickers; LinkExternal opens the link-external-folder picker.
-    /// Archive + Folder are separate modes because a native picker cannot mix
-    /// files + folders. A top-level <see cref="ImportWorkflowViewModel.IsActive"/>
-    /// guard skips the action entirely while the inline card is active (the
-    /// SplitButton is also disabled, but this covers a flyout click that opened
-    /// before the state changed).
+    /// their import pickers; LinkExternal opens the link-external-folder
+    /// picker; LoadOrder opens the load-order txt picker. Archive + Folder are
+    /// separate modes because a native picker cannot mix files + folders. A
+    /// top-level any-card guard (a hosted card is open) skips the action
+    /// entirely (the SplitButton is also disabled, but this covers a flyout
+    /// click that opened before the state changed).
     /// </summary>
     private async void Add_Click(object? sender, RoutedEventArgs e)
     {
-        if (ViewModel is { } vm && vm.ImportWorkflow.IsActive)
+        if (ViewModel is { } vm && vm.IsAnyCardActive)
         {
             return;
         }
@@ -197,6 +197,9 @@ public partial class ModListView : UserControl
                 break;
             case ModAddMode.LinkExternal:
                 await OpenLinkFolderPickerAsync();
+                break;
+            case ModAddMode.LoadOrder:
+                await OpenLoadOrderPickerAsync();
                 break;
         }
     }
@@ -251,6 +254,67 @@ public partial class ModListView : UserControl
     }
 
     /// <summary>
+    /// The "Import load order" flyout item (the fifth + sticky mode on the
+    /// Add split button): sets the mode to LoadOrder (so subsequent primary
+    /// clicks reopen the picker; the face label tracks it) and opens the txt
+    /// file picker immediately (one-click, the established flyout pattern).
+    /// </summary>
+    private async void ImportLoadOrder_Click(object? sender, RoutedEventArgs e)
+    {
+        SetAddMode(ModAddMode.LoadOrder);
+        await OpenLoadOrderPickerAsync();
+    }
+
+    /// <summary>
+    /// Opens a single-select txt file picker and forwards the picked
+    /// <c>mod_load_order.txt</c> to the load-order card's start command (the
+    /// child VM owns the read, parse, reconcile, review table, and apply).
+    /// Guarded on any hosted card being active at entry AND rechecked after
+    /// the picker returns (a native picker is async; a card could have opened
+    /// while it was open). Also gated on Gaming Mode (pickers are unusable
+    /// there; the disabled Add button is the first gate, this covers a
+    /// programmatic or stale-click invocation).
+    /// </summary>
+    private async Task OpenLoadOrderPickerAsync()
+    {
+        if (ViewModel is not { } vm || vm.IsAnyCardActive || vm.IsGamingMode)
+        {
+            return;
+        }
+
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel is null)
+        {
+            return;
+        }
+
+        var loadOrderFiles = new FilePickerFileType("Load order")
+        {
+            Patterns = new[] { "*.txt" },
+        };
+        var options = new FilePickerOpenOptions
+        {
+            AllowMultiple = false,
+            FileTypeFilter = new[] { loadOrderFiles, FilePickerFileTypes.All },
+        };
+
+        var result = await topLevel.StorageProvider.OpenFilePickerAsync(options);
+        if (result is null || result.Count == 0)
+        {
+            return;
+        }
+
+        // Recheck after the picker returns: a card could have opened while it
+        // was open.
+        if (vm.IsAnyCardActive)
+        {
+            return;
+        }
+
+        await vm.LoadOrder.StartImportCommand.ExecuteAsync(result[0].Path.LocalPath);
+    }
+
+    /// <summary>
     /// Opens a multi-select folder picker and forwards the selected folder paths
     /// to the linked-mods child VM's link command. The picker call mirrors
     /// <see cref="OpenFolderPickerAsync"/> exactly (the same
@@ -266,7 +330,7 @@ public partial class ModListView : UserControl
     /// </summary>
     private async Task OpenLinkFolderPickerAsync()
     {
-        if (ViewModel is not { } vm || vm.ImportWorkflow.IsActive || vm.IsGamingMode)
+        if (ViewModel is not { } vm || vm.IsAnyCardActive || vm.IsGamingMode)
         {
             return;
         }
@@ -288,10 +352,10 @@ public partial class ModListView : UserControl
             return;
         }
 
-        // Recheck after the picker returns: a native picker is async, so the
-        // import workflow could have become active while it was open. A
-        // linked-folder mutation must not proceed in that window.
-        if (vm.ImportWorkflow.IsActive)
+        // Recheck after the picker returns: a native picker is async, so a
+        // card could have become active while it was open. A linked-folder
+        // mutation must not proceed in that window.
+        if (vm.IsAnyCardActive)
         {
             return;
         }
@@ -333,7 +397,7 @@ public partial class ModListView : UserControl
     /// </summary>
     private async Task OpenArchivePickerAsync()
     {
-        if (ViewModel is not { } vm || vm.ImportWorkflow.IsActive || vm.IsGamingMode)
+        if (ViewModel is not { } vm || vm.IsAnyCardActive || vm.IsGamingMode)
         {
             return;
         }
@@ -360,9 +424,9 @@ public partial class ModListView : UserControl
             return;
         }
 
-        // Recheck after the picker returns: a native picker is async, so the
-        // import workflow could have become active while it was open.
-        if (vm.ImportWorkflow.IsActive)
+        // Recheck after the picker returns: a native picker is async, so a
+        // card could have become active while it was open.
+        if (vm.IsAnyCardActive)
         {
             return;
         }
@@ -385,7 +449,7 @@ public partial class ModListView : UserControl
     /// </summary>
     private async Task OpenFolderPickerAsync()
     {
-        if (ViewModel is not { } vm || vm.ImportWorkflow.IsActive || vm.IsGamingMode)
+        if (ViewModel is not { } vm || vm.IsAnyCardActive || vm.IsGamingMode)
         {
             return;
         }
@@ -407,9 +471,9 @@ public partial class ModListView : UserControl
             return;
         }
 
-        // Recheck after the picker returns: a native picker is async, so the
-        // import workflow could have become active while it was open.
-        if (vm.ImportWorkflow.IsActive)
+        // Recheck after the picker returns: a native picker is async, so a
+        // card could have become active while it was open.
+        if (vm.IsAnyCardActive)
         {
             return;
         }
@@ -434,8 +498,8 @@ public partial class ModListView : UserControl
     /// </summary>
     private void OnDragOver(object? sender, DragEventArgs e)
     {
-        var workflowActive = ViewModel?.ImportWorkflow.IsActive is true;
-        e.DragEffects = !workflowActive && e.DataTransfer.TryGetFiles() is { Length: > 0 }
+        var anyCardActive = ViewModel?.IsAnyCardActive is true;
+        e.DragEffects = !anyCardActive && e.DataTransfer.TryGetFiles() is { Length: > 0 }
             ? DragDropEffects.Copy
             : DragDropEffects.None;
     }
@@ -449,7 +513,7 @@ public partial class ModListView : UserControl
     /// </summary>
     private void OnDrop(object? sender, DragEventArgs e)
     {
-        if (ViewModel is not { } vm || vm.ImportWorkflow.IsActive)
+        if (ViewModel is not { } vm || vm.IsAnyCardActive)
         {
             return;
         }

@@ -1443,13 +1443,56 @@ over one shared editing form (the same fields, the same
   mod list's reload signal (the edited container's name, source, and version
   can all have changed).
 
-The modes are mutually exclusive: both entries (`StartBatch`, `StartEdit`)
-check the shared inactive gate first, so a batch cannot start over an edit or
-vice versa, and the card being active at all (either mode) gates the Add
-split button, drag-and-drop acceptance, and the toolbar's projection controls
-(`IsListToolingEnabled`). The card is an application-lifetime singleton child
-VM registered before `ModListViewModel`; navigating away from Mods preserves
-an in-flight card.
+The modes are mutually exclusive, and the exclusion is symmetric with the
+load-order card below through the shared `ModCardsGate` (each card VM reports
+its activity to the gate and refuses to start while any other card is open;
+neither VM references the other). The gate is also the one any-card source
+behind `IsAddEnabled`, `IsListToolingEnabled`, and the view's picker/drop
+entry guards. The card is an application-lifetime singleton child VM
+registered before `ModListViewModel`; navigating away from Mods preserves an
+in-flight card.
+
+## The load-order import card
+
+The `LoadOrderImportViewModel` + `LoadOrderImportView` card, hosted below the
+import-workflow card (always the top-below-toolbar card; it edits the whole
+list, never one row, so it never renders as an in-row band). Entry: the Add
+split button's sticky fifth mode, "Import load order" (a txt file picker; the
+primary click reopens it; Gaming Mode inherits the Add button's disable).
+The picker's file feeds `StartImport(path)`:
+
+- **Activation**: read + parse the file (`ModLoadOrderParser`, the DML-exact
+  reader), reconcile it against the active profile and repository
+  (`ILoadOrderReconciler`), and open the review table. Refuses while any
+  other hosted card is active (the shared gate), with no active profile, or
+  on an unreadable file (localized alert). A profile switch mid-review
+  resets.
+- **The table**: one compact ordinary-controls row per file line (file
+  order): the folder name, the match (the mod's display name, or `-`), the
+  localized outcome ("will be reordered" / "can be added" / "not found"),
+  an include checkbox (reorder lines default checked, add lines default
+  unchecked, unresolved lines disabled + unchecked), two reserved mod
+  id + version columns for the resolver tiers (fixed widths in the shared
+  header + row layout, so activating their cells never reshuffles the
+  table; no edit behavior exists yet), and an open-on-Nexus link on
+  unresolved rows (the folder name as the search keyword,
+  `IExternalLauncher`, fallback alert on failure). Unmatched names are
+  fully visible, never dropped.
+- **Apply** (single button, enabled when at least one line is included; an
+  empty/comment-only file shows the localized notice and refuses rather
+  than a no-op write): ONE `SetModOrder` carrying every matched container
+  in file order (included or not; order application is not optional, the
+  checkboxes gate only adds; `SetModOrder`'s own lock projection keeps
+  locked entries at their exact slots), then `AddMod` (Latest policy) for
+  each INCLUDED library-add line in file order, marks the session pending,
+  deactivates the card, and raises `OrderApplied` (the mod list reloads).
+  Apply sequencing: the order write precedes the adds and `AddMod`
+  appends, so included adds land after the listed block rather than at
+  their file positions; the apply refinement that arrives with the
+  resolver tiers revisits this deliberately. A mid-apply failure surfaces
+  the localized inline failure with the card still open; earlier writes
+  stand and re-runs are idempotent.
+- **Cancel**: no writes, the card deactivates.
 
 ## Mod list density / detailed rows
 
@@ -1694,12 +1737,13 @@ feature).
   in the same group: one stable drawn Material `update` glyph (updates-only
   has no natural crossed-out variant to swap), `selected` bound to
   `ShowUpdatesOnly`, bound to `ToggleUpdatesOnlyCommand`, with the dynamic
-  filter/show-all tooltip + automation name. While the import card is active
-  in either mode, the projection-touching toolbar controls (the search box,
+  filter/show-all tooltip + automation name. While any hosted card is active
+  (the import workflow in either mode, or the load-order review), the
+  projection-touching toolbar controls (the search box,
   the density + filter cluster, and the check-now refresh cluster) disable
-  through `ModListViewModel.IsListToolingEnabled` (the `IsAddEnabled` shape:
-  a plain projection over `ImportWorkflow.IsActive`, re-fired through the same
-  child `IsActive` subscription), so no filter or search change can hide the
+  through `ModListViewModel.IsListToolingEnabled` (reading the shared
+  `ModCardsGate`, re-fired through its single `Changed` subscription), so no
+  filter or search change can hide the
   row being edited under its open editor; row-level controls stay live.
 - **Edit-card name field.** In the edit mode the name TextBox locks as
   read-only (`IsReadOnly` bound to `!IsNameEditable`), never disabled: the
