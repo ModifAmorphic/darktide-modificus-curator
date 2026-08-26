@@ -151,9 +151,15 @@
                                TextTrimming="CharacterEllipsis"
                                ToolTip.Tip="{Binding IdentifiedName}" />
                   </Panel>
+                  <!-- The version cell exists only for an identified
+                       sibling-import row: it tags the content imported from
+                       disk. Rows with no local content carry no version (the
+                       Premium download resolves the real one; non-premium
+                       visits Nexus), so the column stays empty for them -
+                       absent, not disabled. -->
                   <TextBox Grid.Column="5"
                            Text="{Binding Version, Mode=TwoWay}"
-                           IsVisible="{Binding AreIdCellsEnabled}"
+                           IsVisible="{Binding IsVersionCellVisible}"
                            PlaceholderText="{ReflectionBinding [LoadOrder_VersionHint], Source={StaticResource Loc}}"
                            FontSize="11" />
 

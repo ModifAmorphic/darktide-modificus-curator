@@ -1512,8 +1512,8 @@ The picker's file feeds `StartImport(path)`:
      download enqueued onto the shared queue (the head file resolved
      first so the queue's dedupe key is real; a `ProfileAdd` item with no
      container; the download rows own progress + completion + the
-     reload). The typed version is informational on these lines: the
-     download resolves the real version. Non-premium accounts perform no
+     reload). These lines carry no version cell: the download resolves the
+     real version. Non-premium accounts perform no
      network action (the rows carry the open-on-Nexus link).
   On full success the session is marked pending, the card deactivates,
   and `OrderApplied` reloads the mod list. A card-level failure (a
@@ -1534,9 +1534,11 @@ The picker's file feeds `StartImport(path)`:
   reserved cells (parsed via the shared `ImportSourceValidator` rules; a
   bare id or a `nexusmods.com` URL both accepted). Accepted or manually
   entered identification marks the row identified: the id cell shows the
-  fact, the version cell activates (empty by default, validated
-  non-empty-when-Nexus like the import form), and the apply path decides
-  what the version means per destination. Identification never checks the
+  fact, and the version cell activates for an identified SIBLING-IMPORT row
+  only (empty by default, validated non-empty-when-Nexus like the import
+  form): it tags the content imported from disk, while rows with no local
+  content carry no version at all (the Premium download resolves the real
+  one; non-premium visits Nexus). Identification never checks the
   include checkbox (the identified default stays excluded; identification
   is a correction, not consent). Cancelling the card stops the queue;
   arrived candidates stay on their rows.

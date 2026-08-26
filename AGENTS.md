@@ -397,9 +397,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            gets a download enqueued onto the shared queue
                            (resolve the head file first, then a ProfileAdd
                            item with no container; the download rows own
-                           progress + completion + the reload; the typed
-                           version is informational on these lines: the
-                           download resolves the real version), while
+                           progress + completion + the reload; these rows
+                           carry no version cell, the download resolves the
+                           real version), while
                            non-premium performs no network action (the rows
                            carry the open-on-Nexus link). The mark-pending +
                            `OrderApplied` reload (the parent reloads) +
@@ -2115,7 +2115,7 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                              positions, the premium enqueue
                                              batch (fresh-verify gate,
                                              ProfileAdd + head resolve,
-                                             version informational),
+                                             no version cell on those rows),
                                              non-premium skipping the network,
                                              stop-on-429 with prior work
                                              standing + the card open,

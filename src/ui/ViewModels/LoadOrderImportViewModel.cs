@@ -160,9 +160,13 @@ public partial class LoadOrderRowViewModel : ObservableObject
     private string _manualId = string.Empty;
 
     /// <summary>
-    /// The release tag typed for an identified row (the version cell; empty
-    /// by default). Validated non-empty-when-Nexus per the import form rules;
-    /// the apply path decides what a version means per destination.
+    /// The release tag typed for an identified SIBLING-IMPORT row (the version
+    /// cell; empty by default): it tags the content imported from disk, per
+    /// the association semantics. Rows with no local content (identified
+    /// unresolved lines) carry no version - the Premium download resolves the
+    /// real version, and non-premium must visit Nexus regardless - so the
+    /// cell does not exist for them. Validated non-empty-when-Nexus per the
+    /// import form rules.
     /// </summary>
     [ObservableProperty]
     private string _version = string.Empty;
@@ -172,6 +176,16 @@ public partial class LoadOrderRowViewModel : ObservableObject
     /// Pre-identification, the row offers the search workspace instead.
     /// </summary>
     public bool AreIdCellsEnabled => !IsIdentified;
+
+    /// <summary>
+    /// Whether the version cell renders: an IDENTIFIED sibling-import row
+    /// only. The cell tags the content imported from disk; every other row
+    /// shape (unidentified siblings, identified lines with no local content)
+    /// shows nothing in the version column - absent, not disabled - so no
+    /// row contract advertises a version it cannot use.
+    /// </summary>
+    public bool IsVersionCellVisible =>
+        Outcome == LoadOrderLineOutcome.SiblingImport && IsIdentified;
 
     /// <summary>Whether the row is still searching (a spinner affordance).</summary>
     [ObservableProperty]
@@ -269,11 +283,12 @@ public partial class LoadOrderRowViewModel : ObservableObject
     /// <summary>
     /// Re-fires every projection that reads the identification state: the
     /// fact itself, the cell activation family (AreIdCellsEnabled gates the
-    /// manual-id + version cells), the include checkbox's enable (an
-    /// unresolved row's checkbox ENABLES once identified: the enqueue path
-    /// now has an identity to act on), the manual-pending parse gate, the
-    /// workspace visibility, and the version-semantics projection. Anything
-    /// new that keys off IsIdentified joins this list.
+    /// manual-id cell), the include checkbox's enable (an unresolved row's
+    /// checkbox ENABLES once identified: the enqueue path now has an identity
+    /// to act on), the manual-pending parse gate, the workspace visibility,
+    /// and the version cell's visibility (it renders for identified
+    /// sibling-import rows only). Anything new that keys off IsIdentified
+    /// joins this list.
     /// </summary>
     private void OnIdentified()
     {
@@ -283,6 +298,7 @@ public partial class LoadOrderRowViewModel : ObservableObject
         OnPropertyChanged(nameof(IsManualPending));
         OnPropertyChanged(nameof(IdentifiedName));
         OnPropertyChanged(nameof(ShowCandidateWorkspace));
+        OnPropertyChanged(nameof(IsVersionCellVisible));
         IsExpanded = false;
     }
 
@@ -844,9 +860,9 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     /// is resolved first so the queue's dedupe key is real; purpose
     /// ProfileAdd onto the active profile; the download rows own progress +
     /// completion + the reload). Non-premium accounts perform no network
-    /// action for these lines (the rows carry the open-on-Nexus link). The
-    /// version cell on these lines is informational: the download resolves
-    /// the real version, so nothing consumes it.</item>
+    /// action for these lines (the rows carry the open-on-Nexus link). These
+    /// rows carry no version cell: the download resolves the real
+    /// version.</item>
     /// </list>
     /// On full success the session is marked pending, the card deactivates,
     /// and <see cref="OrderApplied"/> reloads the mod list.
@@ -901,14 +917,20 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     private async Task ApplyCoreAsync(Guid profileId)
     {
         // (a) Imports: the included sibling lines, on the worker; per-line
-        // failures are recorded on their rows and the rest continue.
+        // failures are recorded on their rows and the rest continue. The
+        // import results are returned as DATA (the imported container ids
+        // ride the task's return value); the row-side assignments below are
+        // display-only, so nothing downstream depends on when they land
+        // relative to the continuation.
+        var importedContainers = new List<(LoadOrderRowViewModel Row, Guid ContainerId)>();
         var includedSiblingRows = Rows
             .Where(r => r.Outcome == LoadOrderLineOutcome.SiblingImport && r.IsIncluded)
             .ToArray();
         if (includedSiblingRows.Length > 0)
         {
-            await Task.Run(() =>
+            var results = await Task.Run(() =>
             {
+                var imported = new List<(LoadOrderRowViewModel Row, Guid ContainerId)>();
                 foreach (var row in includedSiblingRows)
                 {
                     try
@@ -916,18 +938,16 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
                         ModSource source = row.IdentifiedModId is { } modId
                             ? new NexusSource { ModId = modId }
                             : new UntrackedSource();
-                        var version = row.IdentifiedModId is not null && !string.IsNullOrWhiteSpace(row.Version)
+                        // The version tags the content imported from disk:
+                        // only an identified sibling row carries one (the
+                        // version cell exists solely for that case); every
+                        // other shape imports with the empty version-unknown
+                        // tag.
+                        var version = row.IsIdentified && !string.IsNullOrWhiteSpace(row.Version)
                             ? row.Version.Trim()
                             : string.Empty;
                         var (containerId, _) = _imports.Import(row.SiblingPath!, row.Name, source, version);
-                        // The container id must land on the row BEFORE the
-                        // worker's continuation proceeds to phase (b): it
-                        // does because the seam is a FIFO dispatcher post
-                        // (the worker's post runs before the continuation's
-                        // own post). Changing the seam to a non-FIFO
-                        // dispatcher breaks phase (b)'s membership
-                        // enumeration silently; keep this ordering.
-                        _invokeOnUi(() => row.ContainerId = containerId);
+                        imported.Add((row, containerId));
                     }
                     catch (Exception ex) when (IsExpectedImportException(ex))
                     {
@@ -937,30 +957,52 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
                             _localization.Format("LoadOrder_LineImportFailed", detail));
                     }
                 }
+
+                return imported;
             });
+            importedContainers.AddRange(results);
+
+            // Display-only: reflect the landed ids on the rows (the add +
+            // order phases below consume the returned results, not these).
+            foreach (var (row, containerId) in importedContainers)
+            {
+                _invokeOnUi(() => row.ContainerId = containerId);
+            }
         }
 
         try
         {
-            // (b) Adds: every included add line (library + the imported
-            // containers, now recorded on their rows).
+            // (b) Adds: every included add line. Library adds read their
+            // matched id; imported siblings read the id phase (a) returned
+            // (either channel, never a cross-thread ordering guess).
+            var importedByRow = importedContainers.ToDictionary(p => p.Row, p => p.ContainerId);
             var includedAdds = Rows
-                .Where(r => r.ContainerId is { }
-                    && r.Outcome is LoadOrderLineOutcome.LibraryAdd or LoadOrderLineOutcome.SiblingImport
-                    && r.IsIncluded)
+                .Where(r => r.IsIncluded
+                    && (r.Outcome == LoadOrderLineOutcome.LibraryAdd
+                        || (r.Outcome == LoadOrderLineOutcome.SiblingImport
+                            && importedByRow.ContainsKey(r))))
+                .Select(r => r.Outcome == LoadOrderLineOutcome.LibraryAdd
+                    ? r.ContainerId!.Value
+                    : importedByRow[r])
                 .ToArray();
             foreach (var add in includedAdds)
             {
-                _profiles.AddMod(profileId, add.ContainerId!.Value, ModVersionPolicy.Latest);
+                _profiles.AddMod(profileId, add, ModVersionPolicy.Latest);
             }
 
             // (c) Order: ONE write over every matched + newly-created
             // container in file order (non-members, like a not-included
             // library add, are ignored by SetModOrder and keep their
-            // relative order after the listed block).
+            // relative order after the listed block). Same two channels as
+            // the adds, resolved row-by-row in file order: matched ids from
+            // the rows, imported ids from the returned results.
             var order = Rows
-                .Where(r => r.ContainerId is { })
-                .Select(r => r.ContainerId!.Value)
+                .Select(r => r.Outcome == LoadOrderLineOutcome.SiblingImport
+                    && importedByRow.TryGetValue(r, out var imported)
+                        ? imported
+                        : r.ContainerId)
+                .Where(id => id is { })
+                .Select(id => id!.Value)
                 .ToArray();
             if (order.Length > 0)
             {
@@ -1027,9 +1069,9 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
                         // The DMF-prompt enqueue shape: resolve the head file
                         // so the queue's dedupe key is real, then admit a
                         // ProfileAdd item with no container (the download
-                        // owns the import + the profile add at completion).
-                        // The typed version is informational here: the
-                        // download resolves the real version.
+                        // owns the import + the profile add at completion;
+                        // these rows carry no version cell, and the download
+                        // resolves the real version).
                         var (fileId, _) = await _acquisition.ResolveLatestNexusAsync(
                             NexusGameIdentity.DarktideDomain, modId);
                         _downloadQueue.Enqueue(new ModDownloadRequest(

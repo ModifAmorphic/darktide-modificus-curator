@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Modificus.Curator.Config;
 using Modificus.Curator.Integrations;
 using Modificus.Curator.Mods;
@@ -714,6 +715,62 @@ public sealed class LoadOrderImportViewModelTests
     }
 
     [Fact]
+    public async Task The_version_cell_exists_only_for_identified_sibling_rows()
+    {
+        // Identified Unresolved rows (no local content) carry NO version
+        // cell: the Premium download resolves the real version, non-premium
+        // visits Nexus regardless. Both identification kinds, absent.
+        var (vm, reconciler, _, _, _, _, nexus, _, _, _, _, _) = Build();
+        nexus.NextResults = Results((42, "A Mod"));
+        var accepted = await StartUnresolvedAsync(vm, reconciler, "ghost1");
+        Assert.False(accepted.IsVersionCellVisible); // unidentified
+        vm.AcceptCandidateCommand.Execute(accepted);
+        Assert.True(accepted.IsIdentified);
+        Assert.False(accepted.IsVersionCellVisible); // identified, no content
+
+        vm.CancelCommand.Execute(null);
+        reconciler.NextPlan = LoadOrderPlanner.Build(
+            new[] { "ghost2" }, Array.Empty<LoadOrderProfileMod>(), Array.Empty<LoadOrderRepoCandidate>());
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("ghost2\n"));
+        var manual = Assert.Single(vm.Rows);
+        manual.ManualId = "9";
+        vm.ApplyManualIdCommand.Execute(manual);
+        Assert.True(manual.IsIdentified);
+        Assert.False(manual.IsVersionCellVisible); // manual, no content
+
+        // Identified sibling rows: the cell renders (it tags the disk
+        // content); unidentified siblings: absent.
+        vm.CancelCommand.Execute(null);
+        reconciler.NextPlan = UnresolvedPlan("RealMod");
+        var txt = WriteLoadOrderWithSiblings("RealMod\n", ("RealMod", true));
+        try
+        {
+            await vm.StartImportCommand.ExecuteAsync(txt);
+            var sibling = Assert.Single(vm.Rows);
+            Assert.False(sibling.IsVersionCellVisible); // unidentified sibling
+            sibling.ManualId = "42";
+            vm.ApplyManualIdCommand.Execute(sibling);
+            Assert.True(sibling.IsIdentified);
+            Assert.True(sibling.IsVersionCellVisible); // identified sibling
+
+            // The version stays empty + unconsumed for no-content rows (the
+            // enqueue path never reads it).
+            manual.Version = "1.0"; // setting is harmless; nothing binds it
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(Path.GetDirectoryName(txt)!, recursive: true);
+            }
+            catch (IOException)
+            {
+                // Temp cleanup is best-effort.
+            }
+        }
+    }
+
+    [Fact]
     public async Task Apply_imports_an_identified_sibling_with_nexus_source_and_version()
     {
         var (vm, reconciler, profiles, _, _, _, _, imports, _, _, _, _) = Build();
@@ -1065,6 +1122,72 @@ public sealed class LoadOrderImportViewModelTests
         Assert.Contains(profiles.AddModCalls, c => c.Id == captured);
         Assert.Contains(reorder, Assert.Single(profiles.SetModOrderCalls));
         Assert.False(vm.IsActive);
+
+        try
+        {
+            Directory.Delete(Path.GetDirectoryName(txt)!, recursive: true);
+        }
+        catch (IOException)
+        {
+            // Temp cleanup is best-effort.
+        }
+    }
+
+    [Fact]
+    public async Task A_deferred_marshal_seam_still_adds_and_orders_the_imported_container()
+    {
+        // The production race, pinned: the import worker posts the
+        // container-id assignment through the marshal seam, and the seam's
+        // post may land AFTER the awaited continuation proceeds (the logs
+        // showed the order write missing the imported container + AddMod
+        // never running). The apply passes the import results as data, so a
+        // seam that DEFERS every post until after the apply task completes
+        // must still produce the add + the order entry.
+        var profiles = TestDoubles.Profiles(new ProfileSummary(Guid.NewGuid(), "Alpha", ""));
+        var session = new FakeProfileSession { ActiveProfileId = profiles.ListProfiles().First().Id };
+        var repo = new FakeModRepository();
+        var reconciler = new FakeLoadOrderReconciler();
+        var imports = new FakeModImportService();
+        var deferred = new ConcurrentQueue<Action>();
+
+        var vm = new LoadOrderImportViewModel(
+            profiles, session, reconciler, new FakeNexusSearchClient(),
+            imports, new FakeNexusAuthService { State = null },
+            new FakeModAcquisitionService(), new FakeModDownloadQueue(),
+            new ModCardsGate(), new FakeExternalLauncher(), new FakeDialogService(),
+            Localization, action => deferred.Enqueue(action),
+            NullLogger<LoadOrderImportViewModel>.Instance);
+
+        var captured = session.ActiveProfileId!.Value;
+        var reorder = Guid.NewGuid();
+        profiles.WithMods(captured,
+            new ModListEntry { ContainerId = reorder, Order = 0, Policy = ModVersionPolicy.Latest });
+        reconciler.NextPlan = LoadOrderPlanner.Build(
+            new[] { "ModA", "Held" },
+            new[] { new LoadOrderProfileMod(reorder, "ModA", "A") },
+            Array.Empty<LoadOrderRepoCandidate>());
+        var txt = WriteLoadOrderWithSiblings("ModA\nHeld\n", ("Held", true));
+        await vm.StartImportCommand.ExecuteAsync(txt);
+        vm.Rows.Single(r => r.Name == "Held").IsIncluded = true;
+        var importedContainer = Guid.NewGuid();
+        imports.NextImportResults =
+            new Queue<(Guid, string)>(new[] { (importedContainer, "v") });
+
+        await vm.ApplyCommand.ExecuteAsync(null);
+
+        // Not one deferred post has run (the seam drained nothing); the
+        // apply's data path must have carried the container regardless.
+        Assert.NotEmpty(deferred);
+        var order = Assert.Single(profiles.SetModOrderCalls);
+        Assert.Contains(importedContainer, order);
+        Assert.Contains(profiles.AddModCalls, c => c.ContainerId == importedContainer);
+
+        // Drain now: the display assignments land + change nothing.
+        while (deferred.TryDequeue(out var action))
+        {
+            action();
+        }
+        Assert.Equal([reorder, importedContainer], Assert.Single(profiles.SetModOrderCalls));
 
         try
         {
