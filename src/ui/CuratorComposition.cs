@@ -217,7 +217,7 @@ public static class CuratorComposition
         // (registered by AddIntegrations via AddHttpClient) for a plain factory-
         // created HttpClient per download; production decode uses
         // Bitmap.DecodeToWidth at ModThumbnailService.DecodeWidth px (sized for
-        // the 112-DIP detailed-row thumbnail on scaled displays). Registered
+        // the 192-DIP detailed-row thumbnail at 2x display scaling). Registered
         // before ModListViewModel and the later detailed-row coordinator so it is
         // available when they resolve.
         services.AddSingleton<IModThumbnailService>(sp => new ModThumbnailService(

@@ -586,16 +586,16 @@
       root (Border.detailedRow) carries Container.Name + Container.Sizing=Width
       so it measures its own width; repeated cards share the name. The card Grid
       has three columns (grip, thumbnail, content); these default (wide) styles
-      set the large-card state: a 112-DIP thumbnail spanning all three content
-      rows in the thumbnail column, and the right-column action strip in the
-      content column. Width, height, row span, action column, and action column
-      span are set HERE (not as local values on the elements) so the
+      set the large-card state: a 192x108 DIP 16:9 thumbnail spanning all three
+      content rows in the thumbnail column, and the right-column action strip
+      in the content column. Width, height, row span, action column, and action
+      column span are set HERE (not as local values on the elements) so the
       ContainerQuery below can override them; local values outrank styles and
       would defeat the query.
     -->
     <Style Selector="Border.detailedThumb">
-      <Setter Property="Width" Value="112" />
-      <Setter Property="Height" Value="112" />
+      <Setter Property="Width" Value="192" />
+      <Setter Property="Height" Value="108" />
       <Setter Property="Grid.RowSpan" Value="3" />
     </Style>
     <Style Selector="Path.detailedPlaceholder">
@@ -620,15 +620,16 @@
     </Style>
     <!--
       Constrained state (card width at or below 680 DIP): the thumbnail shrinks
-      to 72 DIP and spans only name + summary; the single action strip moves to
-      a full-width row beneath all three columns. The query targets descendants
+      to 128x72 DIP (still 16:9) and spans only name + summary; the single
+      action strip moves to a full-width row beneath all three columns. The
+      query targets descendants
       of the named card root, never the queried Border itself, so the card chrome
       is untouched. Declared after the wide defaults so its setters win while the
       query is active.
     -->
     <ContainerQuery Name="detailedModRow" Query="max-width:680">
       <Style Selector="Border.detailedThumb">
-        <Setter Property="Width" Value="72" />
+        <Setter Property="Width" Value="128" />
         <Setter Property="Height" Value="72" />
         <Setter Property="Grid.RowSpan" Value="2" />
       </Style>
@@ -1362,15 +1363,19 @@
                                       ContentTemplate="{StaticResource ModRowGripTemplate}" />
 
                       <!--
-                        Thumbnail area (column 1). A rounded, clipped square
-                        whose Width, Height, and Grid.RowSpan come from the
-                        Border.detailedThumb styles (112 DIP spanning all three
-                        rows when wide; 72 DIP spanning name + summary when
-                        constrained). Border implements
+                        Thumbnail area (column 1). A rounded, clipped 16:9
+                        frame whose Width, Height, and Grid.RowSpan come from the
+                        Border.detailedThumb styles (192x108 DIP spanning all
+                        three rows when wide; 128x72 DIP spanning name + summary
+                        when constrained). Border implements
                         IVisualWithRoundRectClip with ClipToBoundsRadius mapped
                         to CornerRadius, so ClipToBounds clips the child to the
-                        rounded boundary. The Image shows only when a thumbnail
-                        has been decoded; every no-image case (Untracked/Linked,
+                        rounded boundary. The Image stretches Uniform so the
+                        complete source image is always visible; the frame's
+                        neutral background supplies the letterbox/pillarbox
+                        space for non-16:9 assets. The Image shows only when a
+                        thumbnail has been decoded; every no-image case
+                        (Untracked/Linked,
                         missing metadata, no auth, offline, failed image, adult
                         flag, empty URL) shows the same neutral drawn-geometry
                         placeholder in the same box. Adult rows never receive a
@@ -1383,7 +1388,7 @@
                               HorizontalAlignment="Left" VerticalAlignment="Top"
                               Background="{DynamicResource SystemControlBackgroundBaseMediumLowBrush}">
                         <Panel>
-                          <Image Source="{Binding Thumbnail}" Stretch="UniformToFill"
+                          <Image Source="{Binding Thumbnail}" Stretch="Uniform"
                                  IsVisible="{Binding HasThumbnail}" />
                           <!--
                             Neutral placeholder (Material "image", 24x24 source):
