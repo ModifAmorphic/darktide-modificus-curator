@@ -95,6 +95,7 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     private readonly IProfileSession _session;
     private readonly IModRepository _repo;
     private readonly IModImportService _importService;
+    private readonly ModCardsGate _cards;
     private readonly ILogger<ImportWorkflowViewModel> _logger;
 
     private WorkflowState _state = WorkflowState.Inactive;
@@ -146,6 +147,7 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
         IProfileSession session,
         IModRepository repo,
         IModImportService importService,
+        ModCardsGate cards,
         LocalizationService localization,
         ILogger<ImportWorkflowViewModel> logger)
         : base(localization)
@@ -154,6 +156,7 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _repo = repo ?? throw new ArgumentNullException(nameof(repo));
         _importService = importService ?? throw new ArgumentNullException(nameof(importService));
+        _cards = cards ?? throw new ArgumentNullException(nameof(cards));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         _session.PropertyChanged += OnSessionPropertyChanged;
@@ -669,9 +672,11 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     [RelayCommand]
     private void StartBatch(IReadOnlyList<string>? paths)
     {
-        if (_state != WorkflowState.Inactive)
+        if (_state != WorkflowState.Inactive || _cards.IsAnyOtherCardActive(this))
         {
-            _logger.LogWarning("Import batch start rejected: workflow is already active ({State}).", _state);
+            _logger.LogWarning(
+                "Import batch start rejected: the card is already active ({State}) or another hosted card is.",
+                _state);
             return;
         }
 
@@ -712,10 +717,11 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     [RelayCommand]
     private void StartEdit(Guid? containerId)
     {
-        if (_state != WorkflowState.Inactive)
+        if (_state != WorkflowState.Inactive || _cards.IsAnyOtherCardActive(this))
         {
             _logger.LogWarning(
-                "Edit start rejected: the import card is already active ({State}).", _state);
+                "Edit start rejected: the card is already active ({State}) or another hosted card is.",
+                _state);
             return;
         }
 
@@ -1322,6 +1328,10 @@ public partial class ImportWorkflowViewModel : LocalizedViewModel
     private void SetState(WorkflowState newState)
     {
         _state = newState;
+        // The shared hosted-card gate (the toolbar lock + Add disable + the
+        // other card's start refusal read it). SetState is the one state
+        // authority, so the report cannot drift from IsActive.
+        _cards.ReportActive(this, newState != WorkflowState.Inactive);
         OnPropertyChanged(nameof(IsActive));
         OnPropertyChanged(nameof(IsEditing));
         OnPropertyChanged(nameof(IsProcessing));

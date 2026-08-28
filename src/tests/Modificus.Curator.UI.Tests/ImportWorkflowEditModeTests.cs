@@ -2,6 +2,7 @@ using System.IO;
 using Modificus.Curator.Mods;
 using Modificus.Curator.Profiles;
 using Modificus.Curator.UI.Localization;
+using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.ViewModels;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -42,7 +43,7 @@ public sealed class ImportWorkflowEditModeTests
         repo ??= new FakeModRepository();
         localization ??= new LocalizationService();
         var vm = new ImportWorkflowViewModel(
-            profiles, session, repo, new FakeModImportService(repo), localization,
+            profiles, session, repo, new FakeModImportService(repo), new ModCardsGate(), localization,
             NullLogger<ImportWorkflowViewModel>.Instance);
         return (vm, profiles, session, repo, new FakeModImportService(repo));
     }
@@ -167,7 +168,7 @@ public sealed class ImportWorkflowEditModeTests
         var repo = new FakeModRepository();
         var import = new FakeModImportService(repo) { ImportGate = new TaskCompletionSource<bool>() };
         var vm = new ImportWorkflowViewModel(
-            profiles, session, repo, import, new LocalizationService(),
+            profiles, session, repo, import, new ModCardsGate(), new LocalizationService(),
             NullLogger<ImportWorkflowViewModel>.Instance);
         var container = SeedNexus(repo);
 

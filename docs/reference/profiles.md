@@ -338,6 +338,57 @@ asserts they agree, guarding against drift. Profile files are plaintext, so this
 is not secret storage; logs never print environment values (only the profile id
 + counts).
 
+### The load-order import family
+
+Three pieces backing the Mods page's "Import mod list" flow (any compatible
+line-format list, e.g. `mod_load_order.txt` or `mods.lst`, uses the same
+entry):
+
+- **`ModLoadOrderParser`** (pure static): text -> ordered names, mirroring the
+  Darktide Mod Loader's reader exactly: per line, trim; skip empty lines; skip
+  lines starting `--` (after trim); duplicate names dedupe first-wins; a
+  leading BOM is stripped once. An empty result (a comment-only file) is
+  valid. Deliberately unsupported: `#` comments, `//` comments, inline
+  trailing comments (the loader does not support them either).
+- **`LoadOrderPlanner`** (pure static): reconciles parsed names against
+  caller-resolved data (profile mods with policy-resolved base names + repo
+  candidates with latest-resolved base names; both injected as data so the
+  planner stays IO-free) into the immutable `LoadOrderPlan`:
+  `Lines` (one row per file name in file order, outcome
+  `Reorder` / `LibraryAdd` / `Unresolved` + the matched container),
+  `OrderedContainerIds` (every matched container in file order, the
+  `SetModOrder` argument; SetModOrder's own semantics append
+  installed-but-unlisted mods and keep locked entries at their exact slots,
+  so the planner does no lock reasoning), `LibraryAdds`, and
+  `UnmatchedNames`. Matching is case-insensitive ordinal on the base folder
+  name; a profile match wins outright; an ambiguous repo match (two
+  candidates sharing the base name) prefers the Nexus-sourced one and
+  reports the name unmatched when the preference cannot break the tie.
+  The matched inputs optionally carry read-only identity facts
+  (`NexusModId`, `Version`) the planner copies onto the matching lines
+  without interpreting them, so the review can show what Curator already
+  knows without re-querying by container id. Optional trailing record
+  parameters keep the constructor source-compatible.
+- **`ILoadOrderReconciler`** (the resolution glue): resolves both sides'
+  base names from the live profile + repository through the shared internal
+  `ModBaseNames` helper (the same base-name resolution staging uses, per the
+  `GetBaseNameCollision` precedent), enriches each side with the identity
+  facts at the resolution boundary (the container's Nexus mod id when
+  Nexus-sourced + the version the operation will use: the entry's
+  policy-resolved tag for a profile match, a pin showing the pinned tag and
+  Latest the resolved latest; the resolved-latest tag for a library add,
+  matching the Latest policy `AddMod` applies; an empty resolved tag is
+  carried as an honestly empty string, never fabricated; linked containers
+  carry neither fact), then delegates to the planner.
+  Read-only; the caller applies the plan.
+
+```csharp
+public interface ILoadOrderReconciler
+{
+    LoadOrderPlan Reconcile(Guid profileId, IReadOnlyList<string> names);
+}
+```
+
 ### `ModCleanup` (static)
 
 Startup prune orchestration. Collects every `(containerId, versionFolder)`
@@ -383,6 +434,9 @@ public static IServiceCollection AddProfiles(this IServiceCollection services);
 - `AddSingleton<IProfileService, ProfileService>()` -- the filesystem-backed
   implementation (internal). Resolves `CuratorConfig`, `IModRepository`,
   `StagingLinkCreator`, and `ILogger<ProfileService>` from the container.
+- `AddSingleton<ILoadOrderReconciler, LoadOrderReconciler>()` -- the
+  load-order resolution glue (internal implementation). Resolves
+  `IProfileService` + `IModRepository` from the container.
 
 Registered as a singleton: it holds no per-request state, and `CuratorConfig` (its
 only config source) is itself a singleton.

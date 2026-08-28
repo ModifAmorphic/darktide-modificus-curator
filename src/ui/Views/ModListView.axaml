@@ -752,7 +752,18 @@
     built-in theme chrome, not an authored glyph.
   -->
 
-  <Grid RowDefinitions="Auto,Auto,Auto,*">
+  <!--
+    The Mods destination content. While the load-order import workspace is
+    active it REPLACES the normal content (the toolbar, the import card, the
+    manager banner, the row list + empty states, and the download list all
+    hide; the shell navigation + global header stay). The normal content is
+    one visibility-gated host so a single binding swaps the two states; the
+    workspace host fills the same area.
+  -->
+  <Grid>
+
+    <Grid IsVisible="{Binding !LoadOrder.IsActive}"
+          RowDefinitions="Auto,Auto,Auto,*">
 
     <!-- Header: check-now refresh + rate-limit notice + search box +
          Compact/Detailed density selector with the hide-disabled +
@@ -986,7 +997,7 @@
       </StackPanel>
       <!--
         Add split button: primary click runs the current mode's action; the
-        arrow opens the flyout. All four flyout items are modes that set
+        arrow opens the flyout. All five flyout items are modes that set
         themselves as the default on click (the face label tracks the mode via
         AddModeLabel): "Add Nexus Mods" (the default; opens the Darktide Nexus
         Mods games page in the browser), "Add Mod (archive)", "Add Mod (folder)"
@@ -1020,6 +1031,8 @@
           <MenuFlyout>
             <MenuItem Header="{ReflectionBinding [ModList_AddNexusMods], Source={StaticResource Loc}}"
                       Click="AddNexusMods_Click" />
+            <MenuItem Header="{ReflectionBinding [ModList_AddLoadOrder], Source={StaticResource Loc}}"
+                      Click="ImportLoadOrder_Click" />
             <MenuItem Header="{ReflectionBinding [ModList_AddArchive], Source={StaticResource Loc}}"
                       Click="AddArchive_Click" />
             <MenuItem Header="{ReflectionBinding [ModList_AddFolder], Source={StaticResource Loc}}"
@@ -1550,5 +1563,18 @@
         </StackPanel>
       </ScrollViewer>
       </Grid>
+    </Grid>
+
+    <!--
+      The load-order import workspace: the focused, in-page workflow that
+      replaces the normal Mods content while active (the visibility binding
+      resolves against the mod-list VM's context; the workspace's own
+      DataContext is the child VM). It fills the whole content area, so the
+      review list takes the workspace's remaining height rather than a
+      nested capped region.
+    -->
+    <Panel IsVisible="{Binding LoadOrder.IsActive}">
+      <views:LoadOrderImportView DataContext="{Binding LoadOrder}" />
+    </Panel>
   </Grid>
 </UserControl>
