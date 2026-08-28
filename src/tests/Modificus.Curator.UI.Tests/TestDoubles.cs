@@ -207,12 +207,18 @@ internal static class TestDoubles
             localization,
             NullLogger<ImportWorkflowViewModel>.Instance);
 
-        // The load-order import card child: same shape as the import workflow
-        // (application-lifetime singleton, shared gate + session), with a fake
-        // reconciler whose plan tests script per case + a fake Nexus client
-        // whose search results tests script (empty by default: no search
-        // traffic unless a test opts in). The inline marshal seam keeps
+        // The load-order import workspace child: same shape as the import
+        // workflow (application-lifetime singleton, shared gate + session),
+        // with a fake reconciler whose plan tests script per case + a fake
+        // Nexus client whose search results tests script (empty by default:
+        // no search traffic unless a test opts in). The placements component
+        // shares the queue + profiles fakes so a recorded plan's convergence
+        // lands where the mod-list VM reads it. The inline marshal seam keeps
         // continuations on the test thread.
+        var loadOrderPlacements = new LoadOrderDownloadPlacements(
+            downloadQueue,
+            profiles,
+            NullLogger<LoadOrderDownloadPlacements>.Instance);
         var loadOrder = new LoadOrderImportViewModel(
             profiles,
             session,
@@ -222,8 +228,8 @@ internal static class TestDoubles
             auth,
             acquisition,
             downloadQueue,
+            loadOrderPlacements,
             cards,
-            launcher,
             dialogs,
             localization,
             static action => action(),
@@ -325,6 +331,7 @@ internal static class TestDoubles
             // the update-action tests exercise the resolve->admit contract
             // exactly as production wires it.
             new ModUpdateEnqueuer(acquisition, downloadQueue, profiles),
+            loadOrderPlacements,
             NullLogger<ModListViewModel>.Instance);
     }
 
@@ -636,6 +643,14 @@ internal sealed class FakeProfileService : IProfileService
     /// </summary>
     public Exception? SetModPolicyThrows { get; set; }
 
+    /// <summary>
+    /// Optional exception thrown by <see cref="SetModOrder"/> AFTER the call
+    /// is recorded but BEFORE any mutation. Default <c>null</c> = no throw.
+    /// Used by the load-order placement tests to simulate a transient
+    /// order-write failure (the placement plan's retention path).
+    /// </summary>
+    public Exception? SetModOrderThrows { get; set; }
+
     public IReadOnlyList<(Guid Id, Guid ContainerId)> RemoveModCalls { get; } = new List<(Guid, Guid)>();
     /// <summary>Seeds a profile's mod list (replaces any prior). Test helper.</summary>
     public FakeProfileService WithMods(Guid id, params ModListEntry[] mods)
@@ -814,6 +829,10 @@ internal sealed class FakeProfileService : IProfileService
     public void SetModOrder(Guid id, IReadOnlyList<Guid> containerIdsInOrder)
     {
         ((List<IReadOnlyList<Guid>>)SetModOrderCalls).Add(containerIdsInOrder);
+        if (SetModOrderThrows is not null)
+        {
+            throw SetModOrderThrows;
+        }
 
         var list = EnsureList(id);
 
@@ -1127,10 +1146,12 @@ internal sealed class FakeAppStateStore :
 /// entries absent from the caller's candidates or whose container is gone).
 /// </summary>
 /// <summary>
-/// <see cref="INexusClient"/> fake for the load-order card's search tier:
-/// only <see cref="SearchModsAsync"/> is real (scripted results, call
-/// recording, optional failure); every other member throws. Unscripted
-/// searches return empty results.
+/// <see cref="INexusClient"/> fake for the load-order workspace's search +
+/// exact-identity tiers: <see cref="SearchModsAsync"/> (scripted results, call
+/// recording, optional failure) + <see cref="GetModByIdAsync"/> (a scripted
+/// id-to-identity map, call recording, optional failure) are real; every
+/// other member throws. Unscripted searches return empty results; unscripted
+/// lookups return the not-found null.
 /// </summary>
 internal sealed class FakeNexusSearchClient : INexusClient
 {
@@ -1140,9 +1161,28 @@ internal sealed class FakeNexusSearchClient : INexusClient
     /// <summary>When set, the next search throws this.</summary>
     public Exception? NextSearchThrows { get; set; }
 
+    /// <summary>
+    /// When set, every search first awaits this gate (a held search the test
+    /// releases to observe the in-flight queue state).
+    /// </summary>
+    public TaskCompletionSource<bool>? SearchGate { get; set; }
+
     /// <summary>Every (domain, terms, count) search call, in order.</summary>
     public IReadOnlyList<(string Domain, string Terms, int Count)> SearchCalls { get; }
         = new List<(string, string, int)>();
+
+    /// <summary>
+    /// The identities returned by <see cref="GetModByIdAsync"/>, keyed by mod
+    /// id. An id absent from the map is the not-found null.
+    /// </summary>
+    public Dictionary<int, NexusSearchResult> Identities { get; } = new();
+
+    /// <summary>When set, the next lookup throws this.</summary>
+    public Exception? NextGetModByIdThrows { get; set; }
+
+    /// <summary>Every (domain, modId) lookup call, in order.</summary>
+    public IReadOnlyList<(string Domain, int ModId)> GetModByIdCalls { get; }
+        = new List<(string, int)>();
 
     public Task<Response<NexusSearchResult[]>> SearchModsAsync(
         string gameDomain, string terms, int count, CancellationToken ct = default)
@@ -1153,8 +1193,44 @@ internal sealed class FakeNexusSearchClient : INexusClient
             return Task.FromException<Response<NexusSearchResult[]>>(ex);
         }
 
+        if (SearchGate is { } gate)
+        {
+            return GateThenReturnAsync(gate);
+        }
+
         return Task.FromResult(new Response<NexusSearchResult[]>(
             NextResults.ToArray(), NexusRateLimits.Unknown));
+
+        async Task<Response<NexusSearchResult[]>> GateThenReturnAsync(TaskCompletionSource<bool> held)
+        {
+            await held.Task;
+            return new Response<NexusSearchResult[]>(NextResults.ToArray(), NexusRateLimits.Unknown);
+        }
+    }
+
+    /// <summary>
+    /// When set, every id lookup first awaits this gate (a held verification
+    /// the test releases to observe the row's busy state).
+    /// </summary>
+    public TaskCompletionSource<bool>? GetModByIdGate { get; set; }
+
+    public async Task<Response<NexusSearchResult?>> GetModByIdAsync(
+        string gameDomain, int modId, CancellationToken ct = default)
+    {
+        ((List<(string, int)>)GetModByIdCalls).Add((gameDomain, modId));
+        if (NextGetModByIdThrows is { } ex)
+        {
+            throw ex;
+        }
+
+        if (GetModByIdGate is { } gate)
+        {
+            await gate.Task;
+        }
+
+        return new Response<NexusSearchResult?>(
+            Identities.TryGetValue(modId, out var identity) ? identity : null,
+            NexusRateLimits.Unknown);
     }
 
     public Task<Response<ValidateInfo>> ValidateAsync(CancellationToken ct = default) => throw new NotImplementedException();
@@ -2347,6 +2423,15 @@ internal sealed class FakeModDownloadQueue : IModDownloadQueue
     /// <summary>The items passed to Retry, in order.</summary>
     public List<DownloadItem> RetryCalls { get; } = new();
 
+    /// <summary>
+    /// When set, each Enqueue completes SYNCHRONOUSLY inside the call: the
+    /// func registers the container (mirroring the real queue's
+    /// register-before-signal order) and returns its id, the item resolves +
+    /// lands Completed, and ItemChanged fires before Enqueue returns. Models
+    /// an ultra-fast finish racing the enqueue sequence itself.
+    /// </summary>
+    public Func<ModDownloadRequest, Guid?>? CompleteOnEnqueue { get; set; }
+
     public DownloadItem Enqueue(ModDownloadRequest request)
     {
         Requests.Add(request);
@@ -2364,12 +2449,20 @@ internal sealed class FakeModDownloadQueue : IModDownloadQueue
             return joined;
         }
 
-        return Add(new DownloadItem(request)
+        var item = Add(new DownloadItem(request)
         {
             DisplayName = request.DisplayName,
             ContainerId = request.ContainerId,
             Phase = DownloadPhase.Queued,
         });
+        if (CompleteOnEnqueue is { } complete && complete(request) is { } containerId)
+        {
+            item.ContainerId = containerId;
+            item.Phase = DownloadPhase.Completed;
+            ItemChanged?.Invoke(item);
+        }
+
+        return item;
     }
 
     public void Cancel(DownloadItem item) => CancelCalls.Add(item);

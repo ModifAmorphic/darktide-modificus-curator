@@ -26,7 +26,7 @@ namespace Modificus.Curator.UI.Views;
 /// calls stay in the (unit-tested) VM; this is pure view mechanics.
 /// </summary>
 /// <remarks>
-/// <para><b>Add split button:</b> all four flyout items are modes. Each item
+/// <para><b>Add split button:</b> all five flyout items are modes. Each item
 /// sets itself as the default on click (the VM's <see cref="ModListViewModel.AddMode"/>
 /// is mirrored via <see cref="SetAddMode"/> so the face label updates through
 /// <see cref="ModListViewModel.AddModeLabel"/>) and runs its action: NexusMods
@@ -254,10 +254,12 @@ public partial class ModListView : UserControl
     }
 
     /// <summary>
-    /// The "Import load order" flyout item (the fifth + sticky mode on the
+    /// The "Import mod list" flyout item (the second + sticky mode on the
     /// Add split button): sets the mode to LoadOrder (so subsequent primary
     /// clicks reopen the picker; the face label tracks it) and opens the txt
     /// file picker immediately (one-click, the established flyout pattern).
+    /// Any compatible line-format list (mod_load_order.txt, mods.lst, ...)
+    /// uses this one entry.
     /// </summary>
     private async void ImportLoadOrder_Click(object? sender, RoutedEventArgs e)
     {
@@ -266,9 +268,11 @@ public partial class ModListView : UserControl
     }
 
     /// <summary>
-    /// Opens a single-select txt file picker and forwards the picked
-    /// <c>mod_load_order.txt</c> to the load-order card's start command (the
-    /// child VM owns the read, parse, reconcile, review table, and apply).
+    /// Opens a single-select txt file picker and forwards the picked list
+    /// file (a <c>mod_load_order.txt</c>, a <c>mods.lst</c>, or any other
+    /// compatible line-format file) to the load-order workspace's start
+    /// command (the child VM owns the read, parse, reconcile, mode choice,
+    /// review, and apply).
     /// Guarded on any hosted card being active at entry AND rechecked after
     /// the picker returns (a native picker is async; a card could have opened
     /// while it was open). Also gated on Gaming Mode (pickers are unusable
@@ -288,9 +292,13 @@ public partial class ModListView : UserControl
             return;
         }
 
-        var loadOrderFiles = new FilePickerFileType("Load order")
+        // The "Mod list" filter surfaces both supported list shapes directly
+        // (the DML-world mod_load_order.txt and the mods.lst spelling) so
+        // neither needs the All files fallback; any other compatible
+        // line-format file still opens through All files.
+        var loadOrderFiles = new FilePickerFileType("Mod list")
         {
-            Patterns = new[] { "*.txt" },
+            Patterns = new[] { "*.txt", "*.lst" },
         };
         var options = new FilePickerOpenOptions
         {

@@ -1444,119 +1444,234 @@ over one shared editing form (the same fields, the same
   can all have changed).
 
 The modes are mutually exclusive, and the exclusion is symmetric with the
-load-order card below through the shared `ModCardsGate` (each card VM reports
-its activity to the gate and refuses to start while any other card is open;
-neither VM references the other). The gate is also the one any-card source
-behind `IsAddEnabled`, `IsListToolingEnabled`, and the view's picker/drop
-entry guards. The card is an application-lifetime singleton child VM
-registered before `ModListViewModel`; navigating away from Mods preserves an
-in-flight card.
+load-order workspace below through the shared `ModCardsGate` (each card VM
+reports its activity to the gate and refuses to start while any other card is
+open; neither VM references the other). The gate is also the one any-card
+source behind `IsAddEnabled`, `IsListToolingEnabled`, and the view's
+picker/drop entry guards. The card is an application-lifetime singleton child
+VM registered before `ModListViewModel`; navigating away from Mods preserves
+an in-flight card.
 
-## The load-order import card
+## The load-order import workspace
 
-The `LoadOrderImportViewModel` + `LoadOrderImportView` card, hosted below the
-import-workflow card (always the top-below-toolbar card; it edits the whole
-list, never one row, so it never renders as an in-row band). Entry: the Add
-split button's sticky fifth mode, "Import load order" (a txt file picker; the
-primary click reopens it; Gaming Mode inherits the Add button's disable).
-The picker's file feeds `StartImport(path)`:
+The `LoadOrderImportViewModel` + `LoadOrderImportView` workspace: a focused,
+in-page workflow that REPLACES the normal Mods content (the toolbar, the
+import card, the manager banner, the row list + empty states, and the
+download list all hide through one `!LoadOrder.IsActive` visibility gate on
+the normal-content host; the shell navigation + global header stay) until the
+session ends. Entry: the Add split button's sticky second mode, "Import mod
+list" (a txt file picker; the primary click reopens it; Gaming Mode inherits
+the Add button's disable). Any compatible line-format list uses the same
+entry (`mod_load_order.txt`, `mods.lst`, or another file the parser accepts);
+the naming stays broad for future richer Curator export formats through the
+same command. The picker's file feeds `StartImport(path)`, which
+only reads + parses (`ModLoadOrderParser`) + reconciles locally
+(`ILoadOrderReconciler`) and opens the MODE CHOICE; no Nexus or auth call
+happens before a mode is chosen.
 
-- **Activation**: read + parse the file (`ModLoadOrderParser`, the DML-exact
-  reader), reconcile it against the active profile and repository
-  (`ILoadOrderReconciler`), and open the review table. Refuses while any
-  other hosted card is active (the shared gate), with no active profile, or
-  on an unreadable file (localized alert). A profile switch mid-review
-  resets.
-- **The table**: one compact ordinary-controls row per file line (file
-  order): the folder name, the match (the mod's display name, or `-`), the
-  localized outcome ("will be reordered" / "can be added" / "not found"),
-  an include checkbox (reorder lines default checked, add lines default
-  unchecked, unresolved lines disabled + unchecked), two reserved mod
-  id + version columns (the manual id/URL entry + the version field,
-  activating on identification; fixed widths in the shared header + row
-  layout, so the cells never reshuffle the table), and an open-on-Nexus link on
-  unresolved rows (the folder name as the search keyword,
-  `IExternalLauncher`, fallback alert on failure). Unmatched names are
-  fully visible, never dropped.
-- **The sibling tier** (the migration path): the picked txt's own
-  directory is scanned for sibling mod folders (a directory containing
-  `<dirName>/<dirName>.mod`), skipping `base` (the old DML loader runtime,
-  never a mod) and the txt itself. An unresolved line whose name matches a
-  sibling upgrades to the "will be imported" outcome (resolved lines are
-  never upgraded: the profile/library match wins); IO failures degrade to
-  the plain unresolved rows. The outcome label stays "will be imported"
-  through identification: the folder is the content, identification is the
-  enhancement.
-- **Apply** (single button, enabled when at least one line is included; an
-  empty/comment-only file shows the localized notice and refuses rather
-  than a no-op write), sequenced membership-before-order (the order write
-  cannot place ids that are not profile members yet):
-  1. **Imports**: each INCLUDED sibling-import line imports its folder
-     through `IModImportService.Import` (source = `NexusSource` of the
-     identified id when the row is identified, else `UntrackedSource`;
-     version = the row's typed version when identified + non-empty, else
-     empty, the version-unknown path). The identified sibling import IS
-     the association; there is no separate identity rewrite at apply, and
-     lines matching an existing untracked container stay plain adds. A
-     per-line import failure is recorded on the line and the rest
-     continue.
-  2. **Adds**: `AddMod` (Latest policy) for every included add line
-     (library + the imported containers).
-  3. **Order**: ONE `SetModOrder` carrying every matched + newly-created
-     container in file order, so every add lands at its file position.
-     The checkboxes gate only adds; order application is not optional, and
-     `SetModOrder`'s own lock projection keeps locked entries at their
-     exact slots.
-  4. **Enqueues**: for each INCLUDED identified not-in-Curator line, a
-     Premium account (verified fresh through
-     `INexusAuthService.GetCurrentStateAsync` at apply time) gets a
-     download enqueued onto the shared queue (the head file resolved
-     first so the queue's dedupe key is real; a `ProfileAdd` item with no
-     container; the download rows own progress + completion + the
-     reload). These lines carry no version cell: the download resolves the
-     real version. Non-premium accounts perform no
-     network action (the rows carry the open-on-Nexus link).
-  On full success the session is marked pending, the card deactivates,
-  and `OrderApplied` reloads the mod list. A card-level failure (a
-  profile/repo/import failure, or stop-on-429 in the enqueue batch, which
-  keeps prior work and says the run can be re-applied) or any per-line
-  failure keeps the review open so the messages stay readable and a
-  re-run can finish; re-runs are idempotent (imports dedupe, `AddMod`
-  no-ops on existing membership, the queue dedupes live downloads).
-- **The resolver tier** (the identification workspace): after the repo tier
-  resolves what it can, a serial human-paced search queue (one row at a time,
-  table order, no retries; a failed search is logged and leaves the row
-  unidentified with the manual path available) fires
-  `INexusClient.SearchModsAsync` over the UNRESOLVED and SIBLING rows alike
-  (a sibling folder provides content, not identity: the Nexus badge, update
-  checks, and version come only from the lookup), with the folder name
-  normalized into search terms (case-boundary splitting first, then
-  lowercase, underscores/hyphens to spaces, whitespace collapsed).
-  Each unidentified lookup row gets a workspace: the TOP candidate inline
-  (name +
-  mod id + a one-click Accept), an expand affordance revealing the
-  alternates (each with its own Accept), and the manual id/URL entry in the
-  reserved cells (parsed via the shared `ImportSourceValidator` rules; a
-  bare id or a `nexusmods.com` URL both accepted; a search that completes
-  with zero candidates leaves the localized no-results hint on the row: the
-  manual entry and the open-on-Nexus link are then the path). Accepted or
-  manually entered identification marks the row identified: the id cell
-  swaps the manual entry for the identified fact (the accepted candidate's
-  name or the typed id; mutually exclusive projections of one cell), the
-  Match column shows the identified mod's name for an identified UNRESOLVED
-  row (whose outcome label reads the neutral "identified" instead of
-  not-found; sibling/reorder/library rows keep their own match + label, the
-  fact lives in the id cell), and the version cell activates for an
-  identified SIBLING-IMPORT row
-  only (empty by default, validated non-empty-when-Nexus like the import
-  form): it tags the content imported from disk, while rows with no local
-  content carry no version at all (the Premium download resolves the real
-  one; non-premium visits Nexus). Identification never checks the
-  include checkbox (the identified default stays excluded; identification
-  is a correction, not consent). Cancelling the card stops the queue;
-  arrived candidates stay on their rows.
-- **Cancel**: no writes, the card deactivates.
-
+- **The mode choice**: the picked file + a one-line summary (entries vs
+  profile matches) + two large, flat, accessible action tiles, each with a
+  drawn Material icon, a title, and a short explanation; side-by-side at wide
+  widths, stacked below 720 DIP through a `ContainerQuery` on the tiles'
+  wrapper. No radio buttons, checkboxes, or combo boxes anywhere in the
+  workspace. An empty/comment-only file shows the localized notice instead of
+  the tiles.
+- **`Reorder mods`**: reorder only. Choosing it performs ZERO Nexus/auth
+  calls and builds the lightweight review: profile matches read "will be
+  reordered"; library, sibling, and missing lines stay fully visible as
+  "skipped" (Match shows the library name or "not found"). No per-row
+  controls exist in this mode. Apply passes ONLY the active-profile match
+  ids, in file order, to one `SetModOrder` (locks governed by the service's
+  own projection). A file with no profile match honestly refuses (the primary
+  action stays unavailable).
+- **`Reorder and import mods`**: the same reorder plus acquisition. Choosing
+  it reads the account capability once for honest row messaging AND row
+  lookup capability (Premium unlocks the in-app download action and
+  remote-only lookups; anything else leaves remote-only lines visibly
+  non-actionable, see capability-gated lookups below), scans the txt's own
+  directory for sibling mod folders (a
+  directory containing `<dirName>/<dirName>.mod`, skipping `base` + the txt
+  itself; resolved lines never upgrade), builds the review with EVERY
+  automatic operation included by default, and starts the serial search
+  queue. There are no include checkboxes anywhere: library additions and
+  sibling imports are included by choosing the mode, and the subtle Skip /
+  Undo text action is the exceptional opt-out on optional add/import/download
+  rows (profile matches are never skippable; accepting a remote candidate
+  implies inclusion unless explicitly skipped).
+- **The review**: a fixed workspace header (the file, the search status +
+  `Stop search` action, the upfront remote-unavailable notice, the apply
+  failure, the queued-downloads notice, and the empty-file notice), one
+  fill-height virtualized results list (`ItemsControl` over a
+  `VirtualizingStackPanel` inside a `ScrollViewer`; no selection chrome, no
+  nested height cap), and a fixed footer (Back + Cancel, and the
+  universal primary action: "Apply").
+  Each top-level line renders inside a containing row card (a theme-aware
+  `Border.loItem`: background, rounded corners, padding whose horizontal
+  inset the column header's margin mirrors, so the shared columns stay
+  aligned); the candidate proposals + alternates + per-line errors render
+  INSIDE that card below the main line as visual children (an inset
+  `loCandidates` region with a left accent rule), with the parent-to-candidate
+  gap smaller than the gap between top-level rows. The column layout is ONE
+  definition string (`2*,3*,1.5*,190,130` + `ColumnSpacing=12`: Folder,
+  Match, Action, Mod ID, Version) shared by the header row, every review row,
+  and every candidate line, pinned identical by a source test (star/fixed
+  columns, never per-row Auto measurement; `ColumnDefinitions` is not a
+  styled property in Avalonia, so it cannot live in a style). Below a
+  700-DIP line width a per-line `ContainerQuery` moves the SAME Action
+  controls (the `loAction` styles: the header label, the row rail with its
+  Skip/Undo, the candidate/alternate Accept) to a full-width second line, so
+  long localized action labels reflow instead of overflowing into the fixed
+  Mod ID input; the action label also trims with the full text in its
+  tooltip as defense at intermediate widths. Textual actions (Skip / Undo /
+  Accept / Change / Stop Search) carry the standard visible Fluent chrome at
+  compact sizing (no transparent-link treatment), and the Verify button +
+  the expand chevron use a compact icon-button style. The reorder-only mode
+  keeps the same grid and simply carries no Mod ID/Version content. Row
+  mutation disables while the apply runs (the items host's `IsEnabled` binds
+  `!IsApplying`, plus the per-row `IsApplyingRow` projections and an applying
+  spinner in the footer; every indeterminate spinner carries a localized
+  accessible name).
+- **Capability-gated lookups**: the account read at import-mode entry also
+  decides which rows offer identification work. Sibling-folder rows keep
+  their search + manual identification at EVERY account tier (local content
+  exists and a Nexus association is useful). Remote-only missing rows
+  (`Unresolved`, no sibling content) offer lookups ONLY on Premium: on a
+  non-Premium, signed-out, or unreadable account they are visibly
+  non-actionable from the start (no search, no candidates, no manual
+  entry or Find, no Change, no version note; the Action column reads
+  "skipped" like every untouched row) and the
+  header shows the upfront notice counting them ("{0} mod(s) are not in
+  Curator and cannot be downloaded automatically with this Nexus account.
+  Add them to Curator and run this import again."). No review work is
+  exposed that Apply would discard; search totals/progress count only
+  genuinely searchable rows (a non-Premium standalone txt with no sibling
+  folders generates zero search calls).
+- **Matched-row facts**: in the import review, a line that matched a
+  container Curator already holds shows the facts Curator knows in the Mod ID
+  and Version columns, read-only (no Change or manual identification on an
+  already-resolved local row): a Nexus-sourced match shows `#<modId>` plus
+  the version this operation will use (the entry's policy-resolved tag for a
+  profile match, so a pin shows the pinned version and Latest the resolved
+  latest; the resolved-latest tag for a library add, matching the Latest
+  policy `AddMod` applies). Each fact shows independently: an untracked
+  match may show a known non-empty version with no id; a linked match shows
+  neither; an empty resolved tag stays honestly blank. The facts are
+  threaded through the reconciliation plan (`LoadOrderLine`'s optional
+  `NexusModId`/`Version`, enriched by `LoadOrderReconciler` at the
+  resolution boundary), never re-queried by the UI.
+- **The search queue**: the existing serial, human-paced queue (one row at a
+  time, file order, the folder name normalized into search terms; no
+  retries), fired only on import-mode entry and only over the
+  capability-gated LOOKUP rows (sibling lines at every tier; remote-only
+  lines on Premium). Overall progress (completed/total + the
+  current folder) shows in the header; `Stop search` cancels the remaining
+  lookups and retains arrived candidates. Apply cannot race a live search or
+  an in-flight manual verification: it enables after the search finishes or
+  is stopped and while no row's manual lookup is in flight.
+- **Identification** (capable lookup rows only): the candidate proposal
+  renders the canonical title under Match and, in the Mod ID cell, ONE
+  wrapping identity cluster reading `#id` then Accept (alternates behind an
+  expand chevron kept with that cluster); every alternate renders the same
+  `#id` + Accept cluster in its Mod ID cell. The child lines leave the plan
+  Action column empty: it stays the parent row's operation plan. Accepting
+  identifies the row in one action (the
+  canonical title shows exactly once, in Match; Mod ID carries the numeric
+  id). A UNIQUE normalized-exact search result is auto-identified: when the
+  capped candidate set holds exactly one candidate whose canonical name
+  normalizes (the same case-boundary/underscore/hyphen/whitespace
+  normalization used for the search terms) to exactly the file line's
+  normalized name, the row identifies immediately with the canonical title
+  + Mod ID (the search result is already a remote Nexus identity; no
+  redundant `GetModByIdAsync` call), implying inclusion and exposing Change.
+  The search is broader than exact (Nexus's name wildcard index decides
+  relevance), so a
+  single non-exact hit stays a child proposal and multiple hits always stay
+  proposals: never silently choose. The manual id/URL/NAME field and a
+  drawn-geometry magnifier Find icon button sit on ONE line in the Mod ID
+  cell (the spinner swaps into the same stable trailing slot while the
+  lookup runs, so nothing shifts; error/no-results lines appear beneath only
+  when present; Enter in the field invokes the exact same Find command as
+  the icon, key handled, no duplicated classification policy in
+  code-behind). The shared Find command classifies the trimmed input: (a) a
+  valid Nexus id or supported Nexus URL runs the anonymous exact-identity
+  lookup `INexusClient.GetModByIdAsync` and identifies the row immediately
+  (a syntactically valid id alone is never accepted until Nexus confirms it
+  and supplies the canonical title); (b) input that clearly intends an id or
+  URL but is malformed (an all-numeric invalid value, or an http(s) prefix
+  that is not a valid supported Nexus URL) shows inline validation and is
+  never reinterpreted as a name search; (c) any other nonblank text is
+  user-supplied mod-name criteria, normalized with the same search-terms
+  normalization and run through the anonymous `SearchModsAsync` with the
+  same candidate cap, REPLACING the row's current proposals (every
+  user-entered result requires an explicit Accept, even a single
+  normalized-exact one; the auto-identification rule belongs to the
+  automatic folder-name queue only) with the typed criteria retained. No
+  results show the no-results hint; failures stay editable with an inline
+  error and identify nothing. The two search sources never interleave on a
+  row: the Find action disables while the row's automatic search turn is
+  active, and the automatic queue skips a row whose manual lookup is in
+  flight, so a later manual search can never be overwritten by a stale
+  automatic completion. A subtle Change action returns an identified row to
+  the candidate/manual state (arrived candidates retained, identity-specific
+  validation state cleared) without restarting the workflow. There is
+  deliberately no per-row Search-on-Nexus link.
+- **Version**: only an identified sibling-folder import shows a version input,
+  and it is OPTIONAL: blank is valid and imports the content as
+  `NexusSource(id)` with the empty version string, landing on the derived
+  version-unknown repository state the ordinary Mods row surfaces through
+  its enabled download/update action (the resolution path); a typed value is
+  trimmed + preserved and never auto-populated from the Nexus page version.
+  A remote-only accepted mod shows the "version set by the download" note
+  instead of an input; local/reorder rows advertise no version surface.
+- **Apply (import mode)**, in order: (1) import every non-skipped sibling
+  folder (identified: `NexusSource(id)` + the typed version, blank importing
+  the empty version-unknown tag; otherwise `UntrackedSource` + the empty
+  version-unknown tag); (2) `AddMod` (Latest)
+  for every non-skipped library match + successful import; (3) ONE
+  `SetModOrder` over the profile matches + successfully added/imported
+  containers in file order, omitting skipped/failed rows; (4) the download
+  batch for each non-skipped, remotely identified, not-in-Curator row, only
+  when Premium is authoritative, run in TWO phases so a fast completion can
+  never race the placement plan: resolve every head file + the profile name
+  first (no admissions; per-line resolve failures recorded inline, a
+  rate limit aborts further resolves with everything resolved so far still
+  admitted), then record the placement plan BEFORE admitting any item, then
+  perform the synchronous admissions with no awaits in between (a malformed
+  admission records a per-line failure and re-records the plan without that
+  row). A Premium loss/failure at apply (the review promised downloads but
+  the fresh recheck says no) is a visible failure that writes nothing and
+  keeps the workspace open (a localized message, as is the
+  profile-vanished-during-enqueue failure); a rate limit surfaces the
+  re-runnable hint; per-line import/resolve failures keep their messages on
+  their rows. Re-runs are idempotent. When a failure keeps the workspace
+  open after downloads were admitted, the header shows the
+  queued-downloads notice (those downloads render as rows in the mod list,
+  which the open workspace hides).
+- **Download convergence**: the apply records a profile-scoped pending
+  placement plan on `LoadOrderDownloadPlacements` (the apply's anchors + the
+  pending mod ids in file order, registered before any admission). The
+  component observes the queue's existing `ItemChanged` completion signal: as
+  each download completes it moves the landed container to its file position
+  (one `SetModOrder` per landing), so the imported order converges to the
+  file instead of leaving mods appended. A FAILED download keeps its slot:
+  the queue's `Retry` admits a fresh item for the same request, and its
+  completion still converges (an unretried failure leaves inert session-only
+  intent that a later import supersedes or a profile deletion clears); a
+  CANCELLED download drops its slot (cancellation is authoritative); a
+  transient order-write failure keeps the plan so a later completion retries
+  the write, while a deleted profile discards it. The mod list reloads +
+  flags pending changes on each applied placement (`PlacementApplied`).
+  Load-order placement policy stays out of the download queue's contract
+  entirely.
+- **Reset paths**: Cancel (refused mid-apply, like Back: the in-flight apply
+  owns its captured profile + writes) discards with no writes; Back returns
+  to the mode choice (rows discarded, the queue stopped); an active-profile
+  change resets an open session, and a change DURING an apply defers the
+  reset until the in-flight apply finishes against its captured profile. The
+  workspace refuses to activate if another hosted card started while the
+  picked file was still loading (a card-gate re-check after the async read).
+  The workspace keeps reporting to the shared `ModCardsGate` for its whole
+  lifetime, holding the Add disable + the toolbar lock through the apply.
 ## Mod list density / detailed rows
 
 The Compact/Detailed row-density choice for the Mods destination. Detailed is
@@ -1815,12 +1930,13 @@ feature).
   selectable so the name being edited is always legible. It is the only
   locked field on the card (the version/URL fields are never locked for a
   container that can open it; a downloaded container never opens the card).
-- **Manager banner.** A full-width caution `Border` in the page grid's row 2,
-  between the inline import card (row 1) and the row list (row 3):
-  `IsVisible` bound to `IsModManagerActive`, a `CuratorCautionBackgroundBrush`
-  face carrying a drawn Material `swap_vert` icon (caution foreground) + the
-  wrapping `ModManagerBannerText`. Non-dismissible live state (no close
-  affordance) that gates nothing; it clears when the manager mod is disabled
+- **Manager banner.** A full-width caution `Border` in the normal-content
+  grid's row 2, between the inline import card (row 1) and the row list
+  (row 3): `IsVisible` bound to `IsModManagerActive`, a
+  `CuratorCautionBackgroundBrush` face carrying a drawn Material `swap_vert`
+  icon (caution foreground) + the wrapping `ModManagerBannerText`.
+  Non-dismissible live state (no close affordance) that gates nothing; it
+  clears when the manager mod is disabled
   or removed.
 - **Row template.** A `Panel` hosts two mutually exclusive roots selected by the
   row's `IsDetailed` projection: the Compact `Grid` (`compactRow`, four
@@ -2148,6 +2264,7 @@ UI registers its own surface after the backend libraries:
 // and before the INxmModDownloadHandler override (all three below).
 services.AddSingleton<IModDownloadQueue>(sp => new ModDownloadQueue(/* acquisition, repo, profiles, session, update state, config, Func<IModListRefresh>, loc, Action<Action>, logger */));
 services.AddSingleton(sp => new ModUpdateEnqueuer(/* acquisition, queue, profiles */));  // premium update installs
+services.AddSingleton(sp => new LoadOrderDownloadPlacements(/* queue, profiles, logger */)); // load-order download placement plans (observes the queue's completions)
 // … the INxmModDownloadHandler override (last-wins over AddNxm's no-op) …
 // Singletons: one shell, one list, one dialog service, one session.
 services.AddSingleton<IProfileSession>(sp => new ProfileSession(
@@ -2177,9 +2294,10 @@ services.AddSingleton(sp => new DetailedModRowsViewModel(     // density coordin
     sp.GetRequiredService<IModThumbnailService>(),
     sp.GetRequiredService<ILogger<DetailedModRowsViewModel>>()));
 services.AddSingleton<ImportWorkflowViewModel>();            // inline import card (before ModListViewModel)
+services.AddSingleton(sp => new LoadOrderImportViewModel(/* profiles, session, reconciler, nexus, imports, auth, acquisition, queue, placements, cards, dialogs, loc, Action<Action>, logger */)); // load-order workspace (before ModListViewModel)
 services.AddSingleton(sp => new LinkedModsViewModel(/* … */)); // link-external child (before ModListViewModel)
 services.AddSingleton(sp => new ModRowContext(/* auth, gamingMode, logger */)); // row globals (before ModListViewModel)
-services.AddSingleton<ModListViewModel>();                   // injects the three children + the row context + the download queue
+services.AddSingleton<ModListViewModel>();                   // injects the three children + the row context + the download queue + the load-order placements
 services.AddSingleton<ProfilesViewModel>();
 services.AddSingleton<IntegrationsViewModel>();
 services.AddSingleton<PreferencesViewModel>();

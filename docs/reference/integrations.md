@@ -24,6 +24,7 @@ public interface INexusClient
     Task<Response<ModFile[]>> ListModFilesAsync(string gameDomain, int modId, CancellationToken ct = default);
     Task<Response<ModUpdateStatus[]>> CheckUpdatesGraphQlAsync(int gameId, IReadOnlyList<int> modIds, CancellationToken ct = default);                          // v2 GraphQL
     Task<Response<NexusSearchResult[]>> SearchModsAsync(string gameDomain, string terms, int count, CancellationToken ct = default);                            // anonymous v2 GraphQL
+    Task<Response<NexusSearchResult?>> GetModByIdAsync(string gameDomain, int modId, CancellationToken ct = default);                                            // anonymous v2 GraphQL
 }
 ```
 
@@ -40,29 +41,44 @@ public interface INexusClient
   Returns `ModUpdateStatus[]` with the server-computed `viewerUpdateAvailable`
   field per mod. Throws `NexusApiException` on GraphQL-level errors in a 200 OK
   body (in addition to the standard HTTP error handling).
-- `SearchModsAsync` -- the ANONYMOUS v2 GraphQL `mods` search, run TWICE and
-  unioned by mod id preserving search order (name-leg hits first): once with
-  `name:[{op:WILDCARD,value:"*terms*"}]` (surrounding wildcards) and once with
-  `nameStemmed:[{op:WILDCARD,value:"terms"}]` (bare; the stemmed index matches
-  stemmed words, so a wildcard would break it), both against
-  `gameId:[{op:EQUALS,value:"4943"}]` (resolved from the domain; only the
-  Darktide domain resolves) with `sort:{relevance:{direction:DESC}}` + the
-  given `count`. Returns `NexusSearchResult` (modId + name + uid). The request
+- `SearchModsAsync` -- the ANONYMOUS v2 GraphQL `mods` search, ONE request
+  in the Nexus website's own search shape (grounded against the captured live
+  website query): the supplied phrase goes out verbatim as
+  `name:[{op:WILDCARD,value:"terms"}]` (no literal asterisks; Nexus's
+  wildcard index owns the matching), scoped by
+  `gameDomainName:[{op:EQUALS,value:"warhammer40kdarktide"}]` (only the
+  Darktide domain resolves), with `viewUserBlockedContent:false`,
+  `sort:{createdAt:{direction:DESC}}` (newest first), and the given `count`,
+  requesting only `nodes { modId name uid }`. Returns `NexusSearchResult`
+  (modId + name + uid). The request
   is the one client call that carries NO credentials: it routes around the
   auth factory entirely (a plain request with only the
   app-identification headers; no auth gate, no 401-refresh), because the
   endpoint is anonymous (verified live) and sits behind Cloudflare, not the
   API key budget. Anonymous responses carry no `x-rl-*` headers; they are
   parsed onto the `Response<T>` anyway if ever present. Throws
-  `NexusApiException` on a non-2xx or a GraphQL-level error in a 200 OK body
-  (both legs must succeed). Callers stay serial + human-paced (the
+  `NexusApiException` on a non-2xx or a GraphQL-level error in a 200 OK body.
+  Callers stay serial + human-paced (the
   Cloudflare posture); the load-order resolver's search queue is the model.
+- `GetModByIdAsync` -- the ANONYMOUS exact-identity counterpart to the fuzzy
+  search: looks ONE Darktide mod up by its numeric id through the v2 GraphQL
+  `modsByUid` query (`uid = game_id * 2^32 + mod_id`, identity fields only:
+  `nodes { uid name }`), and returns the mod's canonical identity
+  (`NexusSearchResult`), or null when the id resolves to no Darktide mod
+  (an empty node list is the documented not-found answer, not an error).
+  The same anonymous routing as the search (no auth factory involvement, no
+  credentials, works signed out). Throws `ArgumentException` for a
+  non-Darktide domain or a non-positive id; `NexusApiException` on a non-2xx
+  or a GraphQL-level error in a 200 OK body. Its caller (the load-order
+  workspace's manual id/URL verification) never treats a syntactically valid
+  id as verified identity without this call confirming it.
 
 Every method throws `NexusApiException` on a non-2xx; `NexusRateLimitException`
 on a rate-limit signal (429, or 403 with `x-rl-*-remaining: 0`);
 `NexusNotAuthenticatedException` when `AuthMethod == None` or the selected
-method has no usable credentials -- except `SearchModsAsync`, which works
-signed out and never throws the not-authenticated exception.
+method has no usable credentials -- except `SearchModsAsync` and
+`GetModByIdAsync`, which work signed out and never throw the
+not-authenticated exception.
 
 **401-reactive refresh + retry-once.** On a 401, the client asks the auth
 factory to refresh (OAuth) or give up (API key, None). On a successful refresh

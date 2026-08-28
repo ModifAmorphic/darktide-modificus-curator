@@ -2699,9 +2699,10 @@ public sealed class ModListViewModelTests
         try
         {
             await vm.LoadOrder.StartImportCommand.ExecuteAsync(path);
-            vm.LoadOrder.Rows.Single(r => r.ContainerId == library.Id).IsIncluded = true;
+            await vm.LoadOrder.ChooseImportCommand.ExecuteAsync(null);
+            Assert.Single(vm.LoadOrder.Rows);
 
-            vm.LoadOrder.ApplyCommand.Execute(null);
+            await vm.LoadOrder.ApplyCommand.ExecuteAsync(null);
 
             // The OrderApplied event reloaded the list: the added mod shows.
             Assert.False(vm.LoadOrder.IsActive);

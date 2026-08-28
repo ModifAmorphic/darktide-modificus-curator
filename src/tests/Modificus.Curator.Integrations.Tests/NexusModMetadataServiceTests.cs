@@ -899,6 +899,11 @@ public sealed class NexusModMetadataServiceTests
         public Task<Response<ModFile[]>> ListModFilesAsync(string gameDomain, int modId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<Response<ModUpdateStatus[]>> CheckUpdatesGraphQlAsync(int gameId, IReadOnlyList<int> modIds, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<Response<NexusSearchResult[]>> SearchModsAsync(string gameDomain, string terms, int count, CancellationToken ct = default) => throw new NotImplementedException();
+
+        // The metadata backfill reads mod pages, not id lookups; the honest
+        // default is the not-found answer.
+        public Task<Response<NexusSearchResult?>> GetModByIdAsync(string gameDomain, int modId, CancellationToken ct = default) =>
+            Task.FromResult(new Response<NexusSearchResult?>(null, NexusRateLimits.Unknown));
     }
 
     private sealed class FakeModRepository : IModRepository

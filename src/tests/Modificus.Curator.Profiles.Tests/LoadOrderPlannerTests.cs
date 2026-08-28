@@ -184,6 +184,110 @@ public sealed class LoadOrderPlannerTests
         Assert.Equal("Warp Unbound Timer", line.DisplayName);
     }
 
+    // ---- the reconciler's read-only identity facts (the plan carries what
+    // Curator already knows: the Nexus id + the version this operation will
+    // use, so the review can show them without re-querying by container id).
+
+    [Fact]
+    public void Reconciler_facts_an_active_latest_nexus_entry_with_the_resolved_latest()
+    {
+        using var fx = new ProfileServiceFixture();
+        var container = fx.AddContainerWithVersion(
+            "LatestMod", source: new NexusSource { ModId = 42 }, versionString: "1.0");
+        fx.AddVersion(container.Id, "2.0"); // becomes the resolved latest
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
+        fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
+
+        var line = Assert.Single(fx.Reconciler.Reconcile(profile.Id, ["latestmod"]).Lines);
+
+        Assert.Equal(42, line.NexusModId);
+        Assert.Equal("2.0", line.Version);
+    }
+
+    [Fact]
+    public void Reconciler_facts_an_active_pinned_nexus_entry_with_the_pinned_version()
+    {
+        using var fx = new ProfileServiceFixture();
+        var container = fx.AddContainerWithVersion(
+            "PinnedMod", source: new NexusSource { ModId = 7 }, versionString: "1.0");
+        fx.AddVersion(container.Id, "2.0"); // latest, but pinned past
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
+        var pinned = new PinnedPolicy(container.Versions.Single(v => v.VersionString == "1.0").Folder);
+        fx.Service.AddMod(profile.Id, container.Id, pinned);
+
+        var line = Assert.Single(fx.Reconciler.Reconcile(profile.Id, ["pinnedmod"]).Lines);
+
+        Assert.Equal(7, line.NexusModId);
+        Assert.Equal("1.0", line.Version); // the pin, not the latest
+    }
+
+    [Fact]
+    public void Reconciler_facts_a_library_add_with_its_resolved_latest()
+    {
+        using var fx = new ProfileServiceFixture();
+        var inProfile = fx.AddContainerWithVersion("ModInProfile");
+        var library = fx.AddContainerWithVersion(
+            "ModInLibrary", source: new NexusSource { ModId = 99 }, versionString: "1.0");
+        fx.AddVersion(library.Id, "3.0");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
+        fx.Service.AddMod(profile.Id, inProfile.Id, ModVersionPolicy.Latest);
+
+        var lines = fx.Reconciler.Reconcile(profile.Id, ["modinlibrary"]).Lines;
+        var line = Assert.Single(lines);
+
+        Assert.Equal(LoadOrderLineOutcome.LibraryAdd, line.Outcome);
+        Assert.Equal(99, line.NexusModId);
+        Assert.Equal("3.0", line.Version); // AddMod applies Latest
+    }
+
+    [Fact]
+    public void Reconciler_facts_an_untracked_match_with_a_version_but_no_id()
+    {
+        using var fx = new ProfileServiceFixture();
+        var container = fx.AddContainerWithVersion("LocalMod", versionString: "1.5");
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
+        fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
+
+        var line = Assert.Single(fx.Reconciler.Reconcile(profile.Id, ["localmod"]).Lines);
+
+        Assert.Null(line.NexusModId); // untracked: no Nexus identity
+        Assert.Equal("1.5", line.Version); // the known resolved tag shows
+    }
+
+    [Fact]
+    public void Reconciler_facts_a_linked_match_with_neither_id_nor_version()
+    {
+        using var fx = new ProfileServiceFixture();
+        var external = fx.MakeExternalModFolder("LinkedMod");
+        var linkedId = fx.Imports.LinkFolder(external);
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
+        fx.Service.AddMod(profile.Id, linkedId, ModVersionPolicy.Latest);
+
+        var line = Assert.Single(fx.Reconciler.Reconcile(profile.Id, ["linkedmod"]).Lines);
+
+        Assert.Null(line.NexusModId);
+        Assert.Null(line.Version); // a linked container keeps no version record
+    }
+
+    [Fact]
+    public void Reconciler_facts_an_empty_latest_tag_as_an_honestly_empty_version()
+    {
+        // The version-unknown shape: the resolved latest exists but carries
+        // an empty tag; the fact is an empty string (rendered blank), never
+        // fabricated.
+        using var fx = new ProfileServiceFixture();
+        var container = fx.AddContainerWithVersion(
+            "UnknownTag", source: new NexusSource { ModId = 5 }, versionString: string.Empty);
+        var profile = fx.Service.CreateProfile("P", string.Empty, new LaunchSettings());
+        fx.Service.AddMod(profile.Id, container.Id, ModVersionPolicy.Latest);
+
+        var line = Assert.Single(fx.Reconciler.Reconcile(profile.Id, ["unknowntag"]).Lines);
+
+        Assert.Equal(5, line.NexusModId);
+        Assert.NotNull(line.Version);
+        Assert.Equal(string.Empty, line.Version);
+    }
+
     [Fact]
     public void Reconciler_resolves_repo_candidates_by_their_latest_base_name()
     {

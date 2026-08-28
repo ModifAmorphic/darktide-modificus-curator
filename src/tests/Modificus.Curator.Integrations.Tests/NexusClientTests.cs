@@ -458,79 +458,191 @@ public sealed class NexusClientTests
     }
 
     [Fact]
-    public async Task Search_runs_both_legs_and_unions_by_mod_id_name_leg_first()
+    public async Task Search_sends_one_website_shaped_request_and_surfaces_the_hit()
     {
-        // Leg 1 (name): mods 1, 2, 3. Leg 2 (nameStemmed): mods 4, 2 (dupe),
-        // 5. The union keeps search order with the name leg's hits first and
-        // drops the duplicate mod 2.
-        var bodies = new List<string>();
+        // The regression for the actual failure: a multi-word phrase
+        // ("curios auspex") must go out as ONE request shaped like the Nexus
+        // website's own search (the operator's live capture): the raw phrase
+        // as the name WILDCARD value with NO literal asterisks, no
+        // nameStemmed leg, the Darktide gameDomainName filter, createdAt DESC
+        // ordering, blocked content excluded, and the requested count. The
+        // hit the live endpoint returns for that phrase is surfaced.
+        string? body = null;
         var handler = new StubHttpMessageHandler(req =>
         {
-            var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
-            bodies.Add(body);
-            var nameLeg = body.Contains("name:") && !body.Contains("nameStemmed:");
-            var json = nameLeg
-                ? SearchJson((1, "Alpha"), (2, "Beta"), (3, "Gamma"))
-                : SearchJson((4, "Delta"), (2, "Beta"), (5, "Epsilon"));
+            body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(json),
+                Content = new StringContent(SearchJson((1226, "Curios Auspex"))),
             };
         });
         var http = new HttpClient(handler) { BaseAddress = new Uri(ApiBase) };
         var client = new NexusClient(http, new FakeAuthFactory(authenticated: true), NullLogger<NexusClient>.Instance);
 
-        var response = await client.SearchModsAsync("warhammer40kdarktide", "warp unbound timer", 10);
+        var response = await client.SearchModsAsync("warhammer40kdarktide", "curios auspex", 5);
 
-        Assert.Equal([1, 2, 3, 4, 5], response.Data.Select(r => r.ModId));
-        Assert.Equal("Alpha", response.Data[0].Name);
-        Assert.All(response.Data, r => Assert.NotNull(r.Uid));
+        // The live-verified hit surfaced with its identity fields.
+        var hit = Assert.Single(response.Data);
+        Assert.Equal(1226, hit.ModId);
+        Assert.Equal("Curios Auspex", hit.Name);
+        Assert.NotNull(hit.Uid);
 
-        // Exactly two POSTs to the v2 GraphQL endpoint, the name leg first.
-        Assert.Equal(2, handler.Requests.Count);
-        Assert.All(handler.Requests, r => Assert.Equal(new Uri(ApiBase + "v2/graphql"), r.RequestUri));
-        Assert.All(handler.Requests, r => Assert.Equal(HttpMethod.Post, r.Method));
-        // The name leg's body carries the plain-name filter (and not the
-        // stemmed one); the second leg the reverse. The GraphQL field names
-        // are unquoted, so they survive the JSON serialization verbatim.
-        Assert.Contains("name:", bodies[0]);
-        Assert.DoesNotContain("nameStemmed:", bodies[0]);
-        Assert.Contains("nameStemmed:", bodies[1]);
+        // Exactly ONE POST to the v2 GraphQL endpoint.
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(new Uri(ApiBase + "v2/graphql"), request.RequestUri);
+        Assert.Equal(HttpMethod.Post, request.Method);
+
+        // The request contract, pinned (the query is JSON-serialized into
+        // the body, so the GraphQL string quotes appear as \u0022):
+        Assert.NotNull(body);
+        Assert.Contains("name: [{op: WILDCARD, value: \\u0022curios auspex\\u0022}]", body); // the raw phrase
+        Assert.DoesNotContain("*curios auspex*", body); // no literal asterisks anywhere
+        Assert.DoesNotContain("nameStemmed", body); // no second leg
+        Assert.Contains("gameDomainName: [{op: EQUALS, value: \\u0022warhammer40kdarktide\\u0022}]", body);
+        Assert.Contains("viewUserBlockedContent: false", body);
+        Assert.Contains("sort: { createdAt: { direction: DESC } }", body);
+        Assert.Contains("count: 5", body);
+        Assert.Contains("nodes { modId name uid }", body); // identity fields only
     }
 
     [Fact]
-    public async Task Search_places_the_wildcard_on_the_name_leg_only()
+    public async Task Search_sends_the_callers_normalized_phrase_verbatim()
     {
-        var bodies = new List<string>();
+        // The caller owns normalization (folder names -> lowercase,
+        // word-separated phrases); the client sends whatever phrase it is
+        // given verbatim as the wildcard value (one request, no stemming,
+        // no rewriting).
+        string? body = null;
         var handler = new StubHttpMessageHandler(req =>
         {
-            bodies.Add(req.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+            body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("{ \"data\": { \"mods\": { \"nodes\": [] } } }"),
+                Content = new StringContent(SearchJson()),
             };
         });
         var http = new HttpClient(handler) { BaseAddress = new Uri(ApiBase) };
         var client = new NexusClient(http, new FakeAuthFactory(authenticated: true), NullLogger<NexusClient>.Instance);
 
-        await client.SearchModsAsync("warhammer40kdarktide", "warp unbound timer", 5);
+        await client.SearchModsAsync("warhammer40kdarktide", "solo sandbox", 5);
 
-        // The query string is JSON-serialized into the request body; the
-        // default serializer escapes the GraphQL string quotes as \u0022, so
-        // the assertions use that escaped form (the wildcard placement is the
-        // point).
-        Assert.Contains("value: \\u0022*warp unbound timer*\\u0022", bodies[0]); // name: surrounding wildcard
-        Assert.Contains("value: \\u0022warp unbound timer\\u0022", bodies[1]); // nameStemmed: bare
-        Assert.DoesNotContain("*warp unbound timer*", bodies[1]);
+        Assert.Single(handler.Requests); // one request, same shape for any phrase
+        Assert.NotNull(body);
+        var query = DecodeGraphQlQuery(body!);
+        Assert.Contains("name: [{op: WILDCARD, value: \"solo sandbox\"}]", query);
+        Assert.DoesNotContain("*solo sandbox*", query);
+        Assert.DoesNotContain("nameStemmed", query);
+    }
 
-        // Both legs filter on the Darktide game id, sorted by relevance DESC,
-        // with the requested count.
-        Assert.All(bodies, b =>
+    [Fact]
+    public async Task Search_escapes_a_single_backslash_in_the_phrase()
+    {
+        // A phrase carrying ONE backslash must go out GraphQL-escaped as a
+        // doubled backslash inside the wildcard value. The assertion reads
+        // the DECODED GraphQL query string (JSON's outer escaping removed),
+        // so it inspects the literal Nexus will parse, not the transport
+        // encoding. The prior pair-only Replace left a lone trailing
+        // backslash unescaped; this pins every-single-backslash escaping.
+        string? body = null;
+        var handler = new StubHttpMessageHandler(req =>
         {
-            Assert.Contains("gameId: [{op: EQUALS, value: \\u00224943\\u0022}]", b);
-            Assert.Contains("sort: { relevance: { direction: DESC } }", b);
-            Assert.Contains("count: 5", b);
+            body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(SearchJson()),
+            };
         });
+        var http = new HttpClient(handler) { BaseAddress = new Uri(ApiBase) };
+        var client = new NexusClient(http, new FakeAuthFactory(authenticated: true), NullLogger<NexusClient>.Instance);
+
+        await client.SearchModsAsync("warhammer40kdarktide", "mod\\name", 5);
+
+        Assert.Single(handler.Requests);
+        Assert.NotNull(body);
+        var query = DecodeGraphQlQuery(body!);
+        // The GraphQL string literal contains mod\\name (an escaped
+        // backslash between the words), not the raw single backslash.
+        Assert.Contains("name: [{op: WILDCARD, value: \"mod\\\\name\"}]", query);
+        // ... and never the raw single backslash the caller supplied.
+        Assert.DoesNotContain("value: \"mod\\name\"", query);
+    }
+
+    [Fact]
+    public async Task Search_escapes_a_backslash_immediately_before_a_quote()
+    {
+        // The nastiest shape: a backslash directly before a quote in the
+        // phrase. Both must escape (backslash doubled first, then the quote
+        // escaped), keeping the query string well formed: the phrase still
+        // reads as ONE string value in the WILDCARD entry and the query's
+        // own structural quotes stay intact.
+        string? body = null;
+        var handler = new StubHttpMessageHandler(req =>
+        {
+            body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(SearchJson()),
+            };
+        });
+        var http = new HttpClient(handler) { BaseAddress = new Uri(ApiBase) };
+        var client = new NexusClient(http, new FakeAuthFactory(authenticated: true), NullLogger<NexusClient>.Instance);
+
+        await client.SearchModsAsync("warhammer40kdarktide", "mod\\\"quote", 5);
+
+        Assert.Single(handler.Requests);
+        Assert.NotNull(body);
+        var query = DecodeGraphQlQuery(body!);
+        // The literal carries mod\\"quote: the doubled backslash, then the
+        // escaped quote, inside the still-well-formed value string.
+        Assert.Contains("value: \"mod\\\\\\\"quote\"", query);
+        // The value entry parses as one GraphQL string: it opens with one
+        // quote after 'value: ' and the escaped-quote sequence cannot
+        // terminate it early (no raw unescaped quote from the phrase).
+        Assert.DoesNotContain("value: \"mod\\\"quote\"", query);
+        // The query remains structurally well formed around the filter.
+        Assert.Contains("gameDomainName: [{op: EQUALS, value: \"warhammer40kdarktide\"}]", query);
+    }
+
+    [Fact]
+    public async Task Search_embeds_the_canonical_domain_regardless_of_caller_casing()
+    {
+        // The domain is validated case-insensitively, but the embedded
+        // filter value is the canonical constant, so the request is
+        // deterministic and matches the captured website value byte for
+        // byte. No behavior widening: only the Darktide domain validates.
+        string? body = null;
+        var handler = new StubHttpMessageHandler(req =>
+        {
+            body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(SearchJson()),
+            };
+        });
+        var http = new HttpClient(handler) { BaseAddress = new Uri(ApiBase) };
+        var client = new NexusClient(http, new FakeAuthFactory(authenticated: true), NullLogger<NexusClient>.Instance);
+
+        await client.SearchModsAsync("WARHAMMER40KDARKTIDE", "solo sandbox", 5);
+
+        Assert.Single(handler.Requests);
+        Assert.NotNull(body);
+        var query = DecodeGraphQlQuery(body!);
+        Assert.Contains(
+            "gameDomainName: [{op: EQUALS, value: \"warhammer40kdarktide\"}]",
+            query);
+        Assert.DoesNotContain("WARHAMMER40KDARKTIDE", query, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Decodes the GraphQL query out of the JSON request body the stub
+    /// captured, so assertions read the literal Nexus will parse (JSON's
+    /// outer string escaping removed) instead of the transport encoding.
+    /// </summary>
+    private static string DecodeGraphQlQuery(string body)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(body);
+        return doc.RootElement.GetProperty("query").GetString()
+            ?? throw new InvalidOperationException("The request body carries no query.");
     }
 
     [Fact]
@@ -549,17 +661,14 @@ public sealed class NexusClientTests
         var response = await client.SearchModsAsync("warhammer40kdarktide", "anything", 5);
 
         Assert.Empty(response.Data);
-        Assert.Equal(2, handler.Requests.Count);
-        Assert.All(handler.Requests, r =>
-        {
-            Assert.Null(r.Authorization); // no Bearer
-            Assert.Null(r.ApiKey); // no apikey
-            Assert.Equal("Modificus-Curator", r.ApplicationName); // app-id still applied
-        });
+        var request = Assert.Single(handler.Requests); // one request
+        Assert.Null(request.Authorization); // no Bearer
+        Assert.Null(request.ApiKey); // no apikey
+        Assert.Equal("Modificus-Curator", request.ApplicationName); // app-id still applied
     }
 
     [Fact]
-    public async Task Search_empty_on_both_legs_yields_an_empty_result()
+    public async Task Search_with_no_hits_yields_an_empty_result()
     {
         var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -638,6 +747,153 @@ public sealed class NexusClientTests
         await Assert.ThrowsAsync<ArgumentException>(() =>
             client.SearchModsAsync("skyrim", "anything", 5));
         Assert.Empty(handler.Requests); // rejected before any leg was sent
+    }
+
+    // ---- GetModByIdAsync (the anonymous exact-identity lookup) ------------
+
+    /// <summary>A GraphQL modsByUid response body with one identity node.</summary>
+    private static string ModByUidJson(params (long Uid, string Name)[] nodes)
+    {
+        var entries = string.Join(",", nodes.Select(n =>
+            "{ \"uid\": \"" + n.Uid + "\", \"name\": \"" + n.Name + "\" }"));
+        return "{ \"data\": { \"modsByUid\": { \"nodes\": [" + entries + "] } } }";
+    }
+
+    /// <summary>The Darktide UID for a mod id (game_id * 2^32 + mod_id).</summary>
+    private static long DarktideUid(int modId) => 4943L * 4294967296L + modId;
+
+    [Fact]
+    public async Task Lookup_returns_the_canonical_identity_for_an_existing_mod()
+    {
+        var bodies = new List<string>();
+        var handler = new StubHttpMessageHandler(req =>
+        {
+            bodies.Add(req.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ModByUidJson((DarktideUid(8), "Darktide Mod Framework"))),
+            };
+        });
+        var http = new HttpClient(handler) { BaseAddress = new Uri(ApiBase) };
+        var client = new NexusClient(http, new FakeAuthFactory(authenticated: true), NullLogger<NexusClient>.Instance);
+
+        var response = await client.GetModByIdAsync("warhammer40kdarktide", 8);
+
+        Assert.NotNull(response.Data);
+        Assert.Equal(8, response.Data!.ModId);
+        Assert.Equal("Darktide Mod Framework", response.Data.Name);
+        Assert.NotNull(response.Data.Uid);
+
+        // One POST to the v2 GraphQL endpoint with the UID variable + the
+        // identity-only field selection.
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(new Uri(ApiBase + "v2/graphql"), request.RequestUri);
+        Assert.Contains("modsByUid(uids: $uids)", bodies[0]);
+        Assert.Contains("nodes { uid name }", bodies[0]);
+        Assert.Contains("\"uids\":[\"" + DarktideUid(8) + "\"]", bodies[0]);
+    }
+
+    [Fact]
+    public async Task Lookup_returns_null_for_a_missing_mod()
+    {
+        // A UID that resolves to nothing is simply absent from the nodes: the
+        // documented not-found answer, not an error.
+        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(ModByUidJson()),
+        });
+        var http = new HttpClient(handler) { BaseAddress = new Uri(ApiBase) };
+        var client = new NexusClient(http, new FakeAuthFactory(authenticated: true), NullLogger<NexusClient>.Instance);
+
+        var response = await client.GetModByIdAsync("warhammer40kdarktide", 404040);
+
+        Assert.Null(response.Data);
+    }
+
+    [Fact]
+    public async Task Lookup_is_anonymous_no_auth_header_and_works_signed_out()
+    {
+        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(ModByUidJson()),
+        });
+        var http = new HttpClient(handler) { BaseAddress = new Uri(ApiBase) };
+        var client = new NexusClient(http, new FakeAuthFactory(authenticated: false), NullLogger<NexusClient>.Instance);
+
+        var response = await client.GetModByIdAsync("warhammer40kdarktide", 8);
+
+        Assert.Null(response.Data); // the not-found body; the send itself succeeded
+        var request = Assert.Single(handler.Requests);
+        Assert.Null(request.Authorization); // no Bearer
+        Assert.Null(request.ApiKey); // no apikey
+        Assert.Equal("Modificus-Curator", request.ApplicationName); // app-id still applied
+    }
+
+    [Fact]
+    public async Task Lookup_rejects_invalid_domain_and_non_positive_id()
+    {
+        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var http = new HttpClient(handler) { BaseAddress = new Uri(ApiBase) };
+        var client = new NexusClient(http, new FakeAuthFactory(authenticated: true), NullLogger<NexusClient>.Instance);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.GetModByIdAsync("skyrim", 8));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            client.GetModByIdAsync("warhammer40kdarktide", 0));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            client.GetModByIdAsync("warhammer40kdarktide", -1));
+        Assert.Empty(handler.Requests); // rejected before any send
+    }
+
+    [Fact]
+    public async Task Lookup_surfaces_a_graphql_error_as_a_NexusApiException()
+    {
+        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                "{ \"errors\": [ { \"message\": \"modsByUid requires auth\" } ] }"),
+        });
+        var http = new HttpClient(handler) { BaseAddress = new Uri(ApiBase) };
+        var client = new NexusClient(http, new FakeAuthFactory(authenticated: true), NullLogger<NexusClient>.Instance);
+
+        await Assert.ThrowsAsync<NexusApiException>(() =>
+            client.GetModByIdAsync("warhammer40kdarktide", 8));
+    }
+
+    [Fact]
+    public async Task Lookup_maps_a_non_2xx_to_a_NexusApiException()
+    {
+        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent("{ \"message\": \"bad query\" }"),
+        });
+        var http = new HttpClient(handler) { BaseAddress = new Uri(ApiBase) };
+        var client = new NexusClient(http, new FakeAuthFactory(authenticated: true), NullLogger<NexusClient>.Instance);
+
+        await Assert.ThrowsAsync<NexusApiException>(() =>
+            client.GetModByIdAsync("warhammer40kdarktide", 8));
+    }
+
+    [Fact]
+    public async Task Lookup_forwards_rate_limit_headers_when_present()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+        {
+            var message = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ModByUidJson()),
+            };
+            message.Headers.Add("x-rl-daily-limit", "2500");
+            message.Headers.Add("x-rl-daily-remaining", "2499");
+            return message;
+        });
+        var http = new HttpClient(handler) { BaseAddress = new Uri(ApiBase) };
+        var client = new NexusClient(http, new FakeAuthFactory(authenticated: true), NullLogger<NexusClient>.Instance);
+
+        var response = await client.GetModByIdAsync("warhammer40kdarktide", 8);
+
+        Assert.Equal(2500, response.RateLimits.DailyLimit);
+        Assert.Equal(2499, response.RateLimits.DailyRemaining);
     }
 
     private sealed class FakeAuthFactory : INexusAuthMessageFactory

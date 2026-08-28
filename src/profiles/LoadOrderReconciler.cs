@@ -57,7 +57,10 @@ internal sealed class LoadOrderReconciler : ILoadOrderReconciler
 
         // Profile side: resolve each entry's staging base name per its own
         // policy (what staging would link for it). Unresolvable entries are
-        // omitted; a file naming them reports unmatched.
+        // omitted; a file naming them reports unmatched. The resolved
+        // version + source also supply the read-only identity facts the
+        // review shows (the Nexus id + the version THIS operation will use,
+        // so a pin shows the pinned tag and Latest the resolved latest).
         var profileContainerIds = new HashSet<Guid>();
         var profileMods = new List<LoadOrderProfileMod>();
         foreach (var entry in entries)
@@ -75,13 +78,20 @@ internal sealed class LoadOrderReconciler : ILoadOrderReconciler
                 continue;
             }
 
-            profileMods.Add(new LoadOrderProfileMod(entry.ContainerId, baseName, container.Name));
+            var resolvedVersion = container.ResolveVersion(entry.Policy);
+            profileMods.Add(new LoadOrderProfileMod(
+                entry.ContainerId,
+                baseName,
+                container.Name,
+                container.Source is NexusSource nexus ? nexus.ModId : null,
+                resolvedVersion?.VersionString));
         }
 
         // Repo side: every container NOT in the profile, keyed by the base
         // name its current latest version would stage (a linked container by
         // its external folder's own name; there is no profile policy to
-        // resolve for it).
+        // resolve for it). Facts resolve the same way, against the Latest
+        // policy the add will apply.
         var candidates = new List<LoadOrderRepoCandidate>();
         foreach (var container in _repo.List())
         {
@@ -96,11 +106,16 @@ internal sealed class LoadOrderReconciler : ILoadOrderReconciler
                 continue;
             }
 
+            var latestVersion = container.Source is LinkedSource
+                ? null
+                : container.ResolveVersion(ModVersionPolicy.Latest);
             candidates.Add(new LoadOrderRepoCandidate(
                 container.Id,
                 baseName,
                 container.Source is NexusSource,
-                container.Name));
+                container.Name,
+                container.Source is NexusSource repoNexus ? repoNexus.ModId : null,
+                latestVersion?.VersionString));
         }
 
         return LoadOrderPlanner.Build(names, profileMods, candidates);

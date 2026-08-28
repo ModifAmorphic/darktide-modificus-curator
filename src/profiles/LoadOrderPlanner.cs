@@ -39,7 +39,19 @@ public enum LoadOrderLineOutcome
 /// <param name="BaseName">The resolved staging base folder name.</param>
 /// <param name="DisplayName">The mod's display name (the row name the review
 /// table shows for a match).</param>
-public sealed record LoadOrderProfileMod(Guid ContainerId, string BaseName, string DisplayName);
+/// <param name="NexusModId">The container's Nexus mod id when its source is
+/// <see cref="Mods.NexusSource"/>, else null. A read-only display fact the
+/// planner carries without interpreting.</param>
+/// <param name="Version">The version tag this operation will use (the entry's
+/// policy-resolved version: a pin shows the pinned tag, Latest the resolved
+/// latest), or null when unresolvable. An empty string is an honestly empty
+/// (unknown) tag. A read-only display fact.</param>
+public sealed record LoadOrderProfileMod(
+    Guid ContainerId,
+    string BaseName,
+    string DisplayName,
+    int? NexusModId = null,
+    string? Version = null);
 
 /// <summary>
 /// A repository container that is NOT in the active profile, projected for
@@ -56,15 +68,25 @@ public sealed record LoadOrderProfileMod(Guid ContainerId, string BaseName, stri
 /// ambiguity.</param>
 /// <param name="DisplayName">The container's display name (what the review
 /// table shows for a match).</param>
+/// <param name="NexusModId">The container's Nexus mod id when its source is
+/// <see cref="Mods.NexusSource"/>, else null. A read-only display fact the
+/// planner carries without interpreting.</param>
+/// <param name="Version">The version tag the add will use (the container's
+/// resolved latest, matching the Latest policy <c>AddMod</c> applies), or
+/// null when unresolvable. An empty string is an honestly empty (unknown)
+/// tag. A read-only display fact.</param>
 public sealed record LoadOrderRepoCandidate(
     Guid ContainerId,
     string BaseName,
     bool IsNexusSourced,
-    string DisplayName);
+    string DisplayName,
+    int? NexusModId = null,
+    string? Version = null);
 
 /// <summary>
 /// One file line's reconciliation row: the file's folder name, the outcome,
-/// and the container it matched (null when unresolved). Rows preserve file
+/// the container it matched (null when unresolved), and the read-only
+/// identity facts Curator already knows about the match. Rows preserve file
 /// order; the table renders them one-to-one.
 /// </summary>
 /// <param name="Name">The file's (trimmed, deduplicated) folder name.</param>
@@ -75,12 +97,22 @@ public sealed record LoadOrderRepoCandidate(
 /// unresolved (kept so the review can show what the match keyed on).</param>
 /// <param name="DisplayName">The matched mod's display name, or null when
 /// unresolved.</param>
+/// <param name="NexusModId">The matched container's Nexus mod id when known
+/// (a Nexus-sourced profile or library match), else null. Unmatched lines
+/// carry null; identification of an unmatched line is the review's
+/// user-driven work, not a reconciliation fact.</param>
+/// <param name="Version">The version tag this operation will use for the
+/// match (policy-resolved for a profile entry, the resolved latest for a
+/// library add), or null when unknown. An empty string is an honestly empty
+/// (unknown) tag, never fabricated.</param>
 public sealed record LoadOrderLine(
     string Name,
     LoadOrderLineOutcome Outcome,
     Guid? ContainerId,
     string? MatchedBaseName,
-    string? DisplayName);
+    string? DisplayName,
+    int? NexusModId = null,
+    string? Version = null);
 
 /// <summary>
 /// The immutable reconciliation plan over a parsed load-order file: one row
@@ -218,7 +250,8 @@ public static class LoadOrderPlanner
             {
                 lines.Add(new LoadOrderLine(
                     name, LoadOrderLineOutcome.Reorder,
-                    profileMod.ContainerId, profileMod.BaseName, profileMod.DisplayName));
+                    profileMod.ContainerId, profileMod.BaseName, profileMod.DisplayName,
+                    profileMod.NexusModId, profileMod.Version));
                 continue;
             }
 
@@ -236,7 +269,8 @@ public static class LoadOrderPlanner
                 {
                     lines.Add(new LoadOrderLine(
                         name, LoadOrderLineOutcome.LibraryAdd,
-                        resolved.ContainerId, resolved.BaseName, resolved.DisplayName));
+                        resolved.ContainerId, resolved.BaseName, resolved.DisplayName,
+                        resolved.NexusModId, resolved.Version));
                     continue;
                 }
             }

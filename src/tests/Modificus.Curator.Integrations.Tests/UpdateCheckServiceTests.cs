@@ -1492,6 +1492,12 @@ public sealed class UpdateCheckServiceTests
             string gameDomain, string terms, int count, CancellationToken ct = default) =>
             throw new NotImplementedException();
 
+        // The update check never looks a mod up by id; the honest default is
+        // the not-found answer, recorded so an unexpected call is visible.
+        public Task<Response<NexusSearchResult?>> GetModByIdAsync(
+            string gameDomain, int modId, CancellationToken ct = default) =>
+            Task.FromResult(new Response<NexusSearchResult?>(null, NexusRateLimits.Unknown));
+
         public Task<Response<ValidateInfo>> ValidateAsync(CancellationToken ct = default)
             => throw new NotImplementedException();
         public Task<Response<DownloadLink[]>> DownloadLinksAsync(

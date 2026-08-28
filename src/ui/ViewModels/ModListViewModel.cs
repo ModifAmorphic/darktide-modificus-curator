@@ -37,7 +37,8 @@ public enum ModAddMode
 
     /// <summary>
     /// Import a DML/DMF-world mod_load_order.txt via the txt file picker: the
-    /// load-order review table card (order application + library adds).
+    /// load-order import workspace (the mode choice, the review, and the
+    /// apply).
     /// </summary>
     LoadOrder,
 }
@@ -97,7 +98,7 @@ public enum ModAddMode
 /// <para><b>Localized text is live:</b> the header count + empty-state messages
 /// re-resolve from <see cref="LocalizationService"/> on a culture change, and each
 /// row's badge + policy text refresh too (via <see cref="ModItemViewModel.Refresh"/>).</para>
-/// <para><b>Add flow:</b> the Add split button's four flyout items are all modes
+/// <para><b>Add flow:</b> the Add split button's five flyout items are all modes
 /// that set themselves as the default on click (the face label tracks the
 /// mode): "Add Nexus Mods" (the default; opens the Darktide Nexus Mods games
 /// page in the browser via <see cref="AddNexusModsCommand"/>), "Add Mod
@@ -139,6 +140,13 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     private readonly INxmRegistrationState _nxmRegistration;
     private readonly IModDownloadQueue _downloadQueue;
     private readonly ModUpdateEnqueuer _updateEnqueuer;
+
+    /// <summary>
+    /// The profile-scoped pending placement plans for load-order imports:
+    /// the download-completion convergence this list reloads on (see
+    /// <see cref="OnLoadOrderPlacementApplied"/>).
+    /// </summary>
+    private readonly LoadOrderDownloadPlacements _loadOrderPlacements;
 
     /// <summary>
     /// The shared hosted-card activity gate: the any-card projections below
@@ -214,6 +222,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         INxmRegistrationState nxmRegistration,
         IModDownloadQueue downloadQueue,
         ModUpdateEnqueuer updateEnqueuer,
+        LoadOrderDownloadPlacements loadOrderPlacements,
         ILogger<ModListViewModel> logger)
         : base(localization)
     {
@@ -234,6 +243,8 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         _nxmRegistration = nxmRegistration ?? throw new ArgumentNullException(nameof(nxmRegistration));
         _downloadQueue = downloadQueue ?? throw new ArgumentNullException(nameof(downloadQueue));
         _updateEnqueuer = updateEnqueuer ?? throw new ArgumentNullException(nameof(updateEnqueuer));
+        _loadOrderPlacements = loadOrderPlacements
+            ?? throw new ArgumentNullException(nameof(loadOrderPlacements));
 
         _session.PropertyChanged += OnSessionPropertyChanged;
         // The runner surfaces the check completion on the UI thread (the
@@ -266,10 +277,16 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
         // flipped. Already raised on the UI thread.
         _cards.Changed += OnCardsChanged;
 
-        // The load-order card finished an apply (order written + included
-        // library mods added): reload so the rows + order reflect it.
+        // The load-order workspace finished an apply (order written +
+        // included library mods added): reload so the rows + order reflect it.
         // Application-lifetime singletons both; never undone.
         LoadOrder.OrderApplied += OnLoadOrderApplied;
+
+        // A pending load-order placement rewrote the profile's order as an
+        // enqueued download completed (the placements component raises this
+        // on the UI thread): flag the staged change + reload when the
+        // placement targeted the profile being shown.
+        _loadOrderPlacements.PlacementApplied += OnLoadOrderPlacementApplied;
 
         // The empty-state Nexus hint reads the shared last-known nxm
         // registration state; no OS probe happens here or in Reload.
@@ -495,11 +512,12 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     public ImportWorkflowViewModel ImportWorkflow { get; }
 
     /// <summary>
-    /// The load-order import card's child VM (application-lifetime singleton,
-    /// injected before this VM in composition). Owns the review table + the
-    /// apply; this VM reloads on its <see cref="LoadOrderImportViewModel.OrderApplied"/>
-    /// event. Exposed read-only so the view binds its card host + picker
-    /// forwards to <c>LoadOrder.StartImportCommand</c>.
+    /// The load-order import workspace's child VM (application-lifetime
+    /// singleton, injected before this VM in composition). Owns the mode
+    /// choice, the review list, and the apply; this VM reloads on its
+    /// <see cref="LoadOrderImportViewModel.OrderApplied"/> event. Exposed
+    /// read-only so the view binds its full-content host + picker forwards to
+    /// <c>LoadOrder.StartImportCommand</c>.
     /// </summary>
     public LoadOrderImportViewModel LoadOrder { get; }
 
@@ -961,11 +979,28 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     }
 
     /// <summary>
-    /// The load-order card applied its review: reload so the new order +
+    /// The load-order workspace applied its review: reload so the new order +
     /// the included library adds show (the card owns the pending-changes
     /// flag; this handler is a narrow reload trigger).
     /// </summary>
     private void OnLoadOrderApplied(object? sender, EventArgs e) => Reload();
+
+    /// <summary>
+    /// A pending load-order placement landed (an enqueued download completed
+    /// and the placement plan moved its container to its file position; the
+    /// placements component raises this on the UI thread with the target
+    /// profile). Only a placement for the profile being shown reloads this
+    /// list; every landing flags the session pending (the stored order
+    /// changed, so the next launch stages differently).
+    /// </summary>
+    private void OnLoadOrderPlacementApplied(object? sender, Guid profileId)
+    {
+        _session.HasPendingChanges = true;
+        if (_session.ActiveProfileId == profileId)
+        {
+            Reload();
+        }
+    }
 
     /// <summary>
     /// Mirrors the workflow's edit target onto the rows: the matching row
@@ -2043,7 +2078,7 @@ public partial class ModListViewModel : LocalizedViewModel, IModListRefresh
     /// carries a FileId or a RemoteUploadedAt; a downloaded mod's details
     /// are Nexus-owned) never offer the action (the pencil is hidden for
     /// all three, its layout slot reserved so the strip geometry never
-    /// shifts), and the action refuses while the load-order card is open
+    /// shifts), and the action refuses while the load-order workspace is open
     /// (the cards are mutually exclusive); this command repeats the guards
     /// as defense in depth, and the child's StartEdit repeats them again.
     /// </summary>
