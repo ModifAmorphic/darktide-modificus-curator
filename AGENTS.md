@@ -625,11 +625,14 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           the automation name always carries the displayed
                           summary/fallback), and row 2
                           is a single `WrapPanel` action strip. Wide (card width
-                          greater than 680 DIP): a 112-DIP rounded `UniformToFill`
-                          thumbnail spans all three rows (column 1, `RowSpan=3`)
-                          and the action strip occupies only the content column.
+                          greater than 680 DIP): a 192x108 DIP rounded 16:9
+                          thumbnail (`Stretch=Uniform`, so the complete source
+                          image shows with the frame's neutral background
+                          letterboxing/pillarboxing non-16:9 assets) spans
+                          all three rows (column 1, `RowSpan=3`) and the
+                          action strip occupies only the content column.
                           Constrained (card width at or below 680 DIP): the
-                          thumbnail shrinks to 72 DIP spanning only name +
+                          thumbnail shrinks to 128x72 DIP spanning only name +
                           summary (`RowSpan=2`) and the same action strip moves to
                           a full-width row beneath all three columns
                           (`Grid.ColumnSpan=3`, via the

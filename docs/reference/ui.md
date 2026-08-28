@@ -1955,11 +1955,12 @@ feature).
   card-width breakpoint. Column 0 is the drag-reorder grip, column 1 is the
   thumbnail/placeholder slot, column 2
   holds the name + source badge (row 0) and the summary (row 1), and row 2 is
-  the action strip. Wide (card width greater than 680 DIP): a 112-DIP
-  `UniformToFill` thumbnail spans all three rows (`RowSpan=3`) and the action
-  strip occupies only the content column. Constrained (at or below 680 DIP): the
-  thumbnail shrinks to 72 DIP spanning only name + summary (`RowSpan=2`) and the
-  action strip moves to a full-width row beneath all three columns
+  the action strip. Wide (card width greater than 680 DIP): a 192x108 DIP
+  rounded 16:9 thumbnail spans all three rows (`RowSpan=3`) and the action
+  strip occupies only the content column. Constrained (at or below 680 DIP):
+  the thumbnail shrinks to 128x72 DIP spanning only name + summary
+  (`RowSpan=2`) and the action strip moves to a full-width row beneath all
+  three columns
   (`Grid.ColumnSpan=3`, driven by the `ContentControl.detailedActions` styles).
   Width, height, row span, and action column/span that
   change at the breakpoint are style-driven (default wide styles + the
@@ -1971,7 +1972,10 @@ feature).
 - **Summary.** `MaxLines="2"` + `TextWrapping="Wrap"` + `TextTrimming="CharacterEllipsis"`; the full text is retained in `ToolTip.Tip` (when non-null) + `AutomationProperties.Name` (always, so the fallback stays reachable by assistive tech).
 - **Thumbnail area.** A rounded `Border` with `ClipToBounds`; the `Image` shows
   only when `HasThumbnail`, otherwise a neutral drawn-geometry placeholder
-  (Material `image`) fills the box. The placeholder scales with the slot through
+  (Material `image`) fills the box. The `Image` stretches `Uniform` so the
+  complete source image is always visible; the frame's neutral background
+  supplies the letterbox/pillarbox space for non-16:9 assets. The placeholder
+  scales with the slot through
   the same styles as the thumbnail (36 DIP wide; 28 DIP constrained). Adult rows
   never receive a thumbnail (the coordinator skips them), so they fall through
   to the placeholder.
@@ -2135,10 +2139,10 @@ Cache + failure behavior (`ModThumbnailService`):
 - **Atomic write.** Download to a sibling temp file, then same-volume `File.Move`
   into place. A download failure returns `null` without creating the final file.
 - **Decode.** Production uses `Bitmap.DecodeToWidth(stream,
-  ModThumbnailService.DecodeWidth, BitmapInterpolationMode.HighQuality)` (256 px,
-  sized for the 112-DIP detailed-row thumbnail on scaled displays) on a
-  background thread; the render size is responsive (112 DIP wide, 72 DIP
-  constrained). The 256-px constant is the single named literal
+  ModThumbnailService.DecodeWidth, BitmapInterpolationMode.HighQuality)` (384 px,
+  sized for the 192-DIP detailed-row thumbnail frame at 2x display scaling) on a
+  background thread; the render size is responsive (192 DIP wide, 128 DIP
+  constrained). The 384-px constant is the single named literal
   (`ModThumbnailService.DecodeWidth`) referenced from the DI wiring.
 - **Four-slot load bound.** A `SemaphoreSlim(4)` bounds concurrent distinct-key
   fetch/decode work.

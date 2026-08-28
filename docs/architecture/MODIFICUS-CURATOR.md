@@ -650,10 +650,13 @@ is in [UI reference](../reference/ui.md).
   drag-reorder grip, column 1 is the thumbnail/placeholder slot, column 2
   holds the name + source badge (row 0) and a two-line summary (row 1), and
   row 2 is the action strip. When the card
-  is wide (greater than 680 DIP) a 112-DIP thumbnail spans all three rows and
-  the action strip occupies only the content column; when constrained (at or
-  below 680 DIP) the thumbnail shrinks to 72 DIP spanning name + summary and
-  the action strip moves to a full-width row beneath all three columns. The action
+  is wide (greater than 680 DIP) a 192x108 DIP 16:9 thumbnail (stretched
+  `Uniform`, so the complete source image shows with the frame's neutral
+  background letterboxing/pillarboxing non-16:9 assets) spans all three rows
+  and the action strip occupies only the content column; when constrained (at
+  or below 680 DIP) the thumbnail shrinks to 128x72 DIP spanning name +
+  summary and the action strip moves to a full-width row beneath all three
+  columns. The action
   strip is a right-aligned `WrapPanel` that wraps at the edge (no horizontal
   scrolling); width, height, row span, and the action column/span are driven by
   styles so the breakpoint changes them. The summary is plain text with `CharacterEllipsis` trimming and the full

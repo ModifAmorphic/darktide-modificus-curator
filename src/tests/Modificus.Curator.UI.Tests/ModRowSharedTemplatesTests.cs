@@ -165,6 +165,37 @@ public sealed class ModRowSharedTemplatesTests
     }
 
     [Fact]
+    public void Detailed_thumbnail_frames_are_16by9_and_the_image_never_crops()
+    {
+        var xaml = LoadStrippedXaml("src/ui/Views/ModListView.axaml");
+
+        // The detailed thumbnail is a fixed 16:9 frame, never a square and
+        // never a cropping stretch: wide cards carry 192x108 DIP (RowSpan 3)
+        // and constrained cards (the 680-DIP container query) carry 128x72 DIP
+        // (RowSpan 2), so an ordinary 16:9 Nexus image renders uncropped.
+        var wide = Assert.Single(
+            Elements(xaml.Root!, "Style"),
+            s => A(s, "Selector") == "Border.detailedThumb"
+                && s.Parent?.Name.LocalName != "ContainerQuery");
+        AssertThumbFrame(wide, width: 192, height: 108, rowSpan: 3);
+
+        var query = Assert.Single(Elements(xaml.Root!, "ContainerQuery"));
+        var constrained = Assert.Single(
+            query.Descendants().Where(e => e.Name.LocalName == "Style"),
+            s => A(s, "Selector") == "Border.detailedThumb");
+        AssertThumbFrame(constrained, width: 128, height: 72, rowSpan: 2);
+
+        // The thumbnail Image must fit the whole source inside the frame
+        // (Uniform). UniformToFill fills the frame and hides roughly 44% of
+        // the width of a 16:9 source, so it is banned here; the frame's
+        // neutral background supplies the letterbox/pillarbox space instead.
+        var image = Assert.Single(
+            Elements(xaml.Root!, "Image"),
+            i => A(i, "Source") == "{Binding Thumbnail}");
+        Assert.Equal("Uniform", A(image, "Stretch"));
+    }
+
+    [Fact]
     public void The_edit_band_is_one_definition_leading_both_row_roots()
     {
         var xaml = LoadStrippedXaml("src/ui/Views/ModListView.axaml");
@@ -214,6 +245,28 @@ public sealed class ModRowSharedTemplatesTests
             .Single(e => e.Name.LocalName == "Setter" && A(e, "Property") == "Margin");
         Assert.Equal(margin, A(setter, "Value"));
     }
+
+    /// <summary>
+    /// Asserts one <c>Border.detailedThumb</c> style pins an exactly 16:9
+    /// frame of the given DIP size with the given grid row span. The ratio is
+    /// checked from the parsed setters (not the expected literals) so an edit
+    /// that changes one dimension alone fails even if the literals are updated
+    /// with it.
+    /// </summary>
+    private static void AssertThumbFrame(XElement style, int width, int height, int rowSpan)
+    {
+        var actualWidth = int.Parse(SetterValue(style, "Width"));
+        var actualHeight = int.Parse(SetterValue(style, "Height"));
+        Assert.Equal(width, actualWidth);
+        Assert.Equal(height, actualHeight);
+        Assert.Equal(width * 9, actualHeight * 16);
+        Assert.Equal(rowSpan.ToString(), SetterValue(style, "Grid.RowSpan"));
+    }
+
+    private static string SetterValue(XElement style, string property) =>
+        style.Descendants()
+            .Single(e => e.Name.LocalName == "Setter" && A(e, "Property") == property)
+            .Attribute("Value")?.Value ?? string.Empty;
 
     private static string RequireSourceFile(string relativeFromRepo)
     {

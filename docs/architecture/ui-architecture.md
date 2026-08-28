@@ -1085,11 +1085,13 @@ subscription re-hydrates from the store when the result lands.
   holds the name + source badge (row 0) and a two-line plain-text summary
   (row 1, `MaxLines=2`, `TextWrapping=Wrap`, `TextTrimming=CharacterEllipsis`,
   full text in the tooltip and the automation name), and row 2 is the action
-  strip. When the card is wide (greater than 680 DIP) a 112-DIP
-  `UniformToFill` thumbnail spans all three rows and the action strip occupies
-  only the right column; when constrained (at or below 680 DIP) the thumbnail
-  shrinks to 72 DIP spanning name + summary and the action strip moves to a
-  full-width row beneath both columns. Width, height, row span, and action
+  strip. When the card is wide (greater than 680 DIP) a 192x108 DIP 16:9
+  `Uniform` thumbnail (the complete source image; the frame's neutral
+  background letterboxes/pillarboxes non-16:9 assets) spans all three rows and
+  the action strip occupies only the right column; when constrained (at or
+  below 680 DIP) the thumbnail shrinks to 128x72 DIP spanning name + summary
+  and the action strip moves to a full-width row beneath both columns. Width,
+  height, row span, and action
   column/span that change at the breakpoint are driven by styles (not local
   values, which would outrank styles); constant row/column positions stay
   local. Both roots bind the exact same per-row state and route to the exact
