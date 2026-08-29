@@ -1576,10 +1576,15 @@ happens before a mode is chosen.
   Action column empty: it stays the parent row's operation plan. Accepting
   identifies the row in one action (the
   canonical title shows exactly once, in Match; Mod ID carries the numeric
-  id). A UNIQUE normalized-exact search result is auto-identified: when the
+  id). Arrived candidates are ranked EXACT-FIRST before display: candidates
+  whose canonical name normalizes (the same normalization used for the
+  search terms) to the line's normalized name precede every non-exact one,
+  each partition keeping the service's relative order, with the display cap
+  applied after the promotion (deterministic client policy: the exact title
+  is the top proposal whatever order the server returned). A UNIQUE
+  normalized-exact search result is auto-identified: when the
   capped candidate set holds exactly one candidate whose canonical name
-  normalizes (the same case-boundary/underscore/hyphen/whitespace
-  normalization used for the search terms) to exactly the file line's
+  normalizes to exactly the file line's
   normalized name, the row identifies immediately with the canonical title
   + Mod ID (the search result is already a remote Nexus identity; no
   redundant `GetModByIdAsync` call), implying inclusion and exposing Change.
@@ -1602,7 +1607,8 @@ happens before a mode is chosen.
   never reinterpreted as a name search; (c) any other nonblank text is
   user-supplied mod-name criteria, normalized with the same search-terms
   normalization and run through the anonymous `SearchModsAsync` with the
-  same candidate cap, REPLACING the row's current proposals (every
+  same exact-first candidate ranking + cap, REPLACING the row's current
+  proposals (every
   user-entered result requires an explicit Accept, even a single
   normalized-exact one; the auto-identification rule belongs to the
   automatic folder-name queue only) with the typed criteria retained. No

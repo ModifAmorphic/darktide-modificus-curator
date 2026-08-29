@@ -194,9 +194,10 @@ internal sealed class NexusClient : INexusClient
     /// verified to work.</para>
     /// <para><b>Query shape:</b> the Nexus website's own search shape: one
     /// <c>mods</c> query, the phrase as the <c>name</c> WILDCARD value with
-    /// no literal asterisks, filtered by <c>gameDomainName</c>, newest-first
-    /// (<c>createdAt DESC</c>), blocked content excluded. Nexus's wildcard
-    /// index owns the matching semantics.</para>
+    /// no literal asterisks, filtered by <c>gameDomainName</c>, best-match-first
+    /// (<c>relevance DESC</c>; a newest-first cap can omit the exact title
+    /// from a small page entirely), blocked content excluded. Nexus's
+    /// wildcard index owns the matching semantics.</para>
     /// </remarks>
     public async Task<Response<NexusSearchResult[]>> SearchModsAsync(
         string gameDomain,
@@ -229,7 +230,7 @@ internal sealed class NexusClient : INexusClient
             "query { mods(filter: { gameDomainName: [{op: EQUALS, value: \"" + domain + "\"}], " +
             "name: [{op: WILDCARD, value: \"" + phrase + "\"}] }, " +
             "viewUserBlockedContent: false, " +
-            "sort: { createdAt: { direction: DESC } }, count: " + capped +
+            "sort: { relevance: { direction: DESC } }, count: " + capped +
             ") { nodes { modId name uid } } }";
         var (nodes, limits) = await SendAnonymousGraphQlSearchAsync(query, ct).ConfigureAwait(false);
 

@@ -113,10 +113,15 @@ public interface INexusClient
     /// behind Cloudflare, not the API key budget). The supplied phrase is
     /// matched by Nexus's own <c>name</c> wildcard index (the caller sends it
     /// verbatim, lowercase + word-separated, no literal asterisks), scoped to
-    /// the game domain, newest-first, with blocked content excluded. ONE call
-    /// makes exactly one HTTP request.
+    /// the game domain, best-match-first (<c>relevance DESC</c>), with blocked
+    /// content excluded. ONE call makes exactly one HTTP request.
     /// </summary>
     /// <remarks>
+    /// <para>The relevance ordering is part of the contract because the
+    /// result is capped: ordering decides which hits the page carries, and a
+    /// newest-first page can omit the exact title entirely. Ranking the
+    /// returned candidates (exact-first or otherwise) stays caller
+    /// policy.</para>
     /// <para>Anonymous responses carry no <c>x-rl-*</c> rate-limit headers;
     /// they are parsed onto the returned <see cref="Response{T}"/> anyway if
     /// ever present. No auth gate: the call works signed out, so it neither
