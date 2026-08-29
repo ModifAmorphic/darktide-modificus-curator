@@ -78,8 +78,8 @@ public enum GameDirConflictChoice
 /// choice prompt, the game-dir conflict prompt, or a
 /// non-dismissable progress spinner. Hosted destinations
 /// (Profiles, Mods, Nexus, Preferences, Settings) are not modals and live
-/// entirely on the shell's SplitView content region; the inline import card is
-/// a hosted UserControl, not a modal.
+/// entirely on the shell's SplitView content region; the inline import card
+/// (batch + edit mode) is a hosted UserControl, not a modal.
 /// </summary>
 public interface IDialogService
 {

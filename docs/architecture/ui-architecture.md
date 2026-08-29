@@ -68,7 +68,7 @@ a UI-layer singleton that the shell (and other view models) inject:
   │   │                         strip; mirrors session state
   │   │
   │   ├── ProfilesViewModel ─── the active profile editor (name + description
-  │   │   │                     + inline launch settings) + banner/picker
+  │   │   │                     + inline launch settings) + banner/picker/clone
   │   │   │
   │   │   └── LaunchSettingsEditorViewModel  the reusable inline launch-settings
   │   │                                       rows (env vars + args + toggles)
@@ -194,6 +194,42 @@ list's `OnSessionPropertyChanged` filters to `ActiveProfileId` only: a
 running-state change does not reload the list (the list stays put while the
 game runs; edits land on the profile the user will launch next). Active-id
 changes rebuild the list from the new profile.
+
+## The Profiles destination (`ProfilesViewModel`)
+
+The Profiles page edits the active profile only (name + description + the
+inline launch-settings editor), hosts the persisted-profile banner + picker,
+creates new drafts, and carries the Add / Clone / Delete action row for the
+active persisted profile. Every voluntary active-profile change routes
+through the session's `RequestActive` gate; the page never writes the
+persisted profile outside the atomic `UpdateProfile` / `CreateProfile`
+boundary.
+
+**Cloning** (the Clone action, between Add and Delete) copies the active
+persisted profile through the focused `IProfileCloner` capability:
+
+- **Gating.** Clone is visible only for an active persisted profile and
+  disabled while a new draft is open, while a Save is in flight, and while
+  Darktide runs (the clone becomes active, which is a profile switch). All
+  gates are re-checked in the command body after the dirty-transition await;
+  the disabled button keeps its tooltip (`ToolTip.ShowOnDisabled`) so the
+  running-state reason stays available.
+- **Dirty guard.** A dirty editor resolves through the same unsaved-changes
+  transition as navigation/switch/Add: Save persists the edits then clones
+  the saved profile, Don't save discards the edits then clones the previously
+  persisted profile, Cancel/ESC/X creates nothing and preserves the edits.
+- **Activation.** On success the returned clone is requested active through
+  the session (with the page's own-reload suppression so the session event
+  handler does not treat it as an outside displacement), then one
+  authoritative reload opens the clone in a clean editor. Cloning is
+  immediate + non-destructive, so it needs no confirmation; the new banner
+  name is the success feedback.
+- **DMF suppression.** `CloneProfile` raises no
+  `IProfileService.ProfileCreated` (the blank-profile signal behind the DMF
+  offer), so cloning a profile never queues the DMF prompt.
+- **Failure.** An expected clone/read/write failure logs, keeps the source
+  active + unchanged, and surfaces the localized generic clone error in the
+  page's fixed error area; raw exception text is never shown.
 
 ## The shell (`ShellViewModel` + `MainWindow`)
 
@@ -1085,11 +1121,13 @@ subscription re-hydrates from the store when the result lands.
   holds the name + source badge (row 0) and a two-line plain-text summary
   (row 1, `MaxLines=2`, `TextWrapping=Wrap`, `TextTrimming=CharacterEllipsis`,
   full text in the tooltip and the automation name), and row 2 is the action
-  strip. When the card is wide (greater than 680 DIP) a 112-DIP
-  `UniformToFill` thumbnail spans all three rows and the action strip occupies
-  only the right column; when constrained (at or below 680 DIP) the thumbnail
-  shrinks to 72 DIP spanning name + summary and the action strip moves to a
-  full-width row beneath both columns. Width, height, row span, and action
+  strip. When the card is wide (greater than 680 DIP) a 192x108 DIP 16:9
+  `Uniform` thumbnail (the complete source image; the frame's neutral
+  background letterboxes/pillarboxes non-16:9 assets) spans all three rows and
+  the action strip occupies only the right column; when constrained (at or
+  below 680 DIP) the thumbnail shrinks to 128x72 DIP spanning name + summary
+  and the action strip moves to a full-width row beneath both columns. Width,
+  height, row span, and action
   column/span that change at the breakpoint are driven by styles (not local
   values, which would outrank styles); constant row/column positions stay
   local. Both roots bind the exact same per-row state and route to the exact

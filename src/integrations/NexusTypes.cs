@@ -15,6 +15,19 @@ namespace Modificus.Curator.Integrations;
 /// <param name="RateLimits">The rate-limit headers (<c>x-rl-*</c>), parsed. May
 /// carry zeros when the headers were absent (e.g. a non-rate-limited endpoint or
 /// a test stub).</param>
+/// <summary>
+/// One mod returned by the anonymous Nexus v2 GraphQL search
+/// (<c>INexusClient.SearchModsAsync</c>): the mod's display name + the
+/// numeric mod id (the search UI's identity) + the mod's UID when the server
+/// reported one.
+/// </summary>
+/// <param name="ModId">The Nexus mod id (the URL + API identity).</param>
+/// <param name="Name">The mod's current display name.</param>
+/// <param name="Uid">The mod's Nexus UID, or null when the server omitted it
+/// (informational only; the load-order resolver keys on
+/// <paramref name="ModId"/>).</param>
+public sealed record NexusSearchResult(int ModId, string Name, string? Uid);
+
 public sealed record Response<T>(T Data, NexusRateLimits RateLimits);
 
 /// <summary>

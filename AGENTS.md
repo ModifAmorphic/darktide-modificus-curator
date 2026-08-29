@@ -40,7 +40,8 @@ game-binary constraints now live with the runtime, in
   first-run Welcome onboarding, and in-app self-update for the Windows
   installer plus Linux AppImage (Velopack).
   The app is user-usable:
-  create profiles, import mods (folder/archive, Nexus/Untracked) or link an
+  create or clone profiles, import mods (folder/archive, Nexus/Untracked) or
+  link an
   external mod folder without copying it, manage
   the mod list (enable/disable/reorder/policy/remove), configure Settings
   (discovery paths + mod-repo location), download Nexus mods ("Mod manager
@@ -55,11 +56,24 @@ game-binary constraints now live with the runtime, in
   variant, surviving only when persisted or selected, and
   absent/unknown normalizes to Detailed). Every
   Nexus Latest row shows a stable update-action button (disabled + neutral when
-  no update, enabled + accent when flagged); a Premium click enqueues an
-  in-app install that renders as the row's download morph,
-  a regular/unknown click opens the mod's Nexus files page. Premium users can
+  no update and not version-unknown, enabled + accent when flagged OR
+  version-unknown); a Premium click enqueues an
+  in-app install that renders as the row's download morph (for a version-unknown
+  row, the resolution install carrying an empty ExpectedVersion that the
+  dequeue-time revalidation matches against the empty installed tag),
+   a regular/unknown click opens the mod's Nexus files page. Every row also
+   carries an edit-import-details action (a drawn-pencil button first in the
+   shared action strip, between the source badge and the Enabled checkbox,
+   shown only while the row is editable + hidden otherwise with its layout
+   slot preserved so the strip geometry never shifts: linked,
+   download-morphed, and downloaded rows (any version carries a FileId or a
+   RemoteUploadedAt), the update-action-cell pattern) starting the import
+   card's edit mode, the universal correction surface for a container's
+   name, source association, and release tag, applied through the repository's
+   EditImportDetails primitive and reloaded on save. Premium users can
   additionally opt into automatic flagged-update installation after each check
-  (each flagged mod is enqueued onto the same download queue).
+  (each flagged mod is enqueued onto the same download queue; version-unknown
+  rows are excluded from the batch, manual click only).
   The first app startup shows a one-time Welcome modal introducing Curator and
   offering to set up Nexus. Whenever a new profile is created + set active
   without DMF (Darktide Mod Framework, Nexus mod 8) in it, a modal prompt
@@ -220,6 +234,25 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           runs) + reloads from the authoritative active id; a
                           staged draft is edited in place (the persisted profile is
                           not mutated until Save); Add Profile starts a blank draft;
+                          Clone profile (between Add and Delete, shown only for an
+                          active persisted profile) copies it through the focused
+                          `IProfileCloner.CloneProfile` in one persisted operation
+                          (new id + creation timestamp, the stable non-localized
+                          ` (Copy N)` family name -- a copy of `Testing (Copy 1)`
+                          belongs to the `Testing` family, highest-existing-plus-
+                          one, never gap reuse, case-insensitive, never colliding
+                          with an existing readable name; description, complete mod
+                          membership incl. enabled/order/locks/policies with pinned
+                          version ids, + launch settings; mod files stay shared in
+                          the repository + `staged/` starts empty, rebuilt by
+                          ordinary launch staging), then requests the clone active
+                          + reloads it into the clean editor (immediate +
+                          non-destructive, no confirmation; the new banner name is
+                          the success feedback; dirty edits resolve through the
+                          same Save / Don't save / Cancel transition first; a
+                          failure keeps the source active + unchanged and surfaces
+                          only the localized generic error; no `ProfileCreated`, so
+                          no DMF offer ever fires for a clone);
                           Save existing calls the atomic `UpdateProfile`, Save new
                           calls `CreateProfile(name, description, launchSettings)` +
                           requests it active; Save is disabled while metadata or
@@ -231,9 +264,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           atomic write as the Save button and proceeds only on
                           success; Don't save reloads authority and proceeds);
                           running-state gates
-                          disable switching/Add/Delete while Darktide runs (active-
-                          profile metadata + launch-settings edits stay enabled);
-                          a draft hides the shared Add/Delete action row AND
+                          disable switching/Add/Clone/Delete while Darktide runs
+                          (active-profile metadata + launch-settings edits stay
+                          enabled; Clone carries `ToolTip.ShowOnDisabled` so the
+                          disabled reason stays readable);
+                          a draft hides the shared Add/Clone/Delete action row AND
                           disables Add at the command level (defense in depth so
                           a programmatic call cannot start a second draft);
                           after a successful create + activation,
@@ -254,22 +289,325 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                             hide-disabled + updates-only filter toggles, the Add split
                             button) shown
                             only on Mods, and the
-                          inline import card (`ImportWorkflowViewModel` +
-                          `ImportWorkflowView`, an application-lifetime singleton
-                          child VM registered before `ModListViewModel`) directly
-                          below the toolbar: the card owns the batch state machine
-                          (editing, processing, terminal failure), the per-item
-                          editing form (name + source + conditional Nexus version/
-                          URL/policy + live validation), and the per-item import
-                          orchestration (only `GetBaseName` + `Import` run on
-                          `Task.Run`; `FindExistingContainer` + the collision check
-                          + `AddMod` run on the captured UI context). The Add split
-                          button + drag-and-drop forward paths to the workflow's
-                          `StartBatchCommand`; while the workflow is active the Add
-                          button disables and drops are rejected. Copied
-                          local-import failures surface inline (not via modal
-                          alert); the linked-folder flow keeps its modal alerts.
-                          The toolbar's density selector is two drawn-icon buttons
+                           inline import card (`ImportWorkflowViewModel` +
+                           `ImportWorkflowView`, an application-lifetime singleton
+                           child VM registered before `ModListViewModel`) directly
+                           below the toolbar: the card owns two exclusive modes
+                           over one editing form, and the two modes render in
+                           two places. The batch mode (the top card below the
+                           toolbar, gated by `IsBatchActive`) owns the state
+                           machine (editing, processing, terminal failure), the
+                           per-item editing form (name + source + conditional
+                           Nexus version/URL/policy + live validation), and the
+                           per-item import orchestration (only `GetBaseName` +
+                           `Import` run on `Task.Run`; `FindExistingContainer` +
+                           the collision check + `AddMod` run on the captured UI
+                           context). The edit mode (started by a row's pencil
+                           button through `StartEdit`) reuses the same fields
+                           as the per-container correction surface but renders
+                           as an IN-ROW BAND: a leading section inside the
+                           edited row's template (the row list's items cannot
+                           host injected elements between items, so the band
+                           lives in the row markup; one shared definition
+                           leading both density roots). The parent tracks the
+                           edit target by CONTAINER ID (`EditTargetContainerId`
+                           through the shared child subscription, the
+                           IsListToolingEnabled propagation shape) + assigns
+                           each row's `IsEditTarget` + band context (the
+                           ActiveDownload morph pattern, so the form
+                           instantiates only on the editing row) on activation
+                           + on every Reload: a mid-edit reload re-attaches the
+                           band to the rebuilt row instance. Opening the band
+                           brings its row into view (posted at Loaded
+                           priority). While a row's band is open the row is
+                           ANCHORED like a locked row (grip not hit-testable +
+                           move commands refuse; the enabled toggle, policy,
+                           lock, and remove stay live), and a download morph
+                           arriving on the edited container CLOSES the edit
+                           automatically (the container became downloaded =
+                           not editable; the morph is the visible
+                           explanation). The Add split button +
+                           drag-and-drop forward paths to the workflow's
+                           `StartBatchCommand`; while the workflow is active
+                           (either mode) the Add button disables and drops are
+                           rejected, and the toolbar's projection-touching
+                           controls (the search box, the hide-disabled +
+                           updates-only filter toggles, the density selector,
+                           the check-now refresh; `IsListToolingEnabled`) also
+                           disable so no filter change can hide the row being
+                           edited under its open band (row-level controls
+                            stay live); the batch, the edit, + the load-order
+                            workspace are mutually exclusive through the shared
+                            `ModCardsGate` (each card VM reports its activity +
+                           refuses to start while any other card is open; the
+                           gate is also the one any-card source behind
+                           `IsAddEnabled`/`IsListToolingEnabled` + the view's
+                            The load-order import workspace
+                            (`LoadOrderImportViewModel` +
+                            `LoadOrderImportView`, the child-VM pattern):
+                            a focused in-page workflow that REPLACES the
+                            normal Mods content while active (the toolbar,
+                            import card, manager banner, row list, download
+                            list, + empty states hide behind one
+                            `!LoadOrder.IsActive` visibility gate; the shell
+                            navigation + global header stay). The second Add
+                            mode ("Import mod list"; any compatible
+                            line-format list, mod_load_order.txt/mods.lst/
+                            another, uses the same entry) feeds
+                            `StartImport(path)`,
+                            which reads + parses the file
+                            (`ModLoadOrderParser`), reconciles it against the
+                            active profile + repo (`ILoadOrderReconciler`),
+                            + opens the MODE CHOICE with zero Nexus/auth
+                            calls: the picked file, a one-line summary, + two
+                            large flat tiles (drawn icon + title + short
+                            explanation; side-by-side wide, stacked under
+                            720 DIP via a ContainerQuery; no radio buttons,
+                            checkboxes, or combo boxes anywhere in the
+                            workspace; an empty file shows the notice + no
+                            tiles). "Reorder mods" builds a no-network review
+                            (profile matches read "reordered"; library +
+                            missing lines visible as "skipped", Match
+                            showing the library name or "not found"; no
+                            per-row controls) whose apply passes ONLY the
+                            active-profile match ids, in file order, to one
+                            SetModOrder (zero Nexus/auth/import/add/enqueue
+                            calls; no profile match honestly disables apply).
+                            In the import review, matched lines show the
+                            facts Curator already knows in the Mod ID +
+                            Version columns, read-only (a Nexus match shows
+                            #modId + the version the operation will use:
+                            policy-resolved for a profile entry, a pin
+                            showing its pinned tag + Latest the resolved
+                            latest, the resolved latest for a library add;
+                            untracked may show a known version with no id;
+                            linked shows neither; an empty tag stays blank),
+                            threaded through the plan (`LoadOrderLine`'s
+                            optional NexusModId/Version, enriched by the
+                            reconciler at the resolution boundary, the
+                            planner staying pure), never re-queried by the
+                            UI, + never showing Change/manual controls on an
+                            already-resolved local row.
+                            "Reorder and import mods" reads the account
+                            capability once for honest row messaging AND row
+                            lookup capability (Premium unlocks the in-app
+                            download action + remote-only lookups; anything
+                            else leaves remote-only lines visibly
+                            non-actionable + not skippable), scans the txt's
+                            directory for
+                            sibling mod folders (a directory containing
+                            <dirName>/<dirName>.mod), skipping `base` (the
+                            old DML loader runtime) + the txt itself; an
+                            unresolved line whose name matches a sibling
+                            upgrades to a "will be imported" row (resolved
+                            lines never upgrade; IO failures degrade to the
+                            plain unresolved rows), builds the review with
+                            EVERY automatic operation included by default
+                            (there are no include checkboxes: library adds +
+                            sibling imports are included by choosing the
+                            mode; the subtle Skip/Undo text action is the
+                            exceptional opt-out on optional
+                            add/import/download rows; profile matches are
+                            never skippable; accepting a remote candidate
+                            implies inclusion unless skipped), + starts the
+                            SERIAL human-paced search queue (one row at a
+                            time, file order, no retries; failures logged +
+                            the row left unidentified) over the
+                            capability-gated lookup rows only (sibling lines
+                            at every account tier; remote-only lines on
+                            Premium), with overall
+                            progress (done/total + current) + a Stop search
+                            action in the header (stop cancels remaining
+                            lookups + retains arrived candidates). Capability
+                            gating: on a non-Premium, signed-out, or
+                            unreadable account a remote-only line never
+                            enters the search, shows no candidates/manual
+                            entry/Find/Change/version note, reads "skipped"
+                            like every untouched row (the upfront notice +
+                            the mode tile carry the reason), + is counted by
+                            the upfront header
+                            notice; sibling lookups stay available at every
+                            tier (local content + a Nexus association);
+                            search totals count only searchable rows (a
+                            non-Premium standalone txt with no sibling
+                            folders makes zero search calls). The review
+                            itself: a fixed header (file + search status +
+                            the remote-unavailable notice + failures), one
+                            fill-height virtualized results
+                            list (ItemsControl over a VirtualizingStackPanel
+                            in a ScrollViewer; no selection chrome, no
+                            nested height cap; row mutation disabled while
+                            applying), + a fixed footer (Back + Cancel + the
+                            mode-specific primary action). Each top-level
+                            line renders inside a containing row card (a
+                            theme-aware Border with padding the column
+                            header's margin mirrors); the candidate
+                            proposals + alternates + per-line errors render
+                            INSIDE that card below the main line as visual
+                            children (an inset region with a left accent
+                            rule; the parent-to-candidate gap smaller than
+                            the top-level row gap). The column layout
+                            is ONE definition (folder | match | action | mod
+                            id | version; star/fixed + ColumnSpacing, pinned
+                            identical across the header + every row +
+                            candidate line by a source test; the reorder
+                            mode keeps the grid with no id/version content).
+                            Below a 700-DIP line width a per-line
+                            ContainerQuery moves the SAME action controls
+                            (the loAction styles) to a full-width second
+                            line so long localized action labels reflow
+                            instead of overflowing the Mod ID input (the
+                            action label also trims + tooltips as defense).
+                            Textual actions (Skip/Undo/Accept/Change/Stop
+                            Search) carry the standard visible Fluent chrome
+                            at compact sizing; the Find button + the
+                            expand chevron use a compact icon-button style.
+                            The Action column is the plan as if applied,
+                            consistently past tense (reordered / added /
+                            imported / downloaded; "skipped" for every row
+                            the apply leaves untouched), with reasons in the
+                            upfront notice + mode tile rather than the cell.
+                            Identification (capable lookup rows): the
+                            candidate proposal renders the canonical title
+                            under Match + ONE wrapping identity cluster in
+                            the Mod ID cell reading #id then Accept (the
+                            alternates' expand chevron kept with that
+                            cluster; every alternate renders the same
+                            #id + Accept cluster in its Mod ID cell; the
+                            child lines leave the plan Action column empty,
+                            which stays the parent row's; accepting
+                            identifies in one action,
+                            the title shown exactly once in Match).
+                            Arrived candidates are ranked EXACT-FIRST:
+                            candidates whose canonical name normalizes to
+                            the line's normalized name precede every
+                            non-exact one, each partition keeping the
+                            service's relative order, with the display cap
+                            applied after the promotion (deterministic
+                            client policy: the exact title is the top
+                            proposal whatever order the server returned).
+                            A UNIQUE
+                            normalized-exact search result auto-identifies:
+                            exactly one candidate whose canonical name
+                            normalizes (the same search-terms normalization)
+                            to exactly the line's normalized name identifies
+                            immediately with the canonical title + Mod ID
+                            (the search result is already a remote identity;
+                            no redundant GetModByIdAsync call, inclusion
+                            implied, Change available); a single non-exact
+                            hit stays a proposal + multiple hits always stay
+                            proposals. The
+                            manual id/URL/NAME field + a drawn-geometry
+                            magnifier Find icon button sit on ONE line in the
+                            Mod ID cell
+                            (the spinner swaps into the same stable trailing
+                            slot; error/no-results lines appear beneath only
+                            when present; Enter invokes the same Find
+                            command as the icon, key handled, no duplicated
+                            classification policy in code-behind). The shared
+                            Find command classifies the trimmed input: a
+                            valid Nexus id or supported URL runs the
+                            anonymous exact-identity lookup
+                            `INexusClient.GetModByIdAsync` (a syntactically
+                            valid id is never accepted until Nexus confirms
+                            it + supplies the canonical title; input that
+                            clearly intends an id/URL but is malformed
+                            shows inline validation + is never reinterpreted
+                            as a name search; any other nonblank text is
+                            mod-name criteria run through SearchModsAsync
+                            with the shared normalization + exact-first
+                            ranking + cap, replacing
+                            the row's proposals + requiring an explicit
+                            Accept each (no auto-identification; the typed
+                            criteria retained); no results + failures stay
+                            editable with inline feedback + identify
+                            nothing; the Find action disables while the
+                            row's automatic search turn is active + the
+                            queue skips a row whose manual lookup is in
+                            flight, so a stale automatic completion never
+                            overwrites a later manual search; a subtle
+                            Change action returns an
+                            identified row to the candidate/manual state
+                            (candidates retained, identity-specific
+                            validation cleared). No per-row Search-on-Nexus
+                            link exists. Version: only an identified sibling
+                            import shows an input, + it is OPTIONAL (blank is
+                            valid: the import lands on the empty-version
+                            version-unknown path, which the ordinary Mods row
+                            surfaces through its enabled download/update
+                            action; a typed value is trimmed + preserved +
+                            never auto-populated from the Nexus
+                            page version); a remote-only accepted mod shows
+                            the "version set by the download" note; local +
+                            reorder rows carry no version surface. Apply
+                            (enabled when >= 1 row would be acted on, the
+                            search finished or stopped, + no verification in
+                            flight) sequences membership-before-order: (a)
+                            import every non-skipped sibling folder
+                            (identified: NexusSource(id) + the typed version
+                            or the empty version-unknown tag when blank;
+                            else UntrackedSource + the empty
+                            version-unknown path; per-line failures are
+                            recorded + the rest continue), (b)
+                            AddMod(LatestPolicy) for every non-skipped
+                            library match + successful import, (c) ONE
+                            SetModOrder over the profile matches +
+                            successfully added/imported containers in file
+                            order, omitting skipped/failed rows, then (d)
+                            the download batch: each non-skipped remotely
+                            identified not-in-Curator row, only when Premium
+                            is authoritative (re-verified fresh at apply; a
+                            Premium loss/failure is a visible failure that
+                            writes nothing + keeps the workspace open, never
+                            a silent no-op), run in TWO phases so a fast
+                            completion can never race the placement plan:
+                            resolve every head file + the profile name first
+                            (no admissions; per-line resolve failures
+                            recorded; a rate limit aborts further resolves
+                            with everything resolved so far still admitted +
+                            the re-runnable hint), then record the placement
+                            plan BEFORE admitting anything, then the
+                            synchronous ProfileAdd admissions with no awaits
+                            in between (each item has no container; the
+                            download rows own progress + the completion owns
+                            the add + reload). The apply also records the
+                            profile-scoped pending placement
+                            plan on `LoadOrderDownloadPlacements` (ui/Session/,
+                            the apply's anchors + pending mod ids in file
+                            order): the component observes the queue's
+                            existing ItemChanged completion signal + moves
+                            each landed container to its file position as it
+                            completes, so the imported order converges to
+                            the file instead of appending permanently
+                            (a FAILED download keeps its slot so the queue's
+                            Retry still converges; a cancel drops its slot;
+                            a transient order-write failure retains the plan
+                            for a later retry; a later
+                            import supersedes the plan; a deleted profile
+                            discards it; the mod list reloads + flags pending
+                            on each applied placement; load-order policy
+                            stays out of the queue's contract). The
+                            mark-pending + `OrderApplied` reload (the parent
+                            reloads) + deactivate follow; a card-level
+                            failure (incl. stop-on-429) or any per-line
+                            failure keeps the review open so the messages
+                            stay readable + a re-run can finish (re-runs are
+                            idempotent: imports dedupe, AddMod no-ops on
+                            membership, the queue dedupes live downloads),
+                            + when downloads were admitted before the
+                            failure the header shows the queued-downloads
+                            notice (the open workspace hides the mod list's
+                            download rows).
+                            Cancel + a profile switch reset with no writes
+                            (Cancel is refused mid-apply, like Back; a
+                            switch mid-apply defers the reset until the
+                            in-flight apply finishes against its captured
+                            profile); Back returns to the mode choice; the
+                            card gate is re-checked after the async file
+                            read so no other card can race the activation.
+                           local-import failures surface inline (not via modal
+                           alert); the linked-folder flow keeps its modal alerts.
+                           The toolbar's density selector is two drawn-icon buttons
                           (view_headline for Compact, view_agenda for Detailed)
                           bound to `DetailedModRowsViewModel.SetDensityCommand`;
                            the active one carries the `selected` class (the shell's
@@ -319,11 +657,14 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           the automation name always carries the displayed
                           summary/fallback), and row 2
                           is a single `WrapPanel` action strip. Wide (card width
-                          greater than 680 DIP): a 112-DIP rounded `UniformToFill`
-                          thumbnail spans all three rows (column 1, `RowSpan=3`)
-                          and the action strip occupies only the content column.
+                          greater than 680 DIP): a 192x108 DIP rounded 16:9
+                          thumbnail (`Stretch=Uniform`, so the complete source
+                          image shows with the frame's neutral background
+                          letterboxing/pillarboxing non-16:9 assets) spans
+                          all three rows (column 1, `RowSpan=3`) and the
+                          action strip occupies only the content column.
                           Constrained (card width at or below 680 DIP): the
-                          thumbnail shrinks to 72 DIP spanning only name +
+                          thumbnail shrinks to 128x72 DIP spanning only name +
                           summary (`RowSpan=2`) and the same action strip moves to
                           a full-width row beneath all three columns
                           (`Grid.ColumnSpan=3`, via the
@@ -753,18 +1094,87 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            sharing one countdown timer with the rate-limit gate so
                            either cause keeps the button disabled and the rate-limit
                            reason takes tooltip precedence when both are active).
-                           The view's source badge
-                           is a `HyperlinkButton` to the mod's remote page; the
-                           stable update-action cell is a fixed-width `Panel`
-                           reserved on every row holding a drawn download-arrow
-                           button. The button shows for Nexus + Latest rows
-                           regardless of tier (disabled + neutral when no update,
-                           enabled + accent-blue arrow when flagged); Pinned/
-                           Untracked rows keep the reserved cell but no button;
-                           a morphed row does not render the cell at all (the
-                           morph's progress owns the row's progress surface +
-                           hiding the button is the double-click guard). The
-                           rate-limit notice sits in the Mods toolbar. While
+                            The view's source badge
+                            is a `HyperlinkButton` to the mod's remote page; the
+                            stable update-action cell is a fixed-width `Panel`
+                            reserved on every row holding a drawn download-arrow
+                            button. The button shows for Nexus + Latest rows
+                            regardless of tier (disabled + neutral when no update
+                            and not version-unknown, enabled + accent-blue arrow
+                            when flagged OR version-unknown); Pinned/
+                            Untracked rows keep the reserved cell but no button;
+                            a morphed row does not render the cell at all (the
+                            morph's progress owns the row's progress surface +
+                            hiding the button is the double-click guard).
+                            "Nexus, version unknown" is a derived row state (a
+                            NexusSource container whose resolved latest version
+                            carries an empty VersionString; no storage): the
+                            badge stays the plain "Nexus #id" (the empty
+                            ActualVersion never appends a dangling separator),
+                            the update action enables with the version-unknown
+                            tooltip variants (gaming guidance still wins for
+                            non-Premium rows), the Premium click enqueues the
+                            existing UpdateInstall path with an EMPTY
+                            ExpectedVersion (the queue's dequeue-time
+                            UpdateEligibility revalidation matches empty vs
+                            the empty installed tag), regular/unknown opens the
+                            files page, the updates-only filter keeps unknown
+                            rows, the pin dropdown is suppressed (nothing to
+                            pin to; the Pinned choice is disabled), and the
+                            automatic-update batch excludes them (manual click
+                            only). Every row also carries an
+                            edit-import-details action (a drawn-pencil button
+                            FIRST in the shared action strip, between the
+                            source badge cell and the Enabled checkbox, ONE
+                            definition in the shared templates so Compact +
+                            Detailed behave identically; the button shows
+                            only while the row is editable + hides otherwise
+                            inside its always-laid-out slot (the pencil's
+                            footprint) so the strip geometry never shifts,
+                            linked + download-morphed + downloaded rows, the
+                            update-action-cell
+                            pattern) starting the import card's EDIT MODE
+                            (an in-row band on the edited row, a hosted view
+                            rather than a modal): the per-container
+                            correction surface for name, source association,
+                            and release tag. The band activates in place
+                            titled "Edit import details", prefilled from the
+                            container (name, source choice, the bare mod id,
+                            the latest version's tag); the policy picker
+                            hides; the primary button reads Save and applies
+                            the repository's EditImportDetails primitive with
+                            the same validation the batch form enforces (the
+                            shared ImportSourceValidator; a version is
+                            required when saving as Nexus so the edit can
+                            never create an unknown state). Downloaded mods
+                            are not editable: a version carrying a FileId OR
+                            a RemoteUploadedAt grounds the container (the
+                            timestamp widens the evidence to pre-FileId
+                            downloads), the row's pencil is hidden (its slot
+                            preserved), and
+                            both StartEdit and the primitive refuse (defense
+                            in depth; no degraded fields, no card). The name
+                            field is editable only for the Untracked choice
+                            (the name is the identity for an untracked
+                            container; a Nexus mod's name comes from Nexus +
+                            the update check's name-sync would revert a
+                            user-typed name), while the id, version, and
+                            source switch stay editable; an identity change
+                            on a multi-version
+                            container swaps the form for an inline
+                            plain-language removal confirm (never a nested
+                            modal; the save-time state refresh + the typed
+                            RemovalConfirmationRequiredException recover path
+                            cover a version landing while the card is open);
+                            refused saves + disk failures surface inline with
+                            the form still editable; a successful save
+                            deactivates the band + raises
+                            ImportDetailsEdited, the mod list's reload
+                            signal. The edit mode + the batch are mutually
+                            exclusive (both entries check the shared inactive
+                            gate) and the active card gates Add + drops for
+                            either mode.
+                            rate-limit notice sits in the Mods toolbar. While
                            the active profile has an enabled alternate mod
                            manager mod, a full-width non-dismissible caution
                            banner (a drawn swap-vert icon +
@@ -774,16 +1184,19 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                            Reload + the enable-toggle path) sits between the
                            import card + the row list, gating nothing
                            (reorder/lock controls stay fully functional). The Add split
-                            button has four flyout items, all modes that set
-                            the default on click (the face label tracks the
+                            button has five flyout items, all sticky modes that
+                            set the default on click (the face label tracks the
                             mode): "Add Nexus Mods" (the default; opens the
                             Darktide Nexus Mods games page in the browser), "Add
-                            Mod (archive)", "Add Mod (folder)", and "Link
+                            Mod (archive)", "Add Mod (folder)", "Link
                             external folder" (folder picker, no modal; the
                             link flow lives on the `LinkedModsViewModel` child,
                             the ImportWorkflowViewModel pattern, exposed as
                             `vm.LinkedMods` and raised via its `ModsLinked`
-                            event for the parent's reload);
+                            event for the parent's reload), + "Import mod
+                            list" (position 2 in the flyout; txt picker ->
+                            the load-order import workspace replacing the
+                            Mods content);
                             `LinkedMods.LinkModsCommand` peeks the base name,
                             runs the collision check (excluding a re-link),
                             then `LinkFolder` + `AddMod(LatestPolicy)`. In Gaming
@@ -1029,6 +1442,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           directly from its external folder, no version
                           resolution; the focused ProfilesRoot read feeds the
                           game-dir ownership prefix check) + SetModPolicy transitions + the
+                          focused IProfileCloner capability (CloneProfile: one
+                          persisted copy of the aggregate with a new id +
+                          timestamp + the stable ` (Copy N)` family name,
+                          complete mod membership + launch settings, an empty
+                          staged/ scaffold, no ProfileCreated; ProfileService
+                          implements it alongside IProfileService, both DI
+                          interfaces forwarding to the same singleton) + the
                         profile-scoped load-order lock (ModListEntry.OrderLocked:
                         a locked entry keeps its exact zero-based index across
                         SetModOrder, so a reorder projects the requested ordering
@@ -1044,7 +1464,24 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         import-time base-name collision hard-block
                         (GetBaseNameCollision; two same-folder mods can't coexist
                         in a profile; resolves a linked mod's base name from the
-                        external folder's own name) + per-profile launch settings
+                        external folder's own name) + the load-order import
+                        family (ModLoadOrderParser: pure DML-exact
+                        mod_load_order.txt parsing, per line trim + skip empty +
+                        skip -- comments after trim, first-wins dedupe, BOM
+                        tolerance, no #/// /inline-comment support;
+                        LoadOrderPlanner: pure reconciliation of parsed names
+                        against caller-resolved data (profile mods + repo
+                        candidates keyed by base name) into the immutable
+                        LoadOrderPlan (per-line outcomes Reorder/LibraryAdd/
+                        Unresolved, OrderedContainerIds for SetModOrder,
+                        LibraryAdds, UnmatchedNames), case-insensitive ordinal
+                        matching, Nexus-sourced ambiguity preference with
+                        remaining ties reported unmatched, no lock reasoning
+                        (SetModOrder's own projection keeps locked slots);
+                        ILoadOrderReconciler: the resolution glue resolving both
+                        sides' base names through the shared internal ModBaseNames
+                        helper, the same resolution staging uses) + per-profile
+                        launch settings
                         (EnvVar/LaunchSettings: ordered env-var entries + game
                         args + the EnableLuaLogs toggle (emits Relay's bare
                         --log-lua flag, teeing Lua print output into the log
@@ -1081,15 +1518,39 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         lists like any ordinary mod; one derivation consumed
                         by both the launch flag + the mod-list banner) + ModCleanup (the startup
                         prune orchestration; keeps a referenced linked container by
-                        containerId sentinel, since a linked container has no versions)
+                        containerId sentinel, since a linked container has no
+                        versions, and keeps every referenced container's CURRENT
+                        latest version folder unconditionally, regardless of the
+                        entry's own policy, so a pinned entry can never let the
+                        prune delete the container's newest version)
   mods/          Modificus.Curator.Mods -- the unified mod repository
                         (IModRepository: UUID containers per (source, identity),
                         opaque-ID version subfolders, per-container container.json
                         manifests, in-memory index rebuilt from a scan,
                         RenameContainer (display-label rename; identity Id +
                         on-disk directory unchanged; keeps the untracked-name
-                        index consistent for untracked containers), PruneUnreferenced
-                        GC at startup, keeping a referenced linked container by
+                        index consistent for untracked containers),
+                        EditImportDetails (the name + source + latest-tag
+                         correction primitive in one atomic manifest write:
+                         same-identity edits retag without removal,
+                         the initial Untracked->Nexus association records
+                         identity + tag with no remote facts, Nexus->Untracked
+                         or a Nexus id change resets remote claims + keeps only
+                         the latest version's local facts behind an explicit
+                         removeOlderVersions confirm flag (refused with the
+                         typed RemovalConfirmationRequiredException, an
+                         InvalidOperationException subclass), a downloaded
+                         container (any version carries a FileId OR a
+                         RemoteUploadedAt; only the download path records
+                         either) refuses every edit, name-only included, a
+                         name change is allowed only for an Untracked
+                         destination (a Nexus name is Nexus-owned), a
+                         duplicate
+                         Nexus identity + a non-empty tag with an Untracked
+                         destination are rejected, untracked-name + source
+                         indexes stay coherent, + the container Id never moves
+                         so every profile reference survives), PruneUnreferenced
+                         GC at startup, keeping a referenced linked container by
                         containerId sentinel) + the version-policy model (ModVersionPolicy:
                         PinnedPolicy/LatestPolicy; PinnedPolicy pins by VersionId, a foreign
                         key to ModVersion.Folder, so the repo is the sole source of truth for
@@ -1122,10 +1583,15 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                          RemoteUploadedAt precedent; recorded on both the
                          new-version + dedup-reuse branches, so legacy entries
                          self-heal by attrition) + the IsLatest contract keys on
-                         the effective timestamp (RemoteUploadedAt ?? ImportedAt,
-                         tie-break ImportedAt) re-evaluated at every
+                         the most recent ARRIVAL (the newest ImportedAt decides
+                         the clock: a manual import with the newest arrival is
+                         latest, otherwise the newest downloaded version by
+                         RemoteUploadedAt with the arrival stamp breaking exact
+                         ties), re-evaluated at every
                          AddVersion/RemoveVersion, so importing an older remote
-                         file never flips latest (issue #232);
+                         file never flips latest while a download arriving
+                         after a manual import correctly takes the flag
+                         (issues #232 + its mixed-container incomplete fix);
                          TryInitializeDisplayMetadata is the atomic missing-only
                          initialization seam (writes + persists under the repo lock,
                          returns false if DisplayMetadata is already non-null); LinkFolder records an external
@@ -1231,15 +1697,48 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                         single entry on a successful version change;
                         LastResult + CheckCompleted event for the mod-list;
                         the update family takes the profile's mod list as
-                        caller-mapped `ModListCandidate` records
-                        (ContainerId + Policy), so Integrations holds no
-                        Profiles reference; + the pure static
-                         `UpdateEligibility` evaluator, the one source of the
-                         four known-update eligibility rules (member /
-                         LatestPolicy / NexusSource same ModId / ordinal-ignore-
-                         case version match), shared by the store's hydration
-                         self-heal + the download queue's dequeue-time
-                         revalidation (UI))
+                         caller-mapped `ModListCandidate` records
+                         (ContainerId + Policy), so Integrations holds no
+                         Profiles reference; + the pure static
+                          `UpdateEligibility` evaluator, the one source of the
+                          four known-update eligibility rules (member /
+                          LatestPolicy / NexusSource same ModId / ordinal-ignore-
+                          case version match, with an EMPTY expected version
+                          matching an empty installed tag so an
+                          unknown-resolution install is never dropped as stale),
+                          shared by the store's hydration
+                          self-heal + the download queue's dequeue-time
+                          revalidation (UI); + INexusClient.SearchModsAsync:
+                          the ANONYMOUS v2 GraphQL mods search (no auth header;
+                          the request routes around the auth factory with only
+                          the app-identification headers, works signed out,
+                          sits behind Cloudflare not the API key budget, no
+                          x-rl headers expected but parsed if present): ONE
+                          request in the Nexus website's own search shape:
+                          name:[{op:WILDCARD,value:"terms"}] (the phrase
+                          verbatim, no literal asterisks; Nexus's wildcard
+                          index owns matching) +
+                          gameDomainName:[{op:EQUALS,value:"warhammer40kdarktide"}]
+                          + viewUserBlockedContent:false +
+                          sort:{relevance:{direction:DESC}} (best match
+                          first; the result is capped, so ordering decides
+                          which hits the page carries, + a newest-first page
+                          can omit the exact title entirely) + count,
+                          requesting nodes { modId name uid } only, returning
+                          NexusSearchResult (modId + name + uid); GraphQL-level
+                          errors in a 200 OK body surface as NexusApiException;
+                          callers stay serial + human-paced, no retries);
+                          + INexusClient.GetModByIdAsync: the ANONYMOUS v2
+                          GraphQL modsByUid exact-identity lookup by numeric
+                          mod id (uid = game_id * 2^32 + mod_id, identity
+                          fields only), the same anonymous routing + error
+                          posture as the search, returning the canonical
+                          identity or null when the id resolves to no
+                          Darktide mod (an empty node list is not-found, not
+                          an error); the load-order workspace's manual
+                          id/URL verification consumes it so a syntactically
+                          valid id is never accepted until Nexus confirms it
+                          + supplies the canonical title)
   steam/                Modificus.Curator.Steam -- Steam + Darktide + Proton discovery
                         (multi-library + compatdata; Linux Proton resolves from Steam's
                         CompatToolMapping in config.vdf, app-specific entry first then
@@ -1420,14 +1919,65 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           Nexus + linked, the exact staged manager path), ordinary
                                           staging/mods.lst behavior for the manager mod, null for
                                           disabled/unresolvable/missing-file/capitalized-Base shapes,
-                                          the unknown-profile throw, first-in-order-wins)
+                                          the unknown-profile throw, first-in-order-wins
+                                          + ModLoadOrderParserTests: the DML-exact
+                                          reader (trim/blank/comment-after-trim,
+                                          dedupe first-wins, BOM, the rejected
+                                          #/// /inline tolerances, empty + comment-only)
+                                          + LoadOrderPlannerTests: the pure
+                                          matching table (profile/library/unmatched,
+                                          case-insensitive, the Nexus ambiguity
+                                          preference + remaining ties unmatched,
+                                          ordered ids over file order, unlisted
+                                          not appended, empty plan) + the real
+                                          reconciler over the fixture
+                                          (policy-resolved profile base names,
+                                          latest/linked repo candidates, the
+                                          unresolvable-entry unmatched report)
+                                          + ModCleanupTests: the startup prune -- the linked
+                                          keep/unreferenced-drop pair + the managed latest-keep
+                                          (a pinned entry keeps the pinned folder AND the
+                                          container's current latest, a Latest entry on a mixed
+                                          container keeps the resolved latest, unreferenced
+                                          superseded versions still dropped, empty-container
+                                          removal unchanged)
+                                          + ProfileCloneTests: the clone contract --
+                                          the exact persisted copy across a fresh service
+                                          instance (description, every mod-entry field,
+                                          every policy kind, every launch setting, new id +
+                                          creation timestamp), the empty staged/ scaffold
+                                          vs. a staged source, independence in both
+                                          directions, the full generated-name table
+                                          (copy-of-copy, case-insensitive, a numbering gap,
+                                          a nonnumeric suffix), the unknown-source throw
+                                          creating nothing, no ProfileCreated, + the
+                                          IProfileService/IProfileCloner same-singleton
+                                          DI mapping
     Modificus.Curator.Mods.Tests/      xUnit tests for the mod repository + import
                                         (incl. the linked-folder add + linked-container prune,
                                         + the display-metadata AddVersion/Import pass-through
-                                        + the IsLatest effective-timestamp contract (an older
-                                        remote file never flips latest, at add/remove/dedup)
+                                        + the IsLatest arrival-rule contract (the decision
+                                        table: a download arriving after a manual import takes
+                                        latest, a later manual import lands as latest, an
+                                        older remote file never flips latest, manuals-only by
+                                        ImportedAt, downloads-only by RemoteUploadedAt; the
+                                        dedup branch is not a new arrival; RemoveVersion
+                                        promotion under the rule)
                                         + FileId persistence on both AddVersion branches
                                         + TryInitializeDisplayMetadata atomic missing-only init
+                                        + EditImportDetailsTests: every primitive branch (the
+                                        Untracked-only name rule incl. the rename-with-switch +
+                                        the Nexus name refusal, same-identity retag,
+                                        Untracked->Nexus incl. the empty-tag
+                                        association path, the Nexus-unknown retag, the identity
+                                        reset with older-version removal, Nexus->Untracked), the
+                                        downloaded-not-editable refusal (a FileId OR a
+                                        RemoteUploadedAt on any version refuses every edit
+                                        name-only included, both evidence shapes + the
+                                        older-version-grounded case), the removeOlderVersions
+                                        guard, the
+                                        tag-collision throw, the duplicate-identity guard, + the
+                                        untracked-name index coherence
                                         + the manager archive shape: base/mod_manager.lua with an
                                         empty base.mod validates with base name base)
     Modificus.Curator.Integrations.Tests/    xUnit tests for the Nexus client
@@ -1455,11 +2005,39 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           source-changed/version-changed entries)
                                           + the UpdateEligibility evaluator (the four
                                           rules + every rejection reason + the
-                                          case-insensitive version match; the
+                                          case-insensitive version match, incl.
+                                          the empty-expected/empty-installed
+                                          unknown-resolution match + the
+                                          empty-vs-nonempty mismatches; the
                                           update-install revalidation that
                                           consumes it runs in the UI-layer
                                           download queue, covered by
                                           ModDownloadQueueTests)
+                                          + SearchModsAsync (the one
+                                          website-shaped request: the raw
+                                          phrase as the name WILDCARD value
+                                          with no literal asterisks + no
+                                          nameStemmed leg + the Darktide
+                                          gameDomainName filter + relevance
+                                          DESC (createdAt rejected) +
+                                          viewUserBlockedContent:false
+                                          + identity-only fields + exactly
+                                          one POST, the curios auspex
+                                          multi-word regression, the
+                                          normalized-phrase passthrough, the
+                                          no-auth-header + works-signed-out
+                                          assertions, empty-on-hits, the
+                                          GraphQL-error + non-2xx
+                                          NexusApiException paths, rate-limit
+                                          header forwarding, the non-Darktide
+                                          domain rejection)
+                                          + GetModByIdAsync (the canonical
+                                          identity for an existing id, the
+                                          null not-found answer, the
+                                          anonymous no-auth-header +
+                                          works-signed-out assertions, the
+                                          invalid domain/id rejections, the
+                                          GraphQL-error + non-2xx paths)
                                           + the NexusModMetadataService (stable-v1
                                           display-metadata backfill: the 24-hour gate,
                                           the 25-attempt cap, active-profile-priority
@@ -1575,7 +2153,18 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             ProfilesViewModelTests (profile create/save/cancel/
                                             delete/switch, no-active states, running-state gates,
                                             dirty navigation, banner/picker, inline launch-settings
-                                            validation + atomic save, DMF prompt timing after create)
+                                            validation + atomic save, DMF prompt timing after
+                                            create; + the clone flow: active-only visibility +
+                                            draft/no-active/running gates with direct-invocation
+                                            refusal, clean success (one clone + one activation +
+                                            authoritative reload + clean editor), the Save /
+                                            Don't save / Cancel dirty branches, the localized
+                                            generic failure preserving the source, + the clone
+                                            tooltip's culture refresh) + ProfilesViewXamlTests
+                                            (the Add/Clone/Delete action-row order, the clone
+                                            command/visibility/tooltip bindings +
+                                            ShowOnDisabled, the drawn content-copy Path icon +
+                                            the localized label, the clone resx keys)
                                             + the LaunchSettingsEditorViewModelTests (existing-
                                             settings load, add/remove rows, inline localized
                                             validation -- empty/`=`/NUL name, NUL value,
@@ -1599,19 +2188,23 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                              UpdateCommand premium/regular branches
                                              + the stale-flag silent no-op + the resolve-failure
                                              alert + the automatic-update setting
-                                             + the AutomaticUpdateService
-                                             gating/sequencing/resolve-failure isolation/profile-
-                                             switch/mid-batch-profile-deletion/cancellation;
-                                             + the download queue (ModDownloadQueueTests:
-                                             serial FIFO worker, dedupe join + pulse,
-                                             dequeue-time auth recheck + eligibility
-                                             revalidation, the exact-FileId repository hit,
-                                             head/non-head policy on both paths, ProfileAdd vs
-                                             UpdateInstall completions, token-authoritative
-                                             cancel (queued drop + active interrupt),
-                                             retry/dismiss, mixed nxm + update clicks sharing
-                                             the worker, the admission-event ordering on a
-                                             fast hit)
+                                              + the AutomaticUpdateService
+                                              gating/sequencing/resolve-failure isolation/profile-
+                                              switch/mid-batch-profile-deletion/cancellation +
+                                              the version-unknown-row exclusion (manual click only);
+                                              + the download queue (ModDownloadQueueTests:
+                                              serial FIFO worker, dedupe join + pulse,
+                                              dequeue-time auth recheck + eligibility
+                                              revalidation (incl. the empty-ExpectedVersion
+                                              unknown-resolution install passing over an
+                                              unknown-version container),
+                                              the exact-FileId repository hit,
+                                              head/non-head policy on both paths, ProfileAdd vs
+                                              UpdateInstall completions, token-authoritative
+                                              cancel (queued drop + active interrupt),
+                                              retry/dismiss, mixed nxm + update clicks sharing
+                                              the worker, the admission-event ordering on a
+                                              fast hit)
                                              + the download rows (ModListDownloadRowsTests: the
                                              morph-in-place vs appended hosting projection incl.
                                              filter-hidden targets + rehosting on profile switch
@@ -1709,7 +2302,169 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             row markup (every shared control exists
                                             once, both roots host the templates, the
                                             compact spacing styles, the 680-DIP
-                                            breakpoint); Settings/escape-hatch browse gating
+                                             breakpoint); + the edit-import-details
+                                             surface (ImportWorkflowEditModeTests,
+                                             the import card's edit mode:
+                                             activation + prefill, the batch/edit
+                                             mutual exclusion incl. the
+                                             mid-processing refusal + the Add
+                                              gating, the validation matrix over
+                                              the shared ImportSourceValidator
+                                              (Untracked/Nexus, version required,
+                                              bare id or URL parse), the
+                                              downloaded-not-editable StartEdit
+                                              refusal (both grounding shapes:
+                                              FileId + RemoteUploadedAt-only),
+                                              the name field's choice-following
+                                              editability incl. the programmatic
+                                              Nexus-name refusal (defense in
+                                              depth via the primitive), the inline
+                                              identity-removal confirm step +
+                                              Back + both recover paths (the
+                                              save-time refresh + the typed
+                                              RemovalConfirmationRequiredException),
+                                              refused-save + disk-failure inline
+                                              surfacing + correction, the
+                                              untracked-name conflict, the save +
+                                              ImportDetailsEdited reload signal,
+                                              the unknown/linked screening;
+                                              the in-row band's target
+                                              tracking (ModListViewModelTests:
+                                              IsEditTarget + band-context
+                                              assignment on start, re-attachment
+                                              after a mid-edit reload, save +
+                                              cancel clearing, the morph-close
+                                              rule, the editing row's anchored
+                                              grip/moves while others still
+                                              move, the batch keeping the top
+                                              card + no band);
+                                             ImportSourceValidatorTests: the shared
+                                             parse + remote-field rules both card
+                                              modes consume; the load-order
+                                              workspace
+                                              (LoadOrderImportViewModelTests:
+                                              Start reaching the mode choice
+                                              with zero Nexus/auth calls, the
+                                              reorder mode's zero-network
+                                              review + profile-matches-only
+                                              order write + honest no-match
+                                              refusal, import-mode inclusion
+                                              by default + Skip/Undo, the
+                                              account read + sibling scan +
+                                              serial search queue (progress,
+                                              Stop retaining candidates,
+                                              apply not racing a live search
+                                              or a busy verification), the
+                                              capability gating (non-premium/
+                                              signed-out/failed-read remote
+                                              rows non-actionable with no
+                                              lookup work + the upfront
+                                              notice + zero search calls,
+                                              sibling lookups at every tier),
+                                              the unique normalized-exact
+                                              auto-identification decision
+                                              table (the three exact spelling
+                                              forms, single partial/nonexact,
+                                              multiple, no redundant verify
+                                              call, the sibling association,
+                                              the exact-first candidate
+                                              ranking: an exact hit returned
+                                              behind non-exact ones becomes
+                                              the top proposal with the
+                                              service order retained behind
+                                              it, the cap holding five with
+                                              the exact hit surviving it,
+                                              the scoreboard-shaped id-22
+                                              regression),
+                                              candidate presentation/accept/
+                                              change (title once in Match, id
+                                              in Mod ID), the shared Find
+                                              classification (valid id + URL
+                                              exact lookup, malformed numeric/
+                                              URL/blank inline validation with
+                                              no call, name search replacing
+                                              proposals + requiring Accept
+                                              incl. one exact result + the
+                                              manual exact-first ranking, no
+                                              results + API failure staying
+                                              editable, the stale-overwrite
+                                              guards both directions), the
+                                              matched-row read-only facts
+                                              (active Latest/Pinned Nexus,
+                                              library Latest, untracked
+                                              version-no-id, linked neither,
+                                              empty tag blank),
+                                              the
+                                              version surface (blank
+                                              identified sibling imports on
+                                              the version-unknown path + the
+                                              derived version-unknown Mods
+                                              row, untracked needs none, the
+                                              download note), the premium
+                                              enqueue honesty (resolved head +
+                                              placement plan, non-premium
+                                              visibly non-actionable, a stale
+                                              premium at apply a visible
+                                              no-write failure),
+                                               stop-on-429 + per-line failure
+                                               semantics (the 429 keeps the
+                                               resolved admissions + the
+                                               queued-downloads notice), the
+                                               enqueue-race regression (a
+                                               completion during the enqueue
+                                               sequence still converges), the
+                                               placement
+                                               convergence through
+                                               LoadOrderDownloadPlacements,
+                                               the applying state + refused
+                                               mid-apply cancel + mid-apply
+                                               profile switch + deferred marshal
+                                               seam, a 150-row retention +
+                                               full-order test;
+                                               LoadOrderDownloadPlacementsTests:
+                                               the convergence matrix (anchors,
+                                               out-of-order landings,
+                                               failed-preserves-for-retry +
+                                               cancel drops + the transient
+                                               write failure retaining the
+                                               plan, the
+                                               superseded plan, the deleted
+                                               profile, unknown item filtering,
+                                               the removed-container filter);
+                                               LoadOrderXamlTests: the second
+                                               Add flyout item, the full workspace
+                                               replacing the normal Mods
+                                               content, the two mode tiles +
+                                               their container-query reflow, the
+                                               action rail's narrow reflow to a
+                                               full-width second line, the
+                                               visible resting chrome on the
+                                               text/icon actions, the one-line
+                                               manual-id cell with the inline
+                                               Find icon + Enter routing,
+                                               the obsolete-Watermark scan,
+                                               candidates as visual children of
+                                               their parent row card (spacing +
+                                               the accent-rule inset + header
+                                               alignment), the
+                                               virtualized fill-height list with
+                                               no MaxHeight cap, the fixed
+                                               header/footer, the one shared
+                                               column definition, the TextBox
+                                               font inheritance + spinner
+                                               accessible names, no CheckBox /
+                                               ComboBox / Search-on-Nexus
+                                               anywhere) + the derived
+                                              version-unknown
+                                             row state (ModItemVersionUnknownTests:
+                                             the truth + its negatives, the badge's
+                                             no-dangling-separator guard, the
+                                             update-action enable + every tooltip
+                                             variant with gaming precedence, the pin
+                                             suppression, the edit action's linked/
+                                             morphed suppression; the filter tests
+                                             cover unknown rows kept under
+                                             updates-only); Settings/escape-hatch browse gating
                                             with manual submission preserved; the
                                             PreferencesService theme mapping
                                             ResolveThemeVariant + the stored-System
@@ -1927,7 +2682,11 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   `UpdateProfile(id, name, description, launchSettings)`: the editable write
   boundary; ordered env-var entries + game args; validated up front via the
   shared `LaunchSettingsValidator`, applied at launch; `GetLaunchSettings` is the
-  focused read the launch path uses),
+  focused read the launch path uses) + the focused `IProfileCloner.CloneProfile`
+  capability (one persisted copy of the profile aggregate with a new id +
+  timestamp + the stable ` (Copy N)` family name, complete mod membership +
+  launch settings, mod files staying shared in the repository + an empty
+  `staged/` scaffold, no `ProfileCreated`),
   **Steam** (Steam + Darktide + Proton discovery via Steam's CompatToolMapping with the appinfo recommended-runtime fallback + the automatic/manual mode policy + `Rediscover` + `IsGameRunning`),
   **Integrations** (the Nexus v1 client/auth +
   `IModAcquisitionService` the download + extract + place orchestrator +

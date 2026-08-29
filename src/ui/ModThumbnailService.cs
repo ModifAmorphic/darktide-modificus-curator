@@ -48,12 +48,12 @@ internal sealed class ModThumbnailService : IModThumbnailService
 {
     /// <summary>
     /// The physical-pixel width the production decode path targets. Large enough
-    /// for the widest detailed-row thumbnail (112 DIP) to stay sharp on scaled
-    /// displays. Referenced from the production DI wiring
+    /// for the widest detailed-row thumbnail frame (192 DIP, 16:9) to stay sharp
+    /// at 2x display scaling. Referenced from the production DI wiring
     /// (<see cref="CuratorComposition"/>) so the decode literal lives in one
     /// place. Tests inject their own decode seam and do not read this value.
     /// </summary>
-    internal const int DecodeWidth = 256;
+    internal const int DecodeWidth = 384;
     private const int MaxBytes = 8 * 1024 * 1024; // 8 MiB absolute maximum.
     private const int IoBufferSize = 81920;
     private static readonly TimeSpan PruneAge = TimeSpan.FromDays(90);

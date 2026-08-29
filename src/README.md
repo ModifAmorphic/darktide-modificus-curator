@@ -250,8 +250,12 @@ reached) carries no field at all. A fetched result with no display content
 fetched" and "fetched but empty" stay distinct.
 
 `Profiles` owns the staging seam (`ProfileService.PrepareModRoot` clears +
-rebuilds `staged/`, discovering each enabled mod's base folder name inside its
-resolved version folder, then writes `mods.lst`); `Mods` owns the repository
+rebuilds `staged/`, discovering each enabled mod's base folder name inside the
+resolved version folder, then writes `mods.lst`) + the focused clone
+capability (`IProfileCloner.CloneProfile`: one persisted copy of the profile
+aggregate with a new id + timestamp + a generated ` (Copy N)` family name;
+repository mod files stay shared and the clone's `staged/` starts empty);
+`Mods` owns the repository
 (`IModRepository`) + the version-policy model + the source model + the
 local-import service. Version resolution at stage time is by policy: Latest →
 the container's `isLatest` version; Pinned(vId) → the version whose `Folder`

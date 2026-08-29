@@ -593,7 +593,7 @@ public sealed class ModListViewModelTests
 
         // Start a batch + confirm with Untracked (simplest valid metadata).
         workflow.StartBatchCommand.Execute(new[] { "/mods/DMF" });
-        workflow.SourceChoice = ImportWorkflowViewModel.ImportSource.Untracked;
+        workflow.SourceChoice = ImportSource.Untracked;
         await workflow.ImportCurrentCommand.ExecuteAsync(null);
 
         // The workflow's ItemImported event reloaded the list; the row shows.
@@ -624,7 +624,7 @@ public sealed class ModListViewModelTests
             localization: Localization);
         var workflow = vm.ImportWorkflow;
         workflow.StartBatchCommand.Execute(new[] { "/mods/DMF" });
-        workflow.SourceChoice = ImportWorkflowViewModel.ImportSource.Untracked;
+        workflow.SourceChoice = ImportSource.Untracked;
         var task = workflow.ImportCurrentCommand.ExecuteAsync(null);
 
         // Switch the active profile mid-processing.
@@ -666,7 +666,7 @@ public sealed class ModListViewModelTests
             localization: Localization);
         var workflow = vm.ImportWorkflow;
         workflow.StartBatchCommand.Execute(new[] { "/mods/DMF" });
-        workflow.SourceChoice = ImportWorkflowViewModel.ImportSource.Untracked;
+        workflow.SourceChoice = ImportSource.Untracked;
 
         await workflow.ImportCurrentCommand.ExecuteAsync(null);
 
@@ -2341,5 +2341,406 @@ public sealed class ModListViewModelTests
         queue.RaiseUpdatesApplied();
 
         Assert.True(session.HasPendingChanges);
+    }
+
+    // ---- edit import details ---------------------------------------------------
+
+    [Fact]
+    public void EditImportDetails_starts_the_card_edit_mode_and_reloads_on_the_edited_event()
+    {
+        // The pencil routes through the list VM into the import card's edit
+        // mode; the child's ImportDetailsEdited event (raised after a saved
+        // edit) is the reload trigger, so an applied rename shows on the row.
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            localization: Localization);
+        var row = vm.Mods.Single(m => m.ContainerId == nexus.Id);
+
+        // Start: the card activates in edit mode over the row's container,
+        // prefilled from its facts.
+        vm.EditImportDetailsCommand.Execute(row);
+        Assert.True(vm.ImportWorkflow.IsEdit);
+        Assert.Equal("DMF", vm.ImportWorkflow.ModName);
+        Assert.Equal("DMF", vm.Mods.Single(m => m.ContainerId == nexus.Id).Name);
+
+        // Cancel: the card deactivates + nothing changed.
+        vm.ImportWorkflow.CancelBatchCommand.Execute(null);
+        Assert.False(vm.ImportWorkflow.IsActive);
+
+        // Save with a rename: the event reaches the parent, which reloads, so
+        // the row shows the edited name. The rename rides the switch to
+        // Untracked (the only destination that may change the name).
+        vm.EditImportDetailsCommand.Execute(row);
+        vm.ImportWorkflow.SourceChoice = ImportSource.Untracked;
+        vm.ImportWorkflow.ModName = "DMF Renamed";
+        vm.ImportWorkflow.SaveEditCommand.Execute(null);
+
+        Assert.False(vm.ImportWorkflow.IsActive);
+        Assert.Equal("DMF Renamed", repo.Get(nexus.Id)!.Name);
+        Assert.Equal("DMF Renamed", vm.Mods.Single(m => m.ContainerId == nexus.Id).Name);
+    }
+
+    [Fact]
+    public void EditImportDetails_is_a_noop_for_linked_null_and_morphed_rows()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var queue = new FakeModDownloadQueue();
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            downloadQueue: queue, localization: Localization);
+
+        var linkedRow = new ModItemViewModel(Localization, TestDoubles.RowContext(), Guid.NewGuid(), "Linked",
+            new LinkedSource { ExternalPath = "/tmp/x" }, "", true, 0, ModVersionPolicy.Latest,
+            Array.Empty<ModVersion>(), found: true);
+        vm.EditImportDetailsCommand.Execute(linkedRow);
+        vm.EditImportDetailsCommand.Execute(null);
+        Assert.False(vm.ImportWorkflow.IsActive);
+
+        // A download-morphed row: a live queue item targeting the row's
+        // container morphs it in place; the edit never starts.
+        var row = vm.Mods.Single(m => m.ContainerId == nexus.Id);
+        queue.Enqueue(new ModDownloadRequest(
+            "warhammer40kdarktide", 8, 100, DownloadPurpose.ProfileAdd,
+            nexus.Id, "DMF", a.Id, a.Name));
+        Assert.True(row.IsDownloadMorphed);
+
+        vm.EditImportDetailsCommand.Execute(row);
+        Assert.False(vm.ImportWorkflow.IsActive);
+    }
+    // ---- toolbar lock while the import card is active ------------------------
+
+    [Fact]
+    public void List_tooling_disables_while_a_batch_is_active_and_restores_on_close()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            localization: Localization);
+        Assert.True(vm.IsListToolingEnabled);
+
+        vm.ImportWorkflow.StartBatchCommand.Execute(new[] { "/tmp/some-mod" });
+        Assert.False(vm.IsListToolingEnabled);
+
+        vm.ImportWorkflow.CancelBatchCommand.Execute(null);
+        Assert.True(vm.IsListToolingEnabled);
+    }
+
+    [Fact]
+    public void List_tooling_disables_while_editing_and_restores_on_save_or_cancel()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            localization: Localization);
+
+        // Cancel path.
+        vm.ImportWorkflow.StartEditCommand.Execute(nexus.Id);
+        Assert.False(vm.IsListToolingEnabled);
+        vm.ImportWorkflow.CancelBatchCommand.Execute(null);
+        Assert.True(vm.IsListToolingEnabled);
+
+        // Save path (an unchanged-name retag is a valid save).
+        vm.ImportWorkflow.StartEditCommand.Execute(nexus.Id);
+        Assert.False(vm.IsListToolingEnabled);
+        vm.ImportWorkflow.SaveEditCommand.Execute(null);
+        Assert.True(vm.IsListToolingEnabled);
+    }
+
+    [Fact]
+    public void Row_level_commands_stay_enabled_while_the_card_is_active()
+    {
+        // The lock is the toolbar's projection controls only; a row's own
+        // controls keep working while its editor (or a batch) is open.
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            localization: Localization);
+        var row = vm.Mods.Single(m => m.ContainerId == nexus.Id);
+
+        vm.ImportWorkflow.StartEditCommand.Execute(nexus.Id);
+        Assert.False(vm.IsListToolingEnabled);
+
+        row.Enabled = !row.Enabled;
+        vm.ToggleEnabledCommand.Execute(row);
+
+        var call = Assert.Single(profiles.SetModEnabledCalls);
+        Assert.Equal(nexus.Id, call.ContainerId);
+        Assert.Equal(row.Enabled, call.Enabled);
+    }
+    // ---- the in-row edit band: target tracking + anchoring --------------------
+
+    /// <summary>Builds the VM with three profile mods (A, B, C), B
+    /// Nexus-sourced; returns the VM + the rows' container ids.</summary>
+    private static (ModListViewModel Vm, FakeProfileService Profiles, FakeModDownloadQueue Queue, Guid A, Guid B, Guid C)
+        BuildForEditBand()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var modA = repo.Seed(new UntrackedSource(), "A", "1.0");
+        var modB = repo.Seed(new NexusSource { ModId = 8 }, "B", "1.0");
+        var modC = repo.Seed(new UntrackedSource(), "C", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = modA.Id, Order = 0, Policy = ModVersionPolicy.Latest },
+            new ModListEntry { ContainerId = modB.Id, Order = 1, Policy = ModVersionPolicy.Latest },
+            new ModListEntry { ContainerId = modC.Id, Order = 2, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var queue = new FakeModDownloadQueue();
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            localization: Localization, downloadQueue: queue);
+        return (vm, profiles, queue, modA.Id, modB.Id, modC.Id);
+    }
+
+    [Fact]
+    public void StartEdit_marks_the_row_as_the_edit_target_with_the_band_context()
+    {
+        var (vm, _, _, _, bId, _) = BuildForEditBand();
+        var row = vm.Mods.Single(m => m.ContainerId == bId);
+        Assert.False(row.IsEditTarget);
+        Assert.Null(row.EditBandContext);
+
+        vm.EditImportDetailsCommand.Execute(row);
+
+        Assert.True(row.IsEditTarget);
+        Assert.Same(vm.ImportWorkflow, row.EditBandContext);
+        // Exactly one row carries the band.
+        Assert.Equal(1, vm.Mods.Count(m => m.IsEditTarget));
+        // The top card host is batch-only: the edit does not open it.
+        Assert.False(vm.ImportWorkflow.IsBatchActive);
+        Assert.True(vm.ImportWorkflow.IsEdit);
+    }
+
+    [Fact]
+    public void A_reload_mid_edit_reattaches_the_band_to_the_new_row_instance()
+    {
+        var (vm, _, _, _, bId, _) = BuildForEditBand();
+        var row = vm.Mods.Single(m => m.ContainerId == bId);
+        vm.EditImportDetailsCommand.Execute(row);
+
+        vm.Reload();
+
+        var rebuilt = vm.Mods.Single(m => m.ContainerId == bId);
+        Assert.False(ReferenceEquals(row, rebuilt));
+        Assert.True(rebuilt.IsEditTarget);
+        Assert.Same(vm.ImportWorkflow, rebuilt.EditBandContext);
+        Assert.True(vm.ImportWorkflow.IsEdit);
+    }
+
+    [Fact]
+    public void Save_and_cancel_clear_the_edit_target()
+    {
+        var (vm, _, _, _, bId, _) = BuildForEditBand();
+        var row = vm.Mods.Single(m => m.ContainerId == bId);
+
+        // Cancel.
+        vm.EditImportDetailsCommand.Execute(row);
+        vm.ImportWorkflow.CancelBatchCommand.Execute(null);
+        var afterCancel = vm.Mods.Single(m => m.ContainerId == bId);
+        Assert.False(afterCancel.IsEditTarget);
+        Assert.Null(afterCancel.EditBandContext);
+
+        // Save (an unchanged-name retag).
+        vm.EditImportDetailsCommand.Execute(row);
+        vm.ImportWorkflow.Version = "1.0-hotfix";
+        vm.ImportWorkflow.SaveEditCommand.Execute(null);
+        Assert.False(vm.ImportWorkflow.IsActive);
+        var afterSave = vm.Mods.Single(m => m.ContainerId == bId);
+        Assert.False(afterSave.IsEditTarget);
+        Assert.Null(afterSave.EditBandContext);
+    }
+
+    [Fact]
+    public void A_morph_arriving_on_the_edited_container_closes_the_edit()
+    {
+        // The container just became downloaded (not editable by rule) and the
+        // morph itself is the visible explanation in the row; the band closes
+        // at once.
+        var (vm, _, queue, _, bId, _) = BuildForEditBand();
+        var row = vm.Mods.Single(m => m.ContainerId == bId);
+        vm.EditImportDetailsCommand.Execute(row);
+        Assert.True(row.IsEditTarget);
+
+        queue.Enqueue(new ModDownloadRequest(
+            "warhammer40kdarktide", 8, 100, DownloadPurpose.ProfileAdd,
+            bId, "B", Guid.NewGuid(), "Target"));
+
+        Assert.True(row.IsDownloadMorphed);
+        Assert.False(vm.ImportWorkflow.IsActive);
+        Assert.False(row.IsEditTarget);
+        Assert.Null(row.EditBandContext);
+    }
+
+    [Fact]
+    public void Move_commands_refuse_for_the_editing_row_but_work_for_others()
+    {
+        // [A, B, C] with B being edited: B is anchored (its band is open), so
+        // B's moves are no-ops while C still moves over the anchored row.
+        var (vm, profiles, _, aId, bId, cId) = BuildForEditBand();
+        var b = vm.Mods.Single(m => m.ContainerId == bId);
+        var c = vm.Mods.Single(m => m.ContainerId == cId);
+        vm.EditImportDetailsCommand.Execute(b);
+
+        // The editing row's move buttons are inert + its grip is not
+        // hit-testable.
+        Assert.False(b.CanMoveUp);
+        Assert.False(b.CanMoveDown);
+        Assert.False(b.IsGripEnabled);
+        Assert.True(c.IsGripEnabled);
+
+        vm.MoveUpCommand.Execute(b);
+        vm.MoveDownCommand.Execute(b);
+        Assert.Empty(profiles.SetModOrderCalls);
+
+        // Another row still moves + the anchored row keeps its exact index.
+        vm.MoveUpCommand.Execute(c);
+        var order = Assert.Single(profiles.SetModOrderCalls);
+        Assert.Equal([cId, bId, aId], order); // B anchored at index 1
+
+        // A drag commit naming the anchored row as source is refused too
+        // (the planner's anchored-source rejection over the combined flag).
+        vm.CommitReorderCommand.Execute(new ReorderRequest(bId, 0));
+        Assert.Single(profiles.SetModOrderCalls);
+    }
+
+    [Fact]
+    public void The_batch_still_uses_the_top_card_and_no_row_carries_a_band()
+    {
+        var (vm, _, _, aId, _, _) = BuildForEditBand();
+
+        vm.ImportWorkflow.StartBatchCommand.Execute(new[] { "/tmp/some-mod" });
+
+        Assert.True(vm.ImportWorkflow.IsBatchActive);
+        Assert.All(vm.Mods, m => Assert.False(m.IsEditTarget));
+        Assert.All(vm.Mods, m => Assert.Null(m.EditBandContext));
+    }
+
+    // ---- the load-order card on the mod-list VM --------------------------------
+
+    [Fact]
+    public async Task Tooling_and_add_disable_while_a_load_order_review_is_active()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var reconciler = new FakeLoadOrderReconciler { NextPlan = LoadOrderPlan.Empty };
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            localization: Localization, loadOrderReconciler: reconciler);
+        Assert.True(vm.IsAddEnabled);
+        Assert.True(vm.IsListToolingEnabled);
+        Assert.False(vm.IsAnyCardActive);
+
+        var path = Path.Combine(Path.GetTempPath(), "curator-loadorder-" + Guid.NewGuid() + ".txt");
+        File.WriteAllText(path, "-- empty\n");
+        try
+        {
+            await vm.LoadOrder.StartImportCommand.ExecuteAsync(path);
+
+            Assert.True(vm.IsAnyCardActive);
+            Assert.False(vm.IsAddEnabled);
+            Assert.False(vm.IsListToolingEnabled);
+
+            vm.LoadOrder.CancelCommand.Execute(null);
+            Assert.True(vm.IsAddEnabled);
+            Assert.True(vm.IsListToolingEnabled);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task An_applied_load_order_reloads_the_list()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var library = repo.Seed(new UntrackedSource(), "FromLibrary", "1.0");
+        var existing = repo.Seed(new UntrackedSource(), "Existing", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = existing.Id, Order = 0, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var reconciler = new FakeLoadOrderReconciler
+        {
+            NextPlan = LoadOrderPlanner.Build(
+                new[] { "FromLibrary" },
+                Array.Empty<LoadOrderProfileMod>(),
+                new[] { new LoadOrderRepoCandidate(library.Id, "FromLibrary", false, library.Name) }),
+        };
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            localization: Localization, loadOrderReconciler: reconciler);
+
+        var path = Path.Combine(Path.GetTempPath(), "curator-loadorder-" + Guid.NewGuid() + ".txt");
+        File.WriteAllText(path, "FromLibrary\n");
+        try
+        {
+            await vm.LoadOrder.StartImportCommand.ExecuteAsync(path);
+            await vm.LoadOrder.ChooseImportCommand.ExecuteAsync(null);
+            Assert.Single(vm.LoadOrder.Rows);
+
+            await vm.LoadOrder.ApplyCommand.ExecuteAsync(null);
+
+            // The OrderApplied event reloaded the list: the added mod shows.
+            Assert.False(vm.LoadOrder.IsActive);
+            Assert.Contains(vm.Mods, m => m.ContainerId == library.Id);
+            Assert.Contains(profiles.AddModCalls, c => c.ContainerId == library.Id);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task The_pencil_command_refuses_while_a_load_order_review_is_active()
+    {
+        var a = Profile("Alpha");
+        var profiles = TestDoubles.Profiles(a);
+        var repo = new FakeModRepository();
+        var nexus = repo.Seed(new NexusSource { ModId = 8 }, "DMF", "1.0");
+        profiles.WithMods(a.Id,
+            new ModListEntry { ContainerId = nexus.Id, Order = 0, Policy = ModVersionPolicy.Latest });
+        var session = new FakeProfileSession { ActiveProfileId = a.Id };
+        var reconciler = new FakeLoadOrderReconciler { NextPlan = LoadOrderPlan.Empty };
+        var vm = TestDoubles.BuildModList(profiles, session, repo,
+            localization: Localization, loadOrderReconciler: reconciler);
+        var row = vm.Mods.Single(m => m.ContainerId == nexus.Id);
+
+        var path = Path.Combine(Path.GetTempPath(), "curator-loadorder-" + Guid.NewGuid() + ".txt");
+        File.WriteAllText(path, "-- empty\n");
+        try
+        {
+            await vm.LoadOrder.StartImportCommand.ExecuteAsync(path);
+            vm.EditImportDetailsCommand.Execute(row);
+            Assert.False(vm.ImportWorkflow.IsEdit);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }

@@ -87,7 +87,7 @@
     The Profiles destination content. Three regions: the top profile banner /
     Select affordance (the banner button hosts an Avalonia Flyout with the
     switch targets; when no profile is active but some exist, a full-width
-    Select affordance replaces it) + the shared Add/Delete action row + the
+    Select affordance replaces it) + the shared Add/Clone/Delete action row + the
     no-profiles CTA, the scrollable editor (Name + single-line Description +
     the reusable LaunchSettingsEditorView), and a fixed footer (Save + Cancel
     + top-level save error). The page owns the ScrollViewer so the editor view
@@ -210,13 +210,14 @@
               HorizontalContentAlignment="Left"
               MinHeight="44" />
 
-      <!-- Shared Add/Delete action row beneath either the persisted active-
-           profile banner or the no-active Select affordance. Hidden while a
-           new-profile draft is open (Save + Cancel are the only draft-
-           completion controls). With an active profile it carries Add + Delete;
-           with no active profile it carries Add only. Add is also disabled at
-           the command level while a draft is open (defense in depth) so a
-           programmatic call cannot start a second draft. -->
+      <!-- Shared Add/Clone/Delete action row beneath either the persisted
+            active-profile banner or the no-active Select affordance. Hidden
+            while a new-profile draft is open (Save + Cancel are the only draft-
+            completion controls). With an active profile it carries Add + Clone
+            + Delete; with no active profile it carries Add only (Clone and
+            Delete hide with no active profile to target). Add is also disabled
+            at the command level while a draft is open (defense in depth) so a
+            programmatic call cannot start a second draft. -->
       <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding ShowProfileActions}">
         <Button Command="{Binding AddProfileCommand}"
                 ToolTip.Tip="{Binding AddTooltip}"
@@ -228,6 +229,23 @@
                   Fill="{Binding $parent[Button].Foreground}"
                   Data="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
             <TextBlock Text="{ReflectionBinding [Profiles_AddButton], Source={StaticResource Loc}}"
+                       VerticalAlignment="Center" />
+          </StackPanel>
+        </Button>
+        <!-- Clone keeps its disabled-state tooltip available (the running-gate
+             reason) via ShowOnDisabled. -->
+        <Button Command="{Binding CloneProfileCommand}"
+                IsVisible="{Binding CloneIsVisible}"
+                ToolTip.Tip="{Binding CloneTooltip}"
+                ToolTip.ShowOnDisabled="True"
+                MinHeight="36">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <!-- Material "content copy" (24x24 source): drawn geometry. -->
+            <Path Width="16" Height="16" Stretch="Uniform"
+                  VerticalAlignment="Center"
+                  Fill="{Binding $parent[Button].Foreground}"
+                  Data="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" />
+            <TextBlock Text="{ReflectionBinding [Profiles_CloneButton], Source={StaticResource Loc}}"
                        VerticalAlignment="Center" />
           </StackPanel>
         </Button>

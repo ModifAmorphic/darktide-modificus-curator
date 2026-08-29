@@ -117,6 +117,17 @@ public static class CuratorComposition
             sp.GetRequiredService<IModDownloadQueue>(),
             sp.GetRequiredService<IProfileService>()));
 
+        // The profile-scoped pending placement plans for load-order imports:
+        // observes the queue's completion signal and converges each profile's
+        // order as the enqueued downloads land (load-order policy stays out of
+        // the queue's contract). Subscribes to the queue at construction;
+        // registered after it, before the load-order workspace VM that records
+        // plans and the mod-list VM that reloads on the applied event.
+        services.AddSingleton(sp => new LoadOrderDownloadPlacements(
+            sp.GetRequiredService<IModDownloadQueue>(),
+            sp.GetRequiredService<IProfileService>(),
+            sp.GetRequiredService<ILogger<LoadOrderDownloadPlacements>>()));
+
         // Replace the no-op INxmModDownloadHandler (registered inside AddNxm)
         // with the real enqueue adapter. MS DI resolves the LAST registration
         // for an interface, so this AddSingleton supersedes the no-op. The
@@ -206,7 +217,7 @@ public static class CuratorComposition
         // (registered by AddIntegrations via AddHttpClient) for a plain factory-
         // created HttpClient per download; production decode uses
         // Bitmap.DecodeToWidth at ModThumbnailService.DecodeWidth px (sized for
-        // the 112-DIP detailed-row thumbnail on scaled displays). Registered
+        // the 192-DIP detailed-row thumbnail at 2x display scaling). Registered
         // before ModListViewModel and the later detailed-row coordinator so it is
         // available when they resolve.
         services.AddSingleton<IModThumbnailService>(sp => new ModThumbnailService(
@@ -233,13 +244,43 @@ public static class CuratorComposition
         // per-item editing form, and the per-item import orchestration. The view
         // hosts its card below the Mods toolbar; the mod-list Add split button +
         // drag-and-drop forward paths to its StartBatchCommand.
+        // The shared hosted-card activity gate: the import workflow + the
+        // load-order workspace report their activity to it (mutual exclusion +
+        // the mod-list VM's any-card projections). Registered before both
+        // card VMs.
+        services.AddSingleton<ModCardsGate>();
+
         services.AddSingleton(sp => new ImportWorkflowViewModel(
             sp.GetRequiredService<IProfileService>(),
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IModRepository>(),
             sp.GetRequiredService<IModImportService>(),
+            sp.GetRequiredService<ModCardsGate>(),
             sp.GetRequiredService<LocalizationService>(),
             sp.GetRequiredService<ILogger<ImportWorkflowViewModel>>()));
+
+        // The load-order import workspace VM: an application-lifetime singleton
+        // child registered before ModListViewModel (which takes it as a
+        // child + reloads on its OrderApplied event). Owns the mode choice,
+        // the review list, and the apply; the view's txt picker forwards to
+        // its StartImport command. Shares the card gate with the import
+        // workflow. The pending-placement component (registered above the
+        // card VMs) records its download-order intent.
+        services.AddSingleton(sp => new LoadOrderImportViewModel(
+            sp.GetRequiredService<IProfileService>(),
+            sp.GetRequiredService<IProfileSession>(),
+            sp.GetRequiredService<ILoadOrderReconciler>(),
+            sp.GetRequiredService<INexusClient>(),
+            sp.GetRequiredService<IModImportService>(),
+            sp.GetRequiredService<INexusAuthService>(),
+            sp.GetRequiredService<IModAcquisitionService>(),
+            sp.GetRequiredService<IModDownloadQueue>(),
+            sp.GetRequiredService<LoadOrderDownloadPlacements>(),
+            sp.GetRequiredService<ModCardsGate>(),
+            sp.GetRequiredService<IDialogService>(),
+            sp.GetRequiredService<LocalizationService>(),
+            sp.GetRequiredService<Action<Action>>(),
+            sp.GetRequiredService<ILogger<LoadOrderImportViewModel>>()));
 
         // The link-external-folder child VM: an application-lifetime singleton
         // registered BEFORE ModListViewModel (which takes it as a child +
@@ -285,6 +326,8 @@ public static class CuratorComposition
             sp.GetRequiredService<UpdateCheckRunner>(),
             sp.GetRequiredService<ModRowContext>(),
             sp.GetRequiredService<ImportWorkflowViewModel>(),
+            sp.GetRequiredService<LoadOrderImportViewModel>(),
+            sp.GetRequiredService<ModCardsGate>(),
             sp.GetRequiredService<DetailedModRowsViewModel>(),
             sp.GetRequiredService<LinkedModsViewModel>(),
             // The OS shell-open launcher: the Add NexusMods browser open +
@@ -301,6 +344,9 @@ public static class CuratorComposition
             // The premium update-action front: resolves the head release +
             // admits the UpdateInstall item onto the queue above.
             sp.GetRequiredService<ModUpdateEnqueuer>(),
+            // The load-order pending placements: a completed download's
+            // order convergence reloads this list.
+            sp.GetRequiredService<LoadOrderDownloadPlacements>(),
             sp.GetRequiredService<ILogger<ModListViewModel>>()));
 
         // The hosted destination view models: singletons (one instance per page,
@@ -326,6 +372,9 @@ public static class CuratorComposition
         // reload).
         services.AddSingleton<ProfilesViewModel>(sp => new ProfilesViewModel(
             sp.GetRequiredService<IProfileService>(),
+            // The focused clone capability; AddProfiles maps it to the same
+            // ProfileService singleton as IProfileService.
+            sp.GetRequiredService<IProfileCloner>(),
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),

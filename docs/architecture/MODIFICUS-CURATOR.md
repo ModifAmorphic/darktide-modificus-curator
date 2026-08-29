@@ -261,6 +261,18 @@ for the full contract (env-var table, logging, the hook-ready handshake).
   update of an entry already in the profile is a strict no-op that preserves
   the user's current order, enabled state, policy, and lock. Existing profile
   entries are not migrated.
+- **Cloning:** the focused `IProfileCloner.CloneProfile` capability persists an
+  independent copy of a profile in one operation (never reconstructed through
+  repeated `AddMod`, which would replay fresh-add policy such as DMF
+  placement). The copy gets a new id + creation timestamp, a generated
+  ` (Copy N)` family name (stable data, never localized; `Testing (Copy 1)`
+  belongs to the `Testing` family), and the source's description, complete mod
+  membership (enabled state, order, locks, policies incl. pinned version
+  ids), and launch settings. Mod files stay in the shared repository (the
+  clone references the same containers; nothing is duplicated), and the
+  staged tree is not copied: the clone receives an empty `staged/` scaffold
+  that ordinary launch staging rebuilds. Cloning raises no
+  `ProfileCreated`, so the DMF offer never fires for a clone.
 - Mods are stored **once, in a unified repository** keyed by `(source, identity)`
   per UUID container. Profiles reference a mod by `(containerId, policy)` and
   store no mod files of their own. See [Mod repository](#mod-repository).
@@ -287,9 +299,12 @@ Each version is a subfolder with an **opaque unique ID**; the raw version tag
 lives only in the manifest (for display + pin resolution), never as a folder
 name. **`isLatest` is a flag on one version entry**, not a duplicate folder:
 the repository re-evaluates the flag on every add/remove with the
-**effective-timestamp key** (`remoteUploadedAt` when the remote source
-published the file, else the import time, with the import time breaking exact
-ties), so importing an older remote file never flips latest. Each version
+**arrival rule** (the most recent arrival, i.e. the newest import time,
+decides the clock: a manual import with the newest arrival is latest;
+otherwise the newest downloaded version by `remoteUploadedAt`, with the
+import time breaking exact ties), so importing an older remote file never
+flips latest while a download arriving after a manual import takes the
+flag. Each version
 entry also records the remote file id it was acquired from (`FileId`, the
 exact identity the download queue's repository hit check keys on; null for
 manual imports, self-healing on re-acquisition). Moving latest is a one-field
@@ -367,7 +382,7 @@ contents; the archive is validated to have a single top-level folder before
 extraction). Container dedup: Untracked by name, Nexus by mod id. Version dedup:
 re-importing the same tag reuses its folder (refreshed); a new tag creates a new
 version, and the repository re-evaluates `isLatest` over all versions with its
-effective-timestamp key. The service returns `(containerId, versionId)`,
+arrival rule. The service returns `(containerId, versionId)`,
 where `versionId` is the imported version's opaque on-disk folder id (a
 `ModVersion.Folder` value); the display tag (`ModVersion.VersionString`) is
 recorded in the container manifest and is not returned. The caller then adds
@@ -647,10 +662,13 @@ is in [UI reference](../reference/ui.md).
   drag-reorder grip, column 1 is the thumbnail/placeholder slot, column 2
   holds the name + source badge (row 0) and a two-line summary (row 1), and
   row 2 is the action strip. When the card
-  is wide (greater than 680 DIP) a 112-DIP thumbnail spans all three rows and
-  the action strip occupies only the content column; when constrained (at or
-  below 680 DIP) the thumbnail shrinks to 72 DIP spanning name + summary and
-  the action strip moves to a full-width row beneath all three columns. The action
+  is wide (greater than 680 DIP) a 192x108 DIP 16:9 thumbnail (stretched
+  `Uniform`, so the complete source image shows with the frame's neutral
+  background letterboxing/pillarboxing non-16:9 assets) spans all three rows
+  and the action strip occupies only the content column; when constrained (at
+  or below 680 DIP) the thumbnail shrinks to 128x72 DIP spanning name +
+  summary and the action strip moves to a full-width row beneath all three
+  columns. The action
   strip is a right-aligned `WrapPanel` that wraps at the edge (no horizontal
   scrolling); width, height, row span, and the action column/span are driven by
   styles so the breakpoint changes them. The summary is plain text with `CharacterEllipsis` trimming and the full

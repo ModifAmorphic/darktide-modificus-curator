@@ -212,6 +212,19 @@ internal sealed class AutomaticUpdateService : IAutomaticUpdateService
                 break;
             }
 
+            // Version-unknown rows are excluded (manual click only): an empty
+            // CurrentVersion marks the unknown-resolution state, and silently
+            // installing over content Curator cannot identify is a footgun.
+            // Tier 2 never flags an empty installed version, but tier 1 (the
+            // account download record) can, so the exclusion lives here.
+            if (string.IsNullOrEmpty(info.CurrentVersion))
+            {
+                _logger.LogInformation(
+                    "Automatic update of mod {Mod} ({Container}) skipped: its version is unknown (manual resolution only).",
+                    info.ModName, info.ContainerId);
+                continue;
+            }
+
             try
             {
                 var item = await _enqueuer.EnqueueLatestAsync(

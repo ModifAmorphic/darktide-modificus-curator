@@ -1,5 +1,8 @@
+using System.Globalization;
+using System.Numerics;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Modificus.Curator.Config;
 using Modificus.Curator.General;
 using Modificus.Curator.Mods;
@@ -47,7 +50,7 @@ namespace Modificus.Curator.Profiles;
 /// runs per-op (idempotent) on the live path. Concurrent writes to the same
 /// profile are not coordinated (single-UI-thread assumption).</para>
 /// </remarks>
-internal sealed class ProfileService : IProfileService
+internal sealed class ProfileService : IProfileService, IProfileCloner
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -57,6 +60,14 @@ internal sealed class ProfileService : IProfileService
     // mods.lst is UTF-8 without BOM (the Lua loader reads it line-by-line; a
     // BOM would surface as a stray prefix on the first mod name).
     private static readonly Encoding ModListEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
+    // The canonical clone-name suffix " (Copy N)" (case-insensitive
+    // recognition; output always uses this casing). Greedy prefix so the
+    // FINAL occurrence is the suffix ("A (Copy 1) (Copy 2)" has base
+    // "A (Copy 1)").
+    private static readonly Regex CopySuffixRegex = new(
+        @"^(.+) \(copy ([0-9]+)\)$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private readonly IConfigLoader _configLoader;
     private readonly IModRepository _repo;
@@ -214,6 +225,47 @@ internal sealed class ProfileService : IProfileService
         ClearStagedDir(StagedDir(baseFolder, id));
         Directory.Delete(dir, recursive: true);
         _logger.LogInformation("Deleted profile {Id}", id);
+    }
+
+    /// <inheritdoc />
+    public Profile CloneProfile(Guid sourceProfileId)
+    {
+        var baseFolder = EnsureBaseFolder();
+        // Throws KeyNotFoundException via EnsureReadable when the source is
+        // unknown, before anything is created.
+        var source = ReadProfileFile(ProfileDir(baseFolder, sourceProfileId));
+
+        // Name allocation considers the readable profiles only (ListProfiles
+        // skips unreadable ones, which cannot collide).
+        var cloneName = GenerateCloneName(ListProfiles().Select(s => s.Name), source.Name);
+
+        var clone = new Profile
+        {
+            Id = Guid.NewGuid(),
+            Name = cloneName,
+            Description = source.Description,
+            CreatedAt = DateTimeOffset.UtcNow,
+            // Entries + settings are immutable aggregates; copying the list
+            // wrapper is all the isolation the in-memory graph needs (the
+            // persisted files are fully independent from here on).
+            Mods = source.Mods.ToArray(),
+            LaunchSettings = source.LaunchSettings,
+        };
+
+        // Same scaffold-before-persist ordering as CreateProfile: a crash
+        // between the two never leaves a profile.json without its tree. staged/
+        // starts empty; the next PrepareModRoot rebuilds it from the copied
+        // profile data.
+        Directory.CreateDirectory(ProfileDir(baseFolder, clone.Id));
+        Directory.CreateDirectory(StagedDir(baseFolder, clone.Id));
+        WriteProfileFile(clone, baseFolder);
+
+        // No ProfileCreated: that signal is the blank-profile creation event
+        // (the DMF offer trigger), and a clone is not a blank profile.
+        _logger.LogInformation(
+            "Cloned profile {SourceId} ('{SourceName}') to {CloneId} ('{CloneName}')",
+            sourceProfileId, source.Name, clone.Id, clone.Name);
+        return clone;
     }
 
     /// <inheritdoc />
@@ -649,63 +701,21 @@ internal sealed class ProfileService : IProfileService
         // resolution drives the collision check for free.
         if (container.Source is LinkedSource linked)
         {
-            var external = linked.ExternalPath;
-            if (!Directory.Exists(external))
-            {
-                return (null, null, "external folder unavailable");
-            }
-
-            // Trim trailing separators so a path stored with a trailing slash
-            // still yields its folder name (ExternalPath is normalized at link
-            // time, so this is defensive only).
-            var linkedBaseName = Path.GetFileName(
-                external.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-            if (string.IsNullOrEmpty(linkedBaseName))
-            {
-                return (null, null, "external folder has no base name");
-            }
-
-            return (linkedBaseName, external, null);
+            var linkedBaseName = ModBaseNames.TryResolveLinkedBaseName(linked);
+            return linkedBaseName is null
+                ? (null, null, "external folder unavailable or has no base name")
+                : (linkedBaseName, linked.ExternalPath, null);
         }
 
-        var version = container.ResolveVersion(mod.Policy);
-        if (version is null)
-        {
-            return (null, null, $"no version resolves for policy {mod.Policy}");
-        }
-
-        var versionFolder = _repo.GetVersionFolderPath(mod.ContainerId, version.Folder);
-        if (!Directory.Exists(versionFolder))
-        {
-            // Defensive: the manifest points at a folder that is not on disk
-            // (a hand-delete between prune + stage).
-            return (null, null, $"version folder {version.Folder} is missing on disk");
-        }
-
-        // Discover the mod's base folder: the import validation guarantees the
-        // version folder contains exactly one subdirectory (the base, named to
-        // match its <base>.mod descriptor). A corrupted/inconsistent version
-        // folder (zero/multiple subdirs) can't yield a base name.
-        string[] baseDirs;
-        try
-        {
-            baseDirs = Directory.GetDirectories(versionFolder);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return (null, null, $"version folder {version.Folder} is not readable");
-        }
-
-        if (baseDirs.Length != 1)
-        {
-            return (null, null,
-                $"version folder {version.Folder} has {baseDirs.Length} subdirectories; expected exactly one base folder");
-        }
-
-        var baseName = Path.GetFileName(baseDirs[0]);
-        // The staging-link target is the base folder inside the version folder:
+        // Managed: the shared base-name resolution (the single base directory
+        // inside the policy-resolved version folder; the load-order reconciler
+        // resolves through the same helper so staging + matching cannot drift).
+        // The staging-link target is that base directory itself:
         // <versionFolder>/<baseName>/.
-        return (baseName, Path.Combine(versionFolder, baseName), null);
+        var baseDir = ModBaseNames.TryResolveBaseDir(container, mod.Policy, _repo);
+        return baseDir is null
+            ? (null, null, $"no resolvable base folder for policy {mod.Policy}")
+            : (Path.GetFileName(baseDir), baseDir, null);
     }
 
     /// <inheritdoc />
@@ -740,6 +750,72 @@ internal sealed class ProfileService : IProfileService
             }
         }
         return null;
+    }
+
+    // ---- clone naming -------------------------------------------------------
+
+    /// <summary>
+    /// Generates the clone's name: the source's copy-family base name plus
+    /// <c> (Copy N)</c>, where N is one above the highest existing copy number
+    /// in the family (case-insensitive), incremented further while the
+    /// candidate equals any existing name (case-insensitive). Numbers are
+    /// arbitrary precision (<see cref="BigInteger"/>), so the increment can
+    /// never overflow or wrap. The suffix is stable profile data, never
+    /// localized.
+    /// </summary>
+    private static string GenerateCloneName(IEnumerable<string> existingNames, string sourceName)
+    {
+        var taken = existingNames.ToArray();
+        var baseName = TryStripCopySuffix(sourceName, out var family, out _)
+            ? family
+            : sourceName;
+
+        BigInteger highest = BigInteger.Zero;
+        foreach (var name in taken)
+        {
+            if (TryStripCopySuffix(name, out var candidateBase, out var number)
+                && number > highest
+                && string.Equals(candidateBase, baseName, StringComparison.OrdinalIgnoreCase))
+            {
+                highest = number;
+            }
+        }
+
+        while (true)
+        {
+            highest++;
+            var candidate = $"{baseName} (Copy {highest.ToString(CultureInfo.InvariantCulture)})";
+            if (!taken.Any(n => string.Equals(n, candidate, StringComparison.OrdinalIgnoreCase)))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Strips a trailing canonical <c> (Copy N)</c> suffix (case-insensitive;
+    /// N any positive base-10 integer, of arbitrary length).
+    /// </summary>
+    private static bool TryStripCopySuffix(string name, out string baseName, out BigInteger copyNumber)
+    {
+        baseName = name;
+        copyNumber = BigInteger.Zero;
+        var match = CopySuffixRegex.Match(name);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        if (!BigInteger.TryParse(
+                match.Groups[2].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
+            || parsed.Sign <= 0)
+        {
+            return false;
+        }
+
+        baseName = match.Groups[1].Value;
+        copyNumber = parsed;
+        return true;
     }
 
     // ---- launch settings ----------------------------------------------------

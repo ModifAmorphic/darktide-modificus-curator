@@ -408,6 +408,228 @@
     <value>Link external folder</value>
     <comment>The "Link external folder" flyout item on the Add split button: links an external mod folder into the profile without copying it (the folder stays where it is; Curator stages from it at launch).</comment>
   </data>
+  <data name="ModList_AddLoadOrder" xml:space="preserve">
+    <value>Import mod list</value>
+    <comment>The second Add split-button mode + its flyout item: pick a compatible mod list file (mod_load_order.txt, mods.lst, or another line-format file) and open the load-order import workspace. Named broadly for future richer Curator export formats through the same command.</comment>
+  </data>
+
+  <!-- ============================================================ -->
+  <!-- Load-order import workspace                                    -->
+  <!-- ============================================================ -->
+
+  <data name="LoadOrder_Title" xml:space="preserve">
+    <value>Import mod list</value>
+    <comment>The load-order import workspace's header title.</comment>
+  </data>
+  <data name="LoadOrder_FileNameHeader" xml:space="preserve">
+    <value>Folder</value>
+    <comment>Table column header: the file line's mod folder name.</comment>
+  </data>
+  <data name="LoadOrder_MatchHeader" xml:space="preserve">
+    <value>Match</value>
+    <comment>Table column header: what Curator resolved the line to (the display name, the canonical title once identified, or not found).</comment>
+  </data>
+  <data name="LoadOrder_ActionHeader" xml:space="preserve">
+    <value>Action</value>
+    <comment>Table column header: what applying will do with the line.</comment>
+  </data>
+  <data name="LoadOrder_ModIdHeader" xml:space="preserve">
+    <value>Mod ID</value>
+    <comment>Table column header over the Mod ID cell (the manual id/URL entry + Verify, the identified fact + Change, or a candidate's id).</comment>
+  </data>
+  <data name="LoadOrder_VersionHeader" xml:space="preserve">
+    <value>Version</value>
+    <comment>Table column header over the Version cell (an identified folder import's version input, or the note that a download resolves the version).</comment>
+  </data>
+  <data name="LoadOrder_OutcomeReorder" xml:space="preserve">
+    <value>reordered</value>
+    <comment>Plan label (the Action column reads as if applied): the line matched a mod already in this profile; applying moves it to the file's position.</comment>
+  </data>
+  <data name="LoadOrder_OutcomeAdd" xml:space="preserve">
+    <value>added</value>
+    <comment>Plan label (the Action column reads as if applied): the line matched a mod in the library but not this profile; the import mode adds it automatically (Skip opts out).</comment>
+  </data>
+  <data name="LoadOrder_OutcomeImport" xml:space="preserve">
+    <value>imported</value>
+    <comment>Plan label (the Action column reads as if applied): the line matches a mod folder sitting beside the list file; the import mode imports that folder automatically (Skip opts out).</comment>
+  </data>
+  <data name="LoadOrder_ActionDownload" xml:space="preserve">
+    <value>downloaded</value>
+    <comment>Plan label (the Action column reads as if applied): a missing line identified as a Nexus mod on a Premium account; the apply queues its download (Skip opts out).</comment>
+  </data>
+  <data name="LoadOrder_ActionSkipped" xml:space="preserve">
+    <value>skipped</value>
+    <comment>Plan label (the Action column reads as if applied) for every row the apply leaves untouched: opted-out rows, non-actionable remote lines on any account tier (the upfront notice + mode tile carry the reasons), and unidentified missing lines.</comment>
+  </data>
+  <data name="LoadOrder_OutcomeUnresolved" xml:space="preserve">
+    <value>not found</value>
+    <comment>Match text: no local match for the line.</comment>
+  </data>
+  <data name="LoadOrder_LineImportFailed" xml:space="preserve">
+    <value>Import failed: {0}</value>
+    <comment>Per-line failure recorded on a sibling-import row whose import failed during apply. {0} is the failure detail. The apply continues past failed lines; a re-run can finish them.</comment>
+  </data>
+  <data name="LoadOrder_LineEnqueueFailed" xml:space="preserve">
+    <value>Could not enqueue the download: {0}</value>
+    <comment>Per-line failure recorded on an identified row whose head-file resolve failed during the enqueue batch. {0} is the failure detail. The batch continues past failed lines.</comment>
+  </data>
+  <data name="LoadOrder_EnqueueRateLimited" xml:space="preserve">
+    <value>Nexus rate limit reached; the remaining downloads were not queued.</value>
+    <comment>The apply's inline failure when the enqueue batch hits a rate limit. Everything before it stands; the message pairs with the re-runnable hint.</comment>
+  </data>
+  <data name="LoadOrder_RerunnableHint" xml:space="preserve">
+    <value>Apply again later to finish the remaining lines; completed work is kept.</value>
+    <comment>The re-runnable hint paired with the rate-limit apply failure (re-runs are idempotent: imports dedupe, memberships no-op, the queue dedupes live downloads).</comment>
+  </data>
+  <data name="LoadOrder_PremiumLostFailure" xml:space="preserve">
+    <value>Nexus Premium is no longer active, so the identified downloads cannot be queued. Sign in as Premium and apply again; nothing was changed.</value>
+    <comment>The apply's inline failure when the Premium re-check fails (the account lost Premium or its state could not be read after the review promised downloads). Nothing is written; the workspace stays open.</comment>
+  </data>
+  <data name="LoadOrder_ProfileGoneFailure" xml:space="preserve">
+    <value>This profile was deleted while applying, so its downloads were not queued.</value>
+    <comment>The apply's inline failure when the target profile vanishes before the download batch. Local writes that already landed stand; the workspace stays open.</comment>
+  </data>
+  <data name="LoadOrder_QueuedDownloadsNotice" xml:space="preserve">
+    <value>{0} download(s) are queued and running. They appear as download rows in the mod list after you close this view.</value>
+    <comment>The one-line notice shown while a failure keeps the workspace open after downloads were admitted: the open workspace hides the mod list's download rows, so their existence is named instead. {0} is the admitted count.</comment>
+  </data>
+  <data name="LoadOrder_EmptyNotice" xml:space="preserve">
+    <value>This file contains no mod entries (only comments or blank lines). Nothing to import.</value>
+    <comment>The inline notice shown when the picked file parsed to nothing; the mode choice shows the notice instead of the tiles.</comment>
+  </data>
+  <data name="LoadOrder_ReadFailedTitle" xml:space="preserve">
+    <value>Could not read the file</value>
+    <comment>Title of the alert shown when the picked load-order file cannot be read or reconciled.</comment>
+  </data>
+  <data name="LoadOrder_ReadFailedMessage" xml:space="preserve">
+    <value>Could not read '{0}'.</value>
+    <comment>Body of the read-failure alert. {0} is the picked file path.</comment>
+  </data>
+
+  <!-- The mode choice -->
+
+  <data name="LoadOrder_ChoiceSummary" xml:space="preserve">
+    <value>{0} mod entries, {1} already in this profile.</value>
+    <comment>The mode choice's one-line summary of the reconciled file. {0} is the parsed entry count; {1} is the profile-match count.</comment>
+  </data>
+  <data name="LoadOrder_ModeReorderTitle" xml:space="preserve">
+    <value>Reorder mods</value>
+    <comment>Mode tile title: reorder only.</comment>
+  </data>
+  <data name="LoadOrder_ModeReorderDescription" xml:space="preserve">
+    <value>Reorders matching mods in the active profile to follow their order in the selected file.</value>
+    <comment>Mode tile explanation: reorder only.</comment>
+  </data>
+  <data name="LoadOrder_ModeImportTitle" xml:space="preserve">
+    <value>Reorder and import mods</value>
+    <comment>Mode tile title: reorder plus acquisition.</comment>
+  </data>
+  <data name="LoadOrder_ModeImportDescription" xml:space="preserve">
+    <value>Reorders matching mods and imports missing ones where possible. Curator searches Nexus for matches and asks for your help when it cannot identify one.</value>
+    <comment>Mode tile explanation: reorder plus acquisition.</comment>
+  </data>
+
+  <!-- The review + the search queue -->
+
+  <data name="LoadOrder_StopSearch" xml:space="preserve">
+    <value>Stop search</value>
+    <comment>The header action that stops the Nexus search queue; arrived results stay.</comment>
+  </data>
+  <data name="LoadOrder_SearchProgress" xml:space="preserve">
+    <value>Searching Nexus: {2} ({0}/{1})</value>
+    <comment>The live search status while the queue runs. {0} is the completed lookup count, {1} the total lookups, {2} the folder name currently being searched.</comment>
+  </data>
+  <data name="LoadOrder_SearchStopped" xml:space="preserve">
+    <value>Search stopped. Remaining mods were not searched.</value>
+    <comment>The search status after the user stopped the queue.</comment>
+  </data>
+  <data name="LoadOrder_SearchComplete" xml:space="preserve">
+    <value>Nexus search finished.</value>
+    <comment>The search status after the queue finished on its own.</comment>
+  </data>
+  <data name="LoadOrder_SearchingA11y" xml:space="preserve">
+    <value>Searching Nexus</value>
+    <comment>The accessible name of the indeterminate spinner shown while a Nexus search runs (the header progress and the per-row spinner).</comment>
+  </data>
+  <data name="LoadOrder_FindingA11y" xml:space="preserve">
+    <value>Finding Nexus mod</value>
+    <comment>The accessible name of the indeterminate spinner shown while a manual id/URL/name lookup is in flight.</comment>
+  </data>
+  <data name="LoadOrder_ApplyingA11y" xml:space="preserve">
+    <value>Applying</value>
+    <comment>The accessible name of the indeterminate spinner shown in the footer while the apply runs.</comment>
+  </data>
+  <data name="LoadOrder_NoResultsHint" xml:space="preserve">
+    <value>No Nexus results found</value>
+    <comment>The small hint on a review row whose search completed with zero candidates: the manual id/URL entry is the path.</comment>
+  </data>
+  <data name="LoadOrder_AcceptCandidate" xml:space="preserve">
+    <value>Accept</value>
+    <comment>The accept action on a search candidate (the inline top slot + each alternate): identifies the row with that mod.</comment>
+  </data>
+  <data name="LoadOrder_ShowAlternatesTooltip" xml:space="preserve">
+    <value>Show other matches</value>
+    <comment>Tooltip on the expand affordance that reveals a row's alternate search candidates.</comment>
+  </data>
+  <data name="LoadOrder_ManualIdHint" xml:space="preserve">
+    <value>ID, URL, or mod name</value>
+    <comment>Placeholder for the manual identification field in the Mod ID cell: a bare Nexus mod id, a mod page URL, or a mod name to search for.</comment>
+  </data>
+  <data name="LoadOrder_FindTooltip" xml:space="preserve">
+    <value>Find Nexus mod</value>
+    <comment>Tooltip + accessible name of the inline magnifier Find icon button beside the manual id/URL/name field: a valid id or URL runs the exact remote lookup, any other text searches Nexus by name. Enter in the field invokes the same action.</comment>
+  </data>
+  <data name="LoadOrder_ManualInvalidError" xml:space="preserve">
+    <value>Enter a Nexus mod ID, URL, or mod name.</value>
+    <comment>Inline error under the manual field for blank input or input that clearly intends an id/URL but does not parse (never reinterpreted as a name search).</comment>
+  </data>
+  <data name="LoadOrder_ManualNotFoundError" xml:space="preserve">
+    <value>No Darktide mod exists for that ID.</value>
+    <comment>Inline error under the manual field when Nexus confirms the id resolves to nothing.</comment>
+  </data>
+  <data name="LoadOrder_ManualLookupFailedError" xml:space="preserve">
+    <value>Could not complete the lookup: {0}</value>
+    <comment>Inline error under the manual field when the exact-id lookup or the name search request failed. {0} is the failure detail.</comment>
+  </data>
+  <data name="LoadOrder_ChangeIdentityAction" xml:space="preserve">
+    <value>Change</value>
+    <comment>The subtle Change action beside an identified row's mod id: returns the row to the candidate/manual identification state.</comment>
+  </data>
+  <data name="LoadOrder_VersionHint" xml:space="preserve">
+    <value>Version (optional)</value>
+    <comment>Placeholder for the optional version input on an identified folder-import row: blank leaves the version unknown (the Mods row's download/update action resolves it later).</comment>
+  </data>
+  <data name="LoadOrder_RemoteUnavailableNotice" xml:space="preserve">
+    <value>{0} mod(s) are not in Curator and cannot be downloaded automatically with this Nexus account. Add them to Curator and run this import again.</value>
+    <comment>The upfront notice on an import review built without Premium that holds remote-only missing lines. {0} is the count of those lines.</comment>
+  </data>
+  <data name="LoadOrder_VersionFromDownload" xml:space="preserve">
+    <value>Version set by the download</value>
+    <comment>The note in the Version cell for an identified missing mod: its download resolves the real version, so there is no input.</comment>
+  </data>
+  <data name="LoadOrder_SkipAction" xml:space="preserve">
+    <value>Skip</value>
+    <comment>The subtle opt-out action on an optional add/import/download row (no checkbox; the row is included by default).</comment>
+  </data>
+  <data name="LoadOrder_UndoSkipAction" xml:space="preserve">
+    <value>Undo</value>
+    <comment>The opt-out's reverse action on a skipped row: include it again.</comment>
+  </data>
+
+  <!-- The footer -->
+
+  <data name="LoadOrder_ApplyButton" xml:space="preserve">
+    <value>Apply</value>
+    <comment>The review's primary action, shared by both modes (the mode tile, the workspace header, and the Action column carry the context).</comment>
+  </data>
+  <data name="LoadOrder_BackButton" xml:space="preserve">
+    <value>Back</value>
+    <comment>The footer action that returns from the review to the mode choice.</comment>
+  </data>
+  <data name="LoadOrder_CancelButton" xml:space="preserve">
+    <value>Cancel</value>
+    <comment>The Cancel action on the workspace footer. A plain button (the workspace is a hosted view): discards the workflow with no writes.</comment>
+  </data>
   <data name="ModList_NxmDownloadHint" xml:space="preserve">
     <value>On Nexus, click the 'Vortex' or 'Mod manager download' button.</value>
     <comment>Secondary hint shown in the no-mods empty state ONLY when Curator is the registered OS handler for nxm:// links, so the user knows those Nexus download buttons route the mod straight into the app.</comment>
@@ -565,6 +787,18 @@
     <value>Up to date</value>
     <comment>Tooltip on the stable update-action button when no update is available (the button is disabled).</comment>
   </data>
+  <data name="ModRow_UpdateTooltipInstallUnknown" xml:space="preserve">
+    <value>Version unknown. Install the latest release to record the version</value>
+    <comment>Tooltip on the stable update-action button for a Premium user on a version-unknown row (the click installs the head release in-app, which records the version and clears the unknown state).</comment>
+  </data>
+  <data name="ModRow_UpdateTooltipOpenFilesUnknown" xml:space="preserve">
+    <value>Version unknown. Open the Nexus files page to identify the installed version</value>
+    <comment>Tooltip on the stable update-action button for a regular or unknown Premium user on a version-unknown row (the click opens the files page).</comment>
+  </data>
+  <data name="ModRow_EditImportDetailsTooltip" xml:space="preserve">
+    <value>Edit import details</value>
+    <comment>Tooltip on the edit-action button in each mod row's action strip. Opens the edit-import-details modal (name, source, version tag).</comment>
+  </data>
   <data name="ModList_RateLimited" xml:space="preserve">
     <value>Refresh disabled due to rate-limiting</value>
     <comment>Short banner shown in the mod-list header while a rate-limited update check keeps the refresh button disabled (until the server-reported reset elapses). Pairs with the disabled refresh button; the pill hides when the reset passes and the button re-enables.</comment>
@@ -695,6 +929,51 @@
   <data name="ImportWorkflow_Close" xml:space="preserve">
     <value>Close</value>
     <comment>The Close button on the inline import card's terminal failure. Resets the workflow so a new batch may start.</comment>
+  </data>
+
+  <!-- ============================================================ -->
+  <!-- Edit import details (the import card's edit mode)             -->
+  <!-- ============================================================ -->
+
+  <data name="EditDetails_Title" xml:space="preserve">
+    <value>Edit import details</value>
+    <comment>Header of the import card while the edit mode is active (the per-mod correction surface for name, source, and version tag).</comment>
+  </data>
+  <data name="EditDetails_SaveButton" xml:space="preserve">
+    <value>Save</value>
+    <comment>The accent Save button in the import card's edit mode. Disabled while the fields are invalid; applies the edit through the repository's EditImportDetails primitive.</comment>
+  </data>
+  <data name="EditDetails_CancelButton" xml:space="preserve">
+    <value>Cancel</value>
+    <comment>The Cancel button in the import card's edit mode. A plain button (the card is a hosted view, not a window): discards the staged fields and deactivates the card with no repository write.</comment>
+  </data>
+  <data name="EditDetails_BackButton" xml:space="preserve">
+    <value>Back</value>
+    <comment>The Back button on the import card's edit-mode removal-confirm stage, returning to the editing form without saving.</comment>
+  </data>
+  <data name="EditDetails_ConfirmButton" xml:space="preserve">
+    <value>Remove older versions and save</value>
+    <comment>The accent confirm button on the import card's edit-mode removal-confirm stage. Applies the identity change, which removes the container's older versions.</comment>
+  </data>
+  <data name="EditDetails_ConfirmTitle" xml:space="preserve">
+    <value>Older versions will be removed</value>
+    <comment>Caution title of the import card's edit-mode inline removal confirm, shown before an identity change on a multi-version container.</comment>
+  </data>
+  <data name="EditDetails_ConfirmMessage" xml:space="preserve">
+    <value>Changing this mod's identity removes the {0} older version(s) of this mod. The current version's files are kept.</value>
+    <comment>Body of the import card's edit-mode inline removal confirm, shown before an identity change on a multi-version container (a different mod id, or switching to Untracked). {0} is the number of older versions removed.</comment>
+  </data>
+  <data name="EditDetails_UntrackedNameConflict" xml:space="preserve">
+    <value>Another local mod already uses the name '{0}'.</value>
+    <comment>Inline failure in the import card's edit mode when saving as Untracked under a name another untracked container already holds (the untracked-name dedupe index would silently shadow it). {0} is the typed name.</comment>
+  </data>
+  <data name="EditDetails_FailedMessage" xml:space="preserve">
+    <value>The changes were not saved.</value>
+    <comment>Localized framing prefix of the inline failure message in the import card's edit mode. The actionable detail of the refused save follows.</comment>
+  </data>
+  <data name="EditDetails_ContainerGone" xml:space="preserve">
+    <value>This mod is no longer in the repository.</value>
+    <comment>Inline failure shown when the edited container vanished between opening the card and saving.</comment>
   </data>
 
   <!-- ============================================================ -->
@@ -1361,6 +1640,18 @@ Set up Nexus to check your installed mods for updates and enable download links 
     <value>Can't create a profile while Darktide is running.</value>
     <comment>Tooltip on the Add profile button while it is disabled because Darktide is running.</comment>
   </data>
+  <data name="Profiles_CloneButton" xml:space="preserve">
+    <value>Clone profile</value>
+    <comment>The Clone profile button on the Profiles page action row.</comment>
+  </data>
+  <data name="Profiles_CloneTooltip" xml:space="preserve">
+    <value>Create a copy of the active profile</value>
+    <comment>Tooltip on the Clone profile button.</comment>
+  </data>
+  <data name="Profiles_CloneLockedTooltip" xml:space="preserve">
+    <value>Can't clone the active profile while Darktide is running.</value>
+    <comment>Tooltip on the Clone profile button while it is disabled because Darktide is running.</comment>
+  </data>
   <data name="Profiles_DeleteButton" xml:space="preserve">
     <value>Delete profile</value>
     <comment>The Delete profile button on the Profiles page action row.</comment>
@@ -1412,6 +1703,10 @@ Set up Nexus to check your installed mods for updates and enable download links 
   <data name="Profiles_ErrSaveFailed" xml:space="preserve">
     <value>Could not save the profile. Check your entries and try again.</value>
     <comment>Generic top-level save error shown when the service rejects an update the inline validation did not catch. The raw service text is never shown.</comment>
+  </data>
+  <data name="Profiles_ErrCloneFailed" xml:space="preserve">
+    <value>Could not clone the profile. Try again.</value>
+    <comment>Generic top-level clone error shown when the clone operation fails. The raw service text is never shown.</comment>
   </data>
   <data name="Profiles_ErrNameRequired" xml:space="preserve">
     <value>A profile name is required.</value>

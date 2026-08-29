@@ -18,7 +18,8 @@ namespace Modificus.Curator.UI.Tests;
 /// coalescing, four-slot concurrency bound, oversize rejection (declared +
 /// streamed), HTTP/I/O failure retryability, corrupt-entry delete + one
 /// re-download + one re-decode, cancellation propagation + cleanup + retry,
-/// 90-day prune boundary + failure isolation, and no ConfigureAwait(false).
+/// 90-day prune boundary + failure isolation, production decode sizing (the
+/// 2x-scaled 192-DIP frame floor), and no ConfigureAwait(false).
 /// </summary>
 public sealed class ModThumbnailServiceTests
 {
@@ -720,6 +721,20 @@ public sealed class ModThumbnailServiceTests
             Assert.False(File.Exists(staleFile1));
             Assert.False(File.Exists(staleFile2));
         }
+    }
+
+    // ---- production decode sizing ------------------------------------------
+
+    [Fact]
+    public void Production_decode_width_covers_the_widest_thumbnail_at_2x()
+    {
+        // The widest detailed-row thumbnail frame is 192 DIP; at 2x display
+        // scaling that is 384 physical pixels. A DecodeWidth below the frame's
+        // physical size would render upsampled (soft) on scaled displays.
+        Assert.True(
+            ModThumbnailService.DecodeWidth >= 384,
+            $"DecodeWidth {ModThumbnailService.DecodeWidth} cannot keep the 192-DIP " +
+            "detailed-row thumbnail frame sharp at 2x display scaling.");
     }
 
     // ---- DI registration ---------------------------------------------------

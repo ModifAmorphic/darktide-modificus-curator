@@ -143,6 +143,7 @@ internal static class TestDoubles
         FakeUpdateStateStore? updateState = null,
         FakeAutomaticUpdateService? automaticUpdates = null,
         ImportWorkflowViewModel? importWorkflow = null,
+        FakeLoadOrderReconciler? loadOrderReconciler = null,
         Action<Action>? invokeOnUi = null,
         Func<DateTimeOffset>? getNow = null,
         Action<Action>? startCountdownTimer = null,
@@ -166,7 +167,31 @@ internal static class TestDoubles
         configLoader ??= new FakeConfigLoader();
         appState ??= new FakeAppStateStore();
         automaticUpdates ??= new FakeAutomaticUpdateService();
+        // The load-order reconciler fake: tests script the plan per case
+        // (NextPlan); unscripted defaults to the empty plan.
+        loadOrderReconciler ??= new FakeLoadOrderReconciler();
+        // The Nexus client fake: searches are scripted (empty results +
+        // zero calls unless a test sets them), so unscripted tests make no
+        // search traffic.
+        var nexusClient = new FakeNexusSearchClient();
+        // The download-queue fake: empty by default so existing tests see no
+        // download rows; the download-row tests drive its collection + events
+        // directly (no worker, no real pipeline), and the update-flow tests
+        // exercise the real enqueue front over it (admission + dedupe only).
+        // Settled before the load-order card VM below consumes it.
+        downloadQueue ??= new FakeModDownloadQueue();
+        // SAFETY: an omitted launcher defaults to the harmless in-memory
+        // recorder (never the OS shell; the VM has no production fallback).
+        // This is the test-safety guarantee that no UI test can shell-open the
+        // operator's browser, even when a path that triggers an external open
+        // is exercised. Settled before the load-order card VM below consumes
+        // it.
+        launcher ??= new FakeExternalLauncher();
         profiles.RepoLookup = repo;
+        // The shared hosted-card activity gate: the import workflow + the
+        // load-order card report to it (mirrors production DI: one gate shared
+        // by both card VMs + the mod-list VM).
+        var cards = new ModCardsGate();
         // The inline import-workflow child VM: constructed over the SAME
         // profile/session/repo/import/localization fakes so a test that drives
         // StartBatch sees the imported mod land in the profile the mod-list VM
@@ -178,8 +203,37 @@ internal static class TestDoubles
             session,
             repo,
             importService,
+            cards,
             localization,
             NullLogger<ImportWorkflowViewModel>.Instance);
+
+        // The load-order import workspace child: same shape as the import
+        // workflow (application-lifetime singleton, shared gate + session),
+        // with a fake reconciler whose plan tests script per case + a fake
+        // Nexus client whose search results tests script (empty by default:
+        // no search traffic unless a test opts in). The placements component
+        // shares the queue + profiles fakes so a recorded plan's convergence
+        // lands where the mod-list VM reads it. The inline marshal seam keeps
+        // continuations on the test thread.
+        var loadOrderPlacements = new LoadOrderDownloadPlacements(
+            downloadQueue,
+            profiles,
+            NullLogger<LoadOrderDownloadPlacements>.Instance);
+        var loadOrder = new LoadOrderImportViewModel(
+            profiles,
+            session,
+            loadOrderReconciler,
+            nexusClient,
+            importService,
+            auth,
+            acquisition,
+            downloadQueue,
+            loadOrderPlacements,
+            cards,
+            dialogs,
+            localization,
+            static action => action(),
+            NullLogger<LoadOrderImportViewModel>.Instance);
 
         // The density coordinator child: one shared instance per BuildModList,
         // constructed with safe no-op fakes so existing tests are unaffected.
@@ -191,24 +245,12 @@ internal static class TestDoubles
             NullLogger<DetailedModRowsViewModel>.Instance);
 
         invokeOnUi ??= static action => action();
-        // SAFETY: an omitted launcher defaults to the harmless in-memory
-        // recorder (never the OS shell; the VM has no production fallback).
-        // This is the test-safety guarantee that no UI test can shell-open the
-        // operator's browser, even when a path that triggers an external open
-        // is exercised.
-        launcher ??= new FakeExternalLauncher();
         // The shared nxm registration state: default is a plain fake
         // (unavailable, not registered, no probe possible).
         nxmRegistration ??= new FakeNxmRegistrationState();
         // Gaming Mode default: not gaming (the ordinary desktop session the
         // existing tests assume); gaming-gating tests pass a gaming state.
         gamingMode ??= new GamingModeState(false);
-        // The download-queue fake: empty by default so existing tests see no
-        // download rows; the download-row tests drive its collection + events
-        // directly (no worker, no real pipeline), and the update-flow tests
-        // exercise the real enqueue front over it (admission + dedupe only).
-        downloadQueue ??= new FakeModDownloadQueue();
-
         // The link-external-folder child: constructed over the SAME
         // profile/session/repo/import/dialog fakes (after the launcher +
         // gaming-mode defaults above are settled) so a link-flow test sees its
@@ -278,6 +320,8 @@ internal static class TestDoubles
             runner,
             rowContext,
             importWorkflow,
+            loadOrder,
+            cards,
             detailedRows,
             linkedMods,
             launcher,
@@ -287,6 +331,7 @@ internal static class TestDoubles
             // the update-action tests exercise the resolve->admit contract
             // exactly as production wires it.
             new ModUpdateEnqueuer(acquisition, downloadQueue, profiles),
+            loadOrderPlacements,
             NullLogger<ModListViewModel>.Instance);
     }
 
@@ -394,7 +439,7 @@ internal static class TestDoubles
             nxmRegistration: nxmRegistration,
             modListRefresh: modsPage);
         var profilesPage = new ProfilesViewModel(
-            profiles, session, dialogs, localization,
+            profiles, new FakeProfileCloner(profiles), session, dialogs, localization,
             NullLogger<ProfilesViewModel>.Instance);
         var integrationsPage = new IntegrationsViewModel(
             auth, localization, config, dialogs, nxmRegistrar, nxmRegistration,
@@ -598,6 +643,14 @@ internal sealed class FakeProfileService : IProfileService
     /// </summary>
     public Exception? SetModPolicyThrows { get; set; }
 
+    /// <summary>
+    /// Optional exception thrown by <see cref="SetModOrder"/> AFTER the call
+    /// is recorded but BEFORE any mutation. Default <c>null</c> = no throw.
+    /// Used by the load-order placement tests to simulate a transient
+    /// order-write failure (the placement plan's retention path).
+    /// </summary>
+    public Exception? SetModOrderThrows { get; set; }
+
     public IReadOnlyList<(Guid Id, Guid ContainerId)> RemoveModCalls { get; } = new List<(Guid, Guid)>();
     /// <summary>Seeds a profile's mod list (replaces any prior). Test helper.</summary>
     public FakeProfileService WithMods(Guid id, params ModListEntry[] mods)
@@ -776,6 +829,10 @@ internal sealed class FakeProfileService : IProfileService
     public void SetModOrder(Guid id, IReadOnlyList<Guid> containerIdsInOrder)
     {
         ((List<IReadOnlyList<Guid>>)SetModOrderCalls).Add(containerIdsInOrder);
+        if (SetModOrderThrows is not null)
+        {
+            throw SetModOrderThrows;
+        }
 
         var list = EnsureList(id);
 
@@ -994,6 +1051,56 @@ internal sealed class FakeProfileService : IProfileService
 }
 
 /// <summary>
+/// In-memory <see cref="IProfileCloner"/> for VM tests: records calls and
+/// persists each copy into the paired <see cref="FakeProfileService"/> (the
+/// same store the page reloads from), mirroring how a production clone is
+/// readable back through the profile service. Names copies
+/// "{source} (Copy N)" from a per-fake counter; the real naming algorithm is
+/// covered against the real service in <c>Profiles.Tests</c>.
+/// </summary>
+internal sealed class FakeProfileCloner : IProfileCloner
+{
+    private readonly FakeProfileService _profiles;
+    private int _copies;
+
+    public FakeProfileCloner(FakeProfileService profiles) => _profiles = profiles;
+
+    /// <summary>Source ids passed to <see cref="CloneProfile"/>, in call order.</summary>
+    public IReadOnlyList<Guid> CloneCalls { get; } = new List<Guid>();
+
+    /// <summary>
+    /// When set, <see cref="CloneProfile"/> throws AFTER recording the call and
+    /// BEFORE creating anything (no summary, no mod list, no settings),
+    /// mirroring the production service's create-nothing failure contract.
+    /// </summary>
+    public Exception? CloneThrows { get; set; }
+
+    /// <summary>
+    /// Optional clone-name override ((source name, copy number) -> name);
+    /// defaults to "{source} (Copy N)".
+    /// </summary>
+    public Func<string, int, string>? NameResult { get; set; }
+
+    public Profile CloneProfile(Guid sourceProfileId)
+    {
+        ((List<Guid>)CloneCalls).Add(sourceProfileId);
+        if (CloneThrows is not null)
+        {
+            throw CloneThrows;
+        }
+
+        var source = _profiles.GetProfile(sourceProfileId);
+        _copies++;
+        var summary = _profiles.WithProfile(
+            NameResult?.Invoke(source.Name, _copies) ?? $"{source.Name} (Copy {_copies})",
+            source.Description);
+        _profiles.LaunchSettingsByProfile[summary.Id] = _profiles.GetLaunchSettings(sourceProfileId);
+        _profiles.WithMods(summary.Id, _profiles.GetModList(sourceProfileId).ToArray());
+        return _profiles.GetProfile(summary.Id);
+    }
+}
+
+/// <summary>
 /// In-memory app-state fake covering the role interfaces the UI tests consume
 /// (the concrete store implements all six; the two the UI never touches, the
 /// metadata-backfill gate + the main-window geometry, stay in the General
@@ -1088,6 +1195,123 @@ internal sealed class FakeAppStateStore :
 /// Integrations-layer tests; this fake does the simplest equivalent (drop
 /// entries absent from the caller's candidates or whose container is gone).
 /// </summary>
+/// <summary>
+/// <see cref="INexusClient"/> fake for the load-order workspace's search +
+/// exact-identity tiers: <see cref="SearchModsAsync"/> (scripted results, call
+/// recording, optional failure) + <see cref="GetModByIdAsync"/> (a scripted
+/// id-to-identity map, call recording, optional failure) are real; every
+/// other member throws. Unscripted searches return empty results; unscripted
+/// lookups return the not-found null.
+/// </summary>
+internal sealed class FakeNexusSearchClient : INexusClient
+{
+    /// <summary>The results the next search returns. Default: empty.</summary>
+    public IReadOnlyList<NexusSearchResult> NextResults { get; set; } = Array.Empty<NexusSearchResult>();
+
+    /// <summary>When set, the next search throws this.</summary>
+    public Exception? NextSearchThrows { get; set; }
+
+    /// <summary>
+    /// When set, every search first awaits this gate (a held search the test
+    /// releases to observe the in-flight queue state).
+    /// </summary>
+    public TaskCompletionSource<bool>? SearchGate { get; set; }
+
+    /// <summary>Every (domain, terms, count) search call, in order.</summary>
+    public IReadOnlyList<(string Domain, string Terms, int Count)> SearchCalls { get; }
+        = new List<(string, string, int)>();
+
+    /// <summary>
+    /// The identities returned by <see cref="GetModByIdAsync"/>, keyed by mod
+    /// id. An id absent from the map is the not-found null.
+    /// </summary>
+    public Dictionary<int, NexusSearchResult> Identities { get; } = new();
+
+    /// <summary>When set, the next lookup throws this.</summary>
+    public Exception? NextGetModByIdThrows { get; set; }
+
+    /// <summary>Every (domain, modId) lookup call, in order.</summary>
+    public IReadOnlyList<(string Domain, int ModId)> GetModByIdCalls { get; }
+        = new List<(string, int)>();
+
+    public Task<Response<NexusSearchResult[]>> SearchModsAsync(
+        string gameDomain, string terms, int count, CancellationToken ct = default)
+    {
+        ((List<(string, string, int)>)SearchCalls).Add((gameDomain, terms, count));
+        if (NextSearchThrows is { } ex)
+        {
+            return Task.FromException<Response<NexusSearchResult[]>>(ex);
+        }
+
+        if (SearchGate is { } gate)
+        {
+            return GateThenReturnAsync(gate);
+        }
+
+        return Task.FromResult(new Response<NexusSearchResult[]>(
+            NextResults.ToArray(), NexusRateLimits.Unknown));
+
+        async Task<Response<NexusSearchResult[]>> GateThenReturnAsync(TaskCompletionSource<bool> held)
+        {
+            await held.Task;
+            return new Response<NexusSearchResult[]>(NextResults.ToArray(), NexusRateLimits.Unknown);
+        }
+    }
+
+    /// <summary>
+    /// When set, every id lookup first awaits this gate (a held verification
+    /// the test releases to observe the row's busy state).
+    /// </summary>
+    public TaskCompletionSource<bool>? GetModByIdGate { get; set; }
+
+    public async Task<Response<NexusSearchResult?>> GetModByIdAsync(
+        string gameDomain, int modId, CancellationToken ct = default)
+    {
+        ((List<(string, int)>)GetModByIdCalls).Add((gameDomain, modId));
+        if (NextGetModByIdThrows is { } ex)
+        {
+            throw ex;
+        }
+
+        if (GetModByIdGate is { } gate)
+        {
+            await gate.Task;
+        }
+
+        return new Response<NexusSearchResult?>(
+            Identities.TryGetValue(modId, out var identity) ? identity : null,
+            NexusRateLimits.Unknown);
+    }
+
+    public Task<Response<ValidateInfo>> ValidateAsync(CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<Response<DownloadLink[]>> DownloadLinksAsync(string gameDomain, int modId, int fileId, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<Response<DownloadLink[]>> DownloadLinksAsync(string gameDomain, int modId, int fileId, string nxmKey, long expiresEpoch, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<Response<ModInfo>> GetModInfoAsync(string gameDomain, int modId, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<Response<ModFile[]>> ListModFilesAsync(string gameDomain, int modId, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<Response<ModUpdateStatus[]>> CheckUpdatesGraphQlAsync(int gameId, IReadOnlyList<int> modIds, CancellationToken ct = default) => throw new NotImplementedException();
+}
+
+/// <summary>
+/// <see cref="ILoadOrderReconciler"/> fake: tests script
+/// <see cref="NextPlan"/> per case (an unscripted call reconciles to the
+/// empty plan); each call's (profileId, names) pair is recorded.
+/// </summary>
+internal sealed class FakeLoadOrderReconciler : ILoadOrderReconciler
+{
+    /// <summary>The plan the next call returns. Default: empty.</summary>
+    public LoadOrderPlan NextPlan { get; set; } = LoadOrderPlan.Empty;
+
+    /// <summary>Every (profileId, names) pair passed to Reconcile, in order.</summary>
+    public IReadOnlyList<(Guid ProfileId, IReadOnlyList<string> Names)> Calls { get; }
+        = new List<(Guid, IReadOnlyList<string>)>();
+
+    public LoadOrderPlan Reconcile(Guid profileId, IReadOnlyList<string> names)
+    {
+        ((List<(Guid, IReadOnlyList<string>)>)Calls).Add((profileId, names));
+        return NextPlan;
+    }
+}
+
 internal sealed class FakeUpdateStateStore : IUpdateStateStore
 {
     private readonly Dictionary<Guid, HashSet<Guid>> _flagged = new();
@@ -1696,9 +1920,17 @@ internal class FakeModRepository : IModRepository
             };
             versions = container.Versions.Append(entry).ToList();
         }
-        // Mirror production: latest = argmax of (RemoteUploadedAt ?? ImportedAt,
-        // ImportedAt), recomputed after either branch.
-        var newest = versions.MaxBy(v => (v.RemoteUploadedAt ?? v.ImportedAt, v.ImportedAt))!;
+        // Mirror production (ModRepository.WithLatestMarked): the most recent
+        // ARRIVAL decides the clock. A manual import (null RemoteUploadedAt)
+        // with the newest ImportedAt is latest; otherwise the newest
+        // downloaded version by RemoteUploadedAt (ImportedAt tie-break), with
+        // manual imports ignored for latest in that branch.
+        var newestArrival = versions.MaxBy(v => v.ImportedAt)!;
+        var newest = newestArrival.RemoteUploadedAt is null
+            ? newestArrival
+            : versions
+                .Where(v => v.RemoteUploadedAt is not null)
+                .MaxBy(v => (v.RemoteUploadedAt, v.ImportedAt))!;
         versions = versions.Select(v => v with { IsLatest = ReferenceEquals(v, newest) }).ToList();
         // Mirror production: a non-null displayMetadata replaces the container
         // value in the same update; null preserves any prior value.
@@ -1758,6 +1990,126 @@ internal class FakeModRepository : IModRepository
             _untrackedByName[newName] = container.Id;
         }
         var updated = container with { Name = newName };
+        _byId[containerId] = updated;
+        return updated;
+    }
+
+    /// <summary>
+    /// When set, the next <see cref="EditImportDetails"/> call throws this
+    /// instead of running (the GetThrows pattern), so VM tests can script a
+    /// refused or failing save deterministically.
+    /// </summary>
+    public Exception? EditImportDetailsThrows { get; set; }
+
+    public ModContainer? EditImportDetails(
+        Guid containerId, string name, ModSource source, string versionTag, bool removeOlderVersions)
+    {
+        // Mirror production: the edit-details primitive's guard + mutation
+        // rules, minus the disk (the fake has no manifest to persist).
+        if (EditImportDetailsThrows is { } scripted)
+        {
+            throw scripted;
+        }
+
+        if (!_byId.TryGetValue(containerId, out var container))
+        {
+            return null;
+        }
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new ArgumentException("Container name must not be null or whitespace.", nameof(name));
+        }
+        if (source is LinkedSource)
+        {
+            throw new ArgumentException("A linked source cannot be assigned.", nameof(source));
+        }
+        if (container.Source is LinkedSource)
+        {
+            throw new InvalidOperationException("A linked container cannot be edited.");
+        }
+        // Mirror production: a version record is download-grounded when it
+        // carries a FileId OR a RemoteUploadedAt; ANY grounded version
+        // refuses the whole edit, name-only included.
+        if (container.Versions.Any(v => v.FileId is not null || v.RemoteUploadedAt is not null))
+        {
+            throw new InvalidOperationException(
+                "This mod was downloaded from Nexus; its import details cannot be edited.");
+        }
+        if (source is UntrackedSource && !string.IsNullOrEmpty(versionTag))
+        {
+            throw new ArgumentException(
+                "An untracked container's version tag is always empty; pass an empty versionTag.",
+                nameof(versionTag));
+        }
+        if (source is NexusSource incoming
+            && _byId.Values.Any(c => c.Id != containerId
+                && c.Source is NexusSource ns && ns.ModId == incoming.ModId))
+        {
+            throw new InvalidOperationException($"Another container already tracks Nexus mod {incoming.ModId}.");
+        }
+        // Mirror production: the name is Untracked-only (a Nexus mod's name
+        // comes from Nexus; the rule follows the destination).
+        if (source is NexusSource && !string.Equals(container.Name, name, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The name of a Nexus mod is managed by Nexus; it cannot be edited here.");
+        }
+
+        var identityChanged = !((container.Source, source) switch
+        {
+            (NexusSource a, NexusSource b) => a.ModId == b.ModId,
+            (UntrackedSource, UntrackedSource) => true,
+            _ => false,
+        });
+
+        if (identityChanged && container.Versions.Count > 1)
+        {
+            if (!removeOlderVersions)
+            {
+                throw new RemovalConfirmationRequiredException(
+                    "Changing this mod's identity removes the older versions; the caller must confirm.");
+            }
+            var latestFolder = container.Versions.First(v => v.IsLatest).Folder;
+            var survivors = container.Versions.Where(v => v.Folder == latestFolder).ToList();
+            container = container with { Versions = survivors };
+            _byId[containerId] = container;
+        }
+
+        var latest = container.Versions.FirstOrDefault(v => v.IsLatest);
+        if (latest is not null
+            && container.Versions.Any(v => !ReferenceEquals(v, latest)
+                && string.Equals(v.VersionString, versionTag, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException($"A version tagged '{versionTag}' already exists.");
+        }
+
+        var versions = container.Versions;
+        if (latest is not null)
+        {
+            // Mirror production: the reset clears remote claims only when
+            // leaving a Nexus identity; the initial Untracked -> Nexus
+            // association touches nothing but the tag.
+            var resetRemoteClaims = identityChanged && container.Source is NexusSource;
+            var retagged = latest with
+            {
+                VersionString = versionTag,
+                FileId = resetRemoteClaims ? null : latest.FileId,
+                RemoteUploadedAt = resetRemoteClaims ? null : latest.RemoteUploadedAt,
+            };
+            versions = container.Versions
+                .Select(v => ReferenceEquals(v, latest) ? retagged : v)
+                .ToList();
+        }
+
+        if (container.Source is UntrackedSource)
+        {
+            _untrackedByName.Remove(container.Name);
+        }
+        var updated = container with { Name = name, Source = source, Versions = versions };
+        if (updated.Source is UntrackedSource)
+        {
+            _untrackedByName[name] = updated.Id;
+        }
         _byId[containerId] = updated;
         return updated;
     }
@@ -1841,6 +2193,15 @@ internal sealed class FakeModImportService : IModImportService
     /// </summary>
     public TaskCompletionSource<bool>? ImportGate { get; set; }
 
+    /// <summary>
+    /// When set, the next Import call returns this pair verbatim (after the
+    /// gate, the recording, + the exception queue), bypassing the repository
+    /// mirror; a null slot (the default) runs the normal resolution. Lets a
+    /// test pin the exact container an import produced without seeding the
+    /// repository shape.
+    /// </summary>
+    public Queue<(Guid ContainerId, string VersionId)>? NextImportResults { get; set; }
+
     public (Guid ContainerId, string VersionId) Import(
         string sourcePath, string modName, ModSource source, string version,
         DateTimeOffset? remoteUploadedAt = null, int? remoteFileId = null, ModDisplayMetadata? displayMetadata = null)
@@ -1862,6 +2223,11 @@ internal sealed class FakeModImportService : IModImportService
             {
                 throw ex;
             }
+        }
+
+        if (NextImportResults is { Count: > 0 })
+        {
+            return NextImportResults.Dequeue();
         }
 
         if (_repo is null)
@@ -2107,6 +2473,15 @@ internal sealed class FakeModDownloadQueue : IModDownloadQueue
     /// <summary>The items passed to Retry, in order.</summary>
     public List<DownloadItem> RetryCalls { get; } = new();
 
+    /// <summary>
+    /// When set, each Enqueue completes SYNCHRONOUSLY inside the call: the
+    /// func registers the container (mirroring the real queue's
+    /// register-before-signal order) and returns its id, the item resolves +
+    /// lands Completed, and ItemChanged fires before Enqueue returns. Models
+    /// an ultra-fast finish racing the enqueue sequence itself.
+    /// </summary>
+    public Func<ModDownloadRequest, Guid?>? CompleteOnEnqueue { get; set; }
+
     public DownloadItem Enqueue(ModDownloadRequest request)
     {
         Requests.Add(request);
@@ -2124,12 +2499,20 @@ internal sealed class FakeModDownloadQueue : IModDownloadQueue
             return joined;
         }
 
-        return Add(new DownloadItem(request)
+        var item = Add(new DownloadItem(request)
         {
             DisplayName = request.DisplayName,
             ContainerId = request.ContainerId,
             Phase = DownloadPhase.Queued,
         });
+        if (CompleteOnEnqueue is { } complete && complete(request) is { } containerId)
+        {
+            item.ContainerId = containerId;
+            item.Phase = DownloadPhase.Completed;
+            ItemChanged?.Invoke(item);
+        }
+
+        return item;
     }
 
     public void Cancel(DownloadItem item) => CancelCalls.Add(item);

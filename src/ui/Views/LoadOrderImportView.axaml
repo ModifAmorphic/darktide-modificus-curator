@@ -1,0 +1,615 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Modificus.Curator.UI.ViewModels"
+             x:Class="Modificus.Curator.UI.Views.LoadOrderImportView"
+             x:DataType="vm:LoadOrderImportViewModel">
+
+  <!--
+    The load-order import workspace, hosted by ModListView while
+    LoadOrder.IsActive (it replaces the normal Mods content: the toolbar, the
+    import card, the manager banner, the mod list, and the empty states all
+    hide for the duration; the shell navigation + global header stay).
+
+    A fixed header (the file + the Nexus search status + notices), one
+    fill-height virtualized results list, and a fixed footer (Back/Cancel +
+    the universal Apply action shared by both modes). The list is an ItemsControl whose
+    items panel is a VirtualizingStackPanel inside a ScrollViewer: virtualized,
+    no selection chrome, core-only. (Avalonia 12.1 ships no ItemsRepeater;
+    the virtualizing stack panel is the core virtualization mechanism the
+    selector controls themselves use.)
+
+    Each top-level line renders inside a containing Border.loItem card (a
+    theme-aware row boundary); the candidate proposals + alternates render
+    INSIDE that same container below the main line as visual children (a
+    subtle inset region with a left accent rule), with the parent-to-candidate
+    gap smaller than the gap between top-level rows.
+
+    The shared column layout (Folder | Match | Action | Mod ID | Version) is
+    ONE definition string repeated on every aligned grid (the column header,
+    each review row, each candidate line) and pinned identical by a source
+    test: ColumnDefinitions is not a styled property in Avalonia, so it can
+    live neither in a style nor in a binding, and a fixed rail (not Auto
+    columns) keeps the id entry + version input from drifting per row. Below
+    a 700-DIP line width a container query moves the same Action controls to
+    a full-width second line (the loAction styles), so long action labels
+    reflow instead of overflowing into the Mod ID input; the action label
+    also trims with a tooltip as defense. The reorder-only projection keeps
+    the same grid and simply carries no Mod ID/Version content (those
+    affordances do not exist without the import mode), so the two modes share
+    every cell definition. Icons + markers are drawn geometry, never Unicode
+    glyphs.
+  -->
+
+  <UserControl.Styles>
+    <!-- The column header line: subdued small labels. -->
+    <Style Selector="TextBlock.loHeader">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Opacity" Value="0.7" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <!--
+      Text actions (Skip / Undo / Accept / Change / Stop Search): compact
+      buttons with the STANDARD Fluent chrome, which reads as interactive at
+      rest in both light and dark themes (the former transparent-link
+      treatment vanished until hover). Only the compact sizing is authored;
+      the theme owns the resting background + border.
+    -->
+    <Style Selector="Button.textAction">
+      <Setter Property="Padding" Value="10,2" />
+      <Setter Property="MinWidth" Value="0" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <!--
+      Icon actions (the inline Verify button + the alternates' expand
+      chevron): the same standard visible chrome at a square compact size
+      (the ModListView Button.icon shape).
+    -->
+    <Style Selector="Button.iconAction">
+      <Setter Property="Padding" Value="5" />
+      <Setter Property="MinWidth" Value="0" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <!-- The mode-choice tiles: large, flat, accessible. A bordered card with
+         the standard Fluent hover/press chrome; the drawn icon, the title,
+         and the short explanation stack inside. -->
+    <Style Selector="Button.modeTile">
+      <Setter Property="MinHeight" Value="140" />
+      <Setter Property="Padding" Value="20,16" />
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseMediumLowBrush}" />
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundBaseLowBrush}" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.modeTile TextBlock.tileTitle">
+      <Setter Property="FontSize" Value="16" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Margin" Value="0,8,0,4" />
+    </Style>
+    <Style Selector="Button.modeTile TextBlock.tileBody">
+      <Setter Property="Opacity" Value="0.75" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <!-- The separator between the fixed header and the list. -->
+    <Style Selector="Border.loSeparator">
+      <Setter Property="Height" Value="1" />
+      <Setter Property="Background" Value="{DynamicResource SystemControlForegroundBaseMediumLowBrush}" />
+      <Setter Property="Opacity" Value="0.5" />
+      <Setter Property="Margin" Value="0,6" />
+    </Style>
+    <!--
+      One top-level load-order line: a contained card (theme background,
+      rounded corners, breathing room) whose horizontal padding matches the
+      column header's margin so the shared columns stay aligned. The vertical
+      margin sets the gap BETWEEN top-level rows (larger than the
+      parent-to-candidate gap below, so candidates read as children).
+    -->
+    <Style Selector="Border.loItem">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundBaseLowBrush}" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="10,6,10,8" />
+      <Setter Property="Margin" Value="0,4" />
+    </Style>
+    <!--
+      The candidate region inside a row card: a transparent inset carrying a
+      left accent rule, holding the proposal + alternates + any per-line
+      error so they stay visually bound to their parent row. No fill of its
+      own: the parent card's background shows through.
+    -->
+    <Style Selector="Border.loCandidates">
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="Margin" Value="0,5,0,0" />
+    </Style>
+    <!--
+      The candidate identity cluster's fixed 64-DIP id slot: every candidate
+      id renders at the same width (left-aligned) so Accept begins at exactly
+      the same horizontal position regardless of id length, across the top
+      proposal and every alternate. ONE shared class, not a duplicated
+      numeric value.
+    -->
+    <Style Selector="TextBlock.loCandidateId">
+      <Setter Property="Width" Value="64" />
+    </Style>
+    <!-- The candidate region's left accent rule (the child treatment). -->
+    <Style Selector="Border.loAccentRule">
+      <Setter Property="Width" Value="3" />
+      <Setter Property="CornerRadius" Value="2,0,0,2" />
+      <Setter Property="Background" Value="{DynamicResource SystemControlForegroundAccentBrush}" />
+    </Style>
+    <!-- The candidate region's content inset, right of the accent rule. -->
+    <Style Selector="StackPanel.loCandidateContent">
+      <Setter Property="Margin" Value="8,4,0,4" />
+    </Style>
+    <!--
+      The Action cell's wide placement (its natural spot in the shared
+      five-column line). Placement comes from STYLES, not local values, so the
+      container query below can move the same controls without duplicating
+      them (the ContentControl.detailedActions pattern).
+    -->
+    <Style Selector="StackPanel.loAction, TextBlock.loAction, Button.loAction">
+      <Setter Property="Grid.Row" Value="0" />
+      <Setter Property="Grid.Column" Value="2" />
+    </Style>
+    <!--
+      The narrow reflow: below a 700-DIP line width the star Action rail is
+      too narrow for the longest localized labels and would crowd the fixed
+      Mod ID input, so the PLAN action controls (the header's Action label +
+      each parent row's action rail; never the candidate identity clusters,
+      which live in the fixed Mod ID cell) move to a full-width second line
+      beneath the row (row 1, spanning all five columns). Every aligned grid
+      (the column header, each review row, the candidate proposal, each
+      alternate line) is a named width container, so the header + every line
+      reflow together and the wide-mode column definition stays shared +
+      deterministic. The action label additionally trims with a tooltip as
+      defense at intermediate widths.
+    -->
+    <ContainerQuery Name="loLine" Query="max-width:700">
+      <Style Selector="StackPanel.loAction, TextBlock.loAction, Button.loAction">
+        <Setter Property="Grid.Row" Value="1" />
+        <Setter Property="Grid.Column" Value="0" />
+        <Setter Property="Grid.ColumnSpan" Value="5" />
+        <Setter Property="Margin" Value="0,4,0,0" />
+      </Style>
+    </ContainerQuery>
+    <!--
+      The choice tiles sit side-by-side at wide widths and stack when the
+      workspace narrows below 720 DIP. The named width-measuring container is
+      the wrapper Panel (the Container.Sizing/Container.Name pattern the
+      Detailed row uses); the query restyles the UniformGrid descendant,
+      flipping the column count without duplicating content.
+    -->
+    <ContainerQuery Name="loadOrderChoice" Query="max-width:720">
+      <Style Selector="UniformGrid.modeTiles">
+        <Setter Property="Columns" Value="1" />
+      </Style>
+    </ContainerQuery>
+  </UserControl.Styles>
+
+  <Grid RowDefinitions="Auto,*,Auto" Margin="20,12,20,12">
+
+    <!-- The fixed header: title + file; the search status + Stop action
+         (import mode); the notices (remote-unavailable, apply failure,
+         queued downloads, empty file). -->
+    <Grid Grid.Row="0" RowDefinitions="Auto,Auto,Auto">
+      <Grid Grid.Row="0" ColumnDefinitions="Auto,*" Margin="0,0,0,6">
+        <TextBlock Grid.Column="0"
+                   Text="{ReflectionBinding [LoadOrder_Title], Source={StaticResource Loc}}"
+                   FontWeight="SemiBold"
+                   VerticalAlignment="Center"
+                   Margin="0,0,8,0" />
+        <TextBlock Grid.Column="1"
+                   Text="{Binding SourcePath}"
+                   TextTrimming="CharacterEllipsis"
+                   Opacity="0.7"
+                   VerticalAlignment="Center"
+                   ToolTip.Tip="{Binding SourcePath}"
+                   AutomationProperties.Name="{Binding SourcePath}" />
+      </Grid>
+
+      <!-- The Nexus search progress + Stop action: only while the queue runs.
+           The finished/stopped status line shows beside it afterward. -->
+      <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="0,0,0,4">
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8"
+                    VerticalAlignment="Center">
+          <ProgressBar Width="18" Height="18"
+                       IsIndeterminate="True"
+                       IsVisible="{Binding IsSearchRunning}"
+                       AutomationProperties.Name="{ReflectionBinding [LoadOrder_SearchingA11y], Source={StaticResource Loc}}"
+                       VerticalAlignment="Center" />
+          <TextBlock Text="{Binding SearchStatusText}"
+                     IsVisible="{Binding SearchStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                     VerticalAlignment="Center" />
+        </StackPanel>
+        <Button Grid.Column="1"
+                Classes="textAction"
+                Command="{Binding StopSearchCommand}"
+                IsVisible="{Binding IsSearchRunning}"
+                Content="{ReflectionBinding [LoadOrder_StopSearch], Source={StaticResource Loc}}" />
+      </Grid>
+
+      <!-- The status line: the upfront remote-unavailable notice (missing
+           lines this account cannot act on), the apply failure, the
+           queued-downloads notice, and the empty-file notice. -->
+      <StackPanel Grid.Row="2" Spacing="4" Margin="0,0,0,4">
+        <TextBlock Text="{Binding RemoteUnavailableNoticeText}"
+                   IsVisible="{Binding ShowRemoteUnavailableNotice}"
+                   TextWrapping="Wrap"
+                   Opacity="0.8" />
+        <TextBlock Text="{Binding ApplyFailure}"
+                   IsVisible="{Binding ApplyFailure, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource CuratorCautionBrush}" />
+        <TextBlock Text="{Binding QueuedDownloadsNotice}"
+                   IsVisible="{Binding QueuedDownloadsNotice, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                   TextWrapping="Wrap"
+                   Opacity="0.8" />
+        <TextBlock Text="{ReflectionBinding [LoadOrder_EmptyNotice], Source={StaticResource Loc}}"
+                   IsVisible="{Binding ShowEmptyNotice}"
+                   TextWrapping="Wrap"
+                   Opacity="0.7" />
+      </StackPanel>
+    </Grid>
+
+    <!-- The mode choice: the reconciled file summary + the two large tiles.
+         An empty file shows the notice above instead of tiles. -->
+    <Grid Grid.Row="1" IsVisible="{Binding IsChoosingMode}">
+      <StackPanel Spacing="12" VerticalAlignment="Center"
+                  IsVisible="{Binding !ShowEmptyNotice}">
+        <TextBlock Text="{Binding ChoiceSummaryText}" Opacity="0.7" />
+        <Panel Container.Name="loadOrderChoice" Container.Sizing="Width">
+          <UniformGrid Classes="modeTiles" Columns="2" ColumnSpacing="12" RowSpacing="12">
+          <Button Classes="modeTile"
+                  Command="{Binding ChooseReorderCommand}"
+                  AutomationProperties.Name="{ReflectionBinding [LoadOrder_ModeReorderTitle], Source={StaticResource Loc}}">
+            <StackPanel>
+              <!-- Material "sort" (24x24 source): ranked lines. -->
+              <Path Width="28" Height="28" Stretch="Uniform" HorizontalAlignment="Left"
+                    Fill="{Binding $parent[Button].Foreground}"
+                    Data="M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z" />
+              <TextBlock Classes="tileTitle"
+                         Text="{ReflectionBinding [LoadOrder_ModeReorderTitle], Source={StaticResource Loc}}" />
+              <TextBlock Classes="tileBody"
+                         Text="{ReflectionBinding [LoadOrder_ModeReorderDescription], Source={StaticResource Loc}}" />
+            </StackPanel>
+          </Button>
+          <Button Classes="modeTile"
+                  Command="{Binding ChooseImportCommand}"
+                  AutomationProperties.Name="{ReflectionBinding [LoadOrder_ModeImportTitle], Source={StaticResource Loc}}">
+            <StackPanel>
+              <!-- Material "download" (24x24 source): acquisition. -->
+              <Path Width="28" Height="28" Stretch="Uniform" HorizontalAlignment="Left"
+                    Fill="{Binding $parent[Button].Foreground}"
+                    Data="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
+              <TextBlock Classes="tileTitle"
+                         Text="{ReflectionBinding [LoadOrder_ModeImportTitle], Source={StaticResource Loc}}" />
+              <TextBlock Classes="tileBody"
+                         Text="{ReflectionBinding [LoadOrder_ModeImportDescription], Source={StaticResource Loc}}" />
+            </StackPanel>
+          </Button>
+          </UniformGrid>
+        </Panel>
+      </StackPanel>
+    </Grid>
+
+    <!-- The review: fixed column header, one fill-height virtualized list. -->
+    <Grid Grid.Row="1" RowDefinitions="Auto,Auto,*" IsVisible="{Binding IsReviewing}">
+
+      <!-- The column header (the same layout every row + candidate line
+           uses; the Mod ID + Version headers exist only in import mode).
+           A named width container so the narrow reflow moves its Action
+           label with the rows'; the horizontal margin matches the row
+           card's padding so the shared columns stay aligned. -->
+      <Grid Grid.Row="0" Classes="loRow"
+            RowDefinitions="Auto,Auto"
+            ColumnDefinitions="2*,3*,1.5*,190,130" ColumnSpacing="12"
+            Container.Name="loLine" Container.Sizing="Width"
+            Margin="10,0,10,0"
+            MinHeight="24">
+        <TextBlock Grid.Column="0" Classes="loHeader"
+                   Text="{ReflectionBinding [LoadOrder_FileNameHeader], Source={StaticResource Loc}}" />
+        <TextBlock Grid.Column="1" Classes="loHeader"
+                   Text="{ReflectionBinding [LoadOrder_MatchHeader], Source={StaticResource Loc}}" />
+        <TextBlock Classes="loHeader loAction"
+                   Text="{ReflectionBinding [LoadOrder_ActionHeader], Source={StaticResource Loc}}" />
+        <TextBlock Grid.Column="3" Classes="loHeader"
+                   IsVisible="{Binding IsImportMode}"
+                   Text="{ReflectionBinding [LoadOrder_ModIdHeader], Source={StaticResource Loc}}" />
+        <TextBlock Grid.Column="4" Classes="loHeader"
+                   IsVisible="{Binding IsImportMode}"
+                   Text="{ReflectionBinding [LoadOrder_VersionHeader], Source={StaticResource Loc}}" />
+      </Grid>
+
+      <Border Grid.Row="1" Classes="loSeparator" />
+
+      <!-- The results list: fills the workspace's remaining height (no
+           nested MaxHeight cap), virtualized through the items panel, and
+           disabled as a whole while the apply runs (row mutations cannot
+           race it). -->
+      <ScrollViewer Grid.Row="2"
+                    HorizontalScrollBarVisibility="Disabled"
+                    VerticalScrollBarVisibility="Auto">
+        <ItemsControl ItemsSource="{Binding Rows}"
+                      IsEnabled="{Binding !IsApplying}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <VirtualizingStackPanel />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:LoadOrderRowViewModel">
+              <Border Classes="loItem">
+                <StackPanel>
+
+                <!-- The main row line (the shared layout; the Mod ID +
+                     Version cells carry content only in import mode). A
+                     named width container so the narrow reflow moves its
+                     action rail to a full-width second line. -->
+                <Grid Classes="loRow"
+                      RowDefinitions="Auto,Auto"
+                      ColumnDefinitions="2*,3*,1.5*,190,130" ColumnSpacing="12"
+                      Container.Name="loLine" Container.Sizing="Width"
+                      MinHeight="30">
+                  <!-- Folder -->
+                  <TextBlock Grid.Column="0"
+                             Text="{Binding Name}"
+                             TextTrimming="CharacterEllipsis"
+                             VerticalAlignment="Center"
+                             ToolTip.Tip="{Binding Name}" />
+                  <!-- Match: the display name, the canonical title once
+                       identified, or the localized not-found. -->
+                  <TextBlock Grid.Column="1"
+                             Text="{Binding MatchText}"
+                             TextTrimming="CharacterEllipsis"
+                             VerticalAlignment="Center"
+                             ToolTip.Tip="{Binding MatchText}" />
+                  <!-- Action: the operation, the search spinner, and the
+                       Skip/Undo opt-out (a compact visible button, never a
+                       checkbox). Placement + the narrow reflow come from the
+                       loAction styles; the label trims with the full text in
+                       the tooltip as defense at intermediate widths. -->
+                  <StackPanel Classes="loAction" Orientation="Horizontal" Spacing="6"
+                              VerticalAlignment="Center">
+                    <TextBlock Text="{Binding ActionText}"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding ActionText}"
+                               VerticalAlignment="Center" />
+                    <ProgressBar Width="16" Height="10"
+                                 IsIndeterminate="True"
+                                 IsVisible="{Binding IsSearching}"
+                                 AutomationProperties.Name="{ReflectionBinding [LoadOrder_SearchingA11y], Source={StaticResource Loc}}"
+                                 VerticalAlignment="Center" />
+                    <Button Classes="textAction"
+                            IsVisible="{Binding CanSkip}"
+                            Click="Skip_Click"
+                            CommandParameter="{Binding}"
+                            Content="{Binding SkipActionText}" />
+                  </StackPanel>
+                  <!-- Mod ID: ONE line holding the manual id/URL/name entry
+                       + the drawn magnifier Find icon in a stable trailing
+                       slot (the spinner swaps into the same slot while the
+                       lookup runs, so nothing shifts; error/no-results lines
+                       appear beneath only when present). Identified rows show
+                       the fact + Change; an already-matched local row shows
+                       its reconciliation-known id read-only. The states are
+                       mutually exclusive projections of one cell. -->
+                  <Panel Grid.Column="3" VerticalAlignment="Center">
+                    <StackPanel Orientation="Vertical" Spacing="2"
+                                IsVisible="{Binding ShowManualEntry}">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBox Grid.Column="0"
+                                 Text="{Binding ManualId, Mode=TwoWay}"
+                                 PlaceholderText="{ReflectionBinding [LoadOrder_ManualIdHint], Source={StaticResource Loc}}"
+                                 MinWidth="150"
+                                 IsEnabled="{Binding !IsFinding}"
+                                 KeyDown="ManualId_KeyDown" />
+                        <Panel Grid.Column="1" MinWidth="34" Margin="4,0,0,0">
+                          <Button Classes="iconAction"
+                                  Click="Find_Click"
+                                  CommandParameter="{Binding}"
+                                  IsEnabled="{Binding CanFind}"
+                                  ToolTip.Tip="{ReflectionBinding [LoadOrder_FindTooltip], Source={StaticResource Loc}}"
+                                  AutomationProperties.Name="{ReflectionBinding [LoadOrder_FindTooltip], Source={StaticResource Loc}}">
+                            <!-- Material "search" (24x24 source): the find lookup. -->
+                            <Path Width="16" Height="16" Stretch="Uniform"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                                  Fill="{Binding $parent[Button].Foreground}"
+                                  Data="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" />
+                          </Button>
+                          <ProgressBar Width="16" Height="16"
+                                       IsIndeterminate="True"
+                                       IsVisible="{Binding IsFinding}"
+                                       AutomationProperties.Name="{ReflectionBinding [LoadOrder_FindingA11y], Source={StaticResource Loc}}"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
+                        </Panel>
+                      </Grid>
+                      <TextBlock Text="{Binding ManualError}"
+                                 IsVisible="{Binding ManualError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                 FontSize="11"
+                                 Foreground="{DynamicResource CuratorCautionBrush}"
+                                 TextWrapping="Wrap" MaxWidth="180" />
+                      <TextBlock Text="{ReflectionBinding [LoadOrder_NoResultsHint], Source={StaticResource Loc}}"
+                                 IsVisible="{Binding ShowNoResultsHint}"
+                                 FontSize="11" Opacity="0.6" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6"
+                                IsVisible="{Binding ShowIdentifiedFact}">
+                      <TextBlock Text="{Binding ModIdText}"
+                                 VerticalAlignment="Center" />
+                      <Button Classes="textAction"
+                              Click="ChangeIdentity_Click"
+                              CommandParameter="{Binding}"
+                              Content="{ReflectionBinding [LoadOrder_ChangeIdentityAction], Source={StaticResource Loc}}" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding ModIdText}"
+                               IsVisible="{Binding ShowKnownModId}"
+                               VerticalAlignment="Center" />
+                  </Panel>
+                  <!-- Version: the OPTIONAL input for an identified sibling
+                       import (blank leaves the version unknown; the Mods
+                       row's download/update action resolves it later), the
+                       read-only reconciliation-known tag for an
+                       already-matched local row, or the note that a remote
+                       download resolves the real version. Every other shape
+                       carries no version surface at all. -->
+                  <Panel Grid.Column="4" VerticalAlignment="Center">
+                     <TextBox Text="{Binding Version, Mode=TwoWay}"
+                              PlaceholderText="{ReflectionBinding [LoadOrder_VersionHint], Source={StaticResource Loc}}"
+                              MinWidth="110"
+                              IsVisible="{Binding ShowVersionInput}" />
+                     <TextBlock Text="{Binding KnownVersionText}"
+                                IsVisible="{Binding KnownVersionText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                VerticalAlignment="Center"
+                                TextTrimming="CharacterEllipsis"
+                                ToolTip.Tip="{Binding KnownVersionText}" />
+                     <TextBlock Text="{ReflectionBinding [LoadOrder_VersionFromDownload], Source={StaticResource Loc}}"
+                                IsVisible="{Binding ShowVersionFromDownloadNote}"
+                                FontSize="11" Opacity="0.6"
+                                TextWrapping="Wrap"
+                                VerticalAlignment="Center" />
+                  </Panel>
+                </Grid>
+
+                <!-- The candidate region: the proposal + its alternates
+                     rendered INSIDE the row card as visual children (the
+                     fill-free inset + left accent rule), keeping the shared
+                     column layout: the canonical title under Match, the
+                     identity cluster (#id + Accept, wrapping inside the
+                     190-DIP Mod ID cell) under Mod ID. The plan Action
+                     column stays empty on child rows: it belongs to the
+                     parent row's operation plan; candidate controls carry no
+                     loAction class (that class deliberately reflows PLAN
+                     actions into a full-width second line). -->
+                <Border Classes="loCandidates"
+                        IsVisible="{Binding ShowCandidateArea}">
+                  <Grid ColumnDefinitions="3,*">
+                    <Border Grid.Column="0" Classes="loAccentRule" />
+                    <StackPanel Grid.Column="1" Classes="loCandidateContent">
+
+                      <!-- The candidate proposal: the canonical title under
+                           Match + the identity cluster under Mod ID: the
+                           #id in its fixed 64-DIP slot, immediately followed
+                           by the Accept button + the alternates' expand
+                           chevron, one wrapping horizontal cluster inside
+                           the fixed cell so long localization wraps instead
+                           of overflowing. -->
+                      <Grid Classes="loRow"
+                            RowDefinitions="Auto,Auto"
+                            ColumnDefinitions="2*,3*,1.5*,190,130" ColumnSpacing="12"
+                            Container.Name="loLine" Container.Sizing="Width">
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding TopCandidate.Name}"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
+                                   ToolTip.Tip="{Binding TopCandidate.Name}" />
+                        <WrapPanel Grid.Column="3" Orientation="Horizontal"
+                                   ItemSpacing="6" LineSpacing="2"
+                                   VerticalAlignment="Center">
+                          <TextBlock Classes="loCandidateId"
+                                     Text="{Binding TopCandidate.ModId, StringFormat='#{0}'}"
+                                     VerticalAlignment="Center" />
+                          <Button Classes="textAction"
+                                  Click="AcceptCandidate_Click"
+                                  CommandParameter="{Binding}"
+                                  Content="{ReflectionBinding [LoadOrder_AcceptCandidate], Source={StaticResource Loc}}" />
+                          <Button Classes="iconAction"
+                                  IsVisible="{Binding HasAlternateCandidates}"
+                                  Click="ToggleAlternates_Click"
+                                  CommandParameter="{Binding}"
+                                  ToolTip.Tip="{ReflectionBinding [LoadOrder_ShowAlternatesTooltip], Source={StaticResource Loc}}"
+                                  AutomationProperties.Name="{ReflectionBinding [LoadOrder_ShowAlternatesTooltip], Source={StaticResource Loc}}">
+                            <!-- Material "expand_more" (24x24): the expand chevron. -->
+                            <Path Width="14" Height="14" Stretch="Uniform"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                                  Fill="{Binding $parent[Button].Foreground}"
+                                  Data="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z" />
+                          </Button>
+                        </WrapPanel>
+                      </Grid>
+
+                      <!-- The alternate candidates: the same identity-cluster
+                           shape (#id in the same fixed 64-DIP slot + Accept,
+                           wrapping in the Mod ID cell), title under Match,
+                           plan Action column empty. -->
+                      <ItemsControl ItemsSource="{Binding AlternateCandidates}"
+                                    IsVisible="{Binding IsExpanded}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:NexusSearchCandidate">
+                            <Grid Classes="loRow"
+                                  RowDefinitions="Auto,Auto"
+                                  ColumnDefinitions="2*,3*,1.5*,190,130" ColumnSpacing="12"
+                                  Container.Name="loLine" Container.Sizing="Width"
+                                  Margin="0,1">
+                              <TextBlock Grid.Column="1"
+                                         Text="{Binding Name}"
+                                         TextTrimming="CharacterEllipsis"
+                                         VerticalAlignment="Center"
+                                         ToolTip.Tip="{Binding Name}" />
+                              <WrapPanel Grid.Column="3" Orientation="Horizontal"
+                                         ItemSpacing="6" LineSpacing="2"
+                                         VerticalAlignment="Center">
+                                <TextBlock Classes="loCandidateId"
+                                           Text="{Binding ModId, StringFormat='#{0}'}"
+                                           VerticalAlignment="Center" />
+                                <Button Classes="textAction"
+                                        Click="AcceptAlternate_Click"
+                                        Content="{ReflectionBinding [LoadOrder_AcceptCandidate], Source={StaticResource Loc}}" />
+                              </WrapPanel>
+                            </Grid>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+
+                    </StackPanel>
+                  </Grid>
+                </Border>
+
+                <!-- The per-line apply failure (a failed sibling import, or a
+                     download resolve that produced no item): inside the row
+                     card so it stays associated with its parent. -->
+                <TextBlock Text="{Binding LineFailure}"
+                           IsVisible="{Binding LineFailure, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                           FontSize="11"
+                           Foreground="{DynamicResource CuratorCautionBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,4,0,0" />
+
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Grid>
+
+    <!-- The fixed footer: Back (review only) + Cancel left, the universal
+         Apply action (shared by both review modes) right, and an
+         indeterminate progress bar while the apply runs. -->
+    <StackPanel Grid.Row="2"
+                Orientation="Horizontal" Spacing="8"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Center"
+                Margin="0,10,0,0">
+      <ProgressBar Width="18" Height="18"
+                   IsIndeterminate="True"
+                   IsVisible="{Binding IsApplying}"
+                   AutomationProperties.Name="{ReflectionBinding [LoadOrder_ApplyingA11y], Source={StaticResource Loc}}"
+                   VerticalAlignment="Center" />
+      <Button Content="{ReflectionBinding [LoadOrder_BackButton], Source={StaticResource Loc}}"
+              Command="{Binding BackCommand}"
+              IsVisible="{Binding IsReviewing}"
+              IsEnabled="{Binding CanCancelNow}" />
+      <Button Content="{ReflectionBinding [LoadOrder_CancelButton], Source={StaticResource Loc}}"
+              Command="{Binding CancelCommand}"
+              IsEnabled="{Binding CanCancelNow}" />
+      <Button Content="{ReflectionBinding [LoadOrder_ApplyButton], Source={StaticResource Loc}}"
+              Command="{Binding ApplyCommand}"
+              IsEnabled="{Binding CanApplyNow}"
+              Classes="accent"
+              IsVisible="{Binding IsReviewing}"
+              HorizontalContentAlignment="Center" />
+    </StackPanel>
+
+  </Grid>
+</UserControl>

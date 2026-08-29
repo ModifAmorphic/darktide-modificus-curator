@@ -898,6 +898,12 @@ public sealed class NexusModMetadataServiceTests
         public Task<Response<DownloadLink[]>> DownloadLinksAsync(string gameDomain, int modId, int fileId, string nxmKey, long expiresEpoch, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<Response<ModFile[]>> ListModFilesAsync(string gameDomain, int modId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<Response<ModUpdateStatus[]>> CheckUpdatesGraphQlAsync(int gameId, IReadOnlyList<int> modIds, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<Response<NexusSearchResult[]>> SearchModsAsync(string gameDomain, string terms, int count, CancellationToken ct = default) => throw new NotImplementedException();
+
+        // The metadata backfill reads mod pages, not id lookups; the honest
+        // default is the not-found answer.
+        public Task<Response<NexusSearchResult?>> GetModByIdAsync(string gameDomain, int modId, CancellationToken ct = default) =>
+            Task.FromResult(new Response<NexusSearchResult?>(null, NexusRateLimits.Unknown));
     }
 
     private sealed class FakeModRepository : IModRepository
@@ -917,6 +923,10 @@ public sealed class NexusModMetadataServiceTests
             OnGet?.Invoke(c);
             return c;
         }
+
+        public ModContainer? EditImportDetails(
+            Guid containerId, string name, ModSource source, string versionTag, bool removeOlderVersions)
+            => throw new NotImplementedException();
 
         public bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata)
         {
@@ -969,6 +979,8 @@ public sealed class NexusModMetadataServiceTests
         public string GetVersionFolderPath(Guid containerId, string versionFolder) => throw new NotImplementedException();
         public void PruneUnreferenced(IReadOnlySet<(Guid ContainerId, string VersionFolder)> referenced) => throw new NotImplementedException();
         public bool IsExternalAvailable(Guid containerId) => throw new NotImplementedException();
+        public ModContainer? EditImportDetails(
+            Guid containerId, string name, ModSource source, string versionTag, bool removeOlderVersions) => throw new NotImplementedException();
         public bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata) => throw new NotImplementedException();
     }
 }

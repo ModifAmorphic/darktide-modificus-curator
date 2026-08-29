@@ -132,6 +132,7 @@ public sealed class LinuxNxmHandlerRegistrarTests
             return;
 
         var dir = CreateTempApplicationsDir();
+        var managedDir = CreateTempApplicationsDir();
         try
         {
             var xdgCalls = new List<string>();
@@ -141,11 +142,17 @@ public sealed class LinuxNxmHandlerRegistrarTests
                 return (0, "");
             }
 
+            // managedDir MUST be injected: Unregister's cleanup removes the
+            // managed handler copy + symlink + the emptied managed directory,
+            // and the ctor's default is the REAL per-user
+            // ~/.local/share/Modificus Curator/nxm-handler (an un-injected
+            // test deleted the developer's live nxm handler).
             var registrar = new LinuxNxmHandlerRegistrar(
                 "/opt/curator/Modificus.Curator.NxmHandler",
                 NullLogger<LinuxNxmHandlerRegistrar>.Instance,
                 applicationsDir: dir,
                 runXdg: RunXdg,
+                managedDir: managedDir,
                 appImagePathAccessor: NoAppImage);
 
             registrar.Register();
@@ -162,6 +169,7 @@ public sealed class LinuxNxmHandlerRegistrarTests
         finally
         {
             TryCleanup(dir);
+            TryCleanup(managedDir);
         }
     }
 

@@ -172,6 +172,31 @@ public sealed class AutomaticUpdateServiceTests
     }
 
     [Fact]
+    public async Task RunAfterCheck_excludes_version_unknown_rows_from_the_batch()
+    {
+        // Version-unknown rows (an empty CurrentVersion) are manual-click-only:
+        // silently installing over content Curator cannot identify is a
+        // footgun. Tier 2 never flags an empty installed version, but tier 1
+        // (the account download record) can, so the exclusion lives in the
+        // batch: the unknown entry is skipped while the ordinary flagged entry
+        // still enqueues.
+        var (service, session, profiles, repo, _, queue, _, _, _) = Build();
+        var unknown = repo.Seed(new NexusSource { ModId = 10 }, "Unknown", string.Empty).Id;
+        var known = repo.Seed(new NexusSource { ModId = 11 }, "Known", "1.0").Id;
+        profiles.WithMods(session.ActiveProfileId!.Value,
+            new ModListEntry { ContainerId = unknown, Order = 1, Policy = ModVersionPolicy.Latest },
+            new ModListEntry { ContainerId = known, Order = 2, Policy = ModVersionPolicy.Latest });
+
+        await service.RunAfterCheckAsync(
+            Success(Update(unknown, 10, "Unknown", string.Empty), Update(known, 11, "Known", "1.0")),
+            session.ActiveProfileId!.Value);
+
+        var request = Assert.Single(queue.Requests);
+        Assert.Equal(known, request.ContainerId);
+        Assert.Equal("1.0", request.ExpectedVersion);
+    }
+
+    [Fact]
     public async Task RunAfterCheck_isolates_resolve_failures_and_aggregates_one_alert()
     {
         // Two flagged mods; the first resolve fails (a one-shot API failure),

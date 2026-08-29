@@ -263,8 +263,11 @@ internal sealed class ModRepository : IModRepository
                 // entry fields refreshed on re-import: a re-acquired version
                 // carries the current remote facts (callers pass nulls for manual
                 // re-imports, which clears them; non-remote sources aren't
-                // update-checked anyway). Latest is then re-evaluated: a refreshed
-                // remote timestamp can make the reused entry newly newest.
+                // update-checked anyway). Latest is then re-evaluated under the
+                // arrival rule; because the reused entry keeps its original
+                // import stamp, a refreshed remote timestamp can make it newly
+                // newest only when the newest arrival is a download (see
+                // WithLatestMarked).
                 var versionDir = VersionDir(baseFolder, containerId, existing.Folder);
                 PopulateAtomically(versionDir, populateFolder);
                 var refreshed = existing with { RemoteUploadedAt = remoteUploadedAt, FileId = remoteFileId };
@@ -280,9 +283,9 @@ internal sealed class ModRepository : IModRepository
                 // PopulateAtomically stages into a temp + swaps into the new
                 // version folder; on a populateFolder failure nothing is created
                 // on disk and the manifest is left untouched (no entry added
-                // below). Latest is recomputed over ALL versions with the
-                // effective-timestamp key, so importing an older remote file
-                // leaves the flag on the existing newest entry.
+                // below). Latest is recomputed over ALL versions under the
+                // arrival rule, so importing an older remote file leaves the
+                // flag on the existing newest download.
                 var folder = Guid.NewGuid().ToString("N");
                 var versionDir = VersionDir(baseFolder, containerId, folder);
                 PopulateAtomically(versionDir, populateFolder);
@@ -320,20 +323,52 @@ internal sealed class ModRepository : IModRepository
 
     /// <summary>
     /// Recomputes the <see cref="ModVersion.IsLatest"/> flag over
-    /// <paramref name="versions"/>: the newest by effective timestamp carries
-    /// it, every other entry does not. Shared by both
+    /// <paramref name="versions"/>: the most recent ARRIVAL decides which
+    /// clock governs. When the version with the newest
+    /// <see cref="ModVersion.ImportedAt"/> is a manual import (no
+    /// <see cref="ModVersion.RemoteUploadedAt"/>), that version is latest
+    /// (the user just brought this content in by hand; it stages, and a
+    /// hand-imported folder landing on a previously downloaded container
+    /// becomes latest). Otherwise the most recent arrival is a download, and
+    /// the latest is the newest DOWNLOADED version by
+    /// <see cref="ModVersion.RemoteUploadedAt"/> with
+    /// <see cref="ModVersion.ImportedAt"/> breaking exact ties; manual
+    /// imports are ignored for latest in that branch. Shared by both
     /// <see cref="AddVersion"/> branches and the
-    /// <see cref="RemoveVersion"/> promotion so the key cannot drift between
+    /// <see cref="RemoveVersion"/> promotion so the rule cannot drift between
     /// sites.
     /// </summary>
+    /// <remarks>
+    /// The arrival rule beats the plain effective-timestamp comparison
+    /// (<c>RemoteUploadedAt ?? ImportedAt</c>) on mixed containers: a manual
+    /// import's fresh <c>ImportedAt</c> used to outrank an older download's
+    /// publish date forever, so a downloaded version arriving after a manual
+    /// import never became latest. Ranking by arrival first keeps every
+    /// all-manual and all-download container's outcome unchanged from the
+    /// effective-timestamp key (the newest import, and the newest publish
+    /// date respectively); only mixed containers decide differently.
+    /// </remarks>
     private static List<ModVersion> WithLatestMarked(List<ModVersion> versions)
     {
-        // Effective timestamp: the remote publish date when known, else the
-        // import date. ImportedAt breaks exact ties (two files within the
-        // remote timestamp granularity); an all-null container degenerates to
-        // a plain ImportedAt argmax. MaxBy returns the first max, so exact
-        // double-ties stay stable in storage order.
-        var newest = versions.MaxBy(v => (v.RemoteUploadedAt ?? v.ImportedAt, v.ImportedAt))!;
+        var newestArrival = versions.MaxBy(v => v.ImportedAt)!;
+        ModVersion newest;
+        if (newestArrival.RemoteUploadedAt is null)
+        {
+            // The most recent arrival is a manual import: it is latest.
+            newest = newestArrival;
+        }
+        else
+        {
+            // The most recent arrival is a download: the newest downloaded
+            // version by publish date is latest. MaxBy returns the first max,
+            // so exact publish-date ties stay stable in storage order with
+            // the arrival stamp as the deciding order (arrivals are unique
+            // per insert; a dedup re-import keeps its original stamp).
+            newest = versions
+                .Where(v => v.RemoteUploadedAt is not null)
+                .MaxBy(v => (v.RemoteUploadedAt, v.ImportedAt))!;
+        }
+
         return versions.Select(v => v with { IsLatest = ReferenceEquals(v, newest) }).ToList();
     }
 
@@ -388,6 +423,211 @@ internal sealed class ModRepository : IModRepository
             return updated;
         }
     }
+
+    /// <inheritdoc />
+    public ModContainer? EditImportDetails(
+        Guid containerId,
+        string name,
+        ModSource source,
+        string versionTag,
+        bool removeOlderVersions)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(versionTag);
+
+        lock (_sync)
+        {
+            if (!_byId.TryGetValue(containerId, out var container))
+            {
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                throw new ArgumentException(
+                    "Container name must not be null or whitespace.", nameof(name));
+            }
+
+            if (source is LinkedSource)
+            {
+                throw new ArgumentException(
+                    "A linked source cannot be assigned through EditImportDetails.", nameof(source));
+            }
+
+            if (container.Source is LinkedSource)
+            {
+                throw new InvalidOperationException(
+                    "A linked container's import details cannot be edited.");
+            }
+
+            // Downloaded mods are not editable, period. A version record is
+            // download-grounded when it carries a FileId OR a
+            // RemoteUploadedAt (only the download path ever records either
+            // fact; the timestamp widens the evidence to downloads from
+            // before FileId persistence). ANY grounded version on the
+            // container refuses the whole edit, name-only included.
+            if (container.Versions.Any(v => v.FileId is not null || v.RemoteUploadedAt is not null))
+            {
+                throw new InvalidOperationException(
+                    "This mod was downloaded from Nexus; its import details cannot be edited.");
+            }
+
+            // An untracked container is single-version by construction (the
+            // empty tag is the AddVersion upsert key re-imports dedupe onto);
+            // a non-empty tag would fabricate a version record the untracked
+            // contract cannot hold.
+            if (source is UntrackedSource && !string.IsNullOrEmpty(versionTag))
+            {
+                throw new ArgumentException(
+                    "An untracked container's version tag is always empty; pass an empty versionTag.",
+                    nameof(versionTag));
+            }
+
+            // One container per (source, identity): reject a Nexus identity
+            // another container already carries, so the edit cannot fork the
+            // invariant Import + FindExistingContainer maintain.
+            if (source is NexusSource incoming
+                && _byId.Values.Any(c => c.Id != containerId
+                    && c.Source is NexusSource ns && ns.ModId == incoming.ModId))
+            {
+                throw new InvalidOperationException(
+                    $"Another container already tracks Nexus mod {incoming.ModId}.");
+            }
+
+            // The name is Untracked-only: a Nexus mod's name comes from Nexus
+            // (the update check's name-sync renames the container when
+            // Nexus's name changes, so a user-typed name would be reverted).
+            // The rule follows the DESTINATION: switching to Untracked may
+            // rename, associating to Nexus keeps the name it had.
+            if (source is NexusSource && !string.Equals(container.Name, name, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The name of a Nexus mod is managed by Nexus; it cannot be edited here.");
+            }
+
+            var identityChanged = !SourceIdentityEquals(container.Source, source);
+            var latest = container.Versions.FirstOrDefault(v => v.IsLatest);
+
+            // Identity reset: the older versions' tags + remote facts are
+            // claims about the OLD identity, so only the latest version's
+            // local facts survive. Removal is destructive, so the caller must
+            // opt in explicitly; without the flag the primitive refuses rather
+            // than silently destroying versions.
+            if (identityChanged && container.Versions.Count > 1)
+            {
+                if (!removeOlderVersions)
+                {
+                    throw new RemovalConfirmationRequiredException(
+                        "Changing this mod's identity removes the older versions; the caller must confirm (removeOlderVersions).");
+                }
+
+                foreach (var older in container.Versions
+                    .Where(v => latest is null || v.Folder != latest.Folder)
+                    .Select(v => v.Folder)
+                    .ToArray())
+                {
+                    // Reentrant lock (Monitor): RemoveVersion also takes _sync.
+                    // Each call updates the index + manifest, so the working
+                    // container is re-read below.
+                    RemoveVersion(containerId, older);
+                }
+
+                container = _byId[containerId];
+                latest = container.Versions.FirstOrDefault(v => v.IsLatest);
+            }
+
+            // Retag: apply the new tag to the latest version record. The tag
+            // is the AddVersion upsert key, so a collision with another
+            // surviving version's tag is the same conflict AddVersion would
+            // hit; refuse it rather than creating a duplicate-key manifest.
+            if (latest is not null)
+            {
+                var collides = container.Versions.Any(v =>
+                    !ReferenceEquals(v, latest)
+                    && string.Equals(v.VersionString, versionTag, StringComparison.Ordinal));
+                if (collides)
+                {
+                    throw new InvalidOperationException(
+                        $"A version tagged '{versionTag}' already exists on this container.");
+                }
+            }
+
+            var versions = container.Versions;
+            if (latest is not null)
+            {
+                // Remote-claim reset applies to the identity RESET (leaving a
+                // Nexus identity: its tags + remote facts were claims about the
+                // old identity). The initial Untracked -> Nexus association
+                // touches nothing but the tag: any prior facts stay as they
+                // were.
+                var resetRemoteClaims = identityChanged && container.Source is NexusSource;
+                var retagged = latest with
+                {
+                    VersionString = versionTag,
+                    FileId = resetRemoteClaims ? null : latest.FileId,
+                    RemoteUploadedAt = resetRemoteClaims ? null : latest.RemoteUploadedAt,
+                };
+                versions = container.Versions
+                    .Select(v => ReferenceEquals(v, latest) ? retagged : v)
+                    .ToList();
+            }
+
+            var baseFolder = EnsureBaseFolder();
+            var updated = container with { Name = name, Source = source, Versions = versions };
+            _byId[containerId] = updated;
+            WriteContainer(updated, baseFolder);
+
+            // Keep the untracked-name index coherent: drop the old key when
+            // the container leaves the untracked namespace (regardless of a
+            // rename: the swap itself orphans the key) or renames within it;
+            // record the new key when it arrives. Nexus identity lives on the
+            // source record and is served by the scan, so no other index is
+            // involved.
+            var wasUntracked = container.Source is UntrackedSource;
+            var isUntracked = updated.Source is UntrackedSource;
+            if (wasUntracked
+                && (!isUntracked || !string.Equals(container.Name, name, StringComparison.Ordinal)))
+            {
+                _untrackedByName.Remove(container.Name);
+            }
+
+            if (updated.Source is UntrackedSource)
+            {
+                // Mirror IndexUntrackedName: a duplicate untracked name (a
+                // hand-edit edge case) points the index at this container and
+                // is logged rather than silently shifting.
+                if (_untrackedByName.TryGetValue(name, out var collision) && collision != containerId)
+                {
+                    _logger.LogWarning(
+                        "Duplicate untracked container name '{Name}' (ids {Prior} + {Current}); index points at {Current}.",
+                        name, collision, containerId, containerId);
+                }
+                _untrackedByName[name] = containerId;
+            }
+
+            _logger.LogInformation(
+                "Edited import details of container {Id} ('{Name}', source={Source}, tag='{Tag}', identityChanged={IdentityChanged})",
+                containerId, name, source, versionTag, identityChanged);
+            return updated;
+        }
+    }
+
+    /// <summary>
+    /// Whether two sources carry the same container identity: Nexus by mod id,
+    /// Untracked by type (its identity is the container name, which this
+    /// comparison deliberately ignores: a same-identity rename is allowed, and
+    /// an identity change is defined by the source record, not the label).
+    /// Linked never compares equal here (the method is only reached after the
+    /// linked rejections).
+    /// </summary>
+    private static bool SourceIdentityEquals(ModSource current, ModSource incoming) =>
+        (current, incoming) switch
+        {
+            (NexusSource a, NexusSource b) => a.ModId == b.ModId,
+            (UntrackedSource, UntrackedSource) => true,
+            _ => false,
+        };
 
     /// <inheritdoc />
     public bool TryInitializeDisplayMetadata(Guid containerId, ModDisplayMetadata metadata)
@@ -577,9 +817,8 @@ internal sealed class ModRepository : IModRepository
             var versions = container.Versions.Where(v => !ReferenceEquals(v, existing)).ToList();
 
             // If the removed entry was latest, re-evaluate the flag over the
-            // survivors with the same effective-timestamp key AddVersion uses
-            // (remote publish date when known, else import date, ImportedAt
-            // tie-break).
+            // survivors with the same arrival rule AddVersion uses (the most
+            // recent arrival decides the clock; see WithLatestMarked).
             if (wasLatest && versions.Count > 0)
             {
                 versions = WithLatestMarked(versions);

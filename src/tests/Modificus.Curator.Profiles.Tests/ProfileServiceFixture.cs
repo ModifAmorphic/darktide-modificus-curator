@@ -30,6 +30,7 @@ internal sealed class ProfileServiceFixture : IDisposable
     public string ModsFolder { get; } = Path.Combine(Path.GetTempPath(), "curator-mods-" + Guid.NewGuid());
 
     public IProfileService Service { get; }
+    public IProfileCloner Cloner { get; }
     public IModRepository Repo { get; }
 
     /// <summary>
@@ -39,6 +40,13 @@ internal sealed class ProfileServiceFixture : IDisposable
     /// repository the profile service stages from.
     /// </summary>
     public IModImportService Imports { get; }
+
+    /// <summary>
+    /// The <see cref="ILoadOrderReconciler"/> resolved through the same DI
+    /// tree, so load-order tests reconcile over the same live profile +
+    /// repository the rest of the fixture uses.
+    /// </summary>
+    public ILoadOrderReconciler Reconciler { get; }
 
     /// <param name="createLink">Optional override for the staging-link seam
     /// (default: the platform-selective link, a junction on Windows or
@@ -62,8 +70,10 @@ internal sealed class ProfileServiceFixture : IDisposable
         _provider = services.BuildServiceProvider();
 
         Service = _provider.GetRequiredService<IProfileService>();
+        Cloner = _provider.GetRequiredService<IProfileCloner>();
         Repo = _provider.GetRequiredService<IModRepository>();
         Imports = _provider.GetRequiredService<IModImportService>();
+        Reconciler = _provider.GetRequiredService<ILoadOrderReconciler>();
     }
 
     // ---- profile-tree path helpers -----------------------------------------

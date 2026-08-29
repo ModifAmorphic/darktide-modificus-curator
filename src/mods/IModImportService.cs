@@ -14,7 +14,7 @@ namespace Modificus.Curator.Mods;
 /// Nexus by mod id. Version dedup: re-importing the same version tag reuses its
 /// folder (refreshed); a new tag creates a new version.
 /// <see cref="ModVersion.IsLatest"/> follows the repository's
-/// effective-timestamp key (see <see cref="IModRepository.AddVersion"/>), not
+/// arrival rule (see <see cref="IModRepository.AddVersion"/>), not
 /// import recency.</para>
 /// <para>
 /// <b>Source validation (both kinds):</b> the source must contain exactly one

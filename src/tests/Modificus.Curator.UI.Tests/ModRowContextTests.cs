@@ -37,9 +37,21 @@ public sealed class ModRowContextTests
 
         var session = new FakeProfileSession { ActiveProfileId = a.Id };
         var localization = new LocalizationService();
+        var cards = new ModCardsGate();
         var importWorkflow = new ImportWorkflowViewModel(
-            profiles, session, repo, new FakeModImportService(repo), localization,
+            profiles, session, repo, new FakeModImportService(repo), cards, localization,
             NullLogger<ImportWorkflowViewModel>.Instance);
+        var queue = new FakeModDownloadQueue();
+        var acquisition = new FakeModAcquisitionService();
+        var placements = new LoadOrderDownloadPlacements(
+            queue, profiles, NullLogger<LoadOrderDownloadPlacements>.Instance);
+        var loadOrder = new LoadOrderImportViewModel(
+            profiles, session, new FakeLoadOrderReconciler(), new FakeNexusSearchClient(),
+            new FakeModImportService(), new FakeNexusAuthService { State = null },
+            acquisition, queue, placements, cards,
+            new FakeDialogService(), localization,
+            static action => action(),
+            NullLogger<LoadOrderImportViewModel>.Instance);
         var detailedRows = new DetailedModRowsViewModel(
             new FakeConfigLoader(), new FakeNexusModMetadataService(), repo,
             new FakeModThumbnailService(), NullLogger<DetailedModRowsViewModel>.Instance);
@@ -52,14 +64,13 @@ public sealed class ModRowContextTests
         var runner = new UpdateCheckRunner(
             session, profiles, updateCheck, new FakeConfigLoader(), new FakeAppStateStore(),
             new FakeAutomaticUpdateService(), NullLogger<UpdateCheckRunner>.Instance);
-        var queue = new FakeModDownloadQueue();
-        var acquisition = new FakeModAcquisitionService();
 
         return new ModListViewModel(
             profiles, session, repo, new FakeDialogService(), localization,
-            updateState, runner, context, importWorkflow, detailedRows, linkedMods,
+            updateState, runner, context, importWorkflow, loadOrder, cards,
+            detailedRows, linkedMods,
             new FakeExternalLauncher(), new FakeNxmRegistrationState(),
-            queue, new ModUpdateEnqueuer(acquisition, queue, profiles),
+            queue, new ModUpdateEnqueuer(acquisition, queue, profiles), placements,
             NullLogger<ModListViewModel>.Instance);
     }
 

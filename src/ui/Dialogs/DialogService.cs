@@ -10,12 +10,12 @@ namespace Modificus.Curator.UI.Dialogs;
 /// <c>Window</c>/<c>ShowDialog</c> wiring so view models never construct windows
 /// directly. Each method shows exactly one true modal over the owning main
 /// window (Welcome, confirm, discovery escape hatch, alert, unsaved changes,
-/// progress). This is the only place the app brings up a dialog window;
-/// everything else flows through the <see cref="IDialogService"/> seam, which
-/// tests replace with a fake. The one dialog whose view model carries service
-/// dependencies (the escape hatch) builds that VM through the narrow
-/// <see cref="IDiscoveryEscapeHatchFactory"/>; this service never constructs
-/// view models itself.
+/// game-dir conflict, progress). This is the only place the app brings up a
+/// dialog window; everything else flows through the <see cref="IDialogService"/>
+/// seam, which tests replace with a fake. The one dialog whose view model
+/// carries service dependencies (the escape hatch) builds that VM through the
+/// narrow <see cref="IDiscoveryEscapeHatchFactory"/>; this service never
+/// constructs view models itself.
 /// </summary>
 /// <remarks>
 /// <para>

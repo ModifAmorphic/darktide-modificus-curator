@@ -24,7 +24,7 @@ namespace Modificus.Curator.Mods;
 /// <see cref="IModRepository.AddVersion"/> reuses the existing version
 /// folder + refreshes its files; a new version creates a new opaque version
 /// folder. <see cref="ModVersion.IsLatest"/> follows the repository's
-/// effective-timestamp key (see <see cref="IModRepository.AddVersion"/>), not
+/// arrival rule (see <see cref="IModRepository.AddVersion"/>), not
 /// import recency.</para>
 /// <para>
 /// <b>Archive support:</b> files are detected by content

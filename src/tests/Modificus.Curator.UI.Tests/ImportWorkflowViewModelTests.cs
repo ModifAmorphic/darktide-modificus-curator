@@ -2,6 +2,7 @@ using System.ComponentModel;
 using Modificus.Curator.Mods;
 using Modificus.Curator.Profiles;
 using Modificus.Curator.UI.Localization;
+using Modificus.Curator.UI.Session;
 using Modificus.Curator.UI.ViewModels;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -42,7 +43,7 @@ public sealed class ImportWorkflowViewModelTests
         import ??= new FakeModImportService(repo);
         localization ??= new LocalizationService();
         var vm = new ImportWorkflowViewModel(
-            profiles, session, repo, import, localization,
+            profiles, session, repo, import, new ModCardsGate(), localization,
             NullLogger<ImportWorkflowViewModel>.Instance);
         return (vm, profiles, session, repo, import);
     }
@@ -56,7 +57,7 @@ public sealed class ImportWorkflowViewModelTests
     private static void StartUntracked(ImportWorkflowViewModel vm, params string[] paths)
     {
         vm.StartBatchCommand.Execute(paths);
-        vm.SourceChoice = ImportWorkflowViewModel.ImportSource.Untracked;
+        vm.SourceChoice = ImportSource.Untracked;
     }
 
     // ---- default state + availability -------------------------------------
@@ -122,7 +123,7 @@ public sealed class ImportWorkflowViewModelTests
         Assert.Equal("/mods/DMF", vm.CurrentPath);
         Assert.Equal("DMF", vm.ModName); // folder name
         // Defaults: Nexus, empty Version/URL, Latest.
-        Assert.Equal(ImportWorkflowViewModel.ImportSource.Nexus, vm.SourceChoice);
+        Assert.Equal(ImportSource.Nexus, vm.SourceChoice);
         Assert.True(vm.IsRemote);
         Assert.True(vm.IsVersionVisible);
         Assert.Empty(vm.Version);
@@ -252,7 +253,7 @@ public sealed class ImportWorkflowViewModelTests
         var (vm, _, session, _, _) = Build(profiles: profiles);
         session.ActiveProfileId = a.Id;
         vm.StartBatchCommand.Execute(new[] { "/mods/DMF" });
-        vm.SourceChoice = ImportWorkflowViewModel.ImportSource.Untracked;
+        vm.SourceChoice = ImportSource.Untracked;
 
         Assert.False(vm.IsRemote);
         Assert.False(vm.IsVersionVisible);
@@ -329,7 +330,7 @@ public sealed class ImportWorkflowViewModelTests
         session.ActiveProfileId = a.Id;
         vm.StartBatchCommand.Execute(new[] { "/mods/DMF" });
         vm.ModName = "   ";
-        vm.SourceChoice = ImportWorkflowViewModel.ImportSource.Untracked;
+        vm.SourceChoice = ImportSource.Untracked;
 
         Assert.False(vm.CanImport);
     }
@@ -345,7 +346,7 @@ public sealed class ImportWorkflowViewModelTests
 
         Assert.Equal(1, vm.SourceChoiceIndex); // Nexus default
         vm.SourceChoiceIndex = 0;
-        Assert.Equal(ImportWorkflowViewModel.ImportSource.Untracked, vm.SourceChoice);
+        Assert.Equal(ImportSource.Untracked, vm.SourceChoice);
 
         Assert.Equal(0, vm.PolicyChoiceIndex); // Latest default
         vm.PolicyChoiceIndex = 1;
@@ -450,7 +451,7 @@ public sealed class ImportWorkflowViewModelTests
         Assert.Equal("/mods/Two", vm.CurrentPath);
         Assert.Equal("Two", vm.ModName); // next item's derived name
         // Defaults reset for the new item.
-        Assert.Equal(ImportWorkflowViewModel.ImportSource.Nexus, vm.SourceChoice);
+        Assert.Equal(ImportSource.Nexus, vm.SourceChoice);
         Assert.Empty(vm.Version);
         Assert.Empty(vm.Url);
     }
@@ -536,7 +537,7 @@ public sealed class ImportWorkflowViewModelTests
         // (LoadCurrentItem reset the fields to the Nexus default) and confirm.
         profiles.GetBaseNameCollisionResult =
             new ModListEntry { ContainerId = conflicting.Id, Enabled = true, Order = 0 };
-        vm.SourceChoice = ImportWorkflowViewModel.ImportSource.Untracked;
+        vm.SourceChoice = ImportSource.Untracked;
         await vm.ImportCurrentCommand.ExecuteAsync(null);
 
         Assert.True(vm.IsFailure);
@@ -566,7 +567,7 @@ public sealed class ImportWorkflowViewModelTests
         StartUntracked(vm, "/mods/One", "/mods/Bad");
 
         await vm.ImportCurrentCommand.ExecuteAsync(null); // One ok
-        vm.SourceChoice = ImportWorkflowViewModel.ImportSource.Untracked;
+        vm.SourceChoice = ImportSource.Untracked;
         await vm.ImportCurrentCommand.ExecuteAsync(null); // Bad: Import throws
 
         Assert.True(vm.IsFailure);
@@ -594,7 +595,7 @@ public sealed class ImportWorkflowViewModelTests
         await vm.ImportCurrentCommand.ExecuteAsync(null);
         Assert.True(vm.IsEditing);
         Assert.Equal(2, vm.CurrentNumber);
-        vm.SourceChoice = ImportWorkflowViewModel.ImportSource.Untracked;
+        vm.SourceChoice = ImportSource.Untracked;
         await vm.ImportCurrentCommand.ExecuteAsync(null); // Bad fails
 
         Assert.True(vm.IsFailure);
@@ -1155,7 +1156,7 @@ public sealed class ImportWorkflowViewModelTests
         Assert.Equal(2, vm.TotalCount);
         Assert.Equal(1, vm.CurrentNumber);
         Assert.Equal("Renamed", vm.ModName);
-        Assert.Equal(ImportWorkflowViewModel.ImportSource.Untracked, vm.SourceChoice);
+        Assert.Equal(ImportSource.Untracked, vm.SourceChoice);
     }
 
     [Fact]
