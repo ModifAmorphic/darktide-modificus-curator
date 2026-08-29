@@ -2496,7 +2496,21 @@ No backend library references the UI (the dependency direction is one-way).
 - **`ProfilesViewModelTests`**: profile create / save / cancel / delete /
   switch, no-active states, running-state gates, dirty navigation, banner /
   picker, inline launch-settings validation + atomic save, and DMF prompt
-  timing after create.
+  timing after create. Clone coverage: visibility/executability for an active
+  persisted profile only (hidden + refused with no active profile and while a
+  draft is open), the running gate (disabled + direct invocation refused +
+  the tooltip switching back when the game stops), clean success (one cloner
+  call with the active id, one activation of the returned id, authoritative
+  reload, clean editor), the three dirty branches (Save persists then clones
+  the saved profile, Don't save clones the previously persisted profile,
+  Cancel creates nothing + preserves the edits), the localized generic
+  failure (source preserved, no activation), and the culture-refresh of the
+  clone tooltip without touching values or dirty state.
+- **`ProfilesViewXamlTests`**: the Profiles page action row as a repository
+  source test (the `GamingModeGatingXamlTests` pattern): Add, Clone, Delete
+  button order with the clone command/visibility/tooltip bindings +
+  `ToolTip.ShowOnDisabled`, the drawn `Path` icon + localized label key, and
+  the four clone resx keys.
 - **`LaunchSettingsEditorViewModelTests`**: the reusable inline launch-settings
   editor VM (existing-settings load, add/remove rows, inline localized
   validation -- empty / `=` / NUL name, NUL value, case-insensitive duplicate,

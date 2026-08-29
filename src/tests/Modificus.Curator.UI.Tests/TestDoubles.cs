@@ -439,7 +439,7 @@ internal static class TestDoubles
             nxmRegistration: nxmRegistration,
             modListRefresh: modsPage);
         var profilesPage = new ProfilesViewModel(
-            profiles, session, dialogs, localization,
+            profiles, new FakeProfileCloner(profiles), session, dialogs, localization,
             NullLogger<ProfilesViewModel>.Instance);
         var integrationsPage = new IntegrationsViewModel(
             auth, localization, config, dialogs, nxmRegistrar, nxmRegistration,
@@ -1048,6 +1048,56 @@ internal sealed class FakeProfileService : IProfileService
     /// interface; a path that matches nothing.
     /// </summary>
     public string ProfilesRoot { get; } = "/nonexistent-curator-profiles";
+}
+
+/// <summary>
+/// In-memory <see cref="IProfileCloner"/> for VM tests: records calls and
+/// persists each copy into the paired <see cref="FakeProfileService"/> (the
+/// same store the page reloads from), mirroring how a production clone is
+/// readable back through the profile service. Names copies
+/// "{source} (Copy N)" from a per-fake counter; the real naming algorithm is
+/// covered against the real service in <c>Profiles.Tests</c>.
+/// </summary>
+internal sealed class FakeProfileCloner : IProfileCloner
+{
+    private readonly FakeProfileService _profiles;
+    private int _copies;
+
+    public FakeProfileCloner(FakeProfileService profiles) => _profiles = profiles;
+
+    /// <summary>Source ids passed to <see cref="CloneProfile"/>, in call order.</summary>
+    public IReadOnlyList<Guid> CloneCalls { get; } = new List<Guid>();
+
+    /// <summary>
+    /// When set, <see cref="CloneProfile"/> throws AFTER recording the call and
+    /// BEFORE creating anything (no summary, no mod list, no settings),
+    /// mirroring the production service's create-nothing failure contract.
+    /// </summary>
+    public Exception? CloneThrows { get; set; }
+
+    /// <summary>
+    /// Optional clone-name override ((source name, copy number) -> name);
+    /// defaults to "{source} (Copy N)".
+    /// </summary>
+    public Func<string, int, string>? NameResult { get; set; }
+
+    public Profile CloneProfile(Guid sourceProfileId)
+    {
+        ((List<Guid>)CloneCalls).Add(sourceProfileId);
+        if (CloneThrows is not null)
+        {
+            throw CloneThrows;
+        }
+
+        var source = _profiles.GetProfile(sourceProfileId);
+        _copies++;
+        var summary = _profiles.WithProfile(
+            NameResult?.Invoke(source.Name, _copies) ?? $"{source.Name} (Copy {_copies})",
+            source.Description);
+        _profiles.LaunchSettingsByProfile[summary.Id] = _profiles.GetLaunchSettings(sourceProfileId);
+        _profiles.WithMods(summary.Id, _profiles.GetModList(sourceProfileId).ToArray());
+        return _profiles.GetProfile(summary.Id);
+    }
 }
 
 /// <summary>

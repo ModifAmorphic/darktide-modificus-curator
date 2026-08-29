@@ -1640,6 +1640,18 @@ Set up Nexus to check your installed mods for updates and enable download links 
     <value>Can't create a profile while Darktide is running.</value>
     <comment>Tooltip on the Add profile button while it is disabled because Darktide is running.</comment>
   </data>
+  <data name="Profiles_CloneButton" xml:space="preserve">
+    <value>Clone profile</value>
+    <comment>The Clone profile button on the Profiles page action row.</comment>
+  </data>
+  <data name="Profiles_CloneTooltip" xml:space="preserve">
+    <value>Create a copy of the active profile</value>
+    <comment>Tooltip on the Clone profile button.</comment>
+  </data>
+  <data name="Profiles_CloneLockedTooltip" xml:space="preserve">
+    <value>Can't clone the active profile while Darktide is running.</value>
+    <comment>Tooltip on the Clone profile button while it is disabled because Darktide is running.</comment>
+  </data>
   <data name="Profiles_DeleteButton" xml:space="preserve">
     <value>Delete profile</value>
     <comment>The Delete profile button on the Profiles page action row.</comment>
@@ -1691,6 +1703,10 @@ Set up Nexus to check your installed mods for updates and enable download links 
   <data name="Profiles_ErrSaveFailed" xml:space="preserve">
     <value>Could not save the profile. Check your entries and try again.</value>
     <comment>Generic top-level save error shown when the service rejects an update the inline validation did not catch. The raw service text is never shown.</comment>
+  </data>
+  <data name="Profiles_ErrCloneFailed" xml:space="preserve">
+    <value>Could not clone the profile. Try again.</value>
+    <comment>Generic top-level clone error shown when the clone operation fails. The raw service text is never shown.</comment>
   </data>
   <data name="Profiles_ErrNameRequired" xml:space="preserve">
     <value>A profile name is required.</value>

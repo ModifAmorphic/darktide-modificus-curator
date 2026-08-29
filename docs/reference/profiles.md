@@ -191,6 +191,55 @@ Method behavior:
   `KeyNotFoundException` for an unknown profile. The manager mod itself
   stages + lists like any ordinary mod (no special staging).
 
+### `IProfileCloner`
+
+The focused profile-cloning capability. `ProfileService` implements both this
+and `IProfileService`; consumers that only clone (the hosted Profiles page's
+Clone action) depend on the narrow surface rather than the full profile
+contract.
+
+```csharp
+public interface IProfileCloner
+{
+    Profile CloneProfile(Guid sourceProfileId);
+}
+```
+
+`CloneProfile` persists and returns an independent copy of the source profile
+in one operation (never reconstructed through repeated `AddMod` calls, which
+would replay fresh-add policy such as DMF placement and could partially
+reproduce the list):
+
+- **New identity:** a new `Guid` and a new creation timestamp; everything the
+  caller can observe about membership comes from the persisted copy.
+- **Generated name:** the source's copy-family base name (its name minus a
+  trailing canonical ` (Copy N)` suffix, if any; suffix recognition is
+  case-insensitive but output always uses `Copy` with that casing) followed by
+  ` (Copy N)`, where N is one above the highest existing copy number in the
+  family (never reusing a gap while a higher number exists) and the result
+  never equals an existing readable profile name under ordinal
+  case-insensitive comparison. A name like `Testing (Copy 1)` belongs to the
+  `Testing` family, so cloning it increments the family's counter; a
+  nonnumeric suffix (`Testing (Copy X)`) is not a family member, so the whole
+  name is the base. The suffix is stable profile data, never localized.
+  Existing profile names remain allowed to duplicate; the guarantee covers
+  only the generated clone name.
+- **Copied state:** description, complete mod membership (enabled + disabled
+  states, order, order locks, Latest + Pinned policies including pinned
+  version ids), and launch settings (ordered env vars, ordered game args, the
+  Lua-logging + skip-splash toggles). The source and clone are independently
+  editable afterwards; a write to either never mutates the other.
+- **Omitted state:** nothing generated or session-owned is copied. The staged
+  tree (links, `mods.lst`, the ownership marker) is not: the clone receives an
+  empty `staged/` scaffold that ordinary launch staging rebuilds from the
+  copied profile data. Mod files stay in the shared repository (profiles
+  reference them by container id; nothing is duplicated).
+- **No `ProfileCreated`:** cloning does not raise
+  `IProfileService.ProfileCreated`, so the DMF new-profile offer never fires
+  for a clone (cloning preserves an intentional DMF-free setup without asking
+  to change it).
+- Throws `KeyNotFoundException` for an unknown source and creates nothing.
+
 ### Key types
 
 - `ModListEntry` -- a single mod within a profile's list (immutable record):
@@ -431,9 +480,14 @@ public static IServiceCollection AddProfiles(this IServiceCollection services);
   platform-selective default (an NTFS junction on Windows via `Junction.Create`;
   `Directory.CreateSymbolicLink` on Linux). `TryAdd` so a test may pre-register a
   throwing/fake delegate.
-- `AddSingleton<IProfileService, ProfileService>()` -- the filesystem-backed
-  implementation (internal). Resolves `CuratorConfig`, `IModRepository`,
-  `StagingLinkCreator`, and `ILogger<ProfileService>` from the container.
+- `AddSingleton<ProfileService>()` -- the filesystem-backed implementation
+  (internal), registered once as a concrete singleton.
+- `AddSingleton<IProfileService>(sp => sp.GetRequiredService<ProfileService>())`
+  and
+  `AddSingleton<IProfileCloner>(sp => sp.GetRequiredService<ProfileService>())`
+  -- both capability interfaces forward to that exact singleton instance.
+  Resolves `CuratorConfig`, `IModRepository`, `StagingLinkCreator`, and
+  `ILogger<ProfileService>` from the container.
 - `AddSingleton<ILoadOrderReconciler, LoadOrderReconciler>()` -- the
   load-order resolution glue (internal implementation). Resolves
   `IProfileService` + `IModRepository` from the container.
@@ -540,6 +594,14 @@ only), file reparse points use `File.Delete` -- so it stays data-safe on both OS
 ## Testing
 
 `Modificus.Curator.Profiles.Tests` covers profile CRUD (`ProfileCrudTests`),
+profile cloning (`ProfileCloneTests`: the exact persisted copy across a fresh
+service instance -- description, every mod-entry field, every policy kind,
+every launch setting -- the new id + creation timestamp, the empty `staged/`
+scaffold even when the source has a staged tree, independence in both
+directions across metadata/mod-state/order/lock/policy writes, the full
+generated-name table incl. copy-of-copy + case-insensitive matching + a
+numbering gap + a nonnumeric suffix, the unknown-source throw creating
+nothing, and the no-`ProfileCreated` guarantee),
 profile description + the atomic create/update contract (`ProfileMetadataTests`:
 create round-trip with description + launch settings, missing/null `Description`
 read normalization, `UpdateProfile` preserving
@@ -585,9 +647,10 @@ staging (junction on Windows, symlink on Linux) + the data-safe `ClearStagedDir`
 skip with no fallback copy, enable/disable + reorder, cross-source base-name
 collision, sentinel survival; `LinkedFolderSafetyTests`: availability
 missing-then-returned on rescan, sentinel survival across a full
-link-stage-remove-rescan-delete sequence; `ModCleanupTests`: referenced linked
-container survives prune, unreferenced is pruned, external target untouched), and the `AddProfiles` DI wiring
-(including the `TryAdd` `StagingLinkCreator` override).
+  link-stage-remove-rescan-delete sequence; `ModCleanupTests`: referenced linked
+  container survives prune, unreferenced is pruned, external target untouched), and the `AddProfiles` DI wiring
+  (including the `TryAdd` `StagingLinkCreator` override and the
+  `IProfileService` / `IProfileCloner` same-singleton mapping).
 
 ```sh
 dotnet test src/modificus-curator.sln -c Release

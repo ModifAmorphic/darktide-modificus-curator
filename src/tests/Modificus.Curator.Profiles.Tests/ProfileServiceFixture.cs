@@ -30,6 +30,7 @@ internal sealed class ProfileServiceFixture : IDisposable
     public string ModsFolder { get; } = Path.Combine(Path.GetTempPath(), "curator-mods-" + Guid.NewGuid());
 
     public IProfileService Service { get; }
+    public IProfileCloner Cloner { get; }
     public IModRepository Repo { get; }
 
     /// <summary>
@@ -69,6 +70,7 @@ internal sealed class ProfileServiceFixture : IDisposable
         _provider = services.BuildServiceProvider();
 
         Service = _provider.GetRequiredService<IProfileService>();
+        Cloner = _provider.GetRequiredService<IProfileCloner>();
         Repo = _provider.GetRequiredService<IModRepository>();
         Imports = _provider.GetRequiredService<IModImportService>();
         Reconciler = _provider.GetRequiredService<ILoadOrderReconciler>();

@@ -8,9 +8,12 @@ namespace Modificus.Curator.Profiles;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers <see cref="IProfileService"/> → <see cref="ProfileService"/>,
-    /// plus the staging dependencies it needs: the <see cref="StagingLinkCreator"/>
-    /// default (platform-selective: an NTFS junction on Windows, a symlink via
+    /// Registers the profile capabilities over one <see cref="ProfileService"/>
+    /// singleton: <see cref="IProfileService"/> (lifecycle + mod-list +
+    /// staging) and the focused <see cref="IProfileCloner"/> both forward to
+    /// that exact instance. Also registers the staging dependencies it needs:
+    /// the <see cref="StagingLinkCreator"/> default (platform-selective: an
+    /// NTFS junction on Windows, a symlink via
     /// <see cref="System.IO.Directory.CreateSymbolicLink"/> on Linux) and,
     /// defensively, <see cref="IModRepository"/> via <c>AddMods()</c>
     /// so a lone <c>AddProfiles()</c> yields a resolvable
@@ -34,7 +37,12 @@ public static class ServiceCollectionExtensions
         // IOException path without platform hacks).
         services.TryAddSingleton<StagingLinkCreator>(_ => CreateStagingLink);
 
-        services.AddSingleton<IProfileService, ProfileService>();
+        // One concrete singleton; both capability interfaces forward to that
+        // exact instance (IProfileService for lifecycle/mod-list/staging
+        // consumers, the focused IProfileCloner for the clone capability).
+        services.AddSingleton<ProfileService>();
+        services.AddSingleton<IProfileService>(sp => sp.GetRequiredService<ProfileService>());
+        services.AddSingleton<IProfileCloner>(sp => sp.GetRequiredService<ProfileService>());
 
         // The load-order reconciliation glue over the pure planner: resolves
         // both sides' base names from the live profile + repository. Stateless

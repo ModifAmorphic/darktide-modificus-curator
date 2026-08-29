@@ -261,6 +261,18 @@ for the full contract (env-var table, logging, the hook-ready handshake).
   update of an entry already in the profile is a strict no-op that preserves
   the user's current order, enabled state, policy, and lock. Existing profile
   entries are not migrated.
+- **Cloning:** the focused `IProfileCloner.CloneProfile` capability persists an
+  independent copy of a profile in one operation (never reconstructed through
+  repeated `AddMod`, which would replay fresh-add policy such as DMF
+  placement). The copy gets a new id + creation timestamp, a generated
+  ` (Copy N)` family name (stable data, never localized; `Testing (Copy 1)`
+  belongs to the `Testing` family), and the source's description, complete mod
+  membership (enabled state, order, locks, policies incl. pinned version
+  ids), and launch settings. Mod files stay in the shared repository (the
+  clone references the same containers; nothing is duplicated), and the
+  staged tree is not copied: the clone receives an empty `staged/` scaffold
+  that ordinary launch staging rebuilds. Cloning raises no
+  `ProfileCreated`, so the DMF offer never fires for a clone.
 - Mods are stored **once, in a unified repository** keyed by `(source, identity)`
   per UUID container. Profiles reference a mod by `(containerId, policy)` and
   store no mod files of their own. See [Mod repository](#mod-repository).

@@ -68,7 +68,7 @@ a UI-layer singleton that the shell (and other view models) inject:
   │   │                         strip; mirrors session state
   │   │
   │   ├── ProfilesViewModel ─── the active profile editor (name + description
-  │   │   │                     + inline launch settings) + banner/picker
+  │   │   │                     + inline launch settings) + banner/picker/clone
   │   │   │
   │   │   └── LaunchSettingsEditorViewModel  the reusable inline launch-settings
   │   │                                       rows (env vars + args + toggles)
@@ -194,6 +194,42 @@ list's `OnSessionPropertyChanged` filters to `ActiveProfileId` only: a
 running-state change does not reload the list (the list stays put while the
 game runs; edits land on the profile the user will launch next). Active-id
 changes rebuild the list from the new profile.
+
+## The Profiles destination (`ProfilesViewModel`)
+
+The Profiles page edits the active profile only (name + description + the
+inline launch-settings editor), hosts the persisted-profile banner + picker,
+creates new drafts, and carries the Add / Clone / Delete action row for the
+active persisted profile. Every voluntary active-profile change routes
+through the session's `RequestActive` gate; the page never writes the
+persisted profile outside the atomic `UpdateProfile` / `CreateProfile`
+boundary.
+
+**Cloning** (the Clone action, between Add and Delete) copies the active
+persisted profile through the focused `IProfileCloner` capability:
+
+- **Gating.** Clone is visible only for an active persisted profile and
+  disabled while a new draft is open, while a Save is in flight, and while
+  Darktide runs (the clone becomes active, which is a profile switch). All
+  gates are re-checked in the command body after the dirty-transition await;
+  the disabled button keeps its tooltip (`ToolTip.ShowOnDisabled`) so the
+  running-state reason stays available.
+- **Dirty guard.** A dirty editor resolves through the same unsaved-changes
+  transition as navigation/switch/Add: Save persists the edits then clones
+  the saved profile, Don't save discards the edits then clones the previously
+  persisted profile, Cancel/ESC/X creates nothing and preserves the edits.
+- **Activation.** On success the returned clone is requested active through
+  the session (with the page's own-reload suppression so the session event
+  handler does not treat it as an outside displacement), then one
+  authoritative reload opens the clone in a clean editor. Cloning is
+  immediate + non-destructive, so it needs no confirmation; the new banner
+  name is the success feedback.
+- **DMF suppression.** `CloneProfile` raises no
+  `IProfileService.ProfileCreated` (the blank-profile signal behind the DMF
+  offer), so cloning a profile never queues the DMF prompt.
+- **Failure.** An expected clone/read/write failure logs, keeps the source
+  active + unchanged, and surfaces the localized generic clone error in the
+  page's fixed error area; raw exception text is never shown.
 
 ## The shell (`ShellViewModel` + `MainWindow`)
 
