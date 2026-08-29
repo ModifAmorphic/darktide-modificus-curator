@@ -26,6 +26,7 @@ converter_ignore fences so it never reaches the page.
 **Modificus Curator** is a mod manager for
 **Warhammer 40,000: Darktide**, for Windows, Linux, and the Steam Deck.
 Source code and releases: [Curator GitHub repository](https://github.com/ModifAmorphic/darktide-modificus-curator).
+Guides and help: [Curator wiki](https://github.com/ModifAmorphic/darktide-modificus-curator/wiki).
 
 Curator loads mods into Darktide via dll injection with [Mod Relay](https://github.com/ModifAmorphic/darktide-mod-relay). 
 It does this without altering any Darktide files. No patching or unpatching required. To run vanilla Darktide, 
@@ -95,10 +96,13 @@ Hit **Launch Darktide** to inject mods and launch the game.
 
 **Note:** If your game was already patched then you'll need to restore it to "Vanilla" prior to launching. See the next section.
 
-
 ## Migrating from Patched Darktide
 
 If you previously patched Darktide to load the Darktide Mod Loader, then it needs to be restored to Vanilla for mods to work properly. The easiest is to simply "Verify integrity of game files" from within Steam's Darktide properties under "Installed Files". This can take a bit of time (few minutes usually). You can also unpatch your game the same way you originally patched it. Whatever method you choose, DML (Not to be confused with DMF - Darktide Mod Framework) and Curator are not compatible.
+
+## Importing an Existing Load Order and Mods
+
+On the **Mods** page, open the add button's drop-down menu and select **Import mod list**. Choose an existing `mod_load_order.txt` and select **Reorder mods** or **Reorder and import mods** to review what Curator will do before applying it.
 
 ## Vanilla
 
