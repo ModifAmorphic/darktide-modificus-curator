@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.2.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v1.1.0...v1.2.0) (2026-08-29)
+
+
+### Features
+
+* **mods:** import-details editing, version-unknown state, latest-arrival fix ([#241](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/241)) ([8b6dd7a](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/8b6dd7aed746be24a07a24d6eee2d5b46ee485cb))
+* **profiles:** add profile cloning ([#246](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/246)) ([7f3b5d1](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/7f3b5d1a511485a9b1a1f3b74e985993756c8a39)), closes [#245](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/245)
+* **ui:** import mod lists with Nexus-assisted reconciliation ([#242](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/242)) ([501b8e7](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/501b8e781ae74fa6e8b39be51224837850ffae6e)), closes [#238](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/238)
+
+
+### Bug Fixes
+
+* **ui:** prioritize exact Nexus search matches ([#247](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/247)) ([401a6f9](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/401a6f979b4546ad792ae01ae0f39685f42e1b8c))
+* **ui:** stop cropping Nexus mod thumbnails ([#244](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/244)) ([8e84d8b](https://github.com/ModifAmorphic/darktide-modificus-curator/commit/8e84d8b05d7e8c37c2ba06685243d5117d3e9fe0)), closes [#243](https://github.com/ModifAmorphic/darktide-modificus-curator/issues/243)
+
 ## [1.1.0](https://github.com/ModifAmorphic/darktide-modificus-curator/compare/v1.0.0...v1.1.0) (2026-08-21)
 
 
