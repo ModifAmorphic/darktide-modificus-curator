@@ -34,7 +34,7 @@ launch the game from Steam. To play modded, launch from Curator.
 
 **\*\*IMPORTANT\*\* Requires an unpatched, vanilla Darktide installation**
 
-![Curator mod list, detailed view](https://staticdelivery.nexusmods.com/mods/4943/images/1196/1196-1786929470-1554360530.png)
+![Curator mod list, detailed view](https://staticdelivery.nexusmods.com/mods/4943/images/1196/1196-1788042575-267239489.png)
 
 ## Installation
 
