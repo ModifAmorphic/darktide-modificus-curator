@@ -27,20 +27,23 @@ public sealed class ProfilesViewModelTests
     /// Builds a <see cref="ProfilesViewModel"/> wired to in-memory fakes. After
     /// the DMF/reload-ownership move to the shell, this VM is narrowly coupled
     /// to profile workflow (no DMF + no mod-list reload delegate seams), so the
-    /// builder is now just the four core dependencies + the logger. The fakes
+    /// builder is now just the five core dependencies + the logger. The fakes
     /// are returned by reference for tests that need to drive post-construction
     /// state (most construct + keep the locals themselves).
     /// </summary>
     private static ProfilesViewModel Build(
         FakeProfileService? profiles = null,
         FakeProfileSession? session = null,
-        FakeDialogService? dialogs = null)
+        FakeDialogService? dialogs = null,
+        FakeProfileCloner? cloner = null)
     {
         profiles ??= TestDoubles.Profiles();
         session ??= new FakeProfileSession(() => profiles.ListProfiles());
         dialogs ??= new FakeDialogService();
+        cloner ??= new FakeProfileCloner(profiles);
         return new ProfilesViewModel(
             profiles,
+            cloner,
             session,
             dialogs,
             Localization,
@@ -1376,5 +1379,221 @@ public sealed class ProfilesViewModelTests
         // Each row carries the same color the palette would select.
         var bravoChoice = vm.ProfileChoices.Single(c => c.Id == b.Id);
         Assert.Same(ProfileAvatarPalette.For(b.Id), bravoChoice.AvatarBackground);
+    }
+
+    // ---- clone: visibility + gates -------------------------------------------
+
+    [Fact]
+    public void Clone_is_visible_and_executable_for_an_active_persisted_profile()
+    {
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha");
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+        var vm = Build(profiles, session);
+
+        Assert.True(vm.CloneIsVisible);
+        Assert.True(vm.CloneProfileCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task Clone_hidden_and_refused_with_no_active_profile()
+    {
+        var profiles = new FakeProfileService();
+        Profile(profiles, "Alpha");
+        var cloner = new FakeProfileCloner(profiles);
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = null };
+        var vm = Build(profiles, session, cloner: cloner);
+
+        Assert.False(vm.CloneIsVisible);
+        Assert.False(vm.CloneProfileCommand.CanExecute(null));
+
+        // Defense-in-depth: a direct invocation creates nothing.
+        await vm.CloneProfileCommand.ExecuteAsync(null);
+        Assert.Empty(cloner.CloneCalls);
+    }
+
+    [Fact]
+    public async Task Clone_hidden_and_disabled_while_a_draft_is_open()
+    {
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha");
+        var cloner = new FakeProfileCloner(profiles);
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+        var vm = Build(profiles, session, cloner: cloner);
+
+        await vm.AddProfileCommand.ExecuteAsync(null);
+
+        Assert.False(vm.CloneIsVisible);
+        Assert.False(vm.CloneProfileCommand.CanExecute(null));
+        await vm.CloneProfileCommand.ExecuteAsync(null);
+        Assert.Empty(cloner.CloneCalls);
+    }
+
+    [Fact]
+    public async Task Clone_disabled_while_running_direct_invocation_refused_and_tooltip_switches_back()
+    {
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha");
+        var cloner = new FakeProfileCloner(profiles);
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+        var vm = Build(profiles, session, cloner: cloner);
+
+        session.IsRunning = true;
+        Assert.False(vm.CloneProfileCommand.CanExecute(null));
+        Assert.Equal(Localization["Profiles_CloneLockedTooltip"], vm.CloneTooltip);
+
+        // Defense-in-depth: a direct invocation while running clones nothing.
+        await vm.CloneProfileCommand.ExecuteAsync(null);
+        Assert.Empty(cloner.CloneCalls);
+
+        // The tooltip switches back when the game stops.
+        session.IsRunning = false;
+        Assert.True(vm.CloneProfileCommand.CanExecute(null));
+        Assert.Equal(Localization["Profiles_CloneTooltip"], vm.CloneTooltip);
+    }
+
+    // ---- clone: success + dirty branches -------------------------------------
+
+    [Fact]
+    public async Task Clone_clean_success_clones_activates_reloads_and_leaves_editor_clean()
+    {
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha", "alpha desc",
+            new LaunchSettings { GameArguments = new[] { "--alpha" } });
+        var cloner = new FakeProfileCloner(profiles);
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+        var vm = Build(profiles, session, cloner: cloner);
+
+        await vm.CloneProfileCommand.ExecuteAsync(null);
+
+        // The cloner ran once, with the active id.
+        Assert.Equal(new[] { a.Id }, cloner.CloneCalls);
+        // The returned clone was activated exactly once + reloaded from.
+        var cloneId = profiles.ListProfiles().Single(p => p.Name == "Alpha (Copy 1)").Id;
+        Assert.Equal(1, session.RequestActiveCalls);
+        Assert.Equal(cloneId, session.LastRequestedId);
+        Assert.Equal(cloneId, session.ActiveProfileId);
+        Assert.Equal("Alpha (Copy 1)", vm.Name);
+        Assert.Equal("alpha desc", vm.Description);
+        Assert.Equal("--alpha", vm.Editor.GameArguments[0].Value);
+        Assert.True(vm.IsBannerVisible);
+        Assert.False(vm.IsDirty);
+        Assert.Empty(vm.SaveError);
+    }
+
+    [Fact]
+    public async Task Clone_dirty_save_persists_then_clones_the_saved_profile()
+    {
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha");
+        var cloner = new FakeProfileCloner(profiles);
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+        var dialogs = new FakeDialogService { UnsavedResult = UnsavedChangesChoice.Save };
+        var vm = Build(profiles, session, dialogs, cloner);
+
+        vm.Name = "Edited";
+        await vm.CloneProfileCommand.ExecuteAsync(null);
+
+        // Save ran first (one atomic update), then the clone of the same id.
+        Assert.Single(profiles.UpdateCalls);
+        Assert.Equal("Edited", profiles.UpdateCalls[0].Name);
+        Assert.Equal(new[] { a.Id }, cloner.CloneCalls);
+        // The editor reloaded from the clone: the saved name carries the copy
+        // suffix, and the page is clean.
+        Assert.Equal("Edited (Copy 1)", vm.Name);
+        Assert.False(vm.IsDirty);
+        Assert.Equal(1, session.RequestActiveCalls);
+    }
+
+    [Fact]
+    public async Task Clone_dirty_dont_save_clones_the_previously_persisted_profile()
+    {
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha");
+        var cloner = new FakeProfileCloner(profiles);
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+        var dialogs = new FakeDialogService { UnsavedResult = UnsavedChangesChoice.DontSave };
+        var vm = Build(profiles, session, dialogs, cloner);
+
+        vm.Name = "Edited";
+        await vm.CloneProfileCommand.ExecuteAsync(null);
+
+        // No write to the source; the clone carries the persisted name.
+        Assert.Empty(profiles.UpdateCalls);
+        Assert.Equal(new[] { a.Id }, cloner.CloneCalls);
+        Assert.Equal("Alpha (Copy 1)", vm.Name);
+        Assert.False(vm.IsDirty);
+        Assert.Equal(1, session.RequestActiveCalls);
+    }
+
+    [Fact]
+    public async Task Clone_dirty_cancel_creates_nothing_and_preserves_edits()
+    {
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha");
+        var cloner = new FakeProfileCloner(profiles);
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+        var dialogs = new FakeDialogService { UnsavedResult = UnsavedChangesChoice.Cancel };
+        var vm = Build(profiles, session, dialogs, cloner);
+
+        vm.Name = "Edited";
+        await vm.CloneProfileCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, dialogs.UnsavedCalls);
+        Assert.Empty(cloner.CloneCalls);
+        Assert.Equal(0, session.RequestActiveCalls);
+        Assert.Equal(a.Id, session.ActiveProfileId);
+        Assert.Equal("Edited", vm.Name);
+        Assert.True(vm.IsDirty);
+    }
+
+    [Fact]
+    public async Task Clone_failure_shows_localized_generic_error_and_preserves_the_source()
+    {
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha", "alpha desc");
+        var cloner = new FakeProfileCloner(profiles) { CloneThrows = new IOException("disk full") };
+        var session = new FakeProfileSession(() => profiles.ListProfiles()) { ActiveProfileId = a.Id };
+        var vm = Build(profiles, session, cloner: cloner);
+
+        await vm.CloneProfileCommand.ExecuteAsync(null);
+
+        // The attempt was recorded, but only the localized generic error is
+        // shown (never raw exception text), the source stays active with its
+        // data intact, and no activation was requested.
+        Assert.Single(cloner.CloneCalls);
+        Assert.Equal(Localization["Profiles_ErrCloneFailed"], vm.SaveError);
+        Assert.DoesNotContain("disk full", vm.SaveError);
+        Assert.Equal(a.Id, session.ActiveProfileId);
+        Assert.Equal(0, session.RequestActiveCalls);
+        Assert.Equal("Alpha", profiles.ListProfiles().Single(p => p.Id == a.Id).Name);
+        Assert.Equal("Alpha", vm.Name);
+        Assert.Equal("alpha desc", vm.Description);
+        Assert.False(vm.IsDirty);
+    }
+
+    // ---- clone: localization refresh -----------------------------------------
+
+    [Fact]
+    public async Task Culture_change_refreshes_clone_tooltip_without_changing_values_or_dirty()
+    {
+        var profiles = new FakeProfileService();
+        var a = Profile(profiles, "Alpha");
+        var session = new FakeProfileSession(() => profiles.ListProfiles())
+        {
+            ActiveProfileId = a.Id,
+            IsRunning = true,
+        };
+        var vm = Build(profiles, session);
+
+        vm.Name = "Edited";
+        Assert.True(vm.IsDirty);
+        Assert.Equal(Localization["Profiles_CloneLockedTooltip"], vm.CloneTooltip);
+
+        Localization.SetCulture("fr");
+
+        Assert.Equal(Localization["Profiles_CloneLockedTooltip"], vm.CloneTooltip);
+        Assert.Equal("Edited", vm.Name);
+        Assert.True(vm.IsDirty);
     }
 }

@@ -40,7 +40,8 @@ game-binary constraints now live with the runtime, in
   first-run Welcome onboarding, and in-app self-update for the Windows
   installer plus Linux AppImage (Velopack).
   The app is user-usable:
-  create profiles, import mods (folder/archive, Nexus/Untracked) or link an
+  create or clone profiles, import mods (folder/archive, Nexus/Untracked) or
+  link an
   external mod folder without copying it, manage
   the mod list (enable/disable/reorder/policy/remove), configure Settings
   (discovery paths + mod-repo location), download Nexus mods ("Mod manager
@@ -233,6 +234,25 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           runs) + reloads from the authoritative active id; a
                           staged draft is edited in place (the persisted profile is
                           not mutated until Save); Add Profile starts a blank draft;
+                          Clone profile (between Add and Delete, shown only for an
+                          active persisted profile) copies it through the focused
+                          `IProfileCloner.CloneProfile` in one persisted operation
+                          (new id + creation timestamp, the stable non-localized
+                          ` (Copy N)` family name -- a copy of `Testing (Copy 1)`
+                          belongs to the `Testing` family, highest-existing-plus-
+                          one, never gap reuse, case-insensitive, never colliding
+                          with an existing readable name; description, complete mod
+                          membership incl. enabled/order/locks/policies with pinned
+                          version ids, + launch settings; mod files stay shared in
+                          the repository + `staged/` starts empty, rebuilt by
+                          ordinary launch staging), then requests the clone active
+                          + reloads it into the clean editor (immediate +
+                          non-destructive, no confirmation; the new banner name is
+                          the success feedback; dirty edits resolve through the
+                          same Save / Don't save / Cancel transition first; a
+                          failure keeps the source active + unchanged and surfaces
+                          only the localized generic error; no `ProfileCreated`, so
+                          no DMF offer ever fires for a clone);
                           Save existing calls the atomic `UpdateProfile`, Save new
                           calls `CreateProfile(name, description, launchSettings)` +
                           requests it active; Save is disabled while metadata or
@@ -244,9 +264,11 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           atomic write as the Save button and proceeds only on
                           success; Don't save reloads authority and proceeds);
                           running-state gates
-                          disable switching/Add/Delete while Darktide runs (active-
-                          profile metadata + launch-settings edits stay enabled);
-                          a draft hides the shared Add/Delete action row AND
+                          disable switching/Add/Clone/Delete while Darktide runs
+                          (active-profile metadata + launch-settings edits stay
+                          enabled; Clone carries `ToolTip.ShowOnDisabled` so the
+                          disabled reason stays readable);
+                          a draft hides the shared Add/Clone/Delete action row AND
                           disables Add at the command level (defense in depth so
                           a programmatic call cannot start a second draft);
                           after a successful create + activation,
@@ -1410,6 +1432,13 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           directly from its external folder, no version
                           resolution; the focused ProfilesRoot read feeds the
                           game-dir ownership prefix check) + SetModPolicy transitions + the
+                          focused IProfileCloner capability (CloneProfile: one
+                          persisted copy of the aggregate with a new id +
+                          timestamp + the stable ` (Copy N)` family name,
+                          complete mod membership + launch settings, an empty
+                          staged/ scaffold, no ProfileCreated; ProfileService
+                          implements it alongside IProfileService, both DI
+                          interfaces forwarding to the same singleton) + the
                         profile-scoped load-order lock (ModListEntry.OrderLocked:
                         a locked entry keeps its exact zero-based index across
                         SetModOrder, so a reorder projects the requested ordering
@@ -1899,6 +1928,18 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           container keeps the resolved latest, unreferenced
                                           superseded versions still dropped, empty-container
                                           removal unchanged)
+                                          + ProfileCloneTests: the clone contract --
+                                          the exact persisted copy across a fresh service
+                                          instance (description, every mod-entry field,
+                                          every policy kind, every launch setting, new id +
+                                          creation timestamp), the empty staged/ scaffold
+                                          vs. a staged source, independence in both
+                                          directions, the full generated-name table
+                                          (copy-of-copy, case-insensitive, a numbering gap,
+                                          a nonnumeric suffix), the unknown-source throw
+                                          creating nothing, no ProfileCreated, + the
+                                          IProfileService/IProfileCloner same-singleton
+                                          DI mapping
     Modificus.Curator.Mods.Tests/      xUnit tests for the mod repository + import
                                         (incl. the linked-folder add + linked-container prune,
                                         + the display-metadata AddVersion/Import pass-through
@@ -2098,7 +2139,18 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                             ProfilesViewModelTests (profile create/save/cancel/
                                             delete/switch, no-active states, running-state gates,
                                             dirty navigation, banner/picker, inline launch-settings
-                                            validation + atomic save, DMF prompt timing after create)
+                                            validation + atomic save, DMF prompt timing after
+                                            create; + the clone flow: active-only visibility +
+                                            draft/no-active/running gates with direct-invocation
+                                            refusal, clean success (one clone + one activation +
+                                            authoritative reload + clean editor), the Save /
+                                            Don't save / Cancel dirty branches, the localized
+                                            generic failure preserving the source, + the clone
+                                            tooltip's culture refresh) + ProfilesViewXamlTests
+                                            (the Add/Clone/Delete action-row order, the clone
+                                            command/visibility/tooltip bindings +
+                                            ShowOnDisabled, the drawn content-copy Path icon +
+                                            the localized label, the clone resx keys)
                                             + the LaunchSettingsEditorViewModelTests (existing-
                                             settings load, add/remove rows, inline localized
                                             validation -- empty/`=`/NUL name, NUL value,
@@ -2606,7 +2658,11 @@ dotnet run   --project src/ui --configuration Release   # app shell window
   `UpdateProfile(id, name, description, launchSettings)`: the editable write
   boundary; ordered env-var entries + game args; validated up front via the
   shared `LaunchSettingsValidator`, applied at launch; `GetLaunchSettings` is the
-  focused read the launch path uses),
+  focused read the launch path uses) + the focused `IProfileCloner.CloneProfile`
+  capability (one persisted copy of the profile aggregate with a new id +
+  timestamp + the stable ` (Copy N)` family name, complete mod membership +
+  launch settings, mod files staying shared in the repository + an empty
+  `staged/` scaffold, no `ProfileCreated`),
   **Steam** (Steam + Darktide + Proton discovery via Steam's CompatToolMapping with the appinfo recommended-runtime fallback + the automatic/manual mode policy + `Rediscover` + `IsGameRunning`),
   **Integrations** (the Nexus v1 client/auth +
   `IModAcquisitionService` the download + extract + place orchestrator +

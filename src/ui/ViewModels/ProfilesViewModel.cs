@@ -77,11 +77,11 @@ public sealed record ProfileChoice(Guid Id, string Name, string Description, str
 /// <summary>
 /// The Profiles destination view model. Owns the full profile draft workflow:
 /// the active profile editor (name + description + composed launch-settings
-/// editor), the persisted-profile banner + picker, new-draft creation, atomic
-/// save/cancel/delete, the running-state gates, the dirty-navigation guard, and
-/// the application-lifetime session + localization subscriptions. The page edits
-/// only <see cref="IProfileSession.ActiveProfileId"/>; every voluntary change
-/// routes through the session's gate.
+/// editor), the persisted-profile banner + picker, new-draft creation, cloning,
+/// atomic save/cancel/delete, the running-state gates, the dirty-navigation
+/// guard, and the application-lifetime session + localization subscriptions.
+/// The page edits only <see cref="IProfileSession.ActiveProfileId"/>; every
+/// voluntary change routes through the session's gate.
 /// </summary>
 /// <remarks>
 /// <para><b>Authority:</b> <see cref="IProfileSession.ActiveProfileId"/> is the
@@ -95,12 +95,12 @@ public sealed record ProfileChoice(Guid Id, string Name, string Description, str
 /// draft starts from empty name + empty description + default launch settings
 /// and is not itself dirty until the user types. <see cref="IsDirty"/> compares
 /// the staged values against the persisted baseline captured at Load.</para>
-/// <para><b>Running-state gates:</b> switching, adding, and deleting profiles
-/// are disabled while Darktide runs (and re-checked defense-in-depth in the
-/// command body). Editing and saving the active profile's metadata + launch
-/// settings stays enabled while the game runs (a profile.json write that does
-/// not touch the running process). A new draft's Save additionally requires the
-/// game stopped, since saving activates the new profile.</para>
+/// <para><b>Running-state gates:</b> switching, adding, cloning, and deleting
+/// profiles are disabled while Darktide runs (and re-checked defense-in-depth
+/// in the command body). Editing and saving the active profile's metadata +
+/// launch settings stays enabled while the game runs (a profile.json write that
+/// does not touch the running process). A new draft's Save additionally
+/// requires the game stopped, since saving activates the new profile.</para>
 /// <para><b>DMF + mod-list reload owned by the shell:</b> this VM is narrowly
 /// coupled to profile workflow. The DMF (Darktide Mod Framework) install-prompt
 /// coordinator subscribes to <see cref="IProfileService.ProfileCreated"/> at
@@ -120,6 +120,7 @@ public sealed record ProfileChoice(Guid Id, string Name, string Description, str
 public partial class ProfilesViewModel : LocalizedViewModel
 {
     private readonly IProfileService _profiles;
+    private readonly IProfileCloner _cloner;
     private readonly IProfileSession _session;
     private readonly IDialogService _dialogs;
     private readonly ILogger<ProfilesViewModel> _logger;
@@ -144,6 +145,7 @@ public partial class ProfilesViewModel : LocalizedViewModel
 
     public ProfilesViewModel(
         IProfileService profiles,
+        IProfileCloner cloner,
         IProfileSession session,
         IDialogService dialogs,
         LocalizationService localization,
@@ -151,6 +153,7 @@ public partial class ProfilesViewModel : LocalizedViewModel
         : base(localization)
     {
         _profiles = profiles;
+        _cloner = cloner;
         _session = session;
         _dialogs = dialogs;
         _logger = logger;
@@ -216,7 +219,7 @@ public partial class ProfilesViewModel : LocalizedViewModel
     private bool _isRunning;
 
     /// <summary>
-    /// A top-level save error from the authoritative Save call (empty when
+    /// A top-level error from the authoritative Save or Clone call (empty when
     /// there is nothing to show). Cleared on any editor or metadata edit so a
     /// stale error does not linger after the user fixes the input.
     /// </summary>
@@ -318,6 +321,17 @@ public partial class ProfilesViewModel : LocalizedViewModel
         ? _localization["Profiles_DeleteLockedTooltip"]
         : _localization["Profiles_DeleteTooltip"];
 
+    /// <summary>
+    /// The Clone button tooltip: the normal action label, or the lock
+    /// explanation while Darktide runs (cloning would require switching the
+    /// active profile). Bound from XAML with <c>ToolTip.ShowOnDisabled</c> so
+    /// the reason stays available on the disabled button; re-resolves on a
+    /// running-state flip and on a culture change.
+    /// </summary>
+    public string CloneTooltip => IsRunning
+        ? _localization["Profiles_CloneLockedTooltip"]
+        : _localization["Profiles_CloneTooltip"];
+
     // ---- CanExecute --------------------------------------------------------
 
     /// <summary>
@@ -371,6 +385,18 @@ public partial class ProfilesViewModel : LocalizedViewModel
     /// is no active profile to delete.</summary>
     public bool DeleteIsVisible => _activeId is not null && !IsDraft;
 
+    /// <summary>
+    /// Clone Profile: requires an active persisted profile to copy, no open
+    /// draft, no in-flight profile write, and the game stopped (the clone
+    /// becomes active, which is a switch). Re-checked in the command body.
+    /// </summary>
+    private bool CanCloneProfile => _activeId is not null && !IsDraft && !IsSaving && !IsRunning;
+
+    /// <summary>Clone button visibility: hidden for a new draft and when there
+    /// is no active profile to clone (mirrors <see cref="DeleteIsVisible"/>;
+    /// CanExecute is the secondary guard).</summary>
+    public bool CloneIsVisible => _activeId is not null && !IsDraft;
+
     /// <summary>Selecting a profile in the picker: requires switch targets and
     /// the game stopped. Defense-in-depth re-check in the command body.</summary>
     private bool CanSelectProfile => HasPickerChoices && !IsRunning && !IsSaving;
@@ -399,6 +425,7 @@ public partial class ProfilesViewModel : LocalizedViewModel
         // The running-aware tooltips re-resolve with the running flip.
         OnPropertyChanged(nameof(AddTooltip));
         OnPropertyChanged(nameof(DeleteTooltip));
+        OnPropertyChanged(nameof(CloneTooltip));
     }
 
     partial void OnIsDraftChanged(bool value)
@@ -410,6 +437,7 @@ public partial class ProfilesViewModel : LocalizedViewModel
         OnPropertyChanged(nameof(ShowSelectAffordance));
         OnPropertyChanged(nameof(ShowProfileActions));
         OnPropertyChanged(nameof(DeleteIsVisible));
+        OnPropertyChanged(nameof(CloneIsVisible));
         RefreshCommandCanExecute();
     }
 
@@ -434,6 +462,7 @@ public partial class ProfilesViewModel : LocalizedViewModel
         SaveCommand.NotifyCanExecuteChanged();
         CancelCommand.NotifyCanExecuteChanged();
         AddProfileCommand.NotifyCanExecuteChanged();
+        CloneProfileCommand.NotifyCanExecuteChanged();
         DeleteProfileCommand.NotifyCanExecuteChanged();
         SelectProfileCommand.NotifyCanExecuteChanged();
     }
@@ -463,6 +492,67 @@ public partial class ProfilesViewModel : LocalizedViewModel
         }
 
         StartDraft();
+    }
+
+    /// <summary>
+    /// Clones the active persisted profile through <see cref="IProfileCloner"/>:
+    /// immediate + non-destructive (no confirmation). A dirty editor is resolved
+    /// first through the shared unsaved-changes transition (Save persists the
+    /// edits then clones the saved profile, Don't save discards the edits then
+    /// clones the previously persisted profile, Cancel/ESC/X creates nothing).
+    /// On success the returned clone is requested active through the session
+    /// and the page reloads from it; the new banner name is the success
+    /// feedback, and the editor is clean. An expected clone/read/write failure
+    /// logs, keeps the source active + unchanged, and surfaces the localized
+    /// generic clone error (never raw exception text). The clone raises no
+    /// <see cref="IProfileService.ProfileCreated"/>, so no DMF offer follows.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanCloneProfile))]
+    private async Task CloneProfileAsync()
+    {
+        if (_activeId is null || IsDraft || IsSaving || IsRunning)
+        {
+            return;
+        }
+
+        if (!await ResolveDirtyTransitionAsync())
+        {
+            return;
+        }
+
+        // The dirty transition awaited a dialog, so the gates are re-checked
+        // against whatever changed while the dispatcher ran (its Save / Don't
+        // save branches reload the same profile, keeping the id itself stable).
+        if (_activeId is not Guid resolvedId || IsDraft || IsSaving || IsRunning)
+        {
+            return;
+        }
+
+        Profile clone;
+        try
+        {
+            clone = _cloner.CloneProfile(resolvedId);
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or IOException or JsonException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Cloning profile {Id} failed", resolvedId);
+            SaveError = _localization["Profiles_ErrCloneFailed"];
+            return;
+        }
+
+        // Suppress the session event handler's outside-authority branch for the
+        // active-id change this command just caused (the Select/Save-new
+        // pattern), then establish the clone through one authoritative reload.
+        _syncing = true;
+        try
+        {
+            _session.RequestActive(clone.Id);
+            ReloadFromActive();
+        }
+        finally
+        {
+            _syncing = false;
+        }
     }
 
     /// <summary>
@@ -893,6 +983,7 @@ public partial class ProfilesViewModel : LocalizedViewModel
         OnPropertyChanged(nameof(ShowProfileActions));
         OnPropertyChanged(nameof(HasPickerChoices));
         OnPropertyChanged(nameof(DeleteIsVisible));
+        OnPropertyChanged(nameof(CloneIsVisible));
         OnPropertyChanged(nameof(IsDirty));
         OnPropertyChanged(nameof(NameError));
         OnPropertyChanged(nameof(DescriptionError));
@@ -994,6 +1085,7 @@ public partial class ProfilesViewModel : LocalizedViewModel
         nameof(DescriptionError),
         nameof(AddTooltip),
         nameof(DeleteTooltip),
+        nameof(CloneTooltip),
     };
 
     /// <summary>The non-list culture work: refresh the launch-settings

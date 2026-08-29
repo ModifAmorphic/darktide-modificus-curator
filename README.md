@@ -23,7 +23,9 @@ and it runs unmodified).
   profiles, dependency resolution, mod-source integrations). The backend
   libraries (Profiles, Mods, Steam, Integrations, Relay-client, General) and
   the UI (a left navigation rail with five destinations: Profiles, Mods, Nexus
-  Integrations, Preferences, Settings; plus profile management and the Launch
+  Integrations, Preferences, Settings; plus profile management, including
+  cloning a profile into an independent copy (named "Copy N", with mod files
+  shared rather than duplicated), and the Launch
   flow) are in place. The app is user-usable. The Mods list offers a persisted
   Compact and Detailed row density; Detailed rows show a Nexus summary and a
    cached thumbnail when one is available, with a neutral placeholder otherwise.

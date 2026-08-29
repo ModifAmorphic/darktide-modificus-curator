@@ -372,6 +372,9 @@ public static class CuratorComposition
         // reload).
         services.AddSingleton<ProfilesViewModel>(sp => new ProfilesViewModel(
             sp.GetRequiredService<IProfileService>(),
+            // The focused clone capability; AddProfiles maps it to the same
+            // ProfileService singleton as IProfileService.
+            sp.GetRequiredService<IProfileCloner>(),
             sp.GetRequiredService<IProfileSession>(),
             sp.GetRequiredService<IDialogService>(),
             sp.GetRequiredService<LocalizationService>(),

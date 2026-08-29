@@ -33,4 +33,18 @@ public sealed class ProfileServiceCollectionExtensionsTests
 
         Assert.Same(services, returned);
     }
+
+    [Fact]
+    public void AddProfiles_maps_IProfileService_and_IProfileCloner_to_the_same_singleton()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfigLoader>(new FakeConfigLoader());
+        services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
+        services.AddProfiles();
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Same(
+            provider.GetRequiredService<IProfileService>(),
+            provider.GetRequiredService<IProfileCloner>());
+    }
 }
