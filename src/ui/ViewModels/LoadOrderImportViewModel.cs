@@ -1164,10 +1164,7 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
                             row.SearchedNoResults = true;
                         }
 
-                        var candidates = response.Data
-                            .Take(MaxCandidatesPerRow)
-                            .Select(r => new NexusSearchCandidate(r.ModId, r.Name))
-                            .ToArray();
+                        var candidates = RankCandidatesExactFirst(row.Name, response.Data);
                         row.ApplyCandidates(candidates);
 
                         // A UNIQUE normalized-exact result is already a
@@ -1179,10 +1176,7 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
                         // multiple hits always stay proposals: never silently
                         // choose.
                         if (candidates.Length == 1
-                            && string.Equals(
-                                NormalizeSearchTerms(row.Name),
-                                NormalizeSearchTerms(candidates[0].Name),
-                                StringComparison.Ordinal))
+                            && IsNormalizedExact(row.Name, candidates[0].Name))
                         {
                             row.IdentifyFromCandidate(candidates[0]);
                         }
@@ -1233,6 +1227,34 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
         var lowered = spaced.Replace('_', ' ').Replace('-', ' ').ToLowerInvariant();
         return string.Join(' ', lowered.Split(' ', StringSplitOptions.RemoveEmptyEntries));
     }
+
+    /// <summary>
+    /// Whether a canonical name is a normalized spelling of the phrase: both
+    /// sides run through <see cref="NormalizeSearchTerms"/> and compare
+    /// ordinally.
+    /// </summary>
+    private static bool IsNormalizedExact(string phrase, string canonicalName) =>
+        string.Equals(
+            NormalizeSearchTerms(phrase),
+            NormalizeSearchTerms(canonicalName),
+            StringComparison.Ordinal);
+
+    /// <summary>
+    /// Builds a row's capped candidate set from a search's results,
+    /// normalized-exact matches first: server ordering alone cannot be relied
+    /// on to surface the exact title inside a small result page, so the
+    /// exact-first precedence is deterministic client policy. Each partition
+    /// (exact, then non-exact) keeps the service's relative order; the
+    /// display cap applies after the promotion so an exact hit is never the
+    /// candidate the cap drops.
+    /// </summary>
+    private static NexusSearchCandidate[] RankCandidatesExactFirst(
+        string phrase, NexusSearchResult[] results) =>
+        results
+            .Select(r => new NexusSearchCandidate(r.ModId, r.Name))
+            .OrderByDescending(c => IsNormalizedExact(phrase, c.Name))
+            .Take(MaxCandidatesPerRow)
+            .ToArray();
 
     [GeneratedRegex(@"(\p{Ll}|\d)(\p{Lu})")]
     private static partial Regex CaseBoundaryRegex();
@@ -1390,10 +1412,11 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
     /// <summary>
     /// The name-search leg: normalizes the user's criteria with the same
     /// normalization the automatic queue uses and runs the anonymous search
-    /// with the same candidate cap, REPLACING the row's current proposals
-    /// (never auto-identifying: every user-entered result needs an explicit
-    /// Accept). No results surface the no-results hint; failures stay
-    /// editable with an inline error. Nothing is identified on failure.
+    /// with the same exact-first candidate ranking + cap, REPLACING the row's
+    /// current proposals (never auto-identifying: every user-entered result
+    /// needs an explicit Accept). No results surface the no-results hint;
+    /// failures stay editable with an inline error. Nothing is identified on
+    /// failure.
     /// </summary>
     private async Task FindByNameAsync(LoadOrderRowViewModel row, string criteria)
     {
@@ -1413,10 +1436,7 @@ public partial class LoadOrderImportViewModel : LocalizedViewModel
                     row.SearchedNoResults = true;
                 }
 
-                row.ApplyCandidates(response.Data
-                    .Take(MaxCandidatesPerRow)
-                    .Select(r => new NexusSearchCandidate(r.ModId, r.Name))
-                    .ToArray());
+                row.ApplyCandidates(RankCandidatesExactFirst(criteria, response.Data));
             });
         }
         catch (Exception ex)

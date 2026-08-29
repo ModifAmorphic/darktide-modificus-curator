@@ -464,8 +464,9 @@ public sealed class NexusClientTests
         // ("curios auspex") must go out as ONE request shaped like the Nexus
         // website's own search (the operator's live capture): the raw phrase
         // as the name WILDCARD value with NO literal asterisks, no
-        // nameStemmed leg, the Darktide gameDomainName filter, createdAt DESC
-        // ordering, blocked content excluded, and the requested count. The
+        // nameStemmed leg, the Darktide gameDomainName filter, relevance DESC
+        // ordering (newest-first could cap the exact title out of the page),
+        // blocked content excluded, and the requested count. The
         // hit the live endpoint returns for that phrase is surfaced.
         string? body = null;
         var handler = new StubHttpMessageHandler(req =>
@@ -500,7 +501,8 @@ public sealed class NexusClientTests
         Assert.DoesNotContain("nameStemmed", body); // no second leg
         Assert.Contains("gameDomainName: [{op: EQUALS, value: \\u0022warhammer40kdarktide\\u0022}]", body);
         Assert.Contains("viewUserBlockedContent: false", body);
-        Assert.Contains("sort: { createdAt: { direction: DESC } }", body);
+        Assert.Contains("sort: { relevance: { direction: DESC } }", body);
+        Assert.DoesNotContain("createdAt", body); // never newest-first again
         Assert.Contains("count: 5", body);
         Assert.Contains("nodes { modId name uid }", body); // identity fields only
     }

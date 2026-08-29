@@ -828,6 +828,58 @@ public sealed class LoadOrderImportViewModelTests
     }
 
     [Fact]
+    public async Task An_exact_result_returned_behind_non_exact_hits_becomes_the_top_proposal()
+    {
+        // The scoreboard shape: the wildcard page can bury the exact title
+        // among other hits (a newest-first page omitted mod 22 entirely).
+        // Exact-first precedence is deterministic client policy over
+        // whatever order the service returned, and the non-exact hits keep
+        // their service order behind the promoted exact one.
+        var (vm, reconciler, _, _, _, nexus, _, _, _, _, _, _) = Build();
+        nexus.NextResults = Results(
+            (902, "Scoreboard+"),
+            (22, "Scoreboard"),
+            (907, "Scoreboard Tweaks"));
+        reconciler.NextPlan = UnresolvedPlan("Scoreboard");
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("Scoreboard\n"));
+        await vm.ChooseImportCommand.ExecuteAsync(null);
+        var row = Assert.Single(vm.Rows);
+
+        Assert.False(row.IsIdentified); // multiple hits never silently choose
+        Assert.Equal(3, row.Candidates.Count);
+        Assert.Equal(22, row.TopCandidate!.ModId); // exact first
+        Assert.Equal(902, row.Candidates[1].ModId); // service order retained
+        Assert.Equal(907, row.Candidates[2].ModId);
+    }
+
+    [Fact]
+    public async Task The_candidate_cap_stays_five_with_the_exact_hit_promoted_inside_it()
+    {
+        // A service result larger than the cap (a nonconforming or widened
+        // count) still yields exactly five candidates, and the cap applies
+        // AFTER the exact-first promotion: the exact hit is never the
+        // candidate the cap drops.
+        var (vm, reconciler, _, _, _, nexus, _, _, _, _, _, _) = Build();
+        nexus.NextResults = Results(
+            (1, "SoloSandbox Plus"),
+            (2, "SoloSandbox Extra"),
+            (3, "SoloSandbox More"),
+            (4, "SoloSandbox Deluxe"),
+            (5, "SoloSandbox Ultra"),
+            (7, "SoloSandbox"), // exact, sixth in service order
+            (8, "SoloSandbox Tweaks"));
+        reconciler.NextPlan = UnresolvedPlan("SoloSandbox");
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("SoloSandbox\n"));
+        await vm.ChooseImportCommand.ExecuteAsync(null);
+        var row = Assert.Single(vm.Rows);
+
+        Assert.Equal(5, row.Candidates.Count);
+        Assert.Equal(7, row.TopCandidate!.ModId); // exact survived the cap
+        Assert.Equal(1, row.Candidates[1].ModId); // the rest in service order
+        Assert.False(row.IsIdentified); // still multiple hits: a proposal
+    }
+
+    [Fact]
     public async Task The_auto_identification_issues_no_redundant_verify_call()
     {
         var (vm, reconciler, _, _, _, nexus, _, _, _, _, _, _) = Build();
@@ -978,6 +1030,37 @@ public sealed class LoadOrderImportViewModelTests
 
         vm.AcceptCandidateCommand.Execute(row);
         Assert.True(row.IsIdentified);
+    }
+
+    [Fact]
+    public async Task A_manual_name_search_ranks_exact_first_but_still_requires_acceptance()
+    {
+        // The manual path shares the automatic queue's exact-first ranking:
+        // the exact hit becomes the top proposal whatever order the service
+        // returned, and it still identifies nothing until the explicit
+        // Accept (the auto-identification rule belongs to the automatic
+        // folder-name queue only).
+        var (vm, reconciler, _, _, _, nexus, _, _, _, _, _, _) = Build();
+        nexus.NextSearchThrows = new InvalidOperationException("cloudflare");
+        reconciler.NextPlan = UnresolvedPlan("solo_sandbox");
+        await vm.StartImportCommand.ExecuteAsync(WriteFile("solo_sandbox\n"));
+        await vm.ChooseImportCommand.ExecuteAsync(null);
+        var row = Assert.Single(vm.Rows);
+        Assert.False(row.IsIdentified);
+
+        nexus.NextSearchThrows = null;
+        nexus.NextResults = Results((9, "SoloSandbox Utilities"), (42, "SoloSandbox"));
+        row.ManualId = "SoloSandbox";
+        await vm.FindNexusModCommand.ExecuteAsync(row);
+
+        Assert.False(row.IsIdentified); // a manual result never auto-identifies
+        Assert.True(row.ShowCandidateArea);
+        Assert.Equal(42, row.TopCandidate!.ModId); // exact first
+        Assert.Equal(9, row.Candidates[1].ModId); // service order retained
+
+        vm.AcceptCandidateCommand.Execute(row);
+        Assert.True(row.IsIdentified);
+        Assert.Equal(42, row.IdentifiedModId);
     }
 
     [Fact]

@@ -48,9 +48,11 @@ public interface INexusClient
   wildcard index owns the matching), scoped by
   `gameDomainName:[{op:EQUALS,value:"warhammer40kdarktide"}]` (only the
   Darktide domain resolves), with `viewUserBlockedContent:false`,
-  `sort:{createdAt:{direction:DESC}}` (newest first), and the given `count`,
-  requesting only `nodes { modId name uid }`. Returns `NexusSearchResult`
-  (modId + name + uid). The request
+  `sort:{relevance:{direction:DESC}}` (best match first; the result is
+  capped, so ordering decides which hits the page carries, and a
+  newest-first page can omit the exact title entirely), and the given
+  `count`, requesting only `nodes { modId name uid }`. Returns
+  `NexusSearchResult` (modId + name + uid). The request
   is the one client call that carries NO credentials: it routes around the
   auth factory entirely (a plain request with only the
   app-identification headers; no auth gate, no 401-refresh), because the

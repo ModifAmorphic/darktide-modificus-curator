@@ -477,7 +477,16 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                             child lines leave the plan Action column empty,
                             which stays the parent row's; accepting
                             identifies in one action,
-                            the title shown exactly once in Match). A UNIQUE
+                            the title shown exactly once in Match).
+                            Arrived candidates are ranked EXACT-FIRST:
+                            candidates whose canonical name normalizes to
+                            the line's normalized name precede every
+                            non-exact one, each partition keeping the
+                            service's relative order, with the display cap
+                            applied after the promotion (deterministic
+                            client policy: the exact title is the top
+                            proposal whatever order the server returned).
+                            A UNIQUE
                             normalized-exact search result auto-identifies:
                             exactly one candidate whose canonical name
                             normalizes (the same search-terms normalization)
@@ -506,7 +515,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                             shows inline validation + is never reinterpreted
                             as a name search; any other nonblank text is
                             mod-name criteria run through SearchModsAsync
-                            with the shared normalization + cap, replacing
+                            with the shared normalization + exact-first
+                            ranking + cap, replacing
                             the row's proposals + requiring an explicit
                             Accept each (no auto-identification; the typed
                             criteria retained); no results + failures stay
@@ -1710,7 +1720,10 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                           index owns matching) +
                           gameDomainName:[{op:EQUALS,value:"warhammer40kdarktide"}]
                           + viewUserBlockedContent:false +
-                          sort:{createdAt:{direction:DESC}} + count,
+                          sort:{relevance:{direction:DESC}} (best match
+                          first; the result is capped, so ordering decides
+                          which hits the page carries, + a newest-first page
+                          can omit the exact title entirely) + count,
                           requesting nodes { modId name uid } only, returning
                           NexusSearchResult (modId + name + uid); GraphQL-level
                           errors in a 200 OK body surface as NexusApiException;
@@ -2005,8 +2018,9 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                           phrase as the name WILDCARD value
                                           with no literal asterisks + no
                                           nameStemmed leg + the Darktide
-                                          gameDomainName filter + createdAt
-                                          DESC + viewUserBlockedContent:false
+                                          gameDomainName filter + relevance
+                                          DESC (createdAt rejected) +
+                                          viewUserBlockedContent:false
                                           + identity-only fields + exactly
                                           one POST, the curios auspex
                                           multi-word regression, the
@@ -2352,7 +2366,16 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                               table (the three exact spelling
                                               forms, single partial/nonexact,
                                               multiple, no redundant verify
-                                              call, the sibling association),
+                                              call, the sibling association,
+                                              the exact-first candidate
+                                              ranking: an exact hit returned
+                                              behind non-exact ones becomes
+                                              the top proposal with the
+                                              service order retained behind
+                                              it, the cap holding five with
+                                              the exact hit surviving it,
+                                              the scoreboard-shaped id-22
+                                              regression),
                                               candidate presentation/accept/
                                               change (title once in Match, id
                                               in Mod ID), the shared Find
@@ -2361,7 +2384,8 @@ src/        Modificus Curator -- the mod manager app (.NET 10 + Avalonia 12)
                                               URL/blank inline validation with
                                               no call, name search replacing
                                               proposals + requiring Accept
-                                              incl. one exact result, no
+                                              incl. one exact result + the
+                                              manual exact-first ranking, no
                                               results + API failure staying
                                               editable, the stale-overwrite
                                               guards both directions), the
