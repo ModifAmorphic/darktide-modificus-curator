@@ -6,12 +6,11 @@ Source of truth for Modificus Curator release notes published on Nexus Mods.
 Publish: markdown_to_bbcodenm -i docs/nexus/changelog.md -o <out>, then paste the output into the Nexus editor's BBCode source view. This preamble is wrapped in converter_ignore fences so it never reaches the page.
 
 <!-- /converter_ignore -->
-
 # Version 1.2.0
 
 ## Features / Improvements
 
-- Added **Import mod list** to the Mods page for compatible line-format mod lists such as `mod_load_order.txt` and `mods.lst`.
+- Added **Import mod list** to the Mods page for compatible line-format mod lists such as `mod_load_order.txt`.
   - **Reorder mods** applies the file's order to mods already in the active profile without importing anything.
   - **Reorder and import mods** reuses mods already in Curator and imports matching mod folders found beside the list. Local folders can be associated with their Nexus entries, while Premium users can also identify and queue missing Nexus mods for download.
   - Matches, skipped entries, versions, and planned actions can be reviewed before applying. Optional additions can be skipped.
